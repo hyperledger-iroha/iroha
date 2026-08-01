@@ -881,7 +881,8 @@ impl CertifiedServeBarrier {
         self.scheduler_ordinal
     }
 
-    /// Immutable logical Serve lifecycle retained by every retransmission.
+    /// Exact lifecycle selected for the dedicated ingress turn.
+    #[cfg(test)]
     pub(crate) const fn lifecycle_id(self) -> CertifiedServeLifecycleId {
         self.lifecycle_id
     }
@@ -1674,6 +1675,7 @@ impl std::fmt::Debug for V2IoTrySendError {
     }
 }
 
+#[cfg(test)]
 fn v2_io_command_channel(
     capacity: usize,
     roster_serve_capacity: usize,
@@ -5821,6 +5823,7 @@ impl V2IoCommandQueue {
         )))
     }
 
+    #[cfg(test)]
     fn serve_completion_ownership(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
@@ -6450,6 +6453,7 @@ impl V2IoCommandSender {
         self.queue.rollback_serve_barrier_for_shutdown()
     }
 
+    #[cfg(test)]
     fn serve_completion_ownership(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
@@ -28698,7 +28702,14 @@ pub(super) mod tests {
 
     #[test]
     fn certified_serve_terminal_replay_source_retains_retired_route_and_reconnects() {
-        let (service, keys) = fixture_with_block_payload();
+        let (mut service, keys) = fixture_with_block_payload();
+        let replay_admissions = Arc::new(AtomicUsize::new(0));
+        let replay_admissions_for_hook = Arc::clone(&replay_admissions);
+        service.set_exact_output_admission_hook(move |_post, ticket| {
+            assert!(ticket.is_none(), "the first live replay owns no retry ticket");
+            replay_admissions_for_hook.fetch_add(1, AtomicOrdering::AcqRel);
+            Ok(())
+        });
         let (canonical_wire, payload, proposal) =
             proposal_body_and_payload(&service.context, &keys);
         let request = authenticated_serve_request(
@@ -28829,6 +28840,7 @@ pub(super) mod tests {
                 ),
             )
             .expect("reconnected exact retry acquires an active replay route");
+        assert_eq!(replay_admissions.load(AtomicOrdering::Acquire), 1);
         assert!(!service.output_guard.restart_required());
     }
 

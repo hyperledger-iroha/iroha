@@ -462,14 +462,29 @@ pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(
         expected_epoch,
     )?;
     let barrier = retirement.queue_release_barrier()?;
-    let _ = queue.prepare_lane_reservation_release_barrier(&barrier)?;
-    kura.finalize_autonomous_lane_slot_release(
+    let preparation_authorization = kura.authorize_autonomous_lane_queue_release_preparation(
         retirement,
-        &barrier,
         expected_chain_id_hash,
         expected_epoch,
     )?;
-    Ok(queue.finalize_lane_reservation_release_barrier(&barrier)?)
+    let durable_queue_barrier = queue.prepare_lane_reservation_release_barrier_with_authorization(
+        &barrier,
+        preparation_authorization,
+    )?;
+    let finalization_authorization = kura
+        .finalize_autonomous_lane_slot_release_with_authorization(
+            retirement,
+            &barrier,
+            expected_chain_id_hash,
+            expected_epoch,
+            durable_queue_barrier,
+        )?;
+    Ok(
+        queue.finalize_lane_reservation_release_barrier_with_authorization(
+            &barrier,
+            finalization_authorization,
+        )?,
+    )
 }
 
 fn reservation_group_identity(
@@ -1449,6 +1464,7 @@ pub(crate) fn validate_historical_autonomous_lane_recovery_record(
 
 /// Persist the exact payload, exact execution input, and immutable recovery
 /// record in crash-safe order after independently rebuilding every authority.
+#[cfg(test)]
 pub(crate) fn install_historical_autonomous_lane_recovery(
     state: &State,
     kura: &Kura,
@@ -1461,6 +1477,7 @@ pub(crate) fn install_historical_autonomous_lane_recovery(
 /// Persist one record whose complete State authority was already validated.
 /// Kura performs its bounded namespace preflight, durable dependency checks,
 /// and collision checks at the persistence boundary.
+#[cfg(test)]
 pub(crate) fn persist_preflighted_historical_autonomous_lane_recovery(
     kura: &Kura,
     record: &HistoricalAutonomousLaneRecoveryRecordV1,

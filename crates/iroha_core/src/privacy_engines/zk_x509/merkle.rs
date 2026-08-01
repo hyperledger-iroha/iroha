@@ -414,7 +414,7 @@ pub(crate) fn crl_commitment_preimage_v1(
 }
 
 /// Hash the exact complete signed CRL to the governed record commitment.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn crl_commitment_v1(
     exact_signed_crl_der: &[u8],
 ) -> Result<ZkX509MerkleDigestV1, ZkX509MerkleErrorV1> {
@@ -430,7 +430,7 @@ pub(crate) fn crl_issuer_spki_preimage_v1(
 }
 
 /// Hash the exact CRL issuer SPKI to the governed record digest.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn crl_issuer_spki_digest_v1(
     issuer_spki_der: &[u8],
 ) -> Result<ZkX509MerkleDigestV1, ZkX509MerkleErrorV1> {

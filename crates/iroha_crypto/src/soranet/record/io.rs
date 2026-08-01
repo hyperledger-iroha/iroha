@@ -1,4 +1,4 @@
-//! Consumer-side Tokio stream adapters for the SoraNet record protocol.
+//! Consumer-side Tokio stream adapters for the `SoraNet` record protocol.
 
 /// Define Tokio record reader/writer adapters inside one consumer-owned module.
 ///

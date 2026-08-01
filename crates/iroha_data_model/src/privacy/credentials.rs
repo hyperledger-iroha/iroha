@@ -137,7 +137,7 @@ pub const PQ_MASP_MAX_OUTPUTS_V1: u32 = 2;
 /// Maximum genesis commitments in one typed proof-managed pool bootstrap.
 pub const PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1: usize = 4_096;
 /// Maximum UTF-8 byte length admitted for a privacy transcript chain id.
-pub const PRIVACY_MAX_CHAIN_ID_BYTES_V1: u32 = crate::id::MAX_CHAIN_ID_BYTES as u32;
+pub const PRIVACY_MAX_CHAIN_ID_BYTES_V1: u32 = 128;
 
 /// Explicit chain and governed-artifact binding shared by every statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -2454,7 +2454,7 @@ pub struct PrivacyZkX509CrlRecordV1 {
     pub certificate_policy_id: PrivacyPolicyIdV1,
     /// Strictly increasing immutable revision epoch.
     pub record_epoch: u64,
-    /// Required RFC 5280 CRLNumber, monotonically increasing in this lineage.
+    /// Required RFC 5280 `CRLNumber`, monotonically increasing in this lineage.
     pub crl_number: u64,
     /// SHA-256 digest of the complete exact signed DER CRL.
     pub crl_der_digest: PrivacyX509CrlDerDigestV1,
@@ -2943,7 +2943,7 @@ pub enum PrivacyZkX509TransitionValidationErrorV1 {
     /// A signed-CRL successor did not advance `thisUpdate`.
     #[error("X.509 CRL successor thisUpdate must strictly increase")]
     CrlThisUpdateNotIncreasing,
-    /// A signed-CRL successor did not advance CRLNumber.
+    /// A signed-CRL successor did not advance `CRLNumber`.
     #[error("X.509 CRL successor CRLNumber must strictly increase")]
     CrlNumberNotIncreasing,
     /// A revocation successor must be terminal.

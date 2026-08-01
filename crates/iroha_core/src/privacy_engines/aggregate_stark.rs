@@ -112,8 +112,7 @@ fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> AggregateStarkErr
         TransparentStarkErrorV1::NonCanonicalField => AggregateStarkErrorV1::NonCanonicalField,
         TransparentStarkErrorV1::FriDegree => AggregateStarkErrorV1::FriDegree,
         TransparentStarkErrorV1::MalformedProof => AggregateStarkErrorV1::MalformedProof,
-        TransparentStarkErrorV1::InvalidMerkleOpening
-        | TransparentStarkErrorV1::InvalidMerkleShape => AggregateStarkErrorV1::TraceOpening,
+        TransparentStarkErrorV1::InvalidMerkleShape => AggregateStarkErrorV1::TraceOpening,
         TransparentStarkErrorV1::ChallengeSamplingExhausted
         | TransparentStarkErrorV1::QuerySamplingExhausted
         | TransparentStarkErrorV1::InvalidGrinding => AggregateStarkErrorV1::TranscriptMismatch,

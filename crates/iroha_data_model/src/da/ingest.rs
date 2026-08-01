@@ -130,6 +130,7 @@ pub struct DaIngestRequestIntentV1 {
     pub metadata: ExtraMetadata,
 }
 
+#[derive(Clone, Copy)]
 struct DaIngestRequestIntentRefV1<'a> {
     client_blob_id: &'a BlobDigest,
     lane_id: LaneId,

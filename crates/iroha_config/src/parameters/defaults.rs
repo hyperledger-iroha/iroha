@@ -1314,6 +1314,8 @@ pub mod sorafs {
             pub const MAX_SUBMIT_ATTEMPTS: u16 = 8;
             /// Maximum canonical checkpoint size.
             pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(32 * 1024 * 1024);
+            /// Maximum checkpoint-plus-minimal-terminal-wrapper archive artifact size.
+            pub const PANEL_NOTIFICATION_ARCHIVE_MAX_BYTES: Bytes<u64> = Bytes(40 * 1024 * 1024);
             /// Finalized reconciliation and deadline-maintenance cadence.
             pub const WORKER_INTERVAL_MS: u64 = 1_000;
             /// Maximum native maintenance actions emitted in one scan.
@@ -1708,9 +1710,10 @@ pub mod sorafs {
             ///
             /// Keep this synchronized with
             /// `sorafs_manifest::GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1`:
-            /// 128 MiB of canonical signing payload plus a checked 64 KiB
-            /// block-signature/envelope allowance.
-            pub const MAX_REQUEST_BYTES: Bytes<u64> = Bytes((128 * 1024 * 1024) + (64 * 1024));
+            /// the canonical block ceiling plus a 1 MiB canonical archive
+            /// wrapper and 64 KiB multipart allowance.
+            pub const MAX_REQUEST_BYTES: Bytes<u64> =
+                Bytes((128 * 1024 * 1024) + (64 * 1024) + (1024 * 1024) + (64 * 1024));
             /// Maximum entries retained in the deterministic local IPLD mirror.
             pub const MIRROR_MAX_ENTRIES: usize = 65_536;
             /// Maximum canonical block bytes retained by the mirror.

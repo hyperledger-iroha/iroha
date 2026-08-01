@@ -114,8 +114,10 @@ use crate::{
     block::CommittedBlock,
     commit_roster_journal::{CommitRosterJournal, CommitRosterJournalError},
     queue::{
+        AutonomousLaneKuraActivationAuthorization, DurableLaneQueueReleaseBarrierAuthorization,
         LaneQueueReservationGroupBindingV1, LaneQueueReservationGroupIdentityV1,
-        LaneQueueReservationKeyV2, LaneQueueReservationReconciliationGroupV1, RoutingPlan,
+        LaneQueueReservationKeyV2, LaneQueueReservationReconciliationGroupV1,
+        LaneQueueReservationReleaseBarrierV3, RoutingPlan,
         canonical_lane_queue_reservation_group_identity_projection,
         lane_queue_reservation_group_binding_from_ordered_keys,
     },
@@ -124,12 +126,23 @@ use crate::{
         message::KuraReplicaAdvertV1,
         output_guard::ConsensusOutputGuard,
         v2_core::{
+            CanonicalIdentityProjection, IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED,
             IN_FLIGHT_FIRST_RELEASE_ACTION_AUTHORIZE_READY,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE,
             IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT,
             IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_KURA_RETIREMENT,
             IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC,
-            IN_FLIGHT_FIRST_RELEASE_ACTION_SIGN_READY,
-            IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED, IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PREPARE_RESERVATION_RELEASE,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_SIGN_READY, IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED,
             ProductionInFlightFirstReleaseCarrierProjection,
             ProductionInFlightFirstReleaseDecisionProjection,
             ProductionInFlightFirstReleaseHistoryProjection,
@@ -28596,21 +28609,36 @@ impl Kura {
             .payload_availability_qc
             .as_ref()
             .map(|availability| (availability.body.chain_id_hash, availability.body.epoch));
-        if let Some((chain_id_hash, epoch)) = autonomous_context.as_ref() {
+        let autonomous_source = if let Some((chain_id_hash, epoch)) = autonomous_context.as_ref() {
             let descriptor = &artifact.proposal.descriptor;
-            self.durable_autonomous_lane_merge_source_under_prune_guard(
-                descriptor.lane_id,
-                descriptor.lane_block_height,
-                *chain_id_hash,
-                *epoch,
-                Some(&artifact),
-                false,
+            Some(
+                self.durable_autonomous_lane_merge_source_under_prune_guard(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                    *chain_id_hash,
+                    *epoch,
+                    Some(&artifact),
+                    false,
+                )
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_owned())
+                })?,
             )
+        } else {
+            None
+        };
+        let lane_commit_authorization = autonomous_source
+            .as_ref()
+            .map(|source| Self::authorize_autonomous_lane_commit_persistence(source, &artifact))
+            .transpose()
             .map_err(|message| {
-                Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_owned())
+                Self::invalid_lane_artifact_error(self.store_root.clone(), message)
             })?;
-        }
-        self.write_certified_lane_block_artifact_with_authority(&artifact, authority)?;
+        self.write_certified_lane_block_artifact_with_authority(
+            &artifact,
+            authority,
+            lane_commit_authorization,
+        )?;
         if let Some((chain_id_hash, epoch)) = autonomous_context.as_ref() {
             let descriptor = &artifact.proposal.descriptor;
             let source = self
@@ -28659,18 +28687,42 @@ impl Kura {
         &self,
         artifact: &CertifiedLaneBlockArtifact,
     ) -> Result<()> {
-        self.write_certified_lane_block_artifact_with_authority(artifact, None)
+        self.write_certified_lane_block_artifact_with_authority(artifact, None, None)
     }
 
     fn write_certified_lane_block_artifact_with_authority(
         &self,
         artifact: &CertifiedLaneBlockArtifact,
         authority: Option<&crate::state::CertifiedLaneBlockPersistenceAuthority>,
+        mut lane_commit_authorization: Option<AutonomousLaneCommitPersistenceAuthorization>,
     ) -> Result<()> {
         self.durable_mutation_authorized()?;
         Self::validate_certified_lane_block_artifact(artifact).map_err(|message| {
             Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
         })?;
+        let autonomous_certificate = artifact.prepare_qc.payload_availability_qc.is_some();
+        match (autonomous_certificate, lane_commit_authorization.as_ref()) {
+            (true, Some(authorization)) if authorization.matches_artifact(artifact) => {}
+            (false, None) => {}
+            (true, Some(_)) => {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous lane-Commit authorization does not match the certified artifact",
+                ));
+            }
+            (true, None) => {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous certified-session persistence lacks lane-Commit authorization",
+                ));
+            }
+            (false, Some(_)) => {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "ordinary certified-session persistence received autonomous lane-Commit authorization",
+                ));
+            }
+        }
         if authority.is_some_and(|authority| !authority.authorizes_proposal(&artifact.proposal)) {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
@@ -28838,6 +28890,37 @@ impl Kura {
             }
         }
         drop(existing_pair);
+        if !existing_exact && autonomous_certificate {
+            let projection: ProductionInFlightFirstReleaseTransitionProjection =
+                lane_commit_authorization
+                    .take()
+                    .and_then(|authorization| authorization.consume_for_persistence(artifact))
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            data_path.clone(),
+                            "autonomous lane-Commit authorization changed before persistence",
+                        )
+                    })?;
+            if projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path.clone(),
+                    "autonomous certified-session persistence received the wrong transition",
+                ));
+            }
+            let checked = check_production_in_flight_first_release_transition(projection)
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        data_path.clone(),
+                        "autonomous lane-Commit failed the composed first-release transition gate",
+                    )
+                })?;
+            if checked.into_projection() != projection {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path.clone(),
+                    "checked autonomous lane-Commit projection changed before persistence",
+                ));
+            }
+        }
         let frontier_changed =
             self.publish_latest_certified_lane_block_frontier_locked(&entry, artifact, authority)?;
         if existing_exact {
@@ -31389,25 +31472,70 @@ impl Kura {
             ));
         }
         let retirement_hash = retirement.digest()?;
-        let mut replacements = Vec::with_capacity(payload.entrypoint_hashes.len());
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let projection_context =
+            AutonomousLaneReleaseProjectionContext::from_payload(self, payload, retirement)
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                })?;
+
+        struct ObservedClaim {
+            path: PathBuf,
+            temp_path: PathBuf,
+            promote_temp: bool,
+            remove_temp: bool,
+            stage: u8,
+            pending: AutonomousLaneEntrypointClaimV3,
+            released: AutonomousLaneEntrypointClaimV3,
+        }
+
+        struct PlannedClaim {
+            path: PathBuf,
+            temp_path: PathBuf,
+            promote_temp: bool,
+            remove_temp: bool,
+            replacement: Option<(
+                AutonomousLaneEntrypointClaimV3,
+                Vec<u8>,
+                AutonomousLaneEntrypointClaimTransitionAuthorization,
+            )>,
+        }
+
+        // Read and validate the complete ordered group before promoting a
+        // crash temp, removing a redundant temp, or replacing a main claim.
+        // The only crash-reachable layouts are Pending*/Active* while Queue
+        // is live and Released*/Pending* after its release barrier. Rejecting
+        // every other ordering prevents a forged or corrupt hole from being
+        // silently normalized by a retry.
+        let mut observed = Vec::with_capacity(payload.entrypoint_hashes.len());
+        let mut unique_paths = BTreeSet::new();
         for entrypoint_hash in &payload.entrypoint_hashes {
             let path = Self::autonomous_lane_entrypoint_claim_path(
                 &self.store_root,
                 &payload.chain_id_hash,
                 entrypoint_hash,
             );
+            if !unique_paths.insert(path.clone()) {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous entrypoint release repeats a claim path",
+                ));
+            }
             let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(&path);
             let expected_active = AutonomousLaneEntrypointClaimV3::new(payload, *entrypoint_hash);
-            let existing = if Self::autonomous_lane_entrypoint_claim_file_exists(&path)? {
-                Self::decode_autonomous_lane_entrypoint_claim(&path)
-                    .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?
+            let main_exists = Self::autonomous_lane_entrypoint_claim_file_exists(&path)?;
+            let (existing, promote_temp) = if main_exists {
+                (
+                    Self::decode_autonomous_lane_entrypoint_claim(&path).map_err(|message| {
+                        Self::invalid_lane_artifact_error(path.clone(), message)
+                    })?,
+                    false,
+                )
             } else {
                 // The payload append is the durable ownership boundary. A
                 // crash immediately after that append can leave the exact
-                // claim only at its staged path; retirement must promote that
-                // owner before changing it to a pending tombstone, otherwise
-                // the already-durable lane slot can never be reconciled.
+                // claim only at its staged path. Treat it as Active during
+                // group preflight, but do not promote it until every claim and
+                // the complete prefix ordering have passed validation.
                 if !Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
                     return Err(Self::invalid_lane_artifact_error(
                         path,
@@ -31425,8 +31553,7 @@ impl Kura {
                         "autonomous entrypoint release found a conflicting staged owner",
                     ));
                 }
-                Self::promote_autonomous_lane_entrypoint_claim_temp(&temp_path, &path)?;
-                pending
+                (pending, true)
             };
             if !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &path)
                 || !existing.owns_payload(payload)
@@ -31436,17 +31563,20 @@ impl Kura {
                     "autonomous entrypoint release does not match its durable payload owner",
                 ));
             }
-            if Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
+            let remove_temp =
+                main_exists && Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)?;
+            if remove_temp {
                 let pending = Self::decode_autonomous_lane_entrypoint_claim(&temp_path).map_err(
                     |message| Self::invalid_lane_artifact_error(temp_path.clone(), message),
                 )?;
-                if pending != expected_active {
+                if pending != expected_active
+                    || !self.autonomous_lane_entrypoint_claim_path_matches(&pending, &path)
+                {
                     return Err(Self::invalid_lane_artifact_error(
                         temp_path,
                         "autonomous entrypoint release found a conflicting staged owner",
                     ));
                 }
-                self.remove_autonomous_lane_entrypoint_claim_file(&temp_path)?;
             }
 
             let pending = AutonomousLaneEntrypointClaimV3::release_pending_for_payload(
@@ -31459,43 +31589,182 @@ impl Kura {
                 *entrypoint_hash,
                 retirement_hash,
             );
-            let replacement = if finalize_release {
-                if existing == released {
-                    None
-                } else if existing == pending {
-                    Some(released)
-                } else {
-                    return Err(Self::invalid_lane_artifact_error(
-                        path,
-                        "autonomous entrypoint release requires the exact ReleasePending claim",
-                    ));
-                }
-            } else if existing == pending || existing == released {
-                None
-            } else if existing == expected_active {
-                Some(pending)
+            let stage = if existing == expected_active {
+                0
+            } else if existing == pending {
+                1
+            } else if existing == released {
+                2
             } else {
                 return Err(Self::invalid_lane_artifact_error(
                     path,
                     "autonomous entrypoint claim has a conflicting retirement identity",
                 ));
             };
-            if let Some(replacement) = replacement {
-                replacements.push((path, replacement));
-            }
+            observed.push(ObservedClaim {
+                path,
+                temp_path,
+                promote_temp,
+                remove_temp,
+                stage,
+                pending,
+                released,
+            });
         }
 
-        for (path, replacement) in replacements {
-            let bytes = norito::encode_canonical(&replacement).map_err(Error::NoritoFrame)?;
-            if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
+        let mut previous_stage = 2_u8;
+        let mut saw_active = false;
+        let mut saw_released = false;
+        for claim in &observed {
+            if claim.stage > previous_stage {
                 return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    "transitioned autonomous entrypoint claim exceeds hard byte limit",
+                    claim.path.clone(),
+                    "autonomous entrypoint release claims are not a canonical durable prefix",
                 ));
             }
-            let before_bytes = Self::file_len_or_zero(&path)?;
-            self.write_atomic_synced_replace(&path, &bytes)?;
-            let after_bytes = Self::file_len_or_zero(&path)?;
+            previous_stage = claim.stage;
+            saw_active |= claim.stage == 0;
+            saw_released |= claim.stage == 2;
+        }
+        if saw_released && saw_active {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous entrypoint release cannot mix Released and Active claims",
+            ));
+        }
+        if finalize_release && saw_active {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous entrypoint release requires the exact ReleasePending prefix",
+            ));
+        }
+
+        let released_prefix = u64::try_from(
+            observed.iter().take_while(|claim| claim.stage == 2).count(),
+        )
+        .map_err(|_| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous Released prefix exceeds u64",
+            )
+        })?;
+        let pending_prefix = u64::try_from(
+            observed.iter().take_while(|claim| claim.stage != 0).count(),
+        )
+        .map_err(|_| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous ReleasePending prefix exceeds u64",
+            )
+        })?;
+        let selected_count = u64::try_from(observed.len()).map_err(|_| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous release group size exceeds u64",
+            )
+        })?;
+        let mut prefix_before = if finalize_release {
+            released_prefix
+        } else {
+            pending_prefix
+        };
+        let mut plan = Vec::with_capacity(observed.len());
+        for claim in observed {
+            let replacement = if finalize_release && claim.stage == 1 {
+                Some(claim.released)
+            } else if !finalize_release && claim.stage == 0 {
+                Some(claim.pending)
+            } else {
+                None
+            };
+            let replacement = if let Some(replacement) = replacement {
+                let bytes = norito::encode_canonical(&replacement).map_err(Error::NoritoFrame)?;
+                if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
+                    return Err(Self::invalid_lane_artifact_error(
+                        claim.path,
+                        "transitioned autonomous entrypoint claim exceeds hard byte limit",
+                    ));
+                }
+                let authorization = projection_context
+                    .claim_transition_authorization(
+                        &claim.path,
+                        &replacement,
+                        finalize_release,
+                        prefix_before,
+                    )
+                    .map_err(|message| {
+                        Self::invalid_lane_artifact_error(claim.path.clone(), message)
+                    })?;
+                prefix_before = prefix_before.checked_add(1).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        claim.path.clone(),
+                        "autonomous release prefix overflows",
+                    )
+                })?;
+                Some((replacement, bytes, authorization))
+            } else {
+                None
+            };
+            plan.push(PlannedClaim {
+                path: claim.path,
+                temp_path: claim.temp_path,
+                promote_temp: claim.promote_temp,
+                remove_temp: claim.remove_temp,
+                replacement,
+            });
+        }
+        if prefix_before != selected_count {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous release does not form one complete ordered durable prefix",
+            ));
+        }
+
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        for claim in plan {
+            if claim.promote_temp {
+                Self::promote_autonomous_lane_entrypoint_claim_temp(&claim.temp_path, &claim.path)?;
+            } else if claim.remove_temp {
+                self.remove_autonomous_lane_entrypoint_claim_file(&claim.temp_path)?;
+            }
+            let Some((replacement, bytes, authorization)) = claim.replacement else {
+                continue;
+            };
+            let before_bytes = Self::file_len_or_zero(&claim.path)?;
+            let projection: ProductionInFlightFirstReleaseTransitionProjection = authorization
+                .consume_for_persistence(&claim.path, &replacement)
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        claim.path.clone(),
+                        "autonomous claim-prefix authority changed before persistence",
+                    )
+                })?;
+            let expected_action = if finalize_release {
+                IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED
+            } else {
+                IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING
+            };
+            if projection.action != expected_action {
+                return Err(Self::invalid_lane_artifact_error(
+                    claim.path,
+                    "autonomous claim-prefix authority names another transition",
+                ));
+            }
+            let checked = check_production_in_flight_first_release_transition(projection)
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        claim.path.clone(),
+                        "autonomous claim-prefix persistence failed the composed transition gate",
+                    )
+                })?;
+            if checked.into_projection() != projection {
+                return Err(Self::invalid_lane_artifact_error(
+                    claim.path,
+                    "checked autonomous claim-prefix projection changed before persistence",
+                ));
+            }
+            self.write_atomic_synced_replace(&claim.path, &bytes)?;
+            let after_bytes = Self::file_len_or_zero(&claim.path)?;
             self.update_disk_usage_delta(before_bytes, after_bytes);
         }
         accounting_mutation.finish();
@@ -31619,6 +31888,169 @@ impl Kura {
             }
         }
         Ok(())
+    }
+
+    /// Persist the locally produced executable payload only while Queue still
+    /// fences its exact durable V4/V5 reservation group.
+    ///
+    /// This is the production linearization point for the composed
+    /// `ActivateKura` action. The move-only authorization keeps every signed
+    /// transaction unavailable to concurrent Queue Commit/release until the
+    /// persistence attempt returns.
+    pub(crate) fn persist_producer_lane_executable_payload(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+        authorization: AutonomousLaneKuraActivationAuthorization<'_>,
+    ) -> Result<()> {
+        payload
+            .validate(expected_chain_id_hash, expected_epoch)
+            .map_err(|error| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    format!("invalid producer autonomous lane payload: {error}"),
+                )
+            })?;
+        let descriptor = &payload.origin_proposal.descriptor;
+        let (height_context_id, validator_count, producer, reservation_group) =
+            authorization.facts();
+        if validator_count == 0
+            || validator_count > 128
+            || usize::from(validator_count) != descriptor.validator_set.len()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "producer Kura activation has noncanonical committee width",
+            ));
+        }
+        let producer_index = descriptor
+            .validator_set
+            .iter()
+            .position(|peer| peer == &payload.producer)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "producer Kura activation signer is outside the exact committee",
+                )
+            })?;
+        let expected_producer = 1_u128
+            .checked_shl(u32::try_from(producer_index).map_err(|_| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "producer Kura activation committee index exceeds u32",
+                )
+            })?)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "producer Kura activation committee index exceeds the refinement width",
+                )
+            })?;
+        if producer != expected_producer {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "producer Kura activation authority names another committee member",
+            ));
+        }
+        let (expected_reservation_owner_hash, expected_proposal_identity_hash) =
+            autonomous_lane_reservation_identity_hashes_for_proposal(
+                expected_chain_id_hash,
+                height_context_id,
+                expected_epoch,
+                &payload.origin_proposal,
+                &payload.producer,
+            )
+            .map_err(|error| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    format!(
+                        "producer Kura activation cannot derive canonical slot identity: {error}"
+                    ),
+                )
+            })?;
+        let payload_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+                .map_err(|reason| {
+                    Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        format!("invalid producer Kura reservation group: {reason}"),
+                    )
+                })?;
+        if payload_group != reservation_group
+            || reservation_group.identity.lane_id != descriptor.lane_id
+            || reservation_group.identity.dataspace_id != descriptor.dataspace_id
+            || reservation_group.identity.lane_incarnation != descriptor.lane_incarnation
+            || reservation_group.identity.proposal_height != descriptor.proposal_height
+            || reservation_group.identity.lane_block_height != descriptor.lane_block_height
+            || reservation_group.identity.lane_block_view != descriptor.lane_block_view
+            || reservation_group.identity.reservation_owner_hash != expected_reservation_owner_hash
+            || reservation_group.identity.proposal_identity_hash != expected_proposal_identity_hash
+            || usize::try_from(reservation_group.reservation_count).ok()
+                != Some(payload.entrypoints.len())
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "producer Kura activation payload differs from its Queue-fenced reservation group",
+            ));
+        }
+        let validator_mask = if validator_count == 128 {
+            u128::MAX
+        } else {
+            (1_u128 << validator_count) - 1
+        };
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(reservation_group);
+        let before = ProductionInFlightFirstReleaseStateProjection {
+            validator_count,
+            producer,
+            producer_selected_owner: producer,
+            replicated_carrier_owners: validator_mask & !producer,
+            payload_binding_a: producer,
+            binding_a,
+            queue: ProductionInFlightFirstReleaseQueueProjection {
+                plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+                selected_count: reservation_group.reservation_count,
+                reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            },
+            carrier: ProductionInFlightFirstReleaseCarrierProjection::default(),
+            session: ProductionInFlightFirstReleaseSessionProjection {
+                bodies: producer,
+                producer_alive: true,
+                ..ProductionInFlightFirstReleaseSessionProjection::default()
+            },
+            history: ProductionInFlightFirstReleaseHistoryProjection {
+                ever_queue_plan_v4: true,
+                ever_reservation_v5: true,
+                ..ProductionInFlightFirstReleaseHistoryProjection::default()
+            },
+            decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+            release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+        };
+        let mut after = before;
+        after.carrier.kura_active = producer;
+        let projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,
+            actor: producer,
+            target: 0,
+            before,
+            after,
+        };
+        let checked =
+            check_production_in_flight_first_release_transition(projection).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "producer Kura activation failed the composed first-release transition gate",
+                )
+            })?;
+        if checked.into_projection() != projection {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "checked producer Kura activation changed before persistence",
+            ));
+        }
+
+        self.persist_lane_executable_payload(payload, expected_chain_id_hash, expected_epoch)
     }
 
     /// Persist a producer-authenticated, lane-owned executable payload.
@@ -31899,6 +32331,46 @@ impl Kura {
 
         let mut state = AutonomousLaneBlockViewState::from_artifact(&record.artifact);
         state.retirement = Some(retirement.clone());
+        let authorization = self
+            .authorize_autonomous_lane_slot_retirement_persistence(
+                &record.artifact.executable_payload,
+                retirement,
+                &record.view_state_path,
+            )
+            .map_err(|message| {
+                Self::invalid_lane_artifact_error(record.view_state_path.clone(), message)
+            })?;
+        let projection: ProductionInFlightFirstReleaseTransitionProjection = authorization
+            .consume_for_persistence(
+                &record.artifact.executable_payload,
+                retirement,
+                &record.view_state_path,
+            )
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    record.view_state_path.clone(),
+                    "autonomous slot-retirement authority changed before persistence",
+                )
+            })?;
+        if projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_KURA_RETIREMENT {
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path,
+                "autonomous slot-retirement authority names another transition",
+            ));
+        }
+        let checked =
+            check_production_in_flight_first_release_transition(projection).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    record.view_state_path.clone(),
+                    "autonomous slot-retirement persistence failed the composed transition gate",
+                )
+            })?;
+        if checked.into_projection() != projection {
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path,
+                "checked autonomous slot-retirement projection changed before persistence",
+            ));
+        }
         self.write_autonomous_lane_block_view_state_record_locked(
             &record.artifact.executable_payload,
             &state,
@@ -31913,18 +32385,225 @@ impl Kura {
         Ok(retirement.clone())
     }
 
+    fn autonomous_lane_entrypoint_claim_release_progress_locked(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+    ) -> Result<(u64, u64)> {
+        let retirement_hash = retirement.digest()?;
+        let mut released_prefix = 0_u64;
+        let mut saw_pending = false;
+        for entrypoint_hash in &payload.entrypoint_hashes {
+            let path = Self::autonomous_lane_entrypoint_claim_path(
+                &self.store_root,
+                &payload.chain_id_hash,
+                entrypoint_hash,
+            );
+            let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(&path);
+            if Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
+                return Err(Self::invalid_lane_artifact_error(
+                    temp_path,
+                    "cannot authorize Queue release while a claim transition is staged",
+                ));
+            }
+            let existing = Self::decode_autonomous_lane_entrypoint_claim(&path)
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+            if !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &path)
+                || !existing.owns_payload(payload)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "Queue release authorization found a claim for another exact payload",
+                ));
+            }
+            let pending = AutonomousLaneEntrypointClaimV3::release_pending_for_payload(
+                payload,
+                *entrypoint_hash,
+                retirement_hash,
+            );
+            let released = AutonomousLaneEntrypointClaimV3::released_for_payload(
+                payload,
+                *entrypoint_hash,
+                retirement_hash,
+            );
+            if existing == released {
+                if saw_pending {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous release claims contain a Released suffix after ReleasePending",
+                    ));
+                }
+                released_prefix = released_prefix.checked_add(1).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "autonomous Released prefix exceeds u64",
+                    )
+                })?;
+            } else if existing == pending {
+                saw_pending = true;
+            } else {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "Queue release authorization requires exact ReleasePending or Released claims",
+                ));
+            }
+        }
+        let pending_prefix = u64::try_from(payload.entrypoint_hashes.len()).map_err(|_| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous ReleasePending prefix exceeds u64",
+            )
+        })?;
+        Ok((pending_prefix, released_prefix))
+    }
+
+    /// Authenticate Queue's exact prepared-release boundary from durable Kura evidence.
+    ///
+    /// This reopens the exact historical attempt, verifies its retirement,
+    /// repairs only a canonical `ReleasePending` crash prefix for the current
+    /// attempt, and then mints a move-only authority bound to the complete
+    /// ordered Queue barrier. A superseded attempt is accepted only through
+    /// the existing authenticated supersession proof.
+    pub(crate) fn authorize_autonomous_lane_queue_release_preparation(
+        &self,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> Result<AutonomousLaneQueueReleasePreparationAuthorization> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        if retirement.version != AutonomousLaneSlotRetirementV1::VERSION
+            || retirement.chain_id_hash != expected_chain_id_hash
+            || retirement.epoch != expected_epoch
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous Queue release authorization has an unsupported chain context",
+            ));
+        }
+        let barrier = retirement.queue_release_barrier()?;
+        let entry = self.lane_storage_entry(retirement.lane_id)?;
+        let slot_path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
+            &entry,
+            &self.store_root,
+            retirement.lane_block_height,
+        );
+        let _guard = self.sidecar_lock.lock();
+        let record = self
+            .read_autonomous_lane_block_attempt_record_locked(
+                &entry,
+                retirement.lane_id,
+                retirement.lane_block_height,
+                retirement.proposal_height,
+                expected_chain_id_hash,
+                expected_epoch,
+                true,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    slot_path,
+                    "missing autonomous executable payload for Queue release authorization",
+                )
+            })?;
+        let payload = &record.artifact.executable_payload;
+        if record.retirement.as_ref() != Some(retirement) || !retirement.matches_payload(payload) {
+            return Err(Self::invalid_lane_artifact_error(
+                record.view_state_path,
+                "Queue release authorization does not match its durable Kura retirement",
+            ));
+        }
+        let current = self
+            .read_current_autonomous_lane_block_record_self_context_locked(
+                &entry,
+                retirement.lane_block_height,
+                true,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Queue release authorization has no current lane-height attempt",
+                )
+            })?;
+        let claims_fully_released = if current.artifact.executable_payload == *payload {
+            self.prepare_autonomous_lane_entrypoint_claim_release_locked(payload, retirement)?;
+            let (pending_prefix, released_prefix) =
+                self.autonomous_lane_entrypoint_claim_release_progress_locked(payload, retirement)?;
+            let selected_count = u64::try_from(payload.entrypoint_hashes.len()).map_err(|_| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous release group size exceeds u64",
+                )
+            })?;
+            if pending_prefix != selected_count {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Queue release authorization lacks the full ReleasePending prefix",
+                ));
+            }
+            released_prefix == selected_count
+        } else {
+            self.require_autonomous_lane_release_completed_or_superseded_locked(
+                &entry, payload, retirement,
+            )?;
+            true
+        };
+        AutonomousLaneReleaseProjectionContext::from_payload(self, payload, retirement)
+            .and_then(|context| {
+                context.queue_preparation_authorization(retirement, &barrier, claims_fully_released)
+            })
+            .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))
+    }
+
     /// Finish the claim half of an exact autonomous-slot release.
     ///
     /// Callers may invoke this only after Queue has durably prepared the
     /// byte-identical ordered barrier. Active claims are rejected here rather
     /// than skipping `ReleasePending`; exact `Released` retries are harmless.
+    pub(crate) fn finalize_autonomous_lane_slot_release_with_authorization(
+        &self,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        queue_barrier: &LaneQueueReservationReleaseBarrierV3,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+        authorization: DurableLaneQueueReleaseBarrierAuthorization,
+    ) -> Result<AutonomousLaneQueueReleaseFinalizationAuthorization> {
+        self.finalize_autonomous_lane_slot_release_inner(
+            retirement,
+            queue_barrier,
+            expected_chain_id_hash,
+            expected_epoch,
+            AutonomousLaneQueueReleaseBarrierGate::Authorized(authorization),
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn finalize_autonomous_lane_slot_release(
         &self,
         retirement: &AutonomousLaneSlotRetirementV1,
-        queue_barrier: &crate::queue::LaneQueueReservationReleaseBarrierV3,
+        queue_barrier: &LaneQueueReservationReleaseBarrierV3,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
     ) -> Result<()> {
+        self.finalize_autonomous_lane_slot_release_inner(
+            retirement,
+            queue_barrier,
+            expected_chain_id_hash,
+            expected_epoch,
+            AutonomousLaneQueueReleaseBarrierGate::DirectTest,
+        )
+        .map(drop)
+    }
+
+    fn finalize_autonomous_lane_slot_release_inner(
+        &self,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        queue_barrier: &LaneQueueReservationReleaseBarrierV3,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+        gate: AutonomousLaneQueueReleaseBarrierGate,
+    ) -> Result<AutonomousLaneQueueReleaseFinalizationAuthorization> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         self.durable_mutation_authorized()?;
@@ -31970,6 +32649,15 @@ impl Kura {
                 "autonomous lane claim release does not match its durable retirement",
             ));
         }
+        let payload = &record.artifact.executable_payload;
+        let finalization_authorization =
+            AutonomousLaneReleaseProjectionContext::from_payload(self, payload, retirement)
+                .and_then(|context| {
+                    context.queue_finalization_authorization(retirement, queue_barrier)
+                })
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                })?;
         let current = self
             .read_current_autonomous_lane_block_record_self_context_locked(
                 &entry,
@@ -31982,18 +32670,44 @@ impl Kura {
                     "autonomous lane claim release has no current lane-height attempt",
                 )
             })?;
-        if current.artifact.executable_payload == record.artifact.executable_payload {
-            self.finalize_autonomous_lane_entrypoint_claim_release_locked(
-                &record.artifact.executable_payload,
-                retirement,
-            )
+        if current.artifact.executable_payload == *payload {
+            let (pending_prefix, released_prefix) =
+                self.autonomous_lane_entrypoint_claim_release_progress_locked(payload, retirement)?;
+            let selected_count = u64::try_from(payload.entrypoint_hashes.len()).map_err(|_| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous release group size exceeds u64",
+                )
+            })?;
+            if pending_prefix != selected_count {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous claim release lacks the full ReleasePending prefix",
+                ));
+            }
+            let terminal_absence =
+                gate.consume_for_claim_transition(queue_barrier)
+                    .map_err(|message| {
+                        Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                    })?;
+            if terminal_absence && released_prefix != selected_count {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "forgotten Queue release cannot authorize pending Kura claims",
+                ));
+            }
+            self.finalize_autonomous_lane_entrypoint_claim_release_locked(payload, retirement)?;
         } else {
+            let _terminal_absence =
+                gate.consume_for_claim_transition(queue_barrier)
+                    .map_err(|message| {
+                        Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                    })?;
             self.require_autonomous_lane_release_completed_or_superseded_locked(
-                &entry,
-                &record.artifact.executable_payload,
-                retirement,
-            )
+                &entry, payload, retirement,
+            )?;
         }
+        Ok(finalization_authorization)
     }
 
     /// Read and fully revalidate the durable retirement for one active lane-height slot.
@@ -32146,18 +32860,6 @@ impl Kura {
             ));
         }
         let mut artifact = record.artifact;
-        crate::lane_consensus::validate_lane_payload_availability_certificate(
-            &certificate,
-            &artifact.executable_payload,
-            expected_chain_id_hash,
-            expected_epoch,
-        )
-        .map_err(|err| {
-            Self::invalid_lane_artifact_error(
-                slot_path.clone(),
-                format!("invalid autonomous lane availability certificate: {err}"),
-            )
-        })?;
         if let Some(existing) = &artifact.availability_certificate {
             if existing == &certificate {
                 return Ok(());
@@ -32171,6 +32873,45 @@ impl Kura {
             return Err(Self::invalid_lane_artifact_error(
                 slot_path,
                 "certified autonomous lane slot cannot add availability evidence",
+            ));
+        }
+        let authorization = Self::authorize_lane_payload_availability_certificate_persistence(
+            &artifact.executable_payload,
+            &certificate,
+            expected_chain_id_hash,
+            expected_epoch,
+        )
+        .map_err(|message| {
+            Self::invalid_lane_artifact_error(
+                slot_path.clone(),
+                format!("invalid autonomous lane availability certificate: {message}"),
+            )
+        })?;
+        let projection: ProductionInFlightFirstReleaseTransitionProjection = authorization
+            .consume_for_persistence(&artifact.executable_payload, &certificate)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    slot_path.clone(),
+                    "autonomous READY-QC persistence authorization changed before its Kura sink",
+                )
+            })?;
+        if projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC {
+            return Err(Self::invalid_lane_artifact_error(
+                slot_path,
+                "autonomous READY-QC authorization carries the wrong transition action",
+            ));
+        }
+        let checked_projection = check_production_in_flight_first_release_transition(projection)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    slot_path.clone(),
+                    "autonomous READY QC failed the composed first-release transition gate",
+                )
+            })?;
+        if checked_projection.into_projection() != projection {
+            return Err(Self::invalid_lane_artifact_error(
+                slot_path,
+                "autonomous READY-QC persistence projection is not the checked durable transition",
             ));
         }
         artifact.availability_certificate = Some(certificate);
@@ -33431,17 +34172,95 @@ impl Kura {
             ));
         }
         let artifact = LaneBlockExecutionInputArtifact::new(verified);
-        self.write_lane_block_execution_input_artifact(&artifact)
+        let execution_input_authorization = match (
+            artifact.autonomous_chain_id_hash,
+            artifact.autonomous_epoch,
+            artifact.autonomous_payload_hash,
+        ) {
+            (Some(chain_id_hash), Some(epoch), Some(payload_hash)) => {
+                let descriptor = &artifact.proposal.descriptor;
+                let autonomous = self
+                    .read_autonomous_lane_block_artifact_with_recovery_policy(
+                        descriptor.lane_id,
+                        descriptor.lane_block_height,
+                        chain_id_hash,
+                        epoch,
+                        false,
+                    )
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            self.store_root.clone(),
+                            "autonomous execution-input authorization lacks its exact durable payload",
+                        )
+                    })?;
+                if autonomous.executable_payload.payload_hash != payload_hash {
+                    return Err(Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "autonomous execution-input authorization recovered another payload",
+                    ));
+                }
+                Some(
+                    self.authorize_autonomous_execution_input_persistence(
+                        &autonomous.executable_payload,
+                        &artifact,
+                    )
+                    .map_err(|message| {
+                        Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                    })?,
+                )
+            }
+            (None, None, None) => None,
+            _ => {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "lane execution input has a partial autonomous context",
+                ));
+            }
+        };
+        self.write_lane_block_execution_input_artifact(&artifact, execution_input_authorization)
     }
 
     fn write_lane_block_execution_input_artifact(
         &self,
         artifact: &LaneBlockExecutionInputArtifact,
+        mut execution_input_authorization: Option<
+            AutonomousLaneExecutionInputPersistenceAuthorization,
+        >,
     ) -> Result<()> {
         self.durable_mutation_authorized()?;
         Self::validate_lane_block_execution_input_artifact(artifact).map_err(|message| {
             Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
         })?;
+        let autonomous_input = matches!(
+            (
+                artifact.autonomous_chain_id_hash,
+                artifact.autonomous_epoch,
+                artifact.autonomous_payload_hash,
+            ),
+            (Some(_), Some(_), Some(_))
+        );
+        match (autonomous_input, execution_input_authorization.as_ref()) {
+            (true, Some(authorization)) if authorization.matches_input(artifact) => {}
+            (false, None) => {}
+            (true, Some(_)) => {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous execution-input authorization does not match the artifact",
+                ));
+            }
+            (true, None) => {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous execution-input persistence lacks its authorization",
+                ));
+            }
+            (false, Some(_)) => {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "ordinary execution-input persistence received autonomous authorization",
+                ));
+            }
+        }
         let descriptor = &artifact.proposal.descriptor;
         let lane_id = descriptor.lane_id;
         let lane_block_height = descriptor.lane_block_height;
@@ -33523,6 +34342,37 @@ impl Kura {
             );
         }
 
+        if autonomous_input {
+            let projection: ProductionInFlightFirstReleaseTransitionProjection =
+                execution_input_authorization
+                    .take()
+                    .and_then(|authorization| authorization.consume_for_persistence(artifact))
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            data_path.clone(),
+                            "autonomous execution-input authorization changed before persistence",
+                        )
+                    })?;
+            if projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path.clone(),
+                    "autonomous execution-input persistence received the wrong transition",
+                ));
+            }
+            let checked = check_production_in_flight_first_release_transition(projection)
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        data_path.clone(),
+                        "autonomous execution input failed the composed first-release transition gate",
+                    )
+                })?;
+            if checked.into_projection() != projection {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path.clone(),
+                    "checked autonomous execution-input projection changed before persistence",
+                ));
+            }
+        }
         let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
             Ok(bytes) => Some(bytes),
             Err(err) => {

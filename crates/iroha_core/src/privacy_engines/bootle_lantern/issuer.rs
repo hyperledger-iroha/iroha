@@ -21,7 +21,10 @@ use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::{
-    credential_sampling::{CredentialRandomnessErrorV1, sample_credential_randomness_v1},
+    credential_sampling::{
+        BOOTLE_CREDENTIAL_RANDOMNESS_PROFILE_DESCRIPTOR_V1, CredentialRandomnessErrorV1,
+        sample_credential_randomness_v1,
+    },
     falcon512::{self, DEGREE as FALCON_DEGREE_V1, Trapdoor},
     params::{APPLICATION_MODULUS_V1, APPLICATION_RING_DEGREE_V1, APPLICATION_ROWS_V1},
     proof::{
@@ -105,12 +108,10 @@ impl BootleLanternIssuerKeyPairV1 {
         checked
             .try_fill_bytes(seed.as_mut())
             .map_err(|_| BootleLanternIssuanceErrorV1::RandomnessUnavailable)?;
-        let trapdoor = falcon512::generate_from_seed(
-            seed.as_ref(),
-            MAX_BOOTLE_LANTERN_ISSUER_KEYGEN_CANDIDATES_V1,
-        )
-        .ok_or(BootleLanternIssuanceErrorV1::IssuerKeyGenerationExhausted)?;
-        let public_matrix = public_matrix_from_falcon_h_v1(trapdoor.h.as_ref())?;
+        let trapdoor =
+            falcon512::generate_from_seed(&*seed, MAX_BOOTLE_LANTERN_ISSUER_KEYGEN_CANDIDATES_V1)
+                .ok_or(BootleLanternIssuanceErrorV1::IssuerKeyGenerationExhausted)?;
+        let public_matrix = public_matrix_from_falcon_h_v1(&**trapdoor.h)?;
         public_matrix
             .validate_r512_multiplication_structure_v1()
             .map_err(|_| BootleLanternIssuanceErrorV1::InvalidIssuerPublicMatrix)?;
@@ -514,15 +515,15 @@ pub fn issuer_blind_issue_with_rng_v1<RTag: CryptoRng + RngCore, RPreimage: Cryp
             .try_fill_bytes(seed.as_mut())
             .map_err(|_| BootleLanternIssuanceErrorV1::RandomnessUnavailable)?;
         if let Some(candidate) =
-            falcon512::sample_preimage_from_seed(&issuer.trapdoor, &falcon_target, seed.as_ref())
+            falcon512::sample_preimage_from_seed(&issuer.trapdoor, &falcon_target, &*seed)
         {
             preimage = Some(candidate);
             break;
         }
     }
     let preimage = preimage.ok_or(BootleLanternIssuanceErrorV1::PreimageSamplingExhausted)?;
-    let signature_one = centered_r512_to_r64_rank8_v1(preimage.first.as_ref());
-    let signature_two = centered_r512_to_r64_rank8_v1(preimage.second.as_ref());
+    let signature_one = centered_r512_to_r64_rank8_v1(&**preimage.first);
+    let signature_two = centered_r512_to_r64_rank8_v1(&**preimage.second);
     Ok(BootleLanternBlindIssuanceResponseV1 {
         tag,
         signature_one,
@@ -587,14 +588,31 @@ pub fn holder_finalize_blind_issuance_v1(
 /// Digest of the exact native issuer implementation profile.
 #[must_use]
 pub fn bootle_lantern_issuer_profile_digest_v1() -> [u8; 32] {
+    issuer_profile_digest_from_fields_v1(&[
+        BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1,
+        BOOTLE_CREDENTIAL_RANDOMNESS_PROFILE_DESCRIPTOR_V1,
+        falcon512::BOOTLE_LANTERN_FALCON512_PROFILE_DESCRIPTOR_V1,
+        falcon512::BOOTLE_LANTERN_FALCON512_MAPPING_DESCRIPTOR_V1,
+        falcon512::BOOTLE_LANTERN_FALCON512_IMPLEMENTATION_PROVENANCE_V1,
+    ])
+}
+
+fn issuer_profile_digest_from_fields_v1(fields: &[&[u8]]) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(ISSUER_PROFILE_DIGEST_DOMAIN_V1);
     hash.update(
-        u64::try_from(BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1.len())
-            .expect("fixed issuer descriptor length fits u64")
+        u64::try_from(fields.len())
+            .expect("fixed issuer profile field count fits u64")
             .to_be_bytes(),
     );
-    hash.update(BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1);
+    for field in fields {
+        hash.update(
+            u64::try_from(field.len())
+                .expect("fixed issuer profile field length fits u64")
+                .to_be_bytes(),
+        );
+        hash.update(field);
+    }
     hash.finalize().into()
 }
 
@@ -606,7 +624,7 @@ fn public_matrix_from_falcon_h_v1(
             .map(|coefficient| h[8 * coefficient + row])
             .collect(),
     });
-    BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+    BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
         .map_err(|_| BootleLanternIssuanceErrorV1::InvalidIssuerPublicMatrix)
 }
 
@@ -899,3 +917,48 @@ const _: () = {
     assert!(APPLICATION_RING_DEGREE_V1 * APPLICATION_ROWS_V1 == FALCON_DEGREE_V1);
     assert!(APPLICATION_MODULUS_V1 == 12_289);
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn issuer_profile_digest_binds_every_exact_native_subprofile_in_order() {
+        let canonical_fields = [
+            BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1,
+            BOOTLE_CREDENTIAL_RANDOMNESS_PROFILE_DESCRIPTOR_V1,
+            falcon512::BOOTLE_LANTERN_FALCON512_PROFILE_DESCRIPTOR_V1,
+            falcon512::BOOTLE_LANTERN_FALCON512_MAPPING_DESCRIPTOR_V1,
+            falcon512::BOOTLE_LANTERN_FALCON512_IMPLEMENTATION_PROVENANCE_V1,
+        ];
+        let canonical = bootle_lantern_issuer_profile_digest_v1();
+        assert_eq!(
+            canonical,
+            issuer_profile_digest_from_fields_v1(&canonical_fields)
+        );
+        assert_ne!(canonical, [0; 32]);
+
+        for changed_index in 0..canonical_fields.len() {
+            let mut changed_fields = canonical_fields
+                .iter()
+                .map(|field| field.to_vec())
+                .collect::<Vec<_>>();
+            changed_fields[changed_index][0] ^= 1;
+            let changed_refs = changed_fields.iter().map(Vec::as_slice).collect::<Vec<_>>();
+            assert_ne!(
+                canonical,
+                issuer_profile_digest_from_fields_v1(&changed_refs),
+                "field {changed_index} must be bound"
+            );
+        }
+
+        let reordered = [
+            canonical_fields[1],
+            canonical_fields[0],
+            canonical_fields[2],
+            canonical_fields[3],
+            canonical_fields[4],
+        ];
+        assert_ne!(canonical, issuer_profile_digest_from_fields_v1(&reordered));
+    }
+}

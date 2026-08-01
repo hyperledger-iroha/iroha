@@ -390,7 +390,30 @@ certificate round.
   advertised keeper, exact finality/wire identity, deterministic `f + 1`
   keeper selection, local pinning, all-selected-remote freshness, TTL and
   restart invalidation, checked registry capacity, bounded refresh, and the
-  final pre-stage recheck. Its production bindings include the exact durable
+  final pre-stage recheck. The autonomous producer bindings additionally cover
+  the move-only Queue V4/V5 activation fence, frozen height-context slot-hash
+  recomputation, checked `ActivateKura`, and the Kura payload sink before
+  publication. The first autonomous execution-input append is bound to a
+  repair-disabled exact payload reconstruction, move-only authorization, and
+  checked `PersistExecutionInput` projection before its indexed data/index
+  sink; exact replay is a storage stutter. They also bind the first READY-QC write to an exact
+  payload/certificate authorization and checked `PersistReadyQc` projection
+  before the durable Kura view-state sink; exact replay is a stutter. The first
+  autonomous certified-session write similarly consumes an exact
+  payload/input/READY/Commit/source authorization and checked `LaneCommit`
+  projection before the durable latest-frontier sink; exact replay remains a
+  stutter. The first autonomous slot-retirement write consumes an exact
+  payload/group/retirement/path authorization and checked
+  `PersistKuraRetirement` projection before the validated atomic view-state
+  sink. Claim release preflights the complete ordered on-disk group before any
+  mutation, accepts only canonical crash prefixes, and consumes an exact
+  path/replacement authorization with checked `AdvanceReleasePendingPrefix` or
+  `AdvanceReleasedPrefix` immediately before each synced atomic replacement.
+  Invalid mixed-stage groups are tested to remain byte-identical; canonical
+  restart prefixes and exact released retries are tested as idempotent. This is
+  a newly source-bound production slice, not completion of the still-open
+  production trace-extraction theorem. Kura
+  replica production bindings include the exact durable
   height/hash tip, body-free source token and complete-source revalidation,
   configured two-millisecond TTL and one-millisecond refresh minima,
   evictable-first window, fixed eight-probe/one-fanout turn,
@@ -441,13 +464,18 @@ certificate round.
   actions, including snapshot stutter and the direct-release terminal. The
   retired lane-wide removal operation is absent from the schema-bound V5
   journal and its old bytes fail closed without compatibility decoding. The
-  sole narrow production consumer is the pre-Kura autonomous reservation-batch
-  direct-release path:
-  under the Queue transition and FIFO locks it revalidates the exact V4/V5,
-  FIFO, group, and committee binding, consumes a move-only checked projection
-  immediately before the durable release append, and publishes FIFO ownership
-  afterward. The contract does not claim that any other production
-  linearization point extracts and consumes the relation. The
+  bounded production consumers now include QueuePlan selection/V5 fsync,
+  producer Kura activation, execution-input persistence, READY
+  authorization/signature/QC persistence,
+  autonomous lane-Commit persistence,
+  merge-source admission, canonical WSV application, post-carrier cleanup,
+  Kura slot retirement and ordered claim-prefix replacement, and the pre-Kura
+  direct-release path. The latter revalidates the exact V4/V5,
+  FIFO, group, and committee binding under the Queue transition and FIFO locks,
+  consumes a move-only checked projection immediately before the durable
+  release append, and publishes FIFO ownership afterward. These slices do not
+  cover every production linearization point and are not an end-to-end trace
+  extraction theorem. The
   release receipt requires the five
   refinement rows plus a separately named sixth
   `inflight-first-release-layout` row, preventing bounded layout evidence from

@@ -869,15 +869,14 @@ fn explicit_variant_discriminant(
         );
         return None;
     };
-    match literal.base10_parse::<u32>() {
-        Ok(value) => Some(value),
-        Err(_) => {
-            emit!(
-                emitter,
-                "Norito enum discriminants must be integer literals in 0..=u32::MAX"
-            );
-            None
-        }
+    if let Ok(value) = literal.base10_parse::<u32>() {
+        Some(value)
+    } else {
+        emit!(
+            emitter,
+            "Norito enum discriminants must be integer literals in 0..=u32::MAX"
+        );
+        None
     }
 }
 
@@ -892,17 +891,14 @@ fn enum_variant_indices(emitter: &mut Emitter, variants: &[IntoSchemaVariant]) -
         let explicit = explicit_variant_discriminant(emitter, variant);
         let rust_discriminant = if has_explicit {
             explicit.unwrap_or_default()
+        } else if let Some(discriminant) = next_rust_discriminant {
+            discriminant
         } else {
-            match next_rust_discriminant {
-                Some(discriminant) => discriminant,
-                None => {
-                    emit!(
-                        emitter,
-                        "implicit Norito enum discriminant exceeds u32::MAX"
-                    );
-                    0
-                }
-            }
+            emit!(
+                emitter,
+                "implicit Norito enum discriminant exceeds u32::MAX"
+            );
+            0
         };
         next_rust_discriminant = rust_discriminant.checked_add(1);
 

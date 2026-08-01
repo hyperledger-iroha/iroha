@@ -128,6 +128,10 @@ use crate::{
         LaneManifestSourceSnapshot,
     },
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle, verify_lane_privacy_proofs},
+    kura::{
+        AutonomousLaneQueueReleaseFinalizationAuthorization,
+        AutonomousLaneQueueReleasePreparationAuthorization,
+    },
     nexus::space_directory::{
         LaneIdentityMetadataError,
         extract_authority_domains as extract_directory_authority_domains,
@@ -143,11 +147,15 @@ use crate::{
         status,
         v2_core::{
             CanonicalIdentityProjection, IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_CANONICAL_PAYLOAD,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE,
             IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE,
             IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5,
             IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE,
             IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PREPARE_RESERVATION_RELEASE,
             IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO,
             IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4,
             IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_ABSENT, IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
             IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED,
@@ -896,6 +904,236 @@ impl LaneQueueReservationReleaseBarrierV3 {
     }
 }
 
+/// Move-only Queue proof consumed by Kura before changing exact participant
+/// claims from `ReleasePending` to `Released`.
+///
+/// The ordinary form is created only after the exact prepared barrier is
+/// durable (or reconstructed from its exact durable completion). The terminal
+/// form is permitted only when Kura already proved every claim `Released` and
+/// Queue has no remaining owner for any barrier key.
+#[must_use = "a durable Queue release-barrier proof must be consumed by Kura"]
+pub(crate) struct DurableLaneQueueReleaseBarrierAuthorization {
+    barrier: LaneQueueReservationReleaseBarrierV3,
+    terminal_absence: bool,
+}
+
+impl DurableLaneQueueReleaseBarrierAuthorization {
+    fn durable(barrier: &LaneQueueReservationReleaseBarrierV3) -> Self {
+        Self {
+            barrier: barrier.clone(),
+            terminal_absence: false,
+        }
+    }
+
+    fn terminal(barrier: &LaneQueueReservationReleaseBarrierV3) -> Self {
+        Self {
+            barrier: barrier.clone(),
+            terminal_absence: true,
+        }
+    }
+
+    /// Consume this proof for Kura's byte-identical claim transition.
+    pub(crate) fn consume_for_kura(
+        self,
+        barrier: &LaneQueueReservationReleaseBarrierV3,
+    ) -> Option<bool> {
+        (self.barrier == *barrier).then_some(self.terminal_absence)
+    }
+}
+
+enum LaneQueueReleasePreparationGate {
+    Authorized {
+        projection: ProductionInFlightFirstReleaseTransitionProjection,
+        claims_fully_released: bool,
+    },
+    #[cfg(test)]
+    DirectTest,
+}
+
+impl LaneQueueReleasePreparationGate {
+    fn from_authorization(
+        barrier: &LaneQueueReservationReleaseBarrierV3,
+        authorization: AutonomousLaneQueueReleasePreparationAuthorization,
+    ) -> Result<Self, LaneQueueReservationError> {
+        let (projection, claims_fully_released) =
+            authorization.consume_for_queue(barrier).ok_or_else(|| {
+                LaneQueueReservationError::InvalidIdentity(
+                    "Kura release-preparation authority names another exact barrier".to_owned(),
+                )
+            })?;
+        if projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_PREPARE_RESERVATION_RELEASE {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "Kura release-preparation authority names another transition".to_owned(),
+            ));
+        }
+        let checked =
+            check_production_in_flight_first_release_transition(projection).ok_or_else(|| {
+                LaneQueueReservationError::InvalidIdentity(
+                    "Kura release-preparation authority failed the composed transition gate"
+                        .to_owned(),
+                )
+            })?;
+        if checked.into_projection() != projection {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "Kura release-preparation authority changed during admission".to_owned(),
+            ));
+        }
+        Ok(Self::Authorized {
+            projection,
+            claims_fully_released,
+        })
+    }
+
+    fn claims_fully_released(&self) -> bool {
+        match self {
+            Self::Authorized {
+                claims_fully_released,
+                ..
+            } => *claims_fully_released,
+            #[cfg(test)]
+            Self::DirectTest => true,
+        }
+    }
+
+    fn projection(&self) -> Option<ProductionInFlightFirstReleaseTransitionProjection> {
+        match self {
+            Self::Authorized { projection, .. } => Some(*projection),
+            #[cfg(test)]
+            Self::DirectTest => None,
+        }
+    }
+
+    fn matches_barrier_group(
+        &self,
+        binding_a: CanonicalIdentityProjection,
+        selected_count: u64,
+    ) -> bool {
+        match self {
+            Self::Authorized { projection, .. } => {
+                projection.before.binding_a == binding_a
+                    && projection.after.binding_a == binding_a
+                    && projection.before.queue.selected_count == selected_count
+                    && projection.after.queue.selected_count == selected_count
+            }
+            #[cfg(test)]
+            Self::DirectTest => true,
+        }
+    }
+}
+
+enum LaneQueueReleaseFinalizationGate {
+    Authorized {
+        complete: ProductionInFlightFirstReleaseTransitionProjection,
+        restore: ProductionInFlightFirstReleaseTransitionProjection,
+        forget: ProductionInFlightFirstReleaseTransitionProjection,
+    },
+    #[cfg(test)]
+    DirectTest,
+}
+
+impl LaneQueueReleaseFinalizationGate {
+    fn from_authorization(
+        barrier: &LaneQueueReservationReleaseBarrierV3,
+        authorization: AutonomousLaneQueueReleaseFinalizationAuthorization,
+    ) -> Result<Self, LaneQueueReservationError> {
+        let [complete, restore, forget] =
+            authorization.consume_for_queue(barrier).ok_or_else(|| {
+                LaneQueueReservationError::InvalidIdentity(
+                    "Kura release-finalization authority names another exact barrier".to_owned(),
+                )
+            })?;
+        let expected_actions = [
+            IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE,
+        ];
+        for (projection, expected_action) in [complete, restore, forget]
+            .into_iter()
+            .zip(expected_actions)
+        {
+            if projection.action != expected_action {
+                return Err(LaneQueueReservationError::InvalidIdentity(
+                    "Kura release-finalization authority names an out-of-order transition"
+                        .to_owned(),
+                ));
+            }
+            let checked = check_production_in_flight_first_release_transition(projection)
+                .ok_or_else(|| {
+                    LaneQueueReservationError::InvalidIdentity(
+                        "Kura release-finalization authority failed the composed transition gate"
+                            .to_owned(),
+                    )
+                })?;
+            if checked.into_projection() != projection {
+                return Err(LaneQueueReservationError::InvalidIdentity(
+                    "Kura release-finalization authority changed during admission".to_owned(),
+                ));
+            }
+        }
+        let terminal =
+            production_in_flight_first_release_terminal_owner(forget.after).ok_or_else(|| {
+                LaneQueueReservationError::InvalidIdentity(
+                    "Kura release-finalization authority has no terminal owner".to_owned(),
+                )
+            })?;
+        if !terminal.ordinary_fifo_owner
+            || terminal.canonical_wsv_owner
+            || terminal.commit_terminal
+            || !terminal.release_terminal
+        {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "Kura release-finalization authority is not FIFO-only terminal ownership"
+                    .to_owned(),
+            ));
+        }
+        Ok(Self::Authorized {
+            complete,
+            restore,
+            forget,
+        })
+    }
+
+    fn projection(&self, action: u8) -> Option<ProductionInFlightFirstReleaseTransitionProjection> {
+        match self {
+            Self::Authorized {
+                complete,
+                restore,
+                forget,
+            } => match action {
+                IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE => Some(*complete),
+                IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO => Some(*restore),
+                IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE => Some(*forget),
+                _ => None,
+            },
+            #[cfg(test)]
+            Self::DirectTest => None,
+        }
+    }
+
+    fn matches_barrier_group(
+        &self,
+        binding_a: CanonicalIdentityProjection,
+        selected_count: u64,
+    ) -> bool {
+        match self {
+            Self::Authorized {
+                complete,
+                restore,
+                forget,
+            } => [*complete, *restore, *forget]
+                .into_iter()
+                .all(|projection| {
+                    projection.before.binding_a == binding_a
+                        && projection.after.binding_a == binding_a
+                        && projection.before.queue.selected_count == selected_count
+                        && projection.after.queue.selected_count == selected_count
+                }),
+            #[cfg(test)]
+            Self::DirectTest => true,
+        }
+    }
+}
+
 /// Durable post-claim release state retained until FIFO restoration is safe.
 ///
 /// A completion frame moves the exact live records here atomically. Keeping
@@ -1093,6 +1331,7 @@ pub(crate) struct LaneQueueReservationGroupBindingV1 {
 #[must_use = "a Queue-authenticated Kura activation must be consumed by the exact producer payload"]
 #[allow(missing_copy_implementations)]
 pub(crate) struct AutonomousLaneKuraActivationAuthorization<'queue> {
+    height_context_id: iroha_data_model::block::consensus_v2::HeightContextId,
     validator_count: u8,
     producer: u128,
     reservation_group: LaneQueueReservationGroupBindingV1,
@@ -1102,8 +1341,16 @@ pub(crate) struct AutonomousLaneKuraActivationAuthorization<'queue> {
 impl AutonomousLaneKuraActivationAuthorization<'_> {
     /// Borrow the exact committee and group facts rechecked by Kura while the
     /// embedded Queue transition fence remains live.
-    pub(crate) const fn facts(&self) -> (u8, u128, LaneQueueReservationGroupBindingV1) {
+    pub(crate) const fn facts(
+        &self,
+    ) -> (
+        iroha_data_model::block::consensus_v2::HeightContextId,
+        u8,
+        u128,
+        LaneQueueReservationGroupBindingV1,
+    ) {
         (
+            self.height_context_id,
             self.validator_count,
             self.producer,
             self.reservation_group,
@@ -4371,9 +4618,10 @@ impl Queue {
             {
                 return Err(LaneQueueReservationError::ReconciliationFifoOrderMismatch { hash });
             }
-            let claim = self.durable_plan_claims.get(&hash).ok_or(
-                LaneQueueReservationError::ReconciliationMissingDurableClaim { hash },
-            )?;
+            let claim = self
+                .durable_plan_claims
+                .get(&hash)
+                .ok_or(LaneQueueReservationError::ReconciliationMissingDurableClaim { hash })?;
             let binding = claim.global_admission_binding().map_err(|reason| {
                 LaneQueueReservationError::ReconciliationDurableClaimMismatch { hash, reason }
             })?;
@@ -4435,10 +4683,9 @@ impl Queue {
                 "pre-Kura activation has a noncanonical producer committee index".to_owned(),
             ));
         }
-        let reservation_group = lane_queue_reservation_group_binding_from_ordered_keys(
-            ordered_keys.iter(),
-        )
-        .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+        let reservation_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
+                .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
         let expected_identity = LaneQueueReservationGroupIdentityV1 {
             lane_id: scope.lane_id,
             dataspace_id: scope.dataspace_id,
@@ -4460,10 +4707,8 @@ impl Queue {
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
-        let records = self.revalidate_complete_live_pre_kura_group_locked(
-            reservation_group,
-            ordered_keys,
-        )?;
+        let records =
+            self.revalidate_complete_live_pre_kura_group_locked(reservation_group, ordered_keys)?;
         let reservation_transition = self
             .begin_durability_transition_locked(
                 records
@@ -4474,6 +4719,7 @@ impl Queue {
         drop(queue_guard);
 
         Ok(AutonomousLaneKuraActivationAuthorization {
+            height_context_id: authorization.height_context_id(),
             validator_count,
             producer,
             reservation_group,
@@ -4548,8 +4794,7 @@ impl Queue {
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
-        let records =
-            self.revalidate_complete_live_pre_kura_group_locked(expected_group, keys)?;
+        let records = self.revalidate_complete_live_pre_kura_group_locked(expected_group, keys)?;
 
         let selected_count = u64::try_from(records.len()).map_err(|_| {
             LaneQueueReservationError::InvalidIdentity(
@@ -4673,13 +4918,51 @@ impl Queue {
     /// # Errors
     /// Returns an exact binding conflict, a partial/missing live batch, or a
     /// durable journal failure.
+    pub(crate) fn prepare_lane_reservation_release_barrier_with_authorization(
+        &self,
+        barrier: &LaneQueueReservationReleaseBarrierV3,
+        authorization: AutonomousLaneQueueReleasePreparationAuthorization,
+    ) -> Result<DurableLaneQueueReleaseBarrierAuthorization, LaneQueueReservationError> {
+        let gate = LaneQueueReleasePreparationGate::from_authorization(barrier, authorization)?;
+        self.prepare_lane_reservation_release_barrier_inner(barrier, gate)
+            .map(|(_, authorization)| authorization)
+    }
+
+    #[cfg(test)]
     pub(crate) fn prepare_lane_reservation_release_barrier(
         &self,
         barrier: &LaneQueueReservationReleaseBarrierV3,
     ) -> Result<LaneQueueReservationOutcome, LaneQueueReservationError> {
+        self.prepare_lane_reservation_release_barrier_inner(
+            barrier,
+            LaneQueueReleasePreparationGate::DirectTest,
+        )
+        .map(|(outcome, _)| outcome)
+    }
+
+    fn prepare_lane_reservation_release_barrier_inner(
+        &self,
+        barrier: &LaneQueueReservationReleaseBarrierV3,
+        gate: LaneQueueReleasePreparationGate,
+    ) -> Result<
+        (
+            LaneQueueReservationOutcome,
+            DurableLaneQueueReleaseBarrierAuthorization,
+        ),
+        LaneQueueReservationError,
+    > {
         barrier
             .validate()
             .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+        let barrier_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(barrier.ordered_keys.iter())
+                .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+        let binding_a = canonical_lane_queue_reservation_group_identity_projection(barrier_group);
+        if !gate.matches_barrier_group(binding_a, barrier_group.reservation_count) {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "Kura release-preparation authority names another reservation group".to_owned(),
+            ));
+        }
         let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
         let queue_guard = self.push_remove_lock.lock();
         if self.transaction_selection_durability_faulted() {
@@ -4692,7 +4975,16 @@ impl Queue {
             .iter()
             .any(|completion| completion.barrier == *barrier)
         {
-            return Ok(LaneQueueReservationOutcome::Retained);
+            if !gate.claims_fully_released() {
+                return Err(LaneQueueReservationError::InvalidIdentity(
+                    "completed Queue release cannot precede the full durable Released prefix"
+                        .to_owned(),
+                ));
+            }
+            return Ok((
+                LaneQueueReservationOutcome::Retained,
+                DurableLaneQueueReleaseBarrierAuthorization::durable(barrier),
+            ));
         }
         if store
             .release_barriers
@@ -4700,7 +4992,10 @@ impl Queue {
             .any(|prepared| prepared == barrier)
         {
             if barrier.ordered_keys.iter().all(|key| store.exact(key)) {
-                return Ok(LaneQueueReservationOutcome::Retained);
+                return Ok((
+                    LaneQueueReservationOutcome::Retained,
+                    DurableLaneQueueReleaseBarrierAuthorization::durable(barrier),
+                ));
             }
             return Err(LaneQueueReservationError::InvalidIdentity(
                 "durable lane queue release barrier is missing an exact live reservation"
@@ -4717,7 +5012,21 @@ impl Queue {
             .filter(|key| store.exact(key))
             .count();
         if live == 0 {
-            return Ok(LaneQueueReservationOutcome::AlreadyFinalized);
+            if !gate.claims_fully_released() {
+                return Err(LaneQueueReservationError::InvalidIdentity(
+                    "missing Queue release ownership cannot authorize pending Kura claims"
+                        .to_owned(),
+                ));
+            }
+            if !self.release_barrier_has_exact_fifo_ownership_locked(barrier) {
+                return Err(LaneQueueReservationError::InvalidIdentity(
+                    "forgotten Queue release lacks exact ordinary FIFO ownership".to_owned(),
+                ));
+            }
+            return Ok((
+                LaneQueueReservationOutcome::AlreadyFinalized,
+                DurableLaneQueueReleaseBarrierAuthorization::terminal(barrier),
+            ));
         }
         if live != barrier.ordered_keys.len() {
             return Err(LaneQueueReservationError::InvalidIdentity(
@@ -4735,7 +5044,31 @@ impl Queue {
         drop(store);
         drop(queue_guard);
 
-        self.apply_lane_reservation_journal(|journal| journal.prepare_release(barrier.clone()))?;
+        self.apply_lane_reservation_journal(|journal| {
+            if let Some(projection) = gate.projection() {
+                let projection: ProductionInFlightFirstReleaseTransitionProjection = projection;
+                if projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_PREPARE_RESERVATION_RELEASE {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "checked Queue release-preparation authority names another transition",
+                    ));
+                }
+                let checked = check_production_in_flight_first_release_transition(projection)
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "Queue PrepareRelease failed the composed transition gate",
+                        )
+                    })?;
+                if checked.into_projection() != projection {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "checked Queue PrepareRelease projection changed before append",
+                    ));
+                }
+            }
+            journal.prepare_release(barrier.clone())
+        })?;
 
         let queue_guard = self.push_remove_lock.lock();
         let mut store = self.lane_reservations.lock();
@@ -4748,7 +5081,10 @@ impl Queue {
         if publish_fault {
             self.publish_latched_lane_reservation_durability_fault(None);
         }
-        Ok(LaneQueueReservationOutcome::Finalized)
+        Ok((
+            LaneQueueReservationOutcome::Finalized,
+            DurableLaneQueueReleaseBarrierAuthorization::durable(barrier),
+        ))
     }
 
     /// Complete one exact prepared release after Kura claims are durably
@@ -4762,13 +5098,43 @@ impl Queue {
     /// # Errors
     /// Returns an exact binding conflict, a missing prepared barrier, or a
     /// durable journal failure.
+    pub(crate) fn finalize_lane_reservation_release_barrier_with_authorization(
+        &self,
+        barrier: &LaneQueueReservationReleaseBarrierV3,
+        authorization: AutonomousLaneQueueReleaseFinalizationAuthorization,
+    ) -> Result<usize, LaneQueueReservationError> {
+        let gate = LaneQueueReleaseFinalizationGate::from_authorization(barrier, authorization)?;
+        self.finalize_lane_reservation_release_barrier_inner(barrier, gate)
+    }
+
+    #[cfg(test)]
     pub(crate) fn finalize_lane_reservation_release_barrier(
         &self,
         barrier: &LaneQueueReservationReleaseBarrierV3,
     ) -> Result<usize, LaneQueueReservationError> {
+        self.finalize_lane_reservation_release_barrier_inner(
+            barrier,
+            LaneQueueReleaseFinalizationGate::DirectTest,
+        )
+    }
+
+    fn finalize_lane_reservation_release_barrier_inner(
+        &self,
+        barrier: &LaneQueueReservationReleaseBarrierV3,
+        gate: LaneQueueReleaseFinalizationGate,
+    ) -> Result<usize, LaneQueueReservationError> {
         barrier
             .validate()
             .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+        let barrier_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(barrier.ordered_keys.iter())
+                .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+        let binding_a = canonical_lane_queue_reservation_group_identity_projection(barrier_group);
+        if !gate.matches_barrier_group(binding_a, barrier_group.reservation_count) {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "Kura release-finalization authority names another reservation group".to_owned(),
+            ));
+        }
         let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
         let queue_guard = self.push_remove_lock.lock();
         if self.transaction_selection_durability_faulted() {
@@ -4796,6 +5162,13 @@ impl Queue {
                     return Err(LaneQueueReservationError::InvalidIdentity(
                         "live lane reservations cannot be released without their durable ordered barrier"
                             .to_owned(),
+                    ));
+                }
+                let terminal_fifo_owned =
+                    self.release_barrier_has_exact_fifo_ownership_locked(barrier);
+                if !terminal_fifo_owned {
+                    return Err(LaneQueueReservationError::InvalidIdentity(
+                        "forgotten Queue release lacks exact ordinary FIFO ownership".to_owned(),
                     ));
                 }
                 return Ok(0);
@@ -4839,6 +5212,24 @@ impl Queue {
 
         if barrier_index.is_some() {
             self.apply_lane_reservation_journal(|journal| {
+                if let Some(projection) =
+                    gate.projection(IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE)
+                {
+                    let projection: ProductionInFlightFirstReleaseTransitionProjection = projection;
+                    let checked = check_production_in_flight_first_release_transition(projection)
+                        .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "Queue CompleteRelease failed the composed transition gate",
+                        )
+                    })?;
+                    if checked.into_projection() != projection {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "checked Queue CompleteRelease projection changed before append",
+                        ));
+                    }
+                }
                 journal.complete_release(completion.clone())
             })?;
             let queue_guard = self.push_remove_lock.lock();
@@ -4879,11 +5270,55 @@ impl Queue {
         // Keep the durable completion owner live while its hashes are put back into FIFO. If the
         // following ForgetRelease append fails or the process crashes, recovery replays this
         // exact ordered completion and selectors continue to exclude the restored hashes.
-        self.replace_fifo_locked(&restored_fifo);
+        if self.fifo_snapshot_locked() != restored_fifo {
+            if let Some(projection) =
+                gate.projection(IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO)
+            {
+                let projection: ProductionInFlightFirstReleaseTransitionProjection = projection;
+                let checked = check_production_in_flight_first_release_transition(projection)
+                    .ok_or_else(|| {
+                        LaneQueueReservationError::InvalidIdentity(
+                            "Queue FIFO restoration failed the composed transition gate".to_owned(),
+                        )
+                    })?;
+                if checked.into_projection() != projection {
+                    return Err(LaneQueueReservationError::InvalidIdentity(
+                        "checked Queue FIFO-restoration projection changed before publication"
+                            .to_owned(),
+                    ));
+                }
+            }
+            self.replace_fifo_locked(&restored_fifo);
+        }
+        let fifo_publication_complete =
+            self.release_barrier_has_exact_fifo_ownership_locked(barrier);
+        if !fifo_publication_complete {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "Queue release completion did not publish exact ordinary FIFO ownership".to_owned(),
+            ));
+        }
         drop(store);
         drop(queue_guard);
 
         self.apply_lane_reservation_journal(|journal| {
+            if let Some(projection) =
+                gate.projection(IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE)
+            {
+                let projection: ProductionInFlightFirstReleaseTransitionProjection = projection;
+                let checked = check_production_in_flight_first_release_transition(projection)
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "Queue ForgetRelease failed the composed transition gate",
+                        )
+                    })?;
+                if checked.into_projection() != projection {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "checked Queue ForgetRelease projection changed before append",
+                    ));
+                }
+            }
             journal.forget_release(completion.barrier.clone())
         })?;
 
@@ -13519,6 +13954,45 @@ impl Queue {
         hashes
     }
 
+    /// Prove that every released reservation is again owned by ordinary FIFO
+    /// in the barrier's original relative order.
+    ///
+    /// Caller must hold `push_remove_lock`. This is the physical counterpart
+    /// of the composed model's FIFO-only terminal owner: Kura's durable
+    /// `Released` claims prove that Queue once prepared the exact barrier, but
+    /// cannot by themselves prove that Queue published the transaction bytes
+    /// after forgetting its completion record.
+    fn release_barrier_has_exact_fifo_ownership_locked(
+        &self,
+        barrier: &LaneQueueReservationReleaseBarrierV3,
+    ) -> bool {
+        let fifo = self.fifo_snapshot_locked();
+        if fifo.len() < barrier.ordered_keys.len() {
+            return false;
+        }
+        let mut positions = HashMap::with_capacity(fifo.len());
+        for (position, hash) in fifo.into_iter().enumerate() {
+            if positions.insert(hash, position).is_some() {
+                return false;
+            }
+        }
+        let mut previous_position = None;
+        for key in &barrier.ordered_keys {
+            let hash = key.signed_transaction_hash;
+            if !self.txs.contains_key(&hash) {
+                return false;
+            }
+            let Some(position) = positions.get(&hash).copied() else {
+                return false;
+            };
+            if previous_position.is_some_and(|previous| previous >= position) {
+                return false;
+            }
+            previous_position = Some(position);
+        }
+        true
+    }
+
     /// Remove a hash set from FIFO without changing the order of any unrelated hash.
     /// Caller must hold `push_remove_lock`.
     fn remove_hashes_from_fifo_locked(&self, removed: &HashSet<SignedTxHash>) -> usize {
@@ -13565,9 +14039,6 @@ impl Queue {
             let Some(tx) = self.txs.get(&hash) else {
                 continue;
             };
-            if self.is_expired(tx.as_accepted()) {
-                continue;
-            }
             drop(tx);
             if members.insert(hash) {
                 hashes.push(hash);
@@ -13824,6 +14295,7 @@ impl Queue {
         status::set_tx_queue_pressure(self.pressure_snapshot());
     }
 
+    #[cfg(test)]
     fn push_queued_hash(&self, hash: SignedTxHash, enqueued_at_ms: u64) -> bool {
         if let Err(error) = self.ensure_fifo_order_locked(hash, None) {
             warn!(tx = %hash, %error, "failed to allocate queue FIFO order identity");

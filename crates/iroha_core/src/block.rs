@@ -28862,6 +28862,25 @@ mod tests {
         World::with_assets(domains, accounts, asset_definitions, assets, nfts)
     }
 
+    fn accept_transaction_at_mock_time(
+        transaction: SignedTransaction,
+        chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+        now: Duration,
+    ) -> Result<AcceptedTransaction<'static>, crate::tx::AcceptTransactionFail> {
+        let (_time_handle, time_source) = TimeSource::new_mock(now);
+        AcceptedTransaction::accept_with_time_source(
+            transaction,
+            chain_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            &time_source,
+        )
+    }
+
     fn decode_stored_state_int(stored: &[u8]) -> i64 {
         let record: ivm::state_value::StateValueRecordV1 =
             norito::decode_from_bytes(stored).expect("decode canonical durable-state record");
@@ -33061,12 +33080,13 @@ seiyaku DynamicTarget {
                 .into(),
             ))
             .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
+        let tx = accept_transaction_at_mock_time(
             tx,
             &chain_id,
             max_clock_drift,
             tx_limits,
             state.crypto().as_ref(),
+            Duration::from_millis(10),
         )
         .expect("transaction should pass stateless admission");
 
@@ -33236,12 +33256,13 @@ seiyaku MeteredFailure {
                 vec![ExecutableBatchItem::ContractCall(invocation)].into(),
             ))
             .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
+        let tx = accept_transaction_at_mock_time(
             tx,
             &chain_id,
             max_clock_drift,
             tx_limits,
             state.crypto().as_ref(),
+            Duration::from_millis(10),
         )
         .expect("transaction should pass stateless admission");
 
@@ -33350,12 +33371,13 @@ seiyaku MeteredFailure {
                             vec![ExecutableBatchItem::Instruction(log_instruction.clone())].into(),
                         ))
                         .sign(keypair.private_key());
-                    AcceptedTransaction::accept(
+                    accept_transaction_at_mock_time(
                         transaction,
                         &chain_id,
                         max_clock_drift,
                         tx_limits,
                         state.crypto().as_ref(),
+                        Duration::from_millis(10),
                     )
                     .expect("batch must pass stateless admission")
                 })
@@ -33483,25 +33505,29 @@ seiyaku MeteredFailure {
             )],
             None,
         );
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone(), fee_payment);
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            payer_id.clone(),
+            &block_time_source,
+            fee_payment,
+        )
             .with_instructions([Transfer::asset_quantity(
                 payer_transfer_asset.clone(),
                 1_u32,
                 recipient_id.clone(),
             )])
             .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
+        let tx = AcceptedTransaction::accept_with_time_source(
             tx,
             &chain_id,
             max_clock_drift,
             tx_limits,
             state.crypto().as_ref(),
+            &block_time_source,
         )
         .expect("transaction should pass stateless admission");
 
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
         let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
             .chain(1, Some(&latest_signed))
             .sign(payer_keypair.private_key())
@@ -33622,12 +33648,13 @@ seiyaku MeteredFailure {
                 Json::from(true),
             )])
             .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
+        let tx = accept_transaction_at_mock_time(
             tx,
             &chain_id,
             max_clock_drift,
             tx_limits,
             state.crypto().as_ref(),
+            Duration::from_millis(10),
         )
         .expect("transaction should pass stateless admission");
 
@@ -33765,12 +33792,13 @@ seiyaku MeteredFailure {
                 recipient_id,
             )])
             .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
+        let tx = accept_transaction_at_mock_time(
             tx,
             &chain_id,
             max_clock_drift,
             tx_limits,
             state.crypto().as_ref(),
+            Duration::from_millis(10),
         )
         .expect("transaction should pass stateless admission");
 
@@ -33926,12 +33954,13 @@ seiyaku MeteredFailure {
                 recipient_id.clone(),
             )])
             .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
+        let tx = accept_transaction_at_mock_time(
             tx,
             &chain_id,
             max_clock_drift,
             tx_limits,
             state.crypto().as_ref(),
+            Duration::from_millis(10),
         )
         .expect("transaction should pass stateless admission");
 
@@ -34072,12 +34101,13 @@ seiyaku MeteredFailure {
                 recipient_id,
             )])
             .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
+        let tx = accept_transaction_at_mock_time(
             tx,
             &chain_id,
             max_clock_drift,
             tx_limits,
             state.crypto().as_ref(),
+            Duration::from_millis(10),
         )
         .expect("transaction should pass stateless admission");
 
@@ -34196,12 +34226,13 @@ seiyaku MeteredFailure {
                 recipient_id,
             )])
             .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
+        let tx = accept_transaction_at_mock_time(
             tx,
             &chain_id,
             max_clock_drift,
             tx_limits,
             state.crypto().as_ref(),
+            Duration::from_millis(10),
         )
         .expect("transaction should pass stateless admission");
 
@@ -34327,12 +34358,13 @@ seiyaku MeteredFailure {
                 recipient_id.clone(),
             )])
             .sign(payer_keypair.private_key());
-        let first_tx = AcceptedTransaction::accept(
+        let first_tx = accept_transaction_at_mock_time(
             first_tx,
             &chain_id,
             max_clock_drift,
             tx_limits,
             state.crypto().as_ref(),
+            Duration::from_millis(10),
         )
         .expect("first transaction should pass stateless admission");
 
@@ -34346,12 +34378,13 @@ seiyaku MeteredFailure {
                 recipient_id,
             )])
             .sign(payer_keypair.private_key());
-        let second_tx = AcceptedTransaction::accept(
+        let second_tx = accept_transaction_at_mock_time(
             second_tx,
             &chain_id,
             max_clock_drift,
             tx_limits,
             state.crypto().as_ref(),
+            Duration::from_millis(10),
         )
         .expect("second transaction should pass stateless admission");
 
@@ -34497,12 +34530,13 @@ seiyaku MeteredFailure {
                 Unregister::domain(missing_domain_id).into(),
             ])
             .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
+        let tx = accept_transaction_at_mock_time(
             tx,
             &chain_id,
             max_clock_drift,
             tx_limits,
             state.crypto().as_ref(),
+            Duration::from_millis(10),
         )
         .expect("transaction should pass stateless admission");
 
@@ -34655,12 +34689,13 @@ seiyaku MeteredFailure {
                 recipient_id,
             )])
             .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
+        let tx = accept_transaction_at_mock_time(
             tx,
             &chain_id,
             max_clock_drift,
             tx_limits,
             state.crypto().as_ref(),
+            Duration::from_millis(10),
         )
         .expect("transaction should pass stateless admission");
 
@@ -35025,12 +35060,13 @@ seiyaku MeteredFailure {
                 recipient_id,
             )])
             .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
+        let tx = accept_transaction_at_mock_time(
             tx,
             &chain_id,
             max_clock_drift,
             tx_limits,
             state.crypto().as_ref(),
+            Duration::from_millis(10),
         )
         .expect("transaction should pass stateless admission");
 
@@ -35182,12 +35218,13 @@ seiyaku MeteredFailure {
                 SetKeyValue::account(payer_id.clone(), event_key.clone(), Json::from(true)).into(),
             ])
             .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
+        let tx = accept_transaction_at_mock_time(
             tx,
             &chain_id,
             max_clock_drift,
             tx_limits,
             state.crypto().as_ref(),
+            Duration::from_millis(10),
         )
         .expect("transaction should pass stateless admission");
 

@@ -51,7 +51,7 @@ pub(crate) mod projection_air;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod relation;
 pub(crate) mod rfc5280_stark;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) mod sha256_air;
 pub(crate) mod sha256_word_air;
 pub(crate) mod sha_call_bus_stark;

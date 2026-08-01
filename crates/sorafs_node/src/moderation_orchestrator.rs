@@ -19,6 +19,7 @@ use std::os::unix::fs::{
 };
 
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
+use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature as IrohaSignature};
 use iroha_data_model::{
     account::{AccountId, ParsedAccountId},
     events::data::sorafs::SorafsModerationLedgerEventKind,
@@ -59,8 +60,8 @@ pub use checkpoint_store::{
     ModerationCheckpointStoreRecordV1, ModerationCheckpointStoreV1,
 };
 use terminal_handoff::{
-    retained_terminal_finalization_cursor, terminal_finalization_event_matches_outcome,
-    terminal_handoff_id, validate_retained_terminal_handoff,
+    terminal_finalization_event_matches_outcome, terminal_handoff_id,
+    validate_retained_terminal_handoff,
 };
 
 pub use iroha_data_model::sorafs::moderation_ledger::{
@@ -71,10 +72,24 @@ pub use iroha_data_model::sorafs::moderation_ledger::{
 
 /// Checkpoint schema version.
 ///
-/// Version five chain-binds the complete checkpoint and terminal handoff
-/// identities, and pins each handoff to the exact `CaseFinalized` block. Earlier
+/// Version nine adds source-bound dead-letter resolution receipts plus bounded
+/// native-operation and terminal-handoff archive tombstones. Earlier
 /// pre-release state is intentionally rejected instead of migrated.
-pub const MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1: u16 = 5;
+pub const MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1: u16 = 9;
+/// Canonical panel-notification terminal-record archive schema version.
+pub const MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1: u16 = 4;
+/// Hard ceiling for terminal records in one canonical archive artifact.
+pub const MODERATION_PANEL_NOTIFICATION_ARCHIVE_MAX_RECORDS_V1: usize = 65_536;
+/// Exact maximum for the minimal source manifest plus canonical archive wrapper.
+pub const MODERATION_PANEL_NOTIFICATION_ARCHIVE_WRAPPER_MAX_BYTES_V1: u64 = 1024 * 1024;
+/// Maximum archive heads authenticated in one incremental audit page.
+pub const MODERATION_PANEL_NOTIFICATION_ARCHIVE_AUDIT_PAGE_MAX_V1: u32 = 16;
+/// Maximum authenticated archive-signer epochs retained in sealed state.
+pub const MODERATION_PANEL_NOTIFICATION_ARCHIVE_MAX_SIGNER_EPOCHS_V1: usize = 256;
+/// Exact runtime-provider broker slot bound into every archive receipt signature.
+pub const MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_SLOT_V1: u16 = 55;
+/// Existing sealed-checkpoint broker slot bound into terminal-source attestations.
+pub const MODERATION_PANEL_NOTIFICATION_SOURCE_ATTESTOR_BROKER_SLOT_V1: u16 = 52;
 /// Hard ceiling for one canonical native moderation instruction.
 pub const MODERATION_NATIVE_INSTRUCTION_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
 /// Hard ceiling for one persisted orchestrator checkpoint.
@@ -110,6 +125,35 @@ const PANEL_NOTIFICATION_RECORD_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.panel-notification-record.v1";
 const PANEL_NOTIFICATION_OUTBOX_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.panel-notification-outbox.v1";
+const PANEL_NOTIFICATION_ARCHIVE_PAYLOAD_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-archive-payload.v4";
+const PANEL_NOTIFICATION_ARCHIVE_OPERATION_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-archive-operation.v4";
+const PANEL_NOTIFICATION_ARCHIVE_HEAD_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-archive-head.v4";
+const PANEL_NOTIFICATION_ARCHIVE_RECEIPT_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-archive-receipt.v4";
+const PANEL_NOTIFICATION_ARCHIVE_SOURCE_MANIFEST_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-archive-source-manifest.v1";
+const PANEL_NOTIFICATION_ARCHIVE_SOURCE_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-archive-source.v1";
+const PANEL_NOTIFICATION_ARCHIVE_SOURCE_ATTESTATION_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-archive-source-attestation.v1";
+const PANEL_NOTIFICATION_ARCHIVE_AUDIT_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-archive-audit.v1";
+const PANEL_NOTIFICATION_ARCHIVE_SIGNER_EPOCH_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-archive-signer-epoch.v1";
+const PANEL_NOTIFICATION_ARCHIVE_SIGNER_ROTATION_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-archive-signer-rotation.v1";
+const PANEL_NOTIFICATION_ARCHIVE_SIGNER_POP_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-archive-signer-pop.v1";
+const DEAD_LETTER_RESOLUTION_DOMAIN_V1: &[u8] = b"sorafs.moderation.dead-letter-resolution.v1";
+const DURABLE_DEAD_LETTER_RECORD_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.durable-dead-letter-record.v1";
+const COMPLETED_HANDOFF_RECORD_DOMAIN_V1: &[u8] = b"sorafs.moderation.completed-handoff-record.v1";
+const NATIVE_OPERATION_RECORD_DOMAIN_V1: &[u8] = b"sorafs.moderation.native-operation-record.v1";
+const TERMINAL_ARCHIVE_RECORD_KEY_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.terminal-archive-record-key.v1";
 const EXTERNAL_WORK_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.external-work-digest.v1";
 const EXTERNAL_WORK_LEASE_DOMAIN_V1: &[u8] = b"sorafs.moderation.external-work-lease.v1";
 static CHECKPOINT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -521,6 +565,12 @@ pub enum ModerationRuntimeProviderQualificationErrorV1 {
     /// The provider identity or public policy changed after it was pinned.
     #[error("moderation runtime provider identity or policy changed after qualification")]
     IdentityOrPolicyChanged,
+    /// The immutable archive namespace changed after qualification.
+    #[error("moderation receipt archive identity does not match configuration")]
+    ArchiveIdentityChanged,
+    /// The immutable archive signing key changed after qualification.
+    #[error("moderation receipt archive public key does not match configuration")]
+    ArchivePublicKeyChanged,
 }
 
 /// Fixed readiness failures returned by a moderation runtime provider.
@@ -647,6 +697,12 @@ pub struct ModerationOrchestratorConfigV1 {
     pub checkpoint_store_handle: String,
     /// Exact checkpoint-store adapter and public-policy qualification.
     pub expected_checkpoint_store_qualification: ModerationRuntimeProviderQualificationV1,
+    /// Archive-lifetime-stable Ed25519 trust anchor authenticating checkpoint
+    /// terminal-set attestations.
+    ///
+    /// An HSM may rotate internal material only while preserving this public
+    /// identity. V1 rejects changing this key once archive history exists.
+    pub checkpoint_store_attestation_public_key: [u8; 32],
     /// Maximum appeals and activated cases retained in the projection.
     pub max_cases: usize,
     /// Maximum finalized events retained in one projection.
@@ -661,6 +717,8 @@ pub struct ModerationOrchestratorConfigV1 {
     pub max_submit_attempts: u32,
     /// Maximum checkpoint bytes.
     pub checkpoint_max_bytes: u64,
+    /// Maximum canonical notification archive artifact bytes.
+    pub panel_notification_archive_max_bytes: u64,
     /// Governed identity of the injected HSM transaction signer.
     pub transaction_signer_handle: String,
     /// Independently governed signer adapter and public-policy qualification.
@@ -681,6 +739,22 @@ pub struct ModerationOrchestratorConfigV1 {
     pub panel_notification_handle: String,
     /// Independently governed notification adapter and public-policy qualification.
     pub expected_panel_notification_qualification: ModerationRuntimeProviderQualificationV1,
+    /// Governed identity of the immutable notification-receipt archive.
+    pub panel_notification_archive_handle: String,
+    /// Independently governed archive adapter and public-policy qualification.
+    pub expected_panel_notification_archive_qualification: ModerationRuntimeProviderQualificationV1,
+    /// Stable non-secret archive namespace identity.
+    pub panel_notification_archive_id: [u8; 32],
+    /// Bootstrap Ed25519 archive signer pinned for recovery and epoch-log genesis.
+    pub panel_notification_archive_bootstrap_public_key: [u8; 32],
+    /// Exact Ed25519 key authenticating durable archive readback.
+    pub panel_notification_archive_public_key: [u8; 32],
+    /// Inclusive final generation authorized for the predecessor signer.
+    pub panel_notification_archive_predecessor_revocation_generation: Option<u64>,
+    /// Predecessor-key authorization of the configured signer transition.
+    pub panel_notification_archive_predecessor_authorization_signature: Option<[u8; 64]>,
+    /// Configured new-key proof of possession for the same transition.
+    pub panel_notification_archive_new_key_possession_signature: Option<[u8; 64]>,
 }
 
 impl ModerationOrchestratorConfigV1 {
@@ -712,12 +786,30 @@ impl ModerationOrchestratorConfigV1 {
                 )));
             }
         }
+        if self.max_handoffs > MODERATION_PANEL_NOTIFICATION_ARCHIVE_MAX_RECORDS_V1 {
+            return Err(ModerationOrchestratorError::InvalidConfiguration(
+                "max_handoffs exceeds the canonical notification archive record ceiling".to_owned(),
+            ));
+        }
+        let minimum_archive_bytes = MODERATION_PANEL_NOTIFICATION_ARCHIVE_WRAPPER_MAX_BYTES_V1;
         if self.max_submit_attempts == 0
             || self.checkpoint_max_bytes == 0
             || self.checkpoint_max_bytes > MODERATION_ORCHESTRATOR_CHECKPOINT_MAX_BYTES_V1
+            || self.panel_notification_archive_max_bytes < minimum_archive_bytes
         {
             return Err(ModerationOrchestratorError::InvalidConfiguration(
-                "submission attempts or checkpoint byte bound is invalid".to_owned(),
+                "submission attempts, checkpoint bytes, or archive bytes are invalid".to_owned(),
+            ));
+        }
+        if self.checkpoint_store_attestation_public_key == [0; 32]
+            || PublicKey::from_bytes(
+                Algorithm::Ed25519,
+                &self.checkpoint_store_attestation_public_key,
+            )
+            .is_err()
+        {
+            return Err(ModerationOrchestratorError::InvalidConfiguration(
+                "checkpoint terminal-set attestation key is invalid".to_owned(),
             ));
         }
         for (handle, qualification) in [
@@ -745,6 +837,10 @@ impl ModerationOrchestratorConfigV1 {
                 self.panel_notification_handle.as_str(),
                 self.expected_panel_notification_qualification,
             ),
+            (
+                self.panel_notification_archive_handle.as_str(),
+                self.expected_panel_notification_archive_qualification,
+            ),
         ] {
             validate_moderation_runtime_provider_handle(handle, true).map_err(|_| {
                 ModerationOrchestratorError::InvalidConfiguration(
@@ -756,6 +852,50 @@ impl ModerationOrchestratorConfigV1 {
                     "moderation runtime provider binding is invalid".to_owned(),
                 ));
             }
+        }
+        if self.panel_notification_archive_id == [0; 32]
+            || self.panel_notification_archive_bootstrap_public_key == [0; 32]
+            || self.panel_notification_archive_public_key == [0; 32]
+            || PublicKey::from_bytes(
+                Algorithm::Ed25519,
+                &self.panel_notification_archive_bootstrap_public_key,
+            )
+            .is_err()
+            || PublicKey::from_bytes(
+                Algorithm::Ed25519,
+                &self.panel_notification_archive_public_key,
+            )
+            .is_err()
+        {
+            return Err(ModerationOrchestratorError::InvalidConfiguration(
+                "moderation receipt archive identity or public key is invalid".to_owned(),
+            ));
+        }
+        if self.checkpoint_store_handle == self.panel_notification_archive_handle
+            || self.checkpoint_store_attestation_public_key
+                == self.panel_notification_archive_bootstrap_public_key
+            || self.checkpoint_store_attestation_public_key
+                == self.panel_notification_archive_public_key
+        {
+            return Err(ModerationOrchestratorError::InvalidConfiguration(
+                "checkpoint attestor and immutable archive must be independently administered"
+                    .to_owned(),
+            ));
+        }
+        let rotation_fields = (
+            self.panel_notification_archive_predecessor_revocation_generation,
+            self.panel_notification_archive_predecessor_authorization_signature,
+            self.panel_notification_archive_new_key_possession_signature,
+        );
+        let rotation_shape_is_valid = rotation_fields == (None, None, None)
+            || (matches!(rotation_fields, (Some(_), Some(_), Some(_)))
+                && rotation_fields.1 != Some([0; 64])
+                && rotation_fields.2 != Some([0; 64]));
+        if !rotation_shape_is_valid {
+            return Err(ModerationOrchestratorError::InvalidConfiguration(
+                "archive signer rotation requires exact predecessor cutoff, authorization, and new-key proof of possession"
+                    .to_owned(),
+            ));
         }
         Ok(())
     }
@@ -1105,8 +1245,12 @@ pub struct ModerationTerminalHandoffV1 {
     pub round_id: String,
     /// Canonical digest of the authoritative terminal outcome.
     pub outcome_digest: [u8; 32],
-    /// Exact finalized block that committed the terminal event.
-    pub finalized_cursor: ModerationFinalizedCursorV1,
+    /// Consensus timestamp retained in the authoritative terminal outcome.
+    pub outcome_finalized_at_unix_ms: u64,
+    /// Exact finalized event that committed the terminal outcome.
+    pub finalized_cursor: ModerationFinalizedEventCursorV1,
+    /// Sealed minimal committed-event witness retained across bounded event-window eviction.
+    pub source_event_witness: ModerationFinalizedEventV1,
 }
 
 /// Exactly-once terminal settlement/publication adapter.
@@ -1116,6 +1260,24 @@ pub trait ModerationTerminalHandoffSinkV1: ModerationRuntimeProviderV1 {
         &self,
         handoff: &ModerationTerminalHandoffV1,
     ) -> Result<(), ModerationHandoffFailureV1>;
+
+    /// Publish or replay one exact signed notification-archive head.
+    ///
+    /// Publication implementations must enforce monotonic generation and chain
+    /// commitment, atomically deduplicate `operation_id` against the canonical
+    /// head bytes, and reject forks, gaps, or substituted bytes.
+    fn publish_panel_notification_archive_head(
+        &self,
+        head: &ModerationPanelNotificationArchiveHeadV1,
+    ) -> Result<(), ModerationHandoffFailureV1>;
+
+    /// Read the exact publicly visible monotonic archive head.
+    ///
+    /// The returned value must come from the same authenticated durable store
+    /// used by publication; process-local publication caches are invalid.
+    fn read_panel_notification_archive_head(
+        &self,
+    ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationHandoffFailureV1>;
 }
 
 /// Fixed handoff failures safe for durable recording.
@@ -1215,6 +1377,98 @@ pub enum ModerationPanelNotificationFailureV1 {
     Permanent,
 }
 
+/// Durable dead-letter class addressed by an externally authorized resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub enum ModerationDeadLetterKindV1 {
+    /// A native moderation transaction submission.
+    NativeSubmission,
+    /// A settlement or publication terminal handoff.
+    TerminalHandoff,
+    /// A payload-free panel notification.
+    PanelNotification,
+}
+
+impl ModerationDeadLetterKindV1 {
+    const fn tag(self) -> u8 {
+        match self {
+            Self::NativeSubmission => 0,
+            Self::TerminalHandoff => 1,
+            Self::PanelNotification => 2,
+        }
+    }
+}
+
+/// Authorized disposition for one exact unresolved dead letter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub enum ModerationDeadLetterResolutionActionV1 {
+    /// Requeue the exact source-bound work under a fresh bounded attempt cycle.
+    Redrive,
+    /// Acknowledge the incident without requeueing it.
+    Acknowledge,
+}
+
+impl ModerationDeadLetterResolutionActionV1 {
+    const fn tag(self) -> u8 {
+        match self {
+            Self::Redrive => 0,
+            Self::Acknowledge => 1,
+        }
+    }
+}
+
+/// Externally signed, exact-source authorization resolving one dead letter.
+///
+/// The statement is bound to the current sealed checkpoint revision and the
+/// exact target record digest. It therefore cannot be replayed after any state
+/// transition or redirected to another incident. The same archive-lifetime
+/// checkpoint trust anchor used for terminal-set attestations authorizes the
+/// transition; private key material remains outside the process and checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationDeadLetterResolutionV1 {
+    /// Resolution schema version.
+    pub version: u16,
+    /// Exact ledger chain.
+    pub chain_id: String,
+    /// Exact sealed checkpoint namespace.
+    pub checkpoint_namespace_digest: [u8; 32],
+    /// Exact source checkpoint generation.
+    pub checkpoint_generation: u64,
+    /// Exact source checkpoint revision.
+    pub checkpoint_revision: [u8; 32],
+    /// Exact source checkpoint digest.
+    pub checkpoint_digest: [u8; 32],
+    /// Stable failed-work identity.
+    pub identity: [u8; 32],
+    /// Exact dead-letter class.
+    pub kind: ModerationDeadLetterKindV1,
+    /// Governed resolution disposition.
+    pub action: ModerationDeadLetterResolutionActionV1,
+    /// Digest of the exact unresolved source record.
+    pub source_record_digest: [u8; 32],
+    /// Nonzero operator authorization time retained for audit.
+    pub authorized_at_unix_ms: u64,
+    /// Stable checkpoint-attestor handle.
+    pub attestor_handle: String,
+    /// Exact checkpoint-attestor revision.
+    pub attestor_revision: u64,
+    /// Exact checkpoint-attestor public-policy digest.
+    pub attestor_policy_digest: [u8; 32],
+    /// Archive-lifetime-stable Ed25519 trust anchor.
+    pub attestor_public_key: [u8; 32],
+}
+
+impl ModerationDeadLetterResolutionV1 {
+    /// Derive the exact Ed25519 authorization message.
+    ///
+    /// # Errors
+    ///
+    /// Rejects inert, malformed, or noncanonical resolution coordinates.
+    pub fn signing_message(&self) -> Result<[u8; 32], ModerationOrchestratorError> {
+        validate_dead_letter_resolution_shape(self)?;
+        Ok(dead_letter_resolution_message(self))
+    }
+}
+
 /// Exactly-once payload-free panel-notification delivery adapter.
 ///
 /// Implementations must atomically deduplicate
@@ -1232,6 +1486,448 @@ pub trait ModerationPanelNotificationSinkV1: ModerationRuntimeProviderV1 {
         &self,
         claim: &ModerationPanelNotificationClaimV1,
     ) -> Result<ModerationPanelNotificationDeliveryReceiptV1, ModerationPanelNotificationFailureV1>;
+}
+
+/// Fixed payload-free failures returned by the immutable receipt archive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModerationPanelNotificationArchiveExternalErrorV1 {
+    /// The archive or its authenticated transport is unavailable.
+    Unavailable,
+    /// Installation may have committed and exact readback is required.
+    Ambiguous,
+    /// The archive rejected a substitution, stale predecessor, or policy violation.
+    Rejected,
+}
+
+/// Canonical terminal-set statement signed by the sealed checkpoint authority.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationPanelNotificationSourceAttestationV1 {
+    /// Archive schema version.
+    pub version: u16,
+    /// Exact checkpoint-attestor runtime-provider slot.
+    pub attestor_slot: u16,
+    /// Ledger chain containing the authoritative notification state.
+    pub chain_id: String,
+    /// Chain-bound sealed-checkpoint namespace.
+    pub checkpoint_namespace_digest: [u8; 32],
+    /// Exact sealed checkpoint generation.
+    pub checkpoint_generation: u64,
+    /// Exact sealed checkpoint record revision.
+    pub checkpoint_revision: [u8; 32],
+    /// Digest of the canonical source checkpoint bytes.
+    pub checkpoint_digest: [u8; 32],
+    /// Digest of the exact payload-minimal signer/predecessor source manifest.
+    pub source_manifest_digest: [u8; 32],
+    /// Digest of the exact canonical terminal archive payload.
+    pub terminal_set_digest: [u8; 32],
+    /// Number of terminal records in the attested set.
+    pub terminal_record_count: u32,
+    /// First terminal notification identity in canonical order.
+    pub first_notification_id: [u8; 32],
+    /// Last terminal notification identity in canonical order.
+    pub last_notification_id: [u8; 32],
+    /// Exact checkpoint-attestor provider handle.
+    pub attestor_handle: String,
+    /// Exact checkpoint-attestor adapter/public-policy revision.
+    pub attestor_revision: u64,
+    /// Exact checkpoint-attestor public-policy digest.
+    pub attestor_policy_digest: [u8; 32],
+    /// Ed25519 key authenticating the statement.
+    pub attestor_public_key: [u8; 32],
+}
+
+impl ModerationPanelNotificationSourceAttestationV1 {
+    /// Verify the canonical terminal-set statement and its Ed25519 signature.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed source coordinates, substituted provider identity,
+    /// or a signature that does not authenticate the exact statement.
+    pub fn verify(&self, signature: [u8; 64]) -> Result<(), ModerationOrchestratorError> {
+        validate_panel_notification_source_attestation(self)?;
+        if signature == [0; 64] {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+        let key = PublicKey::from_bytes(Algorithm::Ed25519, &self.attestor_public_key)
+            .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+        let signature = IrohaSignature::try_from_bytes(&signature)
+            .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+        signature
+            .verify(&key, &panel_notification_source_attestation_message(self))
+            .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)
+    }
+}
+
+/// Authenticated exact readback from the immutable notification-receipt archive.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ModerationPanelNotificationArchiveReadbackV1 {
+    /// Exact canonical payload-free archive artifact.
+    pub canonical_artifact: Vec<u8>,
+    /// Ed25519 signature emitted only after durable installation.
+    pub signature: [u8; 64],
+}
+
+impl fmt::Debug for ModerationPanelNotificationArchiveReadbackV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ModerationPanelNotificationArchiveReadbackV1")
+            .field("canonical_artifact", &"<payload-free-receipt-archive>")
+            .field("canonical_artifact_len", &self.canonical_artifact.len())
+            .field("signature", &"<ed25519-signature>")
+            .finish()
+    }
+}
+
+/// Deployment-owned immutable archive for terminal panel-notification receipts.
+///
+/// `install` must atomically bind an operation identifier to the exact receipt
+/// message and canonical artifact. Exact replay is idempotent; any substituted
+/// bytes or receipt message must be rejected. `read` returns only the exact
+/// durable bytes and their provider-issued Ed25519 signature. Credentials and
+/// private signing material remain behind this boundary.
+pub trait ModerationPanelNotificationArchiveV1: ModerationRuntimeProviderV1 {
+    /// Return the stable non-secret archive namespace identity.
+    fn archive_id(&self) -> [u8; 32];
+
+    /// Return the exact Ed25519 key authenticating durable readback.
+    fn signing_public_key(&self) -> [u8; 32];
+
+    /// Durably install one exact canonical archive artifact.
+    fn install(
+        &self,
+        operation_id: [u8; 32],
+        receipt_message: [u8; 32],
+        canonical_artifact: &[u8],
+    ) -> Result<[u8; 64], ModerationPanelNotificationArchiveExternalErrorV1>;
+
+    /// Read back the exact artifact bound to `operation_id`.
+    fn read(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<
+        Option<ModerationPanelNotificationArchiveReadbackV1>,
+        ModerationPanelNotificationArchiveExternalErrorV1,
+    >;
+}
+
+/// One sealed archive-signer epoch with dual-control rotation evidence.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationPanelNotificationArchiveSignerEpochV1 {
+    /// Archive schema version.
+    pub version: u16,
+    /// One-based signer epoch.
+    pub epoch: u64,
+    /// First archive generation this signer may authenticate.
+    pub activated_at_generation: u64,
+    /// Stable archive namespace retained across rotations.
+    pub archive_id: [u8; 32],
+    /// Provider handle qualified for this epoch.
+    pub archive_handle: String,
+    /// Provider revision qualified for this epoch.
+    pub archive_revision: u64,
+    /// Public-policy digest qualified for this epoch.
+    pub archive_policy_digest: [u8; 32],
+    /// Ed25519 signer public key for this epoch.
+    pub archive_public_key: [u8; 32],
+    /// Digest of the prior epoch, absent only at bootstrap.
+    pub predecessor_epoch_digest: Option<[u8; 32]>,
+    /// Inclusive last generation authorized for the predecessor.
+    pub predecessor_revocation_generation: Option<u64>,
+    /// Prior-key authorization of the transition, absent only at bootstrap.
+    pub predecessor_authorization_signature: Option<[u8; 64]>,
+    /// New-key proof of possession, absent only at bootstrap.
+    pub new_key_possession_signature: Option<[u8; 64]>,
+    /// Digest of every preceding field.
+    pub epoch_digest: [u8; 32],
+}
+
+impl ModerationPanelNotificationArchiveSignerEpochV1 {
+    /// Derive the exact predecessor-key authorization message for this transition.
+    ///
+    /// This method is safe to use before the two signatures and `epoch_digest`
+    /// are populated: neither signature nor the self-digest is part of the
+    /// authorization message. The returned digest is chain-bound and commits
+    /// the new provider binding, key, predecessor epoch, and inclusive
+    /// predecessor revocation generation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects bootstrap epochs and malformed, inert, or noncanonical rotation
+    /// coordinates.
+    pub fn rotation_authorization_message(
+        &self,
+        chain_id: &iroha_data_model::ChainId,
+    ) -> Result<[u8; 32], ModerationOrchestratorError> {
+        if chain_id.as_str().is_empty()
+            || chain_id.as_str() != chain_id.as_str().trim()
+            || self.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
+            || self.epoch < 2
+            || self.activated_at_generation == 0
+            || self.archive_id == [0; 32]
+            || validate_production_runtime_handle(&self.archive_handle).is_err()
+            || !ModerationRuntimeProviderQualificationV1::new(
+                self.archive_revision,
+                self.archive_policy_digest,
+            )
+            .is_valid()
+            || self.archive_public_key == [0; 32]
+            || PublicKey::from_bytes(Algorithm::Ed25519, &self.archive_public_key).is_err()
+            || self
+                .predecessor_epoch_digest
+                .is_none_or(|digest| digest == [0; 32])
+            || self
+                .predecessor_revocation_generation
+                .and_then(|generation| generation.checked_add(1))
+                != Some(self.activated_at_generation)
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+        Ok(panel_notification_archive_signer_rotation_message(
+            chain_id, self,
+        ))
+    }
+
+    /// Derive the new-key proof-of-possession message for this transition.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the same malformed transition coordinates as
+    /// [`Self::rotation_authorization_message`].
+    pub fn new_key_possession_message(
+        &self,
+        chain_id: &iroha_data_model::ChainId,
+    ) -> Result<[u8; 32], ModerationOrchestratorError> {
+        self.rotation_authorization_message(chain_id)
+            .map(panel_notification_archive_signer_pop_message)
+    }
+}
+
+/// Signed monotonic head of one immutable notification-receipt archive batch.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationPanelNotificationArchiveHeadV1 {
+    /// Archive schema version.
+    pub version: u16,
+    /// Exact ledger chain whose terminal notifications are archived.
+    pub chain_id: String,
+    /// Monotonic archive generation beginning at one.
+    pub generation: u64,
+    /// Exact predecessor head digest, absent only at generation one.
+    pub predecessor_head_digest: Option<[u8; 32]>,
+    /// Exact predecessor archive operation, absent only at generation one.
+    pub predecessor_operation_id: Option<[u8; 32]>,
+    /// Exact predecessor chain accumulator, absent only at generation one.
+    pub predecessor_chain_commitment: Option<[u8; 32]>,
+    /// Exact sealed checkpoint generation from which receipts were selected.
+    pub source_checkpoint_generation: u64,
+    /// Chain-bound namespace of the authoritative sealed checkpoint.
+    pub source_checkpoint_namespace_digest: [u8; 32],
+    /// Exact sealed checkpoint revision from which receipts were selected.
+    pub source_checkpoint_revision: [u8; 32],
+    /// Exact sealed checkpoint digest from which receipts were selected.
+    pub source_checkpoint_digest: [u8; 32],
+    /// Digest of the payload-minimal source manifest carried by the artifact.
+    pub source_manifest_digest: [u8; 32],
+    /// Digest binding the chain and exact sealed source checkpoint coordinates.
+    pub source_binding_digest: [u8; 32],
+    /// Exact qualified checkpoint authority that attested the terminal set.
+    pub source_attestor_handle: String,
+    /// Exact checkpoint-attestor adapter/public-policy revision.
+    pub source_attestor_revision: u64,
+    /// Exact checkpoint-attestor public-policy digest.
+    pub source_attestor_policy_digest: [u8; 32],
+    /// Ed25519 public key authenticating the terminal-set source attestation.
+    pub source_attestor_public_key: [u8; 32],
+    /// Deterministic terminal-set source-attestation message.
+    pub source_attestation_digest: [u8; 32],
+    /// Independently administered checkpoint-authority signature.
+    pub source_attestation_signature: [u8; 64],
+    /// Number of delivered or dead-lettered terminal records in this batch.
+    pub terminal_record_count: u32,
+    /// Number of terminal dead letters in this exact batch.
+    pub dead_letter_record_count: u32,
+    /// Permanent cumulative dead letters through this archive generation.
+    pub cumulative_dead_letter_count: u64,
+    /// First notification identity in canonical archive order.
+    pub first_notification_id: [u8; 32],
+    /// Last notification identity in canonical archive order.
+    pub last_notification_id: [u8; 32],
+    /// Digest of the exact canonical archived receipt records.
+    pub payload_digest: [u8; 32],
+    /// Stable authenticated archive-provider handle.
+    pub archive_handle: String,
+    /// Exact archive adapter/public-policy revision.
+    pub archive_revision: u64,
+    /// Exact archive public-policy digest.
+    pub archive_policy_digest: [u8; 32],
+    /// Stable non-secret archive namespace identity.
+    pub archive_id: [u8; 32],
+    /// Exact Ed25519 key authenticating durable readback.
+    pub archive_public_key: [u8; 32],
+    /// One-based sealed signer epoch authenticating this generation.
+    pub archive_signer_epoch: u64,
+    /// Exact digest of the corresponding sealed signer-epoch record.
+    pub archive_signer_epoch_digest: [u8; 32],
+    /// Stable deterministic archive operation identifier.
+    pub operation_id: [u8; 32],
+    /// Content-addressed signed archive-chain head.
+    pub head_digest: [u8; 32],
+    /// Forward chain accumulator committing every archive generation.
+    pub chain_commitment: [u8; 32],
+    /// Archive signature emitted only after durable exact installation.
+    pub archive_signature: [u8; 64],
+}
+
+impl ModerationPanelNotificationArchiveHeadV1 {
+    /// Verify the deterministic head and provider-issued readback signature.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed generations, identities, digests, or signatures.
+    pub fn verify(
+        &self,
+        expected_handle: &str,
+        expected_qualification: ModerationRuntimeProviderQualificationV1,
+        expected_archive_id: [u8; 32],
+        expected_public_key: [u8; 32],
+    ) -> Result<(), ModerationOrchestratorError> {
+        verify_panel_notification_archive_head_is_current(
+            self,
+            expected_handle,
+            expected_qualification,
+            expected_archive_id,
+            expected_public_key,
+        )
+    }
+}
+
+/// Result of one bounded authenticated archive-history audit page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModerationPanelNotificationArchiveAuditProgressV1 {
+    /// Archive heads authenticated in this page.
+    pub verified_heads: u32,
+    /// Generation targeted by the current complete-history sweep.
+    pub target_generation: u64,
+    /// Latest generation for which a complete generation-one-to-head sweep finished.
+    pub last_completed_generation: u64,
+    /// Whether the current sweep reached the generation-one root.
+    pub cycle_complete: bool,
+}
+
+/// Derived coordinates returned after strict slot-55 archive broker validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModerationPanelNotificationArchiveBrokerValidationV1 {
+    /// Deterministic archive operation derived from the canonical artifact.
+    pub operation_id: [u8; 32],
+    /// Exact message the independently administered archive signer may sign.
+    pub receipt_message: [u8; 32],
+    /// Exact epoch-authenticated signer key for this artifact generation.
+    ///
+    /// Install validation pins this to the current provider binding. Historical
+    /// readback validation derives it from the bootstrap-anchored signer log.
+    pub archive_public_key: [u8; 32],
+    /// Content-addressed archive head.
+    pub head_digest: [u8; 32],
+    /// Monotonic all-generation archive-chain accumulator.
+    pub chain_commitment: [u8; 32],
+    /// One-based archive generation.
+    pub generation: u64,
+    /// Checkpoint-authority message already authenticated inside the artifact.
+    pub source_attestation_digest: [u8; 32],
+}
+
+/// Stable public expectations used by the slot-55 archive broker validator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModerationPanelNotificationArchiveBrokerExpectationV1<'a> {
+    /// Exact ledger chain accepted by this deployment.
+    pub chain_id: &'a iroha_data_model::ChainId,
+    /// Qualified archive provider handle.
+    pub archive_handle: &'a str,
+    /// Qualified archive provider revision and public-policy digest.
+    pub archive_qualification: ModerationRuntimeProviderQualificationV1,
+    /// Stable archive namespace identity.
+    pub archive_id: [u8; 32],
+    /// Bootstrap signer anchoring the sealed archive epoch log.
+    pub archive_bootstrap_public_key: [u8; 32],
+    /// Current archive signing public key.
+    pub archive_public_key: [u8; 32],
+    /// Qualified sealed-checkpoint provider handle.
+    pub checkpoint_handle: &'a str,
+    /// Qualified checkpoint provider revision and public-policy digest.
+    pub checkpoint_qualification: ModerationRuntimeProviderQualificationV1,
+    /// Current checkpoint terminal-source attestation key.
+    pub checkpoint_attestation_public_key: [u8; 32],
+    /// Maximum canonical source-checkpoint bytes.
+    pub checkpoint_max_bytes: u64,
+    /// Maximum canonical archive artifact bytes.
+    pub archive_max_bytes: u64,
+    /// Maximum terminal records in one artifact.
+    pub max_records: usize,
+}
+
+/// Deterministic non-production fixture for cross-crate broker protocol tests.
+///
+/// This type is public only so the irohad broker can test the real canonical
+/// derivation code instead of duplicating private cryptographic domains.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct ModerationPanelNotificationArchiveBrokerFixtureV1 {
+    /// Exact fixture chain.
+    pub chain_id: iroha_data_model::ChainId,
+    /// Qualified archive provider handle.
+    pub archive_handle: String,
+    /// Qualified archive provider revision and policy.
+    pub archive_qualification: ModerationRuntimeProviderQualificationV1,
+    /// Stable archive namespace.
+    pub archive_id: [u8; 32],
+    /// Bootstrap/current archive public key.
+    pub archive_public_key: [u8; 32],
+    /// Deterministic test-only archive signing seed.
+    pub archive_signing_seed: [u8; 32],
+    /// Qualified checkpoint provider handle.
+    pub checkpoint_handle: String,
+    /// Qualified checkpoint provider revision and policy.
+    pub checkpoint_qualification: ModerationRuntimeProviderQualificationV1,
+    /// Checkpoint terminal-source attestation public key.
+    pub checkpoint_attestation_public_key: [u8; 32],
+    /// Deterministic test-only checkpoint signing seed.
+    pub checkpoint_attestation_signing_seed: [u8; 32],
+    /// Exact current sealed checkpoint record for op115.
+    pub current_checkpoint_record: ModerationCheckpointStoreRecordV1,
+    /// Exact typed op115 statement.
+    pub source_attestation: ModerationPanelNotificationSourceAttestationV1,
+    /// Canonical unsigned archive artifact for install op113.
+    pub canonical_artifact: Vec<u8>,
+    /// Archive signature returned by a successful install.
+    pub archive_signature: [u8; 64],
+    /// Canonical signed head bytes for slot-20 `ModerationPublicationHandoff` op116.
+    pub canonical_signed_head: Vec<u8>,
+    /// Expected derived operation and digest coordinates.
+    pub validation: ModerationPanelNotificationArchiveBrokerValidationV1,
+    /// Source-checkpoint byte bound.
+    pub checkpoint_max_bytes: u64,
+    /// Archive artifact byte bound.
+    pub archive_max_bytes: u64,
+}
+
+impl ModerationPanelNotificationArchiveBrokerFixtureV1 {
+    /// Borrow this fixture as strict broker validation expectations.
+    #[must_use]
+    pub fn expectation(&self) -> ModerationPanelNotificationArchiveBrokerExpectationV1<'_> {
+        ModerationPanelNotificationArchiveBrokerExpectationV1 {
+            chain_id: &self.chain_id,
+            archive_handle: &self.archive_handle,
+            archive_qualification: self.archive_qualification,
+            archive_id: self.archive_id,
+            archive_bootstrap_public_key: self.archive_public_key,
+            archive_public_key: self.archive_public_key,
+            checkpoint_handle: &self.checkpoint_handle,
+            checkpoint_qualification: self.checkpoint_qualification,
+            checkpoint_attestation_public_key: self.checkpoint_attestation_public_key,
+            checkpoint_max_bytes: self.checkpoint_max_bytes,
+            archive_max_bytes: self.archive_max_bytes,
+            max_records: 8,
+        }
+    }
 }
 
 /// Durable terminal reason for a panel notification.
@@ -1316,6 +2012,8 @@ pub struct ModerationOrchestratorDepsV1 {
     pub publication_sink: Arc<dyn ModerationTerminalHandoffSinkV1>,
     /// Durable payload-free panel-notification sink.
     pub panel_notification_sink: Arc<dyn ModerationPanelNotificationSinkV1>,
+    /// Immutable authenticated panel-notification receipt archive.
+    pub panel_notification_archive: Arc<dyn ModerationPanelNotificationArchiveV1>,
 }
 
 impl fmt::Debug for ModerationOrchestratorDepsV1 {
@@ -1328,6 +2026,7 @@ impl fmt::Debug for ModerationOrchestratorDepsV1 {
             .field("settlement_sink", &"<runtime-only>")
             .field("publication_sink", &"<runtime-only>")
             .field("panel_notification_sink", &"<runtime-only>")
+            .field("panel_notification_archive", &"<runtime-only>")
             .finish()
     }
 }
@@ -1498,6 +2197,29 @@ impl QualifiedModerationTerminalHandoffSinkV1 {
             .map_err(|_| ModerationHandoffFailureV1::Ambiguous)?;
         result
     }
+
+    fn publish_panel_notification_archive_head(
+        &self,
+        head: &ModerationPanelNotificationArchiveHeadV1,
+    ) -> Result<(), ModerationHandoffFailureV1> {
+        self.revalidate()
+            .map_err(|_| ModerationHandoffFailureV1::NotDelivered)?;
+        let result = self.sink.publish_panel_notification_archive_head(head);
+        self.revalidate()
+            .map_err(|_| ModerationHandoffFailureV1::Ambiguous)?;
+        result
+    }
+
+    fn read_panel_notification_archive_head(
+        &self,
+    ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationHandoffFailureV1> {
+        self.revalidate()
+            .map_err(|_| ModerationHandoffFailureV1::NotDelivered)?;
+        let result = self.sink.read_panel_notification_archive_head();
+        self.revalidate()
+            .map_err(|_| ModerationHandoffFailureV1::Ambiguous)?;
+        result
+    }
 }
 
 impl fmt::Debug for QualifiedModerationTerminalHandoffSinkV1 {
@@ -1568,6 +2290,111 @@ impl fmt::Debug for QualifiedModerationPanelNotificationSinkV1 {
     }
 }
 
+struct QualifiedModerationPanelNotificationArchiveV1 {
+    handle: String,
+    qualification: ModerationRuntimeProviderQualificationV1,
+    archive_id: [u8; 32],
+    public_key: [u8; 32],
+    archive: Arc<dyn ModerationPanelNotificationArchiveV1>,
+}
+
+impl QualifiedModerationPanelNotificationArchiveV1 {
+    fn try_new(
+        expected_handle: &str,
+        expected_qualification: ModerationRuntimeProviderQualificationV1,
+        expected_archive_id: [u8; 32],
+        expected_public_key: [u8; 32],
+        archive: Arc<dyn ModerationPanelNotificationArchiveV1>,
+    ) -> Result<Self, ModerationRuntimeProviderQualificationErrorV1> {
+        qualify_moderation_runtime_provider_v1(
+            expected_handle,
+            expected_qualification,
+            archive.as_ref(),
+        )?;
+        let identity = Self::read_qualified_identity(
+            expected_handle,
+            expected_qualification,
+            archive.as_ref(),
+        )?;
+        if identity.0 != expected_archive_id {
+            return Err(ModerationRuntimeProviderQualificationErrorV1::ArchiveIdentityChanged);
+        }
+        if identity.1 != expected_public_key {
+            return Err(ModerationRuntimeProviderQualificationErrorV1::ArchivePublicKeyChanged);
+        }
+        Ok(Self {
+            handle: expected_handle.to_owned(),
+            qualification: expected_qualification,
+            archive_id: expected_archive_id,
+            public_key: expected_public_key,
+            archive,
+        })
+    }
+
+    fn read_qualified_identity(
+        handle: &str,
+        qualification: ModerationRuntimeProviderQualificationV1,
+        archive: &dyn ModerationPanelNotificationArchiveV1,
+    ) -> Result<([u8; 32], [u8; 32]), ModerationRuntimeProviderQualificationErrorV1> {
+        revalidate_moderation_runtime_provider_v1(handle, qualification, archive)?;
+        let identity = (archive.archive_id(), archive.signing_public_key());
+        revalidate_moderation_runtime_provider_v1(handle, qualification, archive)?;
+        Ok(identity)
+    }
+
+    fn revalidate_identity(&self) -> Result<(), ModerationPanelNotificationArchiveExternalErrorV1> {
+        let identity =
+            Self::read_qualified_identity(&self.handle, self.qualification, self.archive.as_ref())
+                .map_err(|_| ModerationPanelNotificationArchiveExternalErrorV1::Unavailable)?;
+        if identity != (self.archive_id, self.public_key) {
+            return Err(ModerationPanelNotificationArchiveExternalErrorV1::Unavailable);
+        }
+        Ok(())
+    }
+
+    fn install(
+        &self,
+        operation_id: [u8; 32],
+        receipt_message: [u8; 32],
+        canonical_artifact: &[u8],
+    ) -> Result<[u8; 64], ModerationPanelNotificationArchiveExternalErrorV1> {
+        self.revalidate_identity()?;
+        let result = self
+            .archive
+            .install(operation_id, receipt_message, canonical_artifact);
+        self.revalidate_identity()
+            .map_err(|_| ModerationPanelNotificationArchiveExternalErrorV1::Ambiguous)?;
+        result
+    }
+
+    fn read(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<
+        Option<ModerationPanelNotificationArchiveReadbackV1>,
+        ModerationPanelNotificationArchiveExternalErrorV1,
+    > {
+        self.revalidate_identity()?;
+        let result = self.archive.read(operation_id);
+        self.revalidate_identity()
+            .map_err(|_| ModerationPanelNotificationArchiveExternalErrorV1::Ambiguous)?;
+        result
+    }
+}
+
+impl fmt::Debug for QualifiedModerationPanelNotificationArchiveV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QualifiedModerationPanelNotificationArchiveV1")
+            .field("handle", &self.handle)
+            .field("qualification", &self.qualification)
+            .field("archive_id", &self.archive_id)
+            .field("public_key", &self.public_key)
+            .field("archive", &"<runtime-only>")
+            .finish()
+    }
+}
+
 struct QualifiedModerationOrchestratorDepsV1 {
     checkpoint_store: checkpoint_store::QualifiedModerationCheckpointStoreV1,
     submitter: QualifiedModerationTransactionSubmitterV1,
@@ -1575,6 +2402,7 @@ struct QualifiedModerationOrchestratorDepsV1 {
     settlement_sink: QualifiedModerationTerminalHandoffSinkV1,
     publication_sink: QualifiedModerationTerminalHandoffSinkV1,
     panel_notification_sink: QualifiedModerationPanelNotificationSinkV1,
+    panel_notification_archive: QualifiedModerationPanelNotificationArchiveV1,
 }
 
 impl QualifiedModerationOrchestratorDepsV1 {
@@ -1589,10 +2417,12 @@ impl QualifiedModerationOrchestratorDepsV1 {
             settlement_sink,
             publication_sink,
             panel_notification_sink,
+            panel_notification_archive,
         } = deps;
         let checkpoint_store = checkpoint_store::QualifiedModerationCheckpointStoreV1::try_new(
             &config.checkpoint_store_handle,
             config.expected_checkpoint_store_qualification,
+            config.checkpoint_store_attestation_public_key,
             checkpoint_store,
         )?;
         let submitter = QualifiedModerationTransactionSubmitterV1::try_new(config, submitter)?;
@@ -1611,6 +2441,13 @@ impl QualifiedModerationOrchestratorDepsV1 {
             config.expected_panel_notification_qualification,
             panel_notification_sink,
         )?;
+        let panel_notification_archive = QualifiedModerationPanelNotificationArchiveV1::try_new(
+            &config.panel_notification_archive_handle,
+            config.expected_panel_notification_archive_qualification,
+            config.panel_notification_archive_id,
+            config.panel_notification_archive_public_key,
+            panel_notification_archive,
+        )?;
         Ok(Self {
             checkpoint_store,
             submitter,
@@ -1618,6 +2455,7 @@ impl QualifiedModerationOrchestratorDepsV1 {
             settlement_sink,
             publication_sink,
             panel_notification_sink,
+            panel_notification_archive,
         })
     }
 }
@@ -1632,6 +2470,10 @@ impl fmt::Debug for QualifiedModerationOrchestratorDepsV1 {
             .field("settlement_sink", &self.settlement_sink)
             .field("publication_sink", &self.publication_sink)
             .field("panel_notification_sink", &self.panel_notification_sink)
+            .field(
+                "panel_notification_archive",
+                &self.panel_notification_archive,
+            )
             .finish()
     }
 }
@@ -1677,10 +2519,19 @@ pub struct ModerationOrchestratorDurableHealthV1 {
     pub pending_handoffs: usize,
     /// Panel notifications not yet delivered or terminally dead-lettered.
     pub pending_panel_notifications: usize,
-    /// Native submission or terminal-handoff dead letters.
+    /// Unresolved native-submission or terminal-handoff dead letters.
     pub durable_dead_letters: usize,
-    /// Panel-notification dead letters.
+    /// Unresolved panel-notification dead letters.
+    ///
+    /// Signed resolution history remains immutable in the archive, but only an
+    /// active unresolved incident blocks projection readiness.
     pub panel_notification_dead_letters: usize,
+    /// Latest immutable archive generation retained in the sealed checkpoint.
+    pub panel_notification_archive_generation: u64,
+    /// Latest archive generation durably published as the public monotonic head.
+    pub panel_notification_archive_published_generation: u64,
+    /// Latest archive generation covered by an authenticated incremental audit suffix.
+    pub panel_notification_archive_audited_generation: u64,
 }
 
 impl ModerationOrchestratorDurableHealthV1 {
@@ -1688,6 +2539,15 @@ impl ModerationOrchestratorDurableHealthV1 {
     #[must_use]
     pub const fn has_dead_letters(self) -> bool {
         self.durable_dead_letters != 0 || self.panel_notification_dead_letters != 0
+    }
+
+    /// Return whether publication and the incremental authenticated audit cover the current head.
+    #[must_use]
+    pub const fn archive_is_fresh(self) -> bool {
+        self.panel_notification_archive_generation
+            == self.panel_notification_archive_published_generation
+            && self.panel_notification_archive_generation
+                == self.panel_notification_archive_audited_generation
     }
 }
 
@@ -1814,10 +2674,25 @@ enum StoredDeadLetterReasonV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredDeadLetterV1 {
+    incident_sequence: u64,
     identity: [u8; 32],
     action_label: String,
     reason: StoredDeadLetterReasonV1,
     finalized_cursor: ModerationFinalizedCursorV1,
+    dead_lettered_at_unix_ms: u64,
+    redrive: Option<StoredDeadLetterRedriveV1>,
+    resolution: Option<ModerationDeadLetterResolutionV1>,
+    resolution_signature: Option<[u8; 64]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+enum StoredDeadLetterRedriveV1 {
+    NativeSubmission {
+        authority: AccountId,
+        action: ModerationNativeActionV1,
+        request_binding_digest: [u8; 32],
+    },
+    TerminalHandoff(ModerationTerminalHandoffV1),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -1826,6 +2701,13 @@ struct StoredHandoffV1 {
     attempts: u32,
     work_generation: u32,
     work_claim: Option<StoredExternalWorkClaimV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct StoredCompletedHandoffV1 {
+    handoff: ModerationTerminalHandoffV1,
+    completed_at_finalized_cursor: ModerationFinalizedCursorV1,
+    record_digest: [u8; 32],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -1856,21 +2738,148 @@ struct StoredPanelNotificationV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+enum ModerationPanelNotificationArchiveTerminalStatusV1 {
+    Delivered {
+        receipt_digest: [u8; 32],
+        delivered_at_unix_ms: u64,
+    },
+    DeadLettered {
+        reason: ModerationPanelNotificationDeadLetterReasonV1,
+        dead_lettered_at_unix_ms: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct ModerationPanelNotificationArchiveRecordV1 {
+    notification_id: [u8; 32],
+    terminal_status: ModerationPanelNotificationArchiveTerminalStatusV1,
+    source_record_digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct StoredPanelNotificationDeadLetterResolutionV1 {
+    terminal_record: ModerationPanelNotificationArchiveRecordV1,
+    resolution: ModerationDeadLetterResolutionV1,
+    resolution_signature: [u8; 64],
+    record_digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+enum ModerationTerminalArchiveRecordV1 {
+    PanelNotification(ModerationPanelNotificationArchiveRecordV1),
+    ResolvedPanelDeadLetter {
+        terminal_record: ModerationPanelNotificationArchiveRecordV1,
+        resolution: ModerationDeadLetterResolutionV1,
+        resolution_signature: [u8; 64],
+        source_record_digest: [u8; 32],
+    },
+    NativeOperation {
+        operation_id: [u8; 32],
+        status: StoredOperationStatusV1,
+        transaction_id: Option<[u8; 32]>,
+        source_record_digest: [u8; 32],
+    },
+    DurableDeadLetter {
+        incident_sequence: u64,
+        identity: [u8; 32],
+        reason: StoredDeadLetterReasonV1,
+        finalized_cursor: ModerationFinalizedCursorV1,
+        dead_lettered_at_unix_ms: u64,
+        resolution: ModerationDeadLetterResolutionV1,
+        resolution_signature: [u8; 64],
+        operation_source_record_digest: Option<[u8; 32]>,
+        handoff_kind: Option<ModerationTerminalHandoffKindV1>,
+        handoff_outcome_digest: Option<[u8; 32]>,
+        handoff_finalized_cursor: Option<ModerationFinalizedEventCursorV1>,
+        source_record_digest: [u8; 32],
+    },
+    CompletedHandoff {
+        handoff_id: [u8; 32],
+        kind: ModerationTerminalHandoffKindV1,
+        outcome_digest: [u8; 32],
+        finalized_cursor: ModerationFinalizedEventCursorV1,
+        completed_at_finalized_cursor: ModerationFinalizedCursorV1,
+        source_record_digest: [u8; 32],
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct ModerationPanelNotificationArchivePayloadV1 {
+    version: u16,
+    records: Vec<ModerationTerminalArchiveRecordV1>,
+}
+
+/// Payload-minimal witness for archive-signer and predecessor validation.
+///
+/// The checkpoint authority separately verifies terminal membership before it
+/// signs the source attestation. This manifest therefore carries no finalized
+/// snapshot, moderation scopes, authorities, native actions, outbox entries, or
+/// other checkpoint payloads.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct ModerationPanelNotificationArchiveSourceManifestV1 {
+    version: u16,
+    chain_id: String,
+    checkpoint_namespace_digest: [u8; 32],
+    checkpoint_generation: u64,
+    checkpoint_revision: [u8; 32],
+    checkpoint_digest: [u8; 32],
+    archive_signer_epochs: Vec<ModerationPanelNotificationArchiveSignerEpochV1>,
+    predecessor_archive_head: Option<ModerationPanelNotificationArchiveHeadV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct ModerationPanelNotificationArchiveArtifactV1 {
+    version: u16,
+    head: ModerationPanelNotificationArchiveHeadV1,
+    source_manifest: ModerationPanelNotificationArchiveSourceManifestV1,
+    payload: ModerationPanelNotificationArchivePayloadV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct ModerationPanelNotificationArchiveAuditCursorV1 {
+    version: u16,
+    target_generation: u64,
+    target_head_digest: [u8; 32],
+    next_operation_id: Option<[u8; 32]>,
+    expected_generation: Option<u64>,
+    expected_head_digest: Option<[u8; 32]>,
+    expected_chain_commitment: Option<[u8; 32]>,
+    verified_head_count: u64,
+    chain_commitment: [u8; 32],
+    last_completed_generation: u64,
+    last_completed_head_digest: Option<[u8; 32]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationOrchestratorCheckpointV1 {
     version: u16,
     chain_id: String,
     generation: u64,
     panel_notification_clock_unix_ms: u64,
     panel_notification_scanned_cursor: Option<ModerationFinalizedEventCursorV1>,
+    terminal_handoff_scanned_cursor: Option<ModerationFinalizedEventCursorV1>,
     panel_notification_outbox_digest: [u8; 32],
+    panel_notification_archived_dead_letter_count: u64,
+    terminal_handoff_archived_cursor: Option<ModerationFinalizedEventCursorV1>,
+    panel_notification_archive_compaction_reservation:
+        Option<ModerationPanelNotificationArchivePayloadV1>,
+    panel_notification_archive_signer_epochs: Vec<ModerationPanelNotificationArchiveSignerEpochV1>,
+    panel_notification_archive_head: Option<ModerationPanelNotificationArchiveHeadV1>,
+    panel_notification_archive_pending_publication:
+        Option<ModerationPanelNotificationArchiveHeadV1>,
+    panel_notification_archive_published_head: Option<ModerationPanelNotificationArchiveHeadV1>,
+    panel_notification_archive_audit_cursor:
+        Option<ModerationPanelNotificationArchiveAuditCursorV1>,
     finalized_snapshot: Option<ModerationFinalizedLedgerSnapshotV1>,
     finalized_snapshot_digest: Option<[u8; 32]>,
     operations: Vec<StoredOperationV1>,
     outbox: Vec<StoredOutboxEntryV1>,
     dead_letters: Vec<StoredDeadLetterV1>,
+    dead_letter_incident_sequence: u64,
     pending_handoffs: Vec<StoredHandoffV1>,
-    completed_handoffs: Vec<[u8; 32]>,
+    completed_handoffs: Vec<StoredCompletedHandoffV1>,
     panel_notifications: Vec<StoredPanelNotificationV1>,
+    panel_notification_dead_letter_resolutions: Vec<StoredPanelNotificationDeadLetterResolutionV1>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1977,7 +2986,20 @@ impl ModerationOrchestratorV1 {
             &chain_id,
             &deps.checkpoint_store,
         )?;
-        if recover_external_work_after_restart(&mut state) {
+        let signer_epochs_changed =
+            reconcile_panel_notification_archive_signer_epochs(&config, &chain_id, &mut state)?;
+        verify_current_panel_notification_archive_readback(
+            &config,
+            &chain_id,
+            &deps.panel_notification_archive,
+            state.panel_notification_archive_head.as_ref(),
+        )?;
+        verify_published_panel_notification_archive_head_readback(
+            &deps.publication_sink,
+            state.panel_notification_archive_published_head.as_ref(),
+        )?;
+        let expired_work_recovered = recover_external_work_after_restart(&mut state)?;
+        if signer_epochs_changed || expired_work_recovered {
             checkpoint_store::persist_authoritative_checkpoint(
                 &config,
                 &chain_id,
@@ -2291,7 +3313,8 @@ impl ModerationOrchestratorV1 {
         })
     }
 
-    /// Return payload-free durable queue health without contacting collaborators.
+    /// Return payload-free durable queue health after authenticating the public
+    /// archive-head readback.
     ///
     /// # Errors
     ///
@@ -2316,7 +3339,8 @@ impl ModerationOrchestratorV1 {
             .iter()
             .filter(|entry| entry.state == StoredPanelNotificationStateV1::DeadLetter)
             .count();
-        Ok(ModerationOrchestratorDurableHealthV1 {
+        let published_head = state.panel_notification_archive_published_head.clone();
+        let health = ModerationOrchestratorDurableHealthV1 {
             finalized_cursor: state
                 .finalized_snapshot
                 .as_ref()
@@ -2324,9 +3348,31 @@ impl ModerationOrchestratorV1 {
             pending_submissions: state.outbox.len(),
             pending_handoffs: state.pending_handoffs.len(),
             pending_panel_notifications,
-            durable_dead_letters: state.dead_letters.len(),
+            durable_dead_letters: state
+                .dead_letters
+                .iter()
+                .filter(|entry| entry.resolution.is_none())
+                .count(),
             panel_notification_dead_letters,
-        })
+            panel_notification_archive_generation: state
+                .panel_notification_archive_head
+                .as_ref()
+                .map_or(0, |head| head.generation),
+            panel_notification_archive_published_generation: state
+                .panel_notification_archive_published_head
+                .as_ref()
+                .map_or(0, |head| head.generation),
+            panel_notification_archive_audited_generation: state
+                .panel_notification_archive_audit_cursor
+                .as_ref()
+                .map_or(0, |cursor| cursor.last_completed_generation),
+        };
+        drop(state);
+        verify_published_panel_notification_archive_head_readback(
+            &self.deps.publication_sink,
+            published_head.as_ref(),
+        )?;
+        Ok(health)
     }
 
     /// Durably claim due panel notifications for delivery outside the state lock.
@@ -2720,6 +3766,1292 @@ impl ModerationOrchestratorV1 {
             .transpose()
     }
 
+    /// Prepare an exact current-checkpoint authorization statement for one
+    /// unresolved durable dead letter.
+    ///
+    /// The returned statement is unsigned. An independently administered HSM
+    /// holding the configured checkpoint-attestor key must sign
+    /// [`ModerationDeadLetterResolutionV1::signing_message`] before
+    /// [`Self::apply_dead_letter_resolution`] accepts it.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the identity is not an unresolved dead letter of the requested
+    /// kind, the action cannot be redriven, or sealed source coordinates drift.
+    pub fn prepare_dead_letter_resolution(
+        &self,
+        identity: [u8; 32],
+        kind: ModerationDeadLetterKindV1,
+        action: ModerationDeadLetterResolutionActionV1,
+        authorized_at_unix_ms: u64,
+    ) -> Result<ModerationDeadLetterResolutionV1, ModerationOrchestratorError> {
+        if identity == [0; 32] || authorized_at_unix_ms == 0 {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+        let state = self.lock_state()?;
+        let source_record_digest = unresolved_dead_letter_record_digest(&state, identity, kind)?;
+        let incident_time = unresolved_dead_letter_incident_time(&state, identity, kind)?;
+        let finalized_time = state
+            .finalized_snapshot
+            .as_ref()
+            .ok_or(ModerationOrchestratorError::FinalizedReaderUnavailable)?
+            .finalized_at_unix_ms;
+        if authorized_at_unix_ms < incident_time || authorized_at_unix_ms > finalized_time {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveRejected);
+        }
+        if action == ModerationDeadLetterResolutionActionV1::Redrive
+            && !dead_letter_redrive_is_available(&state, identity, kind)
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveRejected);
+        }
+        let current_record = self
+            .checkpoint_record
+            .lock()
+            .map_err(|_| ModerationOrchestratorError::CheckpointStoreLockPoisoned)?
+            .clone();
+        if current_record.checkpoint_generation != state.generation
+            || current_record.namespace_digest
+                != checkpoint_store::checkpoint_namespace(&self.chain_id)
+        {
+            return Err(ModerationOrchestratorError::CheckpointStoreEquivocation);
+        }
+        Ok(ModerationDeadLetterResolutionV1 {
+            version: 1,
+            chain_id: self.chain_id.as_str().to_owned(),
+            checkpoint_namespace_digest: current_record.namespace_digest,
+            checkpoint_generation: current_record.checkpoint_generation,
+            checkpoint_revision: current_record.revision,
+            checkpoint_digest: current_record.checkpoint_digest,
+            identity,
+            kind,
+            action,
+            source_record_digest,
+            authorized_at_unix_ms,
+            attestor_handle: self.config.checkpoint_store_handle.clone(),
+            attestor_revision: self
+                .config
+                .expected_checkpoint_store_qualification
+                .revision(),
+            attestor_policy_digest: self
+                .config
+                .expected_checkpoint_store_qualification
+                .policy_digest(),
+            attestor_public_key: self.config.checkpoint_store_attestation_public_key,
+        })
+    }
+
+    /// Apply one externally signed, source-bound dead-letter resolution.
+    ///
+    /// Resolution never erases the incident: durable incidents retain the
+    /// signed receipt until archive compaction, while panel incidents first
+    /// move an exact terminal record and signed receipt into resolution
+    /// history. Health stops counting only after this sealed transition.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid signatures, stale source checkpoints, target
+    /// substitution, duplicate resolution, unsafe redrive, or durability loss.
+    pub fn apply_dead_letter_resolution(
+        &self,
+        resolution: ModerationDeadLetterResolutionV1,
+        signature: [u8; 64],
+    ) -> Result<(), ModerationOrchestratorError> {
+        verify_dead_letter_resolution_signature(&resolution, signature)?;
+        if resolution.chain_id != self.chain_id.as_str()
+            || resolution.checkpoint_namespace_digest
+                != checkpoint_store::checkpoint_namespace(&self.chain_id)
+            || resolution.attestor_handle != self.config.checkpoint_store_handle
+            || resolution.attestor_revision
+                != self
+                    .config
+                    .expected_checkpoint_store_qualification
+                    .revision()
+            || resolution.attestor_policy_digest
+                != self
+                    .config
+                    .expected_checkpoint_store_qualification
+                    .policy_digest()
+            || resolution.attestor_public_key != self.config.checkpoint_store_attestation_public_key
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+        let mut state = self.lock_state()?;
+        let current_record = self
+            .checkpoint_record
+            .lock()
+            .map_err(|_| ModerationOrchestratorError::CheckpointStoreLockPoisoned)?
+            .clone();
+        if resolution.checkpoint_generation != current_record.checkpoint_generation
+            || resolution.checkpoint_revision != current_record.revision
+            || resolution.checkpoint_digest != current_record.checkpoint_digest
+            || current_record.checkpoint_generation != state.generation
+            || unresolved_dead_letter_record_digest(&state, resolution.identity, resolution.kind)?
+                != resolution.source_record_digest
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveRejected);
+        }
+        let incident_time =
+            unresolved_dead_letter_incident_time(&state, resolution.identity, resolution.kind)?;
+        let finalized_time = state
+            .finalized_snapshot
+            .as_ref()
+            .ok_or(ModerationOrchestratorError::FinalizedReaderUnavailable)?
+            .finalized_at_unix_ms;
+        if resolution.authorized_at_unix_ms < incident_time
+            || resolution.authorized_at_unix_ms > finalized_time
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveRejected);
+        }
+
+        match resolution.kind {
+            ModerationDeadLetterKindV1::PanelNotification => {
+                if state
+                    .panel_notifications
+                    .len()
+                    .saturating_add(state.panel_notification_dead_letter_resolutions.len())
+                    >= self.config.max_handoffs
+                {
+                    return Err(ModerationOrchestratorError::ResourceExhausted {
+                        resource: "panel notification resolution history",
+                        limit: self.config.max_handoffs,
+                    });
+                }
+                let position = state
+                    .panel_notifications
+                    .iter()
+                    .position(|entry| {
+                        entry.notification.notification_id == resolution.identity
+                            && entry.state == StoredPanelNotificationStateV1::DeadLetter
+                    })
+                    .ok_or(ModerationOrchestratorError::PanelNotificationArchiveRejected)?;
+                let terminal_record = panel_notification_archive_record_from_stored(
+                    &state.panel_notifications[position],
+                )?;
+                let record_digest = panel_notification_resolution_record_digest(
+                    &terminal_record,
+                    &resolution,
+                    signature,
+                )?;
+                state.panel_notification_dead_letter_resolutions.push(
+                    StoredPanelNotificationDeadLetterResolutionV1 {
+                        terminal_record,
+                        resolution: resolution.clone(),
+                        resolution_signature: signature,
+                        record_digest,
+                    },
+                );
+                match resolution.action {
+                    ModerationDeadLetterResolutionActionV1::Acknowledge => {
+                        state.panel_notifications.remove(position);
+                    }
+                    ModerationDeadLetterResolutionActionV1::Redrive => {
+                        let entry = &mut state.panel_notifications[position];
+                        entry.attempts = 0;
+                        entry.claim_generation = 0;
+                        entry.available_at_unix_ms = resolution
+                            .authorized_at_unix_ms
+                            .max(entry.notification.source_occurred_at_unix_ms);
+                        entry.state = StoredPanelNotificationStateV1::Pending;
+                        entry.claimed_by = None;
+                        entry.lease_token = None;
+                        entry.claimed_at_unix_ms = None;
+                        entry.lease_expires_at_unix_ms = None;
+                        entry.receipt_digest = None;
+                        entry.delivered_at_unix_ms = None;
+                        entry.dead_letter_reason = None;
+                        entry.dead_lettered_at_unix_ms = None;
+                        refresh_panel_notification_record_digest(entry);
+                    }
+                }
+            }
+            ModerationDeadLetterKindV1::NativeSubmission
+            | ModerationDeadLetterKindV1::TerminalHandoff => {
+                let position = state
+                    .dead_letters
+                    .iter()
+                    .position(|entry| {
+                        entry.identity == resolution.identity && entry.resolution.is_none()
+                    })
+                    .ok_or(ModerationOrchestratorError::PanelNotificationArchiveRejected)?;
+                let redrive = state.dead_letters[position].redrive.clone();
+                if resolution.action == ModerationDeadLetterResolutionActionV1::Redrive {
+                    match (resolution.kind, redrive) {
+                        (
+                            ModerationDeadLetterKindV1::NativeSubmission,
+                            Some(StoredDeadLetterRedriveV1::NativeSubmission {
+                                authority,
+                                action,
+                                request_binding_digest,
+                            }),
+                        ) => {
+                            ensure_outbox_capacity(&state, &self.config)?;
+                            let operation = state
+                                .operations
+                                .iter_mut()
+                                .find(|entry| entry.operation_id == resolution.identity)
+                                .ok_or(
+                                    ModerationOrchestratorError::PanelNotificationArchiveRejected,
+                                )?;
+                            if operation.status != StoredOperationStatusV1::Rejected
+                                || operation.authority != authority
+                                || operation.action_digest != action.action_digest()?
+                            {
+                                return Err(
+                                    ModerationOrchestratorError::PanelNotificationArchiveRejected,
+                                );
+                            }
+                            operation.status = StoredOperationStatusV1::Pending;
+                            operation.transaction_id = None;
+                            state.outbox.push(StoredOutboxEntryV1 {
+                                operation_id: resolution.identity,
+                                authority,
+                                action: action.clone(),
+                                action_digest: action.action_digest()?,
+                                request_binding_digest,
+                                envelope_generation: 1,
+                                retired_envelopes: Vec::new(),
+                                baseline_finalized_height: 0,
+                                baseline_finalized_block_hash: [0; 32],
+                                transaction_id: None,
+                                signed_transaction_digest: None,
+                                signed_transaction_bytes: None,
+                                attempts: 0,
+                                state: StoredOutboxStateV1::Ready,
+                                work_generation: 0,
+                                work_claim: None,
+                                last_lookup_finalized_height: 0,
+                                last_lookup_finalized_block_hash: [0; 32],
+                            });
+                        }
+                        (
+                            ModerationDeadLetterKindV1::TerminalHandoff,
+                            Some(StoredDeadLetterRedriveV1::TerminalHandoff(handoff)),
+                        ) => {
+                            if state.pending_handoffs.len().saturating_add(1)
+                                > self.config.max_handoffs
+                                || state
+                                    .pending_handoffs
+                                    .iter()
+                                    .any(|entry| entry.handoff.handoff_id == resolution.identity)
+                            {
+                                return Err(ModerationOrchestratorError::ResourceExhausted {
+                                    resource: "terminal handoffs",
+                                    limit: self.config.max_handoffs,
+                                });
+                            }
+                            state.pending_handoffs.push(StoredHandoffV1 {
+                                handoff,
+                                attempts: 0,
+                                work_generation: 0,
+                                work_claim: None,
+                            });
+                        }
+                        _ => {
+                            return Err(
+                                ModerationOrchestratorError::PanelNotificationArchiveRejected,
+                            );
+                        }
+                    }
+                }
+                state.dead_letters[position].resolution = Some(resolution);
+                state.dead_letters[position].resolution_signature = Some(signature);
+            }
+        }
+        self.persist_checkpoint_locked(&mut state)
+    }
+
+    /// Archive and prune one bounded canonical batch of terminal moderation records.
+    ///
+    /// The immutable archive is installed and read back under its exact
+    /// provider-issued Ed25519 signature before any checkpoint record is
+    /// removed. The batch is bound to the current sealed checkpoint revision
+    /// and predecessor archive head. The sealed checkpoint CAS is the sole
+    /// cross-replica commit fence; there is no process-local fallback.
+    ///
+    /// Eligible records are delivered notifications, finalized native-operation
+    /// tombstones, successful handoff receipts, and externally signed resolved
+    /// dead letters. Active unresolved failures are never pruned.
+    /// `Ok(None)` means no terminal record is currently eligible.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero or excessive bounds, provider drift, corrupt/noncanonical
+    /// readback, signature or predecessor substitution, checkpoint rollback,
+    /// concurrent conflicting compaction, and uncertain durability.
+    pub fn compact_panel_notification_receipts(
+        &self,
+        maximum_records: u32,
+    ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationOrchestratorError> {
+        let maximum_records = usize::try_from(maximum_records).map_err(|_| {
+            ModerationOrchestratorError::ResourceExhausted {
+                resource: "panel notification archive batch",
+                limit: self.config.max_handoffs,
+            }
+        })?;
+        if maximum_records == 0 || maximum_records > self.config.max_handoffs {
+            return Err(ModerationOrchestratorError::ResourceExhausted {
+                resource: "panel notification archive batch",
+                limit: self.config.max_handoffs,
+            });
+        }
+
+        let mut state = self.lock_state()?;
+        if state
+            .panel_notification_archive_pending_publication
+            .is_some()
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveRejected);
+        }
+        let predecessor_head = state.panel_notification_archive_head.clone();
+        let signer_epoch = state
+            .panel_notification_archive_signer_epochs
+            .last()
+            .cloned()
+            .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+        if signer_epoch.archive_handle != self.config.panel_notification_archive_handle
+            || signer_epoch.archive_revision
+                != self
+                    .config
+                    .expected_panel_notification_archive_qualification
+                    .revision()
+            || signer_epoch.archive_policy_digest
+                != self
+                    .config
+                    .expected_panel_notification_archive_qualification
+                    .policy_digest()
+            || signer_epoch.archive_id != self.config.panel_notification_archive_id
+            || signer_epoch.archive_public_key != self.config.panel_notification_archive_public_key
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+        let archive_max_bytes = usize::try_from(self.config.panel_notification_archive_max_bytes)
+            .map_err(|_| {
+            ModerationOrchestratorError::InvalidConfiguration(
+                "notification archive byte limit does not fit usize".to_owned(),
+            )
+        })?;
+        let available_records = collect_terminal_archive_records(&state)?;
+        let records = if let Some(reservation) = state
+            .panel_notification_archive_compaction_reservation
+            .as_ref()
+        {
+            if reservation.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
+                || reservation.records.is_empty()
+                || reservation.records.len() > maximum_records
+                || available_records.len() < reservation.records.len()
+                || available_records[..reservation.records.len()] != reservation.records
+                || safe_terminal_archive_prefix_len(&available_records, reservation.records.len())?
+                    != reservation.records.len()
+            {
+                return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                    "terminal archive reservation is stale or noncanonical".to_owned(),
+                ));
+            }
+            reservation.records.clone()
+        } else {
+            if available_records.is_empty() {
+                return Ok(None);
+            }
+            let selected = safe_terminal_archive_prefix_len(&available_records, maximum_records)?;
+            if selected == 0 {
+                return Err(ModerationOrchestratorError::ResourceExhausted {
+                    resource: "atomic terminal archive group",
+                    limit: maximum_records,
+                });
+            }
+            let mut selected_records = available_records[..selected].to_vec();
+            loop {
+                let payload = ModerationPanelNotificationArchivePayloadV1 {
+                    version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+                    records: selected_records.clone(),
+                };
+                let payload_bytes = norito::to_bytes(&payload).map_err(|error| {
+                    ModerationOrchestratorError::CheckpointCorrupt(format!(
+                        "encode terminal archive reservation payload: {error}"
+                    ))
+                })?;
+                if payload_bytes
+                    .len()
+                    .checked_add(
+                        usize::try_from(MODERATION_PANEL_NOTIFICATION_ARCHIVE_WRAPPER_MAX_BYTES_V1)
+                            .unwrap_or(usize::MAX),
+                    )
+                    .is_some_and(|total| total <= archive_max_bytes)
+                {
+                    state.panel_notification_archive_compaction_reservation = Some(payload);
+                    self.persist_checkpoint_locked(&mut state)?;
+                    break;
+                }
+                let next = safe_terminal_archive_prefix_len(
+                    &selected_records,
+                    selected_records.len() / 2,
+                )?;
+                if next == 0 {
+                    return Err(ModerationOrchestratorError::ResourceExhausted {
+                        resource: "panel notification archive bytes",
+                        limit: archive_max_bytes,
+                    });
+                }
+                selected_records.truncate(next);
+            }
+            selected_records
+        };
+        let source_record = self
+            .checkpoint_record
+            .lock()
+            .map_err(|_| ModerationOrchestratorError::CheckpointStoreLockPoisoned)?
+            .clone();
+        let source_checkpoint_bytes = norito::to_bytes(&*state).map_err(|error| {
+            ModerationOrchestratorError::CheckpointCorrupt(format!(
+                "encode receipt archive source checkpoint: {error}"
+            ))
+        })?;
+        if source_record.checkpoint_generation != state.generation
+            || source_record.checkpoint_bytes != source_checkpoint_bytes
+            || source_record.checkpoint_digest
+                != domain_hash(
+                    b"sorafs.moderation.checkpoint-bytes.v1",
+                    &[source_checkpoint_bytes.as_slice()],
+                )
+        {
+            return Err(ModerationOrchestratorError::CheckpointStoreEquivocation);
+        }
+        let source_manifest = ModerationPanelNotificationArchiveSourceManifestV1 {
+            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+            chain_id: self.chain_id.as_str().to_owned(),
+            checkpoint_namespace_digest: source_record.namespace_digest,
+            checkpoint_generation: source_record.checkpoint_generation,
+            checkpoint_revision: source_record.revision,
+            checkpoint_digest: source_record.checkpoint_digest,
+            archive_signer_epochs: state.panel_notification_archive_signer_epochs.clone(),
+            predecessor_archive_head: predecessor_head.clone(),
+        };
+        let source_manifest_digest =
+            panel_notification_archive_source_manifest_digest(&source_manifest)?;
+
+        let (
+            generation,
+            predecessor_head_digest,
+            predecessor_operation_id,
+            predecessor_chain_commitment,
+        ) = if let Some(head) = predecessor_head.as_ref() {
+            (
+                head.generation
+                    .checked_add(1)
+                    .ok_or(ModerationOrchestratorError::GenerationOverflow)?,
+                Some(head.head_digest),
+                Some(head.operation_id),
+                Some(head.chain_commitment),
+            )
+        } else {
+            (1, None, None, None)
+        };
+        let archive = &self.deps.panel_notification_archive;
+        drop(state);
+
+        let build_artifact = |selected: &[ModerationTerminalArchiveRecordV1],
+                              source_attestation_signature: [u8; 64]|
+         -> Result<
+            ModerationPanelNotificationArchiveArtifactV1,
+            ModerationOrchestratorError,
+        > {
+            let payload = ModerationPanelNotificationArchivePayloadV1 {
+                version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+                records: selected.to_vec(),
+            };
+            let terminal_record_count = u32::try_from(payload.records.len()).map_err(|_| {
+                ModerationOrchestratorError::ResourceExhausted {
+                    resource: "panel notification archive batch",
+                    limit: self.config.max_handoffs,
+                }
+            })?;
+            let dead_letter_record_count = u32::try_from(
+                payload
+                    .records
+                    .iter()
+                    .filter(|record| terminal_archive_record_is_dead_letter(record))
+                    .count(),
+            )
+            .map_err(|_| ModerationOrchestratorError::ResourceExhausted {
+                resource: "panel notification archive dead letters",
+                limit: self.config.max_handoffs,
+            })?;
+            let cumulative_dead_letter_count = predecessor_head
+                .as_ref()
+                .map_or(0, |head| head.cumulative_dead_letter_count)
+                .checked_add(u64::from(dead_letter_record_count))
+                .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
+            let first_notification_id = payload
+                .records
+                .first()
+                .map(terminal_archive_record_boundary_id)
+                .transpose()?
+                .ok_or_else(|| {
+                    ModerationOrchestratorError::CheckpointCorrupt(
+                        "receipt archive batch unexpectedly became empty".to_owned(),
+                    )
+                })?;
+            let last_notification_id = payload
+                .records
+                .last()
+                .map(terminal_archive_record_boundary_id)
+                .transpose()?
+                .ok_or_else(|| {
+                    ModerationOrchestratorError::CheckpointCorrupt(
+                        "receipt archive batch unexpectedly became empty".to_owned(),
+                    )
+                })?;
+            let payload_digest = panel_notification_archive_payload_digest(&payload)?;
+            let source_attestation = ModerationPanelNotificationSourceAttestationV1 {
+                version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+                attestor_slot: MODERATION_PANEL_NOTIFICATION_SOURCE_ATTESTOR_BROKER_SLOT_V1,
+                chain_id: self.chain_id.as_str().to_owned(),
+                checkpoint_namespace_digest: source_record.namespace_digest,
+                checkpoint_generation: source_record.checkpoint_generation,
+                checkpoint_revision: source_record.revision,
+                checkpoint_digest: source_record.checkpoint_digest,
+                source_manifest_digest,
+                terminal_set_digest: payload_digest,
+                terminal_record_count,
+                first_notification_id,
+                last_notification_id,
+                attestor_handle: source_record.checkpoint_store_handle.clone(),
+                attestor_revision: source_record.checkpoint_store_revision,
+                attestor_policy_digest: source_record.checkpoint_store_policy_digest,
+                attestor_public_key: self.config.checkpoint_store_attestation_public_key,
+            };
+            let mut head = ModerationPanelNotificationArchiveHeadV1 {
+                version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+                chain_id: self.chain_id.as_str().to_owned(),
+                generation,
+                predecessor_head_digest,
+                predecessor_operation_id,
+                predecessor_chain_commitment,
+                source_checkpoint_generation: source_record.checkpoint_generation,
+                source_checkpoint_namespace_digest: source_record.namespace_digest,
+                source_checkpoint_revision: source_record.revision,
+                source_checkpoint_digest: source_record.checkpoint_digest,
+                source_manifest_digest,
+                source_binding_digest: panel_notification_archive_source_binding_digest(
+                    &source_attestation,
+                ),
+                source_attestor_handle: source_record.checkpoint_store_handle.clone(),
+                source_attestor_revision: source_record.checkpoint_store_revision,
+                source_attestor_policy_digest: source_record.checkpoint_store_policy_digest,
+                source_attestor_public_key: self.config.checkpoint_store_attestation_public_key,
+                source_attestation_digest: panel_notification_source_attestation_message(
+                    &source_attestation,
+                ),
+                source_attestation_signature,
+                terminal_record_count,
+                dead_letter_record_count,
+                cumulative_dead_letter_count,
+                first_notification_id,
+                last_notification_id,
+                payload_digest,
+                archive_handle: archive.handle.clone(),
+                archive_revision: archive.qualification.revision(),
+                archive_policy_digest: archive.qualification.policy_digest(),
+                archive_id: archive.archive_id,
+                archive_public_key: archive.public_key,
+                archive_signer_epoch: signer_epoch.epoch,
+                archive_signer_epoch_digest: signer_epoch.epoch_digest,
+                operation_id: [0; 32],
+                head_digest: [0; 32],
+                chain_commitment: [0; 32],
+                archive_signature: [0; 64],
+            };
+            head.operation_id = panel_notification_archive_operation_id(&head);
+            head.head_digest = panel_notification_archive_head_digest(&head);
+            head.chain_commitment = panel_notification_archive_chain_commitment(&head);
+            Ok(ModerationPanelNotificationArchiveArtifactV1 {
+                version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+                head,
+                source_manifest: source_manifest.clone(),
+                payload,
+            })
+        };
+
+        let candidate = build_artifact(&records, [1; 64])?;
+        if norito::to_bytes(&candidate)
+            .map_err(|error| {
+                ModerationOrchestratorError::CheckpointCorrupt(format!(
+                    "encode panel notification receipt archive candidate: {error}"
+                ))
+            })?
+            .len()
+            > archive_max_bytes
+        {
+            return Err(ModerationOrchestratorError::ResourceExhausted {
+                resource: "panel notification archive bytes",
+                limit: archive_max_bytes,
+            });
+        }
+        let source_attestation = panel_notification_source_attestation_from_head(&candidate.head);
+        let source_attestation_signature = self
+            .deps
+            .checkpoint_store
+            .attest_terminal_set(&source_attestation)
+            .map_err(map_checkpoint_store_attestation_error)?;
+        let artifact = build_artifact(&records, source_attestation_signature)?;
+        let mut head = artifact.head.clone();
+        verify_panel_notification_archive_head_core_is_current(
+            &head,
+            &self.config.panel_notification_archive_handle,
+            self.config
+                .expected_panel_notification_archive_qualification,
+            self.config.panel_notification_archive_id,
+            self.config.panel_notification_archive_public_key,
+        )?;
+        if let Some(predecessor) = predecessor_head.as_ref() {
+            verify_panel_notification_archive_lineage_link(&head, predecessor)?;
+        }
+        let artifact_bytes = norito::to_bytes(&artifact).map_err(|error| {
+            ModerationOrchestratorError::CheckpointCorrupt(format!(
+                "encode panel notification receipt archive: {error}"
+            ))
+        })?;
+
+        // Runtime archive I/O must never execute while the orchestrator state
+        // mutex is held. The exact sealed source checkpoint is compared again
+        // after authenticated readback and before pruning.
+        verify_current_panel_notification_archive_readback(
+            &self.config,
+            &self.chain_id,
+            &self.deps.panel_notification_archive,
+            predecessor_head.as_ref(),
+        )?;
+        let verified = verify_panel_notification_archive_artifact(
+            &self.config,
+            &self.chain_id,
+            &artifact_bytes,
+        )?;
+        if verified != artifact {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+
+        let install_result = archive.install(
+            head.operation_id,
+            panel_notification_archive_receipt_message(&head),
+            &artifact_bytes,
+        );
+        let readback = match archive.read(head.operation_id) {
+            Ok(Some(readback)) => readback,
+            Ok(None) => {
+                return Err(install_result.err().map_or(
+                    ModerationOrchestratorError::PanelNotificationArchiveUnavailable,
+                    map_panel_notification_archive_error,
+                ));
+            }
+            Err(error) => return Err(map_panel_notification_archive_error(error)),
+        };
+        if let Ok(install_signature) = install_result
+            && install_signature != readback.signature
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+        let (installed, installed_head) =
+            verify_panel_notification_archive_readback(&self.config, &self.chain_id, &readback)?;
+        if installed != artifact {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+        head = installed_head;
+        verify_panel_notification_archive_head_is_current(
+            &head,
+            &archive.handle,
+            archive.qualification,
+            archive.archive_id,
+            archive.public_key,
+        )?;
+        if let Some(predecessor) = predecessor_head.as_ref() {
+            verify_panel_notification_archive_lineage_link(&head, predecessor)?;
+        }
+
+        let mut state = self.lock_state()?;
+        let current_checkpoint_bytes = norito::to_bytes(&*state).map_err(|error| {
+            ModerationOrchestratorError::CheckpointCorrupt(format!(
+                "encode receipt archive commit checkpoint: {error}"
+            ))
+        })?;
+        let current_record = self
+            .checkpoint_record
+            .lock()
+            .map_err(|_| ModerationOrchestratorError::CheckpointStoreLockPoisoned)?
+            .clone();
+        if state.panel_notification_archive_head != predecessor_head
+            || current_checkpoint_bytes != source_checkpoint_bytes
+            || current_record != source_record
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveRejected);
+        }
+
+        let mut candidate_state = state.clone();
+        let mut archived_terminal_groups =
+            BTreeMap::<[u8; 32], Vec<ModerationFinalizedEventCursorV1>>::new();
+        for record in &artifact.payload.records {
+            match record {
+                ModerationTerminalArchiveRecordV1::PanelNotification(archived) => {
+                    let position = candidate_state
+                        .panel_notifications
+                        .iter()
+                        .position(|entry| {
+                            entry.notification.notification_id == archived.notification_id
+                                && entry.state == StoredPanelNotificationStateV1::Delivered
+                        })
+                        .ok_or(ModerationOrchestratorError::CheckpointStoreEquivocation)?;
+                    validate_archived_panel_notification_record(
+                        archived,
+                        &candidate_state.panel_notifications[position],
+                    )
+                    .map_err(|_| ModerationOrchestratorError::CheckpointStoreEquivocation)?;
+                    candidate_state.panel_notifications.remove(position);
+                }
+                ModerationTerminalArchiveRecordV1::ResolvedPanelDeadLetter {
+                    source_record_digest,
+                    ..
+                } => {
+                    let position = candidate_state
+                        .panel_notification_dead_letter_resolutions
+                        .iter()
+                        .position(|entry| entry.record_digest == *source_record_digest)
+                        .ok_or(ModerationOrchestratorError::CheckpointStoreEquivocation)?;
+                    candidate_state
+                        .panel_notification_dead_letter_resolutions
+                        .remove(position);
+                }
+                ModerationTerminalArchiveRecordV1::NativeOperation {
+                    operation_id,
+                    source_record_digest,
+                    ..
+                } => {
+                    let position = candidate_state
+                        .operations
+                        .iter()
+                        .position(|entry| {
+                            entry.operation_id == *operation_id
+                                && native_operation_record_digest(entry).ok()
+                                    == Some(*source_record_digest)
+                        })
+                        .ok_or(ModerationOrchestratorError::CheckpointStoreEquivocation)?;
+                    candidate_state.operations.remove(position);
+                }
+                ModerationTerminalArchiveRecordV1::DurableDeadLetter {
+                    identity,
+                    operation_source_record_digest,
+                    source_record_digest,
+                    handoff_outcome_digest,
+                    handoff_finalized_cursor,
+                    ..
+                } => {
+                    let position = candidate_state
+                        .dead_letters
+                        .iter()
+                        .position(|entry| {
+                            entry.identity == *identity
+                                && durable_dead_letter_source_record_digest(entry).ok()
+                                    == Some(*source_record_digest)
+                                && entry.resolution.is_some()
+                        })
+                        .ok_or(ModerationOrchestratorError::CheckpointStoreEquivocation)?;
+                    candidate_state.dead_letters.remove(position);
+                    if let Some(operation_digest) = operation_source_record_digest {
+                        let operation_position = candidate_state
+                            .operations
+                            .iter()
+                            .position(|entry| {
+                                native_operation_record_digest(entry).ok()
+                                    == Some(*operation_digest)
+                            })
+                            .ok_or(ModerationOrchestratorError::CheckpointStoreEquivocation)?;
+                        candidate_state.operations.remove(operation_position);
+                    }
+                    if let (Some(outcome_digest), Some(cursor)) =
+                        (handoff_outcome_digest, handoff_finalized_cursor)
+                    {
+                        archived_terminal_groups
+                            .entry(terminal_handoff_outcome_group_identity(
+                                *cursor,
+                                *outcome_digest,
+                            ))
+                            .or_default()
+                            .push(*cursor);
+                    }
+                }
+                ModerationTerminalArchiveRecordV1::CompletedHandoff {
+                    handoff_id,
+                    outcome_digest,
+                    finalized_cursor,
+                    source_record_digest,
+                    ..
+                } => {
+                    let position = candidate_state
+                        .completed_handoffs
+                        .iter()
+                        .position(|entry| {
+                            entry.handoff.handoff_id == *handoff_id
+                                && entry.record_digest == *source_record_digest
+                        })
+                        .ok_or(ModerationOrchestratorError::CheckpointStoreEquivocation)?;
+                    candidate_state.completed_handoffs.remove(position);
+                    archived_terminal_groups
+                        .entry(terminal_handoff_outcome_group_identity(
+                            *finalized_cursor,
+                            *outcome_digest,
+                        ))
+                        .or_default()
+                        .push(*finalized_cursor);
+                }
+            }
+        }
+        for cursors in archived_terminal_groups.values() {
+            if cursors.len() == 2 && cursors[0] == cursors[1] {
+                let cursor = cursors[0];
+                if candidate_state
+                    .terminal_handoff_archived_cursor
+                    .is_none_or(|archived| cursor.sequence > archived.sequence)
+                {
+                    candidate_state.terminal_handoff_archived_cursor = Some(cursor);
+                }
+            }
+        }
+        candidate_state.panel_notification_archive_head = Some(head.clone());
+        candidate_state.panel_notification_archive_compaction_reservation = None;
+        candidate_state.panel_notification_archived_dead_letter_count =
+            head.cumulative_dead_letter_count;
+        candidate_state.panel_notification_archive_pending_publication = Some(head.clone());
+        self.persist_checkpoint_locked(&mut candidate_state)?;
+        *state = candidate_state;
+        Ok(Some(head))
+    }
+
+    /// Publish or replay the one durable archive-head outbox entry.
+    ///
+    /// The signed head is retained in the sealed checkpoint before this method
+    /// contacts the independently administered publication boundary. A crash or
+    /// ambiguous result therefore replays the exact operation and bytes. The
+    /// checkpoint advances its public monotonic head only after durable success.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed on missing/corrupt archive readback, publication failure,
+    /// provider drift, a concurrent substituted head, or sealed-CAS fencing.
+    pub fn reconcile_panel_notification_archive_publication(
+        &self,
+    ) -> Result<bool, ModerationOrchestratorError> {
+        let pending = self
+            .lock_state()?
+            .panel_notification_archive_pending_publication
+            .clone();
+        let Some(head) = pending else {
+            return Ok(false);
+        };
+        verify_current_panel_notification_archive_readback(
+            &self.config,
+            &self.chain_id,
+            &self.deps.panel_notification_archive,
+            Some(&head),
+        )?;
+        self.deps
+            .publication_sink
+            .publish_panel_notification_archive_head(&head)
+            .map_err(map_panel_notification_archive_publication_error)?;
+        verify_published_panel_notification_archive_head_readback(
+            &self.deps.publication_sink,
+            Some(&head),
+        )?;
+
+        let mut state = self.lock_state()?;
+        if state.panel_notification_archive_head.as_ref() != Some(&head)
+            || state
+                .panel_notification_archive_pending_publication
+                .as_ref()
+                != Some(&head)
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveRejected);
+        }
+        state.panel_notification_archive_pending_publication = None;
+        state.panel_notification_archive_published_head = Some(head);
+        self.persist_checkpoint_locked(&mut state)?;
+        Ok(true)
+    }
+
+    /// Return the exact authenticated current receipt-archive head.
+    ///
+    /// # Errors
+    ///
+    /// Fails when state is unavailable or archive readback is missing/corrupt.
+    pub fn panel_notification_archive_head(
+        &self,
+    ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationOrchestratorError> {
+        let state = self.lock_state()?;
+        let head = state.panel_notification_archive_head.clone();
+        let published_head = state.panel_notification_archive_published_head.clone();
+        drop(state);
+        verify_current_panel_notification_archive_readback(
+            &self.config,
+            &self.chain_id,
+            &self.deps.panel_notification_archive,
+            head.as_ref(),
+        )?;
+        verify_published_panel_notification_archive_head_readback(
+            &self.deps.publication_sink,
+            published_head.as_ref(),
+        )?;
+        Ok(head)
+    }
+
+    /// Return the complete authenticated archive-signer epoch log.
+    ///
+    /// The bootstrap key anchors the first epoch. Every successor is checked
+    /// against its predecessor authorization, new-key proof of possession, and
+    /// inclusive revocation cutoff before the log is returned.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for a corrupt sealed log, a substituted bootstrap key or
+    /// archive identity, or a current epoch that differs from configuration.
+    pub fn panel_notification_archive_signer_epochs(
+        &self,
+    ) -> Result<Vec<ModerationPanelNotificationArchiveSignerEpochV1>, ModerationOrchestratorError>
+    {
+        let epochs = self
+            .lock_state()?
+            .panel_notification_archive_signer_epochs
+            .clone();
+        validate_panel_notification_archive_signer_epochs(
+            &epochs,
+            &self.chain_id,
+            self.config.panel_notification_archive_bootstrap_public_key,
+            self.config.panel_notification_archive_id,
+        )?;
+        let current = epochs
+            .last()
+            .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+        if current.archive_handle != self.config.panel_notification_archive_handle
+            || current.archive_revision
+                != self
+                    .config
+                    .expected_panel_notification_archive_qualification
+                    .revision()
+            || current.archive_policy_digest
+                != self
+                    .config
+                    .expected_panel_notification_archive_qualification
+                    .policy_digest()
+            || current.archive_id != self.config.panel_notification_archive_id
+            || current.archive_public_key != self.config.panel_notification_archive_public_key
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+        Ok(epochs)
+    }
+
+    /// Start a bounded audit of the complete archive lineage from the current
+    /// published head through generation one.
+    ///
+    /// This operator-controlled rehearsal first seals a fresh audit cursor
+    /// with no trusted floor, making archive readiness fail closed until the
+    /// full lineage completes. The first bounded page is processed before this
+    /// call returns; if it is incomplete, continue it with
+    /// [`Self::audit_panel_notification_archive`].
+    ///
+    /// # Errors
+    ///
+    /// Fails closed on invalid bounds, an unpublished or substituted head,
+    /// concurrent checkpoint changes, checkpoint fencing, or any archive
+    /// validation failure encountered in the first page.
+    pub fn audit_panel_notification_archive_full_history(
+        &self,
+        maximum_heads: u32,
+    ) -> Result<ModerationPanelNotificationArchiveAuditProgressV1, ModerationOrchestratorError>
+    {
+        if maximum_heads == 0
+            || maximum_heads > MODERATION_PANEL_NOTIFICATION_ARCHIVE_AUDIT_PAGE_MAX_V1
+        {
+            return Err(ModerationOrchestratorError::ResourceExhausted {
+                resource: "panel notification archive audit page",
+                limit: usize::try_from(MODERATION_PANEL_NOTIFICATION_ARCHIVE_AUDIT_PAGE_MAX_V1)
+                    .unwrap_or(usize::MAX),
+            });
+        }
+
+        let state = self.lock_state()?;
+        let Some(latest_head) = state.panel_notification_archive_head.clone() else {
+            drop(state);
+            return self.audit_panel_notification_archive(maximum_heads);
+        };
+        if state
+            .panel_notification_archive_pending_publication
+            .is_some()
+            || state.panel_notification_archive_published_head.as_ref() != Some(&latest_head)
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveRejected);
+        }
+        let source_checkpoint_bytes = norito::to_bytes(&*state).map_err(|error| {
+            ModerationOrchestratorError::CheckpointCorrupt(format!(
+                "encode full-history archive audit source checkpoint: {error}"
+            ))
+        })?;
+        let source_record = self
+            .checkpoint_record
+            .lock()
+            .map_err(|_| ModerationOrchestratorError::CheckpointStoreLockPoisoned)?
+            .clone();
+        drop(state);
+
+        verify_published_panel_notification_archive_head_readback(
+            &self.deps.publication_sink,
+            Some(&latest_head),
+        )?;
+
+        let mut state = self.lock_state()?;
+        let current_checkpoint_bytes = norito::to_bytes(&*state).map_err(|error| {
+            ModerationOrchestratorError::CheckpointCorrupt(format!(
+                "encode full-history archive audit commit checkpoint: {error}"
+            ))
+        })?;
+        let current_record = self
+            .checkpoint_record
+            .lock()
+            .map_err(|_| ModerationOrchestratorError::CheckpointStoreLockPoisoned)?
+            .clone();
+        if current_checkpoint_bytes != source_checkpoint_bytes
+            || current_record != source_record
+            || state.panel_notification_archive_head.as_ref() != Some(&latest_head)
+            || state.panel_notification_archive_pending_publication.is_some()
+            || state.panel_notification_archive_published_head.as_ref() != Some(&latest_head)
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveRejected);
+        }
+        state.panel_notification_archive_audit_cursor =
+            Some(ModerationPanelNotificationArchiveAuditCursorV1 {
+                version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+                target_generation: latest_head.generation,
+                target_head_digest: latest_head.head_digest,
+                next_operation_id: Some(latest_head.operation_id),
+                expected_generation: Some(latest_head.generation),
+                expected_head_digest: Some(latest_head.head_digest),
+                expected_chain_commitment: Some(latest_head.chain_commitment),
+                verified_head_count: 0,
+                chain_commitment: [0; 32],
+                last_completed_generation: 0,
+                last_completed_head_digest: None,
+            });
+        self.persist_checkpoint_locked(&mut state)?;
+        drop(state);
+
+        self.audit_panel_notification_archive(maximum_heads)
+    }
+
+    /// Authenticate one bounded page of the archive suffix added since the
+    /// last completed audit.
+    ///
+    /// The sealed cursor advances from a fixed target head toward the last
+    /// authenticated head. Every page checks exact operation, generation, head
+    /// digest, chain accumulator, signature, and predecessor coordinates. The
+    /// initial audit reaches generation one; later audits verify only new
+    /// generations plus the previously trusted boundary head. A separate
+    /// operator-controlled full-history rehearsal via
+    /// [`Self::audit_panel_notification_archive_full_history`] detects loss
+    /// outside the readiness-critical incremental suffix.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed on invalid bounds, missing/corrupt history, forks, gaps,
+    /// provider drift, concurrent checkpoint changes, or checkpoint fencing.
+    pub fn audit_panel_notification_archive(
+        &self,
+        maximum_heads: u32,
+    ) -> Result<ModerationPanelNotificationArchiveAuditProgressV1, ModerationOrchestratorError>
+    {
+        if maximum_heads == 0
+            || maximum_heads > MODERATION_PANEL_NOTIFICATION_ARCHIVE_AUDIT_PAGE_MAX_V1
+        {
+            return Err(ModerationOrchestratorError::ResourceExhausted {
+                resource: "panel notification archive audit page",
+                limit: usize::try_from(MODERATION_PANEL_NOTIFICATION_ARCHIVE_AUDIT_PAGE_MAX_V1)
+                    .unwrap_or(usize::MAX),
+            });
+        }
+
+        let state = self.lock_state()?;
+        let Some(latest_head) = state.panel_notification_archive_head.clone() else {
+            if state.panel_notification_archive_audit_cursor.is_some() {
+                return Err(ModerationOrchestratorError::CheckpointStoreEquivocation);
+            }
+            return Ok(ModerationPanelNotificationArchiveAuditProgressV1 {
+                verified_heads: 0,
+                target_generation: 0,
+                last_completed_generation: 0,
+                cycle_complete: true,
+            });
+        };
+        if state
+            .panel_notification_archive_pending_publication
+            .is_some()
+            || state.panel_notification_archive_published_head.as_ref() != Some(&latest_head)
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveRejected);
+        }
+        let source_cursor = state.panel_notification_archive_audit_cursor.clone();
+        let source_signer_epochs = state.panel_notification_archive_signer_epochs.clone();
+        let mut cursor = match source_cursor.as_ref() {
+            Some(cursor) if cursor.next_operation_id.is_some() => cursor.clone(),
+            previous => ModerationPanelNotificationArchiveAuditCursorV1 {
+                version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+                target_generation: latest_head.generation,
+                target_head_digest: latest_head.head_digest,
+                next_operation_id: Some(latest_head.operation_id),
+                expected_generation: Some(latest_head.generation),
+                expected_head_digest: Some(latest_head.head_digest),
+                expected_chain_commitment: Some(latest_head.chain_commitment),
+                verified_head_count: 0,
+                chain_commitment: [0; 32],
+                last_completed_generation: previous
+                    .map_or(0, |value| value.last_completed_generation),
+                last_completed_head_digest: previous
+                    .and_then(|value| value.last_completed_head_digest),
+            },
+        };
+        let source_checkpoint_bytes = norito::to_bytes(&*state).map_err(|error| {
+            ModerationOrchestratorError::CheckpointCorrupt(format!(
+                "encode archive audit source checkpoint: {error}"
+            ))
+        })?;
+        let source_record = self
+            .checkpoint_record
+            .lock()
+            .map_err(|_| ModerationOrchestratorError::CheckpointStoreLockPoisoned)?
+            .clone();
+        drop(state);
+        verify_published_panel_notification_archive_head_readback(
+            &self.deps.publication_sink,
+            Some(&latest_head),
+        )?;
+
+        let audit_floor_generation = cursor.last_completed_generation;
+        let audit_floor_head_digest = cursor.last_completed_head_digest;
+        if latest_head.generation < audit_floor_generation
+            || (audit_floor_generation == 0) != audit_floor_head_digest.is_none()
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+        let mut verified_heads = 0_u32;
+        while verified_heads < maximum_heads {
+            let Some(operation_id) = cursor.next_operation_id else {
+                break;
+            };
+            let expected_generation = cursor
+                .expected_generation
+                .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+            let expected_head_digest = cursor
+                .expected_head_digest
+                .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+            let expected_chain_commitment = cursor
+                .expected_chain_commitment
+                .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+            let head = load_verified_panel_notification_archive_head(
+                &self.config,
+                &self.chain_id,
+                &self.deps.panel_notification_archive,
+                operation_id,
+            )?;
+            if head.generation != expected_generation
+                || head.head_digest != expected_head_digest
+                || head.chain_commitment != expected_chain_commitment
+                || verify_panel_notification_archive_head_signer_epoch(&head, &source_signer_epochs)
+                    .is_err()
+            {
+                return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+            }
+            cursor.chain_commitment =
+                panel_notification_archive_audit_page_commitment(cursor.chain_commitment, &head);
+            cursor.verified_head_count = cursor
+                .verified_head_count
+                .checked_add(1)
+                .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
+            verified_heads = verified_heads
+                .checked_add(1)
+                .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
+            if audit_floor_generation != 0 && head.generation == audit_floor_generation {
+                if Some(head.head_digest) != audit_floor_head_digest {
+                    return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+                }
+                cursor.next_operation_id = None;
+                cursor.expected_generation = None;
+                cursor.expected_head_digest = None;
+                cursor.expected_chain_commitment = None;
+                cursor.last_completed_generation = cursor.target_generation;
+                cursor.last_completed_head_digest = Some(cursor.target_head_digest);
+                continue;
+            }
+            if head.generation < audit_floor_generation {
+                return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+            }
+            match head.generation {
+                1 => {
+                    if head.predecessor_operation_id.is_some()
+                        || head.predecessor_head_digest.is_some()
+                        || head.predecessor_chain_commitment.is_some()
+                        || audit_floor_generation != 0
+                    {
+                        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+                    }
+                    cursor.next_operation_id = None;
+                    cursor.expected_generation = None;
+                    cursor.expected_head_digest = None;
+                    cursor.expected_chain_commitment = None;
+                    cursor.last_completed_generation = cursor.target_generation;
+                    cursor.last_completed_head_digest = Some(cursor.target_head_digest);
+                }
+                2.. => {
+                    cursor.next_operation_id = head.predecessor_operation_id;
+                    cursor.expected_generation = Some(head.generation - 1);
+                    cursor.expected_head_digest = head.predecessor_head_digest;
+                    cursor.expected_chain_commitment = head.predecessor_chain_commitment;
+                    if cursor.next_operation_id.is_none()
+                        || cursor.expected_head_digest.is_none()
+                        || cursor.expected_chain_commitment.is_none()
+                    {
+                        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+                    }
+                }
+                0 => return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid),
+            }
+        }
+
+        let mut state = self.lock_state()?;
+        let current_checkpoint_bytes = norito::to_bytes(&*state).map_err(|error| {
+            ModerationOrchestratorError::CheckpointCorrupt(format!(
+                "encode archive audit commit checkpoint: {error}"
+            ))
+        })?;
+        let current_record = self
+            .checkpoint_record
+            .lock()
+            .map_err(|_| ModerationOrchestratorError::CheckpointStoreLockPoisoned)?
+            .clone();
+        if current_checkpoint_bytes != source_checkpoint_bytes
+            || current_record != source_record
+            || state.panel_notification_archive_head.as_ref() != Some(&latest_head)
+            || state.panel_notification_archive_audit_cursor != source_cursor
+            || state.panel_notification_archive_signer_epochs != source_signer_epochs
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveRejected);
+        }
+        let cycle_complete = cursor.next_operation_id.is_none();
+        let target_generation = cursor.target_generation;
+        let last_completed_generation = cursor.last_completed_generation;
+        state.panel_notification_archive_audit_cursor = Some(cursor);
+        self.persist_checkpoint_locked(&mut state)?;
+        Ok(ModerationPanelNotificationArchiveAuditProgressV1 {
+            verified_heads,
+            target_generation,
+            last_completed_generation,
+            cycle_complete,
+        })
+    }
+
     fn lock_state(
         &self,
     ) -> Result<
@@ -2886,11 +5218,21 @@ impl ModerationOrchestratorV1 {
                 }
                 ActionEffect::Conflict => {
                     state.operations[operation_position].status = StoredOperationStatusV1::Rejected;
+                    let incident_sequence = next_dead_letter_incident_sequence(state)?;
                     dead.push(StoredDeadLetterV1 {
+                        incident_sequence,
                         identity: entry.operation_id,
                         action_label: entry.action.label().to_owned(),
                         reason: StoredDeadLetterReasonV1::FinalizedConflict,
                         finalized_cursor: cursor,
+                        dead_lettered_at_unix_ms: snapshot.finalized_at_unix_ms,
+                        redrive: Some(StoredDeadLetterRedriveV1::NativeSubmission {
+                            authority: entry.authority,
+                            action: entry.action,
+                            request_binding_digest: entry.request_binding_digest,
+                        }),
+                        resolution: None,
+                        resolution_signature: None,
                     });
                 }
                 ActionEffect::Absent => {
@@ -3529,6 +5871,11 @@ impl ModerationOrchestratorV1 {
             return Ok(());
         };
         let cursor = snapshot_cursor(&state)?;
+        let dead_lettered_at_unix_ms = state
+            .finalized_snapshot
+            .as_ref()
+            .ok_or(ModerationOrchestratorError::FinalizedReaderUnavailable)?
+            .finalized_at_unix_ms;
         let needs_dead_letter = matches!(result, Err(ModerationHandoffFailureV1::Permanent))
             || (matches!(
                 result,
@@ -3542,26 +5889,48 @@ impl ModerationOrchestratorV1 {
         entry.work_claim = None;
         match result {
             Ok(()) => {
-                state.completed_handoffs.push(entry.handoff.handoff_id);
-                state.completed_handoffs.sort_unstable();
-                state.completed_handoffs.dedup();
+                let mut completed = StoredCompletedHandoffV1 {
+                    handoff: entry.handoff,
+                    completed_at_finalized_cursor: cursor,
+                    record_digest: [0; 32],
+                };
+                completed.record_digest = completed_handoff_record_digest(&completed)?;
+                state.completed_handoffs.push(completed);
+                state
+                    .completed_handoffs
+                    .sort_by_key(|entry| entry.handoff.handoff_id);
+                state
+                    .completed_handoffs
+                    .dedup_by_key(|entry| entry.handoff.handoff_id);
             }
             Err(ModerationHandoffFailureV1::Permanent) => {
+                let incident_sequence = next_dead_letter_incident_sequence(&mut state)?;
                 state.dead_letters.push(StoredDeadLetterV1 {
+                    incident_sequence,
                     identity: entry.handoff.handoff_id,
                     action_label: handoff_label(entry.handoff.kind).to_owned(),
                     reason: StoredDeadLetterReasonV1::HandoffPermanentRejection,
                     finalized_cursor: cursor,
+                    dead_lettered_at_unix_ms,
+                    redrive: Some(StoredDeadLetterRedriveV1::TerminalHandoff(entry.handoff)),
+                    resolution: None,
+                    resolution_signature: None,
                 });
             }
             Err(
                 ModerationHandoffFailureV1::NotDelivered | ModerationHandoffFailureV1::Ambiguous,
             ) if entry.attempts >= self.config.max_submit_attempts => {
+                let incident_sequence = next_dead_letter_incident_sequence(&mut state)?;
                 state.dead_letters.push(StoredDeadLetterV1 {
+                    incident_sequence,
                     identity: entry.handoff.handoff_id,
                     action_label: handoff_label(entry.handoff.kind).to_owned(),
                     reason: StoredDeadLetterReasonV1::HandoffRetryExhausted,
                     finalized_cursor: cursor,
+                    dead_lettered_at_unix_ms,
+                    redrive: Some(StoredDeadLetterRedriveV1::TerminalHandoff(entry.handoff)),
+                    resolution: None,
+                    resolution_signature: None,
                 });
             }
             Err(
@@ -3628,6 +5997,12 @@ impl ModerationOrchestratorV1 {
     ) -> Result<(), ModerationOrchestratorError> {
         ensure_dead_letter_capacity(state, &self.config, 1)?;
         let cursor = snapshot_cursor(state)?;
+        let dead_lettered_at_unix_ms = state
+            .finalized_snapshot
+            .as_ref()
+            .ok_or(ModerationOrchestratorError::FinalizedReaderUnavailable)?
+            .finalized_at_unix_ms;
+        let incident_sequence = next_dead_letter_incident_sequence(state)?;
         let entry = state.outbox.remove(position);
         if let Some(operation) = state
             .operations
@@ -3640,10 +6015,19 @@ impl ModerationOrchestratorV1 {
             }
         }
         state.dead_letters.push(StoredDeadLetterV1 {
+            incident_sequence,
             identity: entry.operation_id,
             action_label: entry.action.label().to_owned(),
             reason,
             finalized_cursor: cursor,
+            dead_lettered_at_unix_ms,
+            redrive: Some(StoredDeadLetterRedriveV1::NativeSubmission {
+                authority: entry.authority,
+                action: entry.action,
+                request_binding_digest: entry.request_binding_digest,
+            }),
+            resolution: None,
+            resolution_signature: None,
         });
         self.persist_checkpoint_locked(state)
     }
@@ -3834,18 +6218,80 @@ impl ModerationOrchestratorV1 {
         let completed = state
             .completed_handoffs
             .iter()
-            .copied()
+            .map(|entry| entry.handoff.handoff_id)
             .collect::<BTreeSet<_>>();
         let pending = state
             .pending_handoffs
             .iter()
             .map(|entry| entry.handoff.handoff_id)
             .collect::<BTreeSet<_>>();
+        let unresolved_dead = state
+            .dead_letters
+            .iter()
+            .filter(|entry| {
+                entry.resolution.is_none()
+                    && matches!(
+                        entry.redrive,
+                        Some(StoredDeadLetterRedriveV1::TerminalHandoff(_))
+                    )
+            })
+            .map(|entry| entry.identity)
+            .collect::<BTreeSet<_>>();
+        let scanned_cursor = state.terminal_handoff_scanned_cursor;
+        let new_events = snapshot
+            .events
+            .iter()
+            .filter(|event| scanned_cursor.is_none_or(|cursor| event.sequence > cursor.sequence))
+            .collect::<Vec<_>>();
+        if let (Some(scanned), Some(first)) = (scanned_cursor, new_events.first())
+            && scanned
+                .sequence
+                .checked_add(1)
+                .is_none_or(|expected| first.sequence != expected)
+        {
+            return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                "terminal handoff event scan contains a sequence gap".to_owned(),
+            ));
+        }
+        if scanned_cursor.is_none()
+            && snapshot.cases.iter().any(|case| {
+                case.outcome.as_ref().is_some_and(|outcome| {
+                    !new_events.iter().any(|event| {
+                        *event.event.kind() == SorafsModerationLedgerEventKind::CaseFinalized
+                            && event.event.case_id().as_deref() == Some(&outcome.case_id)
+                            && event.event.round_id().as_deref() == Some(&outcome.round_id)
+                    })
+                })
+            })
+        {
+            return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                "terminal handoff initial scan lacks exact finalized-event history".to_owned(),
+            ));
+        }
         let mut additions = Vec::new();
-        for case in &snapshot.cases {
-            let Some(outcome) = case.outcome.as_ref() else {
+        for event in &new_events {
+            if *event.event.kind() != SorafsModerationLedgerEventKind::CaseFinalized {
                 continue;
+            }
+            let (Some(case_id), Some(round_id)) = (event.event.case_id(), event.event.round_id())
+            else {
+                return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                    "terminal finalization event lacks canonical scope".to_owned(),
+                ));
             };
+            let outcome = snapshot
+                .case(&case_id, &round_id)
+                .and_then(|case| case.outcome.as_ref())
+                .ok_or_else(|| {
+                    ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                        "terminal finalization event lacks authoritative outcome".to_owned(),
+                    )
+                })?;
+            if !terminal_finalization_event_matches_outcome(event, outcome) {
+                return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                    "terminal finalization event provenance differs from outcome".to_owned(),
+                ));
+            }
             let outcome_bytes = norito::to_bytes(outcome).map_err(|error| {
                 ModerationOrchestratorError::InvalidFinalizedSnapshot(format!(
                     "encode terminal outcome: {error}"
@@ -3869,16 +6315,18 @@ impl ModerationOrchestratorV1 {
                 )
             });
             if handoff_ids.iter().all(|(_, handoff_id)| {
-                completed.contains(handoff_id) || pending.contains(handoff_id)
+                completed.contains(handoff_id)
+                    || pending.contains(handoff_id)
+                    || unresolved_dead.contains(handoff_id)
             }) {
                 continue;
             }
-            let finalized_cursor = retained_terminal_finalization_cursor(snapshot, outcome)
-                .map_err(|error| {
-                    ModerationOrchestratorError::InvalidFinalizedSnapshot(error.to_owned())
-                })?;
+            let finalized_cursor = event.cursor();
             for (kind, handoff_id) in handoff_ids {
-                if !completed.contains(&handoff_id) && !pending.contains(&handoff_id) {
+                if !completed.contains(&handoff_id)
+                    && !pending.contains(&handoff_id)
+                    && !unresolved_dead.contains(&handoff_id)
+                {
                     additions.push(StoredHandoffV1 {
                         handoff: ModerationTerminalHandoffV1 {
                             handoff_id,
@@ -3886,7 +6334,9 @@ impl ModerationOrchestratorV1 {
                             case_id: outcome.case_id.clone(),
                             round_id: outcome.round_id.clone(),
                             outcome_digest,
+                            outcome_finalized_at_unix_ms: outcome.finalized_at_unix_ms,
                             finalized_cursor,
+                            source_event_witness: (*event).clone(),
                         },
                         attempts: 0,
                         work_generation: 0,
@@ -3908,6 +6358,9 @@ impl ModerationOrchestratorV1 {
             });
         }
         state.pending_handoffs.extend(additions);
+        if let Some(last) = new_events.last() {
+            state.terminal_handoff_scanned_cursor = Some(last.cursor());
+        }
         Ok(())
     }
 }
@@ -5219,6 +7672,52 @@ fn external_work_claim_is_valid(
         && external_work_lease_token(identity, claim) == claim.lease_token
 }
 
+fn validate_retained_dead_letter_resolution(
+    resolution: &ModerationDeadLetterResolutionV1,
+    signature: [u8; 64],
+    expected_source_record_digest: [u8; 32],
+    expected_identity: [u8; 32],
+    expected_kind: ModerationDeadLetterKindV1,
+    incident_time: u64,
+    state: &ModerationOrchestratorCheckpointV1,
+    config: &ModerationOrchestratorConfigV1,
+    chain_id: &iroha_data_model::ChainId,
+) -> Result<(), ModerationOrchestratorError> {
+    verify_dead_letter_resolution_signature(resolution, signature)?;
+    let finalized_time = state
+        .finalized_snapshot
+        .as_ref()
+        .ok_or_else(|| {
+            ModerationOrchestratorError::CheckpointCorrupt(
+                "dead-letter resolution exists without a finalized snapshot".to_owned(),
+            )
+        })?
+        .finalized_at_unix_ms;
+    if resolution.chain_id != chain_id.as_str()
+        || resolution.checkpoint_namespace_digest
+            != checkpoint_store::checkpoint_namespace(chain_id)
+        || resolution.checkpoint_generation == 0
+        || resolution.checkpoint_generation >= state.generation
+        || resolution.identity != expected_identity
+        || resolution.kind != expected_kind
+        || resolution.source_record_digest != expected_source_record_digest
+        || resolution.authorized_at_unix_ms < incident_time
+        || resolution.authorized_at_unix_ms > finalized_time
+        || resolution.attestor_handle != config.checkpoint_store_handle
+        || resolution.attestor_revision != config.expected_checkpoint_store_qualification.revision()
+        || resolution.attestor_policy_digest
+            != config
+                .expected_checkpoint_store_qualification
+                .policy_digest()
+        || resolution.attestor_public_key != config.checkpoint_store_attestation_public_key
+    {
+        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "dead-letter resolution binding is stale, substituted, or noncanonical".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_checkpoint(
     state: &ModerationOrchestratorCheckpointV1,
     config: &ModerationOrchestratorConfigV1,
@@ -5242,11 +7741,153 @@ fn validate_checkpoint(
             .len()
             .saturating_add(state.completed_handoffs.len())
             > config.max_handoffs
-        || state.panel_notifications.len() > config.max_handoffs
+        || state
+            .panel_notifications
+            .len()
+            .saturating_add(state.panel_notification_dead_letter_resolutions.len())
+            > config.max_handoffs
     {
         return Err(ModerationOrchestratorError::CheckpointCorrupt(
             "checkpoint exceeds configured retention bounds".to_owned(),
         ));
+    }
+    if state.panel_notification_archive_signer_epochs.is_empty() {
+        if state.panel_notification_archive_head.is_some()
+            || state
+                .panel_notification_archive_compaction_reservation
+                .is_some()
+            || state
+                .panel_notification_archive_pending_publication
+                .is_some()
+            || state.panel_notification_archive_published_head.is_some()
+            || state.panel_notification_archived_dead_letter_count != 0
+        {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "archive state exists without a signer epoch log".to_owned(),
+            ));
+        }
+    } else {
+        validate_panel_notification_archive_signer_epochs(
+            &state.panel_notification_archive_signer_epochs,
+            chain_id,
+            config.panel_notification_archive_bootstrap_public_key,
+            config.panel_notification_archive_id,
+        )
+        .map_err(|_| {
+            ModerationOrchestratorError::CheckpointCorrupt(
+                "archive signer epoch log is malformed".to_owned(),
+            )
+        })?;
+    }
+    if let Some(head) = state.panel_notification_archive_head.as_ref() {
+        verify_panel_notification_archive_head(head)?;
+        verify_panel_notification_archive_head_signer_epoch(
+            head,
+            &state.panel_notification_archive_signer_epochs,
+        )?;
+        if head.source_checkpoint_generation >= state.generation {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "receipt archive source checkpoint does not precede retained state".to_owned(),
+            ));
+        }
+        if state.panel_notification_archived_dead_letter_count != head.cumulative_dead_letter_count
+        {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "archived panel-notification dead-letter count differs from the signed head"
+                    .to_owned(),
+            ));
+        }
+    } else if state.panel_notification_archived_dead_letter_count != 0 {
+        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "archived panel-notification dead letters exist without an archive head".to_owned(),
+        ));
+    }
+    let publication_state_is_valid = match (
+        state.panel_notification_archive_head.as_ref(),
+        state
+            .panel_notification_archive_pending_publication
+            .as_ref(),
+        state.panel_notification_archive_published_head.as_ref(),
+    ) {
+        (None, None, None) => true,
+        (Some(current), None, Some(published)) => current == published,
+        (Some(current), Some(pending), None) => pending == current && current.generation == 1,
+        (Some(current), Some(pending), Some(published)) => {
+            pending == current
+                && verify_panel_notification_archive_head(published).is_ok()
+                && verify_panel_notification_archive_head_signer_epoch(
+                    published,
+                    &state.panel_notification_archive_signer_epochs,
+                )
+                .is_ok()
+                && verify_panel_notification_archive_lineage_link(current, published).is_ok()
+        }
+        _ => false,
+    };
+    if !publication_state_is_valid {
+        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "archive publication outbox is nonmonotonic or inconsistent".to_owned(),
+        ));
+    }
+    match (
+        state.panel_notification_archive_head.as_ref(),
+        state.panel_notification_archive_audit_cursor.as_ref(),
+    ) {
+        (None, None) | (Some(_), None) => {}
+        (None, Some(_)) => {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "archive audit cursor exists without an archive head".to_owned(),
+            ));
+        }
+        (Some(head), Some(cursor)) => {
+            let pending_coordinates_are_complete = matches!(
+                (
+                    cursor.next_operation_id,
+                    cursor.expected_generation,
+                    cursor.expected_head_digest,
+                    cursor.expected_chain_commitment,
+                ),
+                (Some(_), Some(_), Some(_), Some(_)) | (None, None, None, None)
+            );
+            let last_completed_is_valid = match (
+                cursor.last_completed_generation,
+                cursor.last_completed_head_digest,
+            ) {
+                (0, None) => true,
+                (generation, Some(digest)) => {
+                    generation != 0 && generation <= cursor.target_generation && digest != [0; 32]
+                }
+                _ => false,
+            };
+            let progress_is_valid = match cursor.expected_generation {
+                Some(expected_generation) => {
+                    expected_generation != 0
+                        && expected_generation <= cursor.target_generation
+                        && expected_generation >= cursor.last_completed_generation
+                        && cursor.verified_head_count.checked_add(expected_generation)
+                            == Some(cursor.target_generation)
+                }
+                None => {
+                    cursor.verified_head_count != 0
+                        && cursor.verified_head_count <= cursor.target_generation
+                        && cursor.last_completed_generation == cursor.target_generation
+                        && cursor.last_completed_head_digest == Some(cursor.target_head_digest)
+                }
+            };
+            if cursor.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
+                || cursor.target_generation == 0
+                || cursor.target_generation > head.generation
+                || cursor.target_head_digest == [0; 32]
+                || !pending_coordinates_are_complete
+                || !last_completed_is_valid
+                || !progress_is_valid
+                || (cursor.verified_head_count == 0) != (cursor.chain_commitment == [0; 32])
+            {
+                return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                    "archive audit cursor is malformed or nonmonotonic".to_owned(),
+                ));
+            }
+        }
     }
     if state.panel_notification_outbox_digest == [0; 32]
         || state.panel_notification_outbox_digest != panel_notification_outbox_digest(state)
@@ -5271,9 +7912,13 @@ fn validate_checkpoint(
         state.finalized_snapshot_digest,
     ) {
         (None, None) => {
-            if state.panel_notification_scanned_cursor.is_some() {
+            if state.panel_notification_scanned_cursor.is_some()
+                || state.terminal_handoff_scanned_cursor.is_some()
+                || state.terminal_handoff_archived_cursor.is_some()
+            {
                 return Err(ModerationOrchestratorError::CheckpointCorrupt(
-                    "panel notification scan cursor exists without a finalized snapshot".to_owned(),
+                    "moderation scan or archive cursor exists without a finalized snapshot"
+                        .to_owned(),
                 ));
             }
         }
@@ -5284,6 +7929,11 @@ fn validate_checkpoint(
                 return Err(ModerationOrchestratorError::CheckpointCorrupt(
                     "finalized moderation events were not scanned for panel notifications"
                         .to_owned(),
+                ));
+            }
+            if !snapshot.events.is_empty() && state.terminal_handoff_scanned_cursor.is_none() {
+                return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                    "finalized moderation events were not scanned for terminal handoffs".to_owned(),
                 ));
             }
             if let Some(scanned) = state.panel_notification_scanned_cursor {
@@ -5314,6 +7964,69 @@ fn validate_checkpoint(
                         "panel notification scan cursor differs from the finalized snapshot"
                             .to_owned(),
                     ));
+                }
+            }
+            if let Some(scanned) = state.terminal_handoff_scanned_cursor {
+                let retained_exact = snapshot
+                    .events
+                    .iter()
+                    .find(|event| event.sequence == scanned.sequence);
+                let first_after = snapshot
+                    .events
+                    .iter()
+                    .find(|event| event.sequence > scanned.sequence);
+                let invalid_gap = retained_exact.is_none()
+                    && first_after.is_some_and(|event| {
+                        scanned
+                            .sequence
+                            .checked_add(1)
+                            .is_none_or(|expected| event.sequence != expected)
+                    });
+                if scanned.sequence == 0
+                    || scanned.block_height == 0
+                    || scanned.block_hash == [0; 32]
+                    || scanned.block_height > snapshot.finalized_height
+                    || snapshot
+                        .events
+                        .last()
+                        .is_some_and(|event| scanned.sequence > event.sequence)
+                    || retained_exact.is_some_and(|event| event.cursor() != scanned)
+                    || invalid_gap
+                {
+                    return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                        "terminal handoff scan cursor differs from the finalized snapshot"
+                            .to_owned(),
+                    ));
+                }
+            }
+            match (
+                state.terminal_handoff_archived_cursor,
+                state.terminal_handoff_scanned_cursor,
+            ) {
+                (None, _) => {}
+                (Some(_), None) => {
+                    return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                        "terminal handoff archive cursor exists without a scan cursor".to_owned(),
+                    ));
+                }
+                (Some(archived), Some(scanned)) => {
+                    let retained_exact = snapshot
+                        .events
+                        .iter()
+                        .find(|event| event.sequence == archived.sequence);
+                    if archived.sequence == 0
+                        || archived.block_height == 0
+                        || archived.block_hash == [0; 32]
+                        || archived.sequence > scanned.sequence
+                        || archived.block_height > scanned.block_height
+                        || (archived.sequence == scanned.sequence && archived != scanned)
+                        || retained_exact.is_some_and(|event| event.cursor() != archived)
+                    {
+                        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                            "terminal handoff archive cursor is nonmonotonic or substituted"
+                                .to_owned(),
+                        ));
+                    }
                 }
             }
             if finalized_snapshot_digest(snapshot)? != digest {
@@ -5481,15 +8194,28 @@ fn validate_checkpoint(
             }
         }
     }
-    let mut handoffs = state
-        .completed_handoffs
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
-    if handoffs.len() != state.completed_handoffs.len() {
-        return Err(ModerationOrchestratorError::CheckpointCorrupt(
-            "duplicate completed handoff".to_owned(),
-        ));
+    let mut handoffs = BTreeSet::new();
+    for completed in &state.completed_handoffs {
+        validate_retained_terminal_handoff(
+            &completed.handoff,
+            state.finalized_snapshot.as_ref(),
+            chain_id,
+        )?;
+        if !handoffs.insert(completed.handoff.handoff_id)
+            || !external_work_cursor_is_valid(
+                completed.completed_at_finalized_cursor.height,
+                completed.completed_at_finalized_cursor.block_hash,
+                state.finalized_snapshot.as_ref(),
+            )
+            || completed.completed_at_finalized_cursor.height
+                < completed.handoff.finalized_cursor.block_height
+            || completed.record_digest == [0; 32]
+            || completed.record_digest != completed_handoff_record_digest(completed)?
+        {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "completed terminal handoff is duplicate, stale, or corrupt".to_owned(),
+            ));
+        }
     }
     for entry in &state.pending_handoffs {
         validate_retained_terminal_handoff(
@@ -5519,6 +8245,132 @@ fn validate_checkpoint(
             return Err(ModerationOrchestratorError::CheckpointCorrupt(
                 "invalid, duplicate, or unfenced pending handoff".to_owned(),
             ));
+        }
+    }
+    let finalized_time = state
+        .finalized_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.finalized_at_unix_ms);
+    let mut previous_incident_sequence = 0;
+    let mut unresolved_dead_letters = BTreeSet::new();
+    for entry in &state.dead_letters {
+        let source_record_digest = durable_dead_letter_source_record_digest(entry)?;
+        let expected_kind = match (&entry.redrive, entry.reason) {
+            (
+                Some(StoredDeadLetterRedriveV1::NativeSubmission { .. }),
+                StoredDeadLetterReasonV1::PermanentRejection
+                | StoredDeadLetterReasonV1::FinalizedConflict
+                | StoredDeadLetterReasonV1::RetryExhaustedNotFound,
+            ) => ModerationDeadLetterKindV1::NativeSubmission,
+            (
+                Some(StoredDeadLetterRedriveV1::TerminalHandoff(_)),
+                StoredDeadLetterReasonV1::HandoffPermanentRejection
+                | StoredDeadLetterReasonV1::HandoffRetryExhausted,
+            ) => ModerationDeadLetterKindV1::TerminalHandoff,
+            _ => {
+                return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                    "dead-letter reason and exact redrive source disagree".to_owned(),
+                ));
+            }
+        };
+        if entry.incident_sequence == 0
+            || entry.incident_sequence <= previous_incident_sequence
+            || entry.incident_sequence > state.dead_letter_incident_sequence
+            || entry.identity == [0; 32]
+            || entry.action_label.is_empty()
+            || !external_work_cursor_is_valid(
+                entry.finalized_cursor.height,
+                entry.finalized_cursor.block_hash,
+                state.finalized_snapshot.as_ref(),
+            )
+            || entry.dead_lettered_at_unix_ms == 0
+            || finalized_time.is_none_or(|time| entry.dead_lettered_at_unix_ms > time)
+        {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "durable dead-letter identity, sequence, cursor, or timestamp is invalid"
+                    .to_owned(),
+            ));
+        }
+        previous_incident_sequence = entry.incident_sequence;
+
+        let Some(redrive) = entry.redrive.as_ref() else {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "dead letter has no exact redrive source".to_owned(),
+            ));
+        };
+        match redrive {
+            StoredDeadLetterRedriveV1::NativeSubmission {
+                authority,
+                action,
+                request_binding_digest,
+            } => {
+                action.validate_authority(authority)?;
+                let action_digest = action.action_digest()?;
+                let operation = operations.get(&entry.identity).copied();
+                if *request_binding_digest == [0; 32]
+                    || action.operation_id(chain_id, authority)? != entry.identity
+                    || action.label() != entry.action_label
+                    || (entry.resolution.is_none() && operation.is_none())
+                    || operation.is_some_and(|operation| {
+                        action_digest != operation.action_digest
+                            || &operation.authority != authority
+                            || ((entry.resolution.is_none()
+                                || entry.resolution.as_ref().is_some_and(|resolution| {
+                                    resolution.action
+                                        == ModerationDeadLetterResolutionActionV1::Acknowledge
+                                }))
+                                && operation.status != StoredOperationStatusV1::Rejected)
+                    })
+                {
+                    return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                        "native dead-letter source differs from its operation tombstone".to_owned(),
+                    ));
+                }
+            }
+            StoredDeadLetterRedriveV1::TerminalHandoff(handoff) => {
+                validate_retained_terminal_handoff(
+                    handoff,
+                    state.finalized_snapshot.as_ref(),
+                    chain_id,
+                )?;
+                if handoff.handoff_id != entry.identity
+                    || handoff_label(handoff.kind) != entry.action_label
+                    || (entry.resolution.is_none() && handoffs.contains(&entry.identity))
+                {
+                    return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                        "terminal-handoff dead letter is substituted or simultaneously active"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
+
+        match (entry.resolution.as_ref(), entry.resolution_signature) {
+            (None, None) => {
+                if !unresolved_dead_letters.insert((expected_kind.tag(), entry.identity)) {
+                    return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                        "duplicate unresolved dead-letter identity".to_owned(),
+                    ));
+                }
+            }
+            (Some(resolution), Some(signature)) => {
+                validate_retained_dead_letter_resolution(
+                    resolution,
+                    signature,
+                    source_record_digest,
+                    entry.identity,
+                    expected_kind,
+                    entry.dead_lettered_at_unix_ms,
+                    state,
+                    config,
+                    chain_id,
+                )?;
+            }
+            _ => {
+                return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                    "dead-letter resolution and signature presence disagree".to_owned(),
+                ));
+            }
         }
     }
     let mut previous_notification_id = None;
@@ -5676,6 +8528,90 @@ fn validate_checkpoint(
             }
         }
     }
+    let mut panel_resolution_records = BTreeSet::new();
+    for entry in &state.panel_notification_dead_letter_resolutions {
+        validate_archived_panel_notification_record_shape(&entry.terminal_record).map_err(
+            |_| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "resolved panel dead-letter terminal record is malformed".to_owned(),
+                )
+            },
+        )?;
+        let dead_lettered_at_unix_ms = match &entry.terminal_record.terminal_status {
+            ModerationPanelNotificationArchiveTerminalStatusV1::DeadLettered {
+                dead_lettered_at_unix_ms,
+                ..
+            } => *dead_lettered_at_unix_ms,
+            ModerationPanelNotificationArchiveTerminalStatusV1::Delivered { .. } => {
+                return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                    "panel dead-letter resolution history contains a delivered record".to_owned(),
+                ));
+            }
+        };
+        if entry.record_digest == [0; 32]
+            || !panel_resolution_records.insert(entry.record_digest)
+            || entry.record_digest
+                != panel_notification_resolution_record_digest(
+                    &entry.terminal_record,
+                    &entry.resolution,
+                    entry.resolution_signature,
+                )?
+            || (entry.resolution.action == ModerationDeadLetterResolutionActionV1::Acknowledge
+                && state.panel_notifications.iter().any(|notification| {
+                    notification.notification.notification_id
+                        == entry.terminal_record.notification_id
+                }))
+        {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "panel dead-letter resolution history is duplicate or inconsistent".to_owned(),
+            ));
+        }
+        validate_retained_dead_letter_resolution(
+            &entry.resolution,
+            entry.resolution_signature,
+            entry.terminal_record.source_record_digest,
+            entry.terminal_record.notification_id,
+            ModerationDeadLetterKindV1::PanelNotification,
+            dead_lettered_at_unix_ms,
+            state,
+            config,
+            chain_id,
+        )?;
+    }
+
+    if let Some(reservation) = state
+        .panel_notification_archive_compaction_reservation
+        .as_ref()
+    {
+        let available_records = collect_terminal_archive_records(state)?;
+        let encoded_reservation = norito::to_bytes(reservation).map_err(|error| {
+            ModerationOrchestratorError::CheckpointCorrupt(format!(
+                "encode terminal archive reservation: {error}"
+            ))
+        })?;
+        let wrapper_bytes =
+            usize::try_from(MODERATION_PANEL_NOTIFICATION_ARCHIVE_WRAPPER_MAX_BYTES_V1)
+                .unwrap_or(usize::MAX);
+        let archive_max_bytes =
+            usize::try_from(config.panel_notification_archive_max_bytes).unwrap_or(usize::MAX);
+        if reservation.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
+            || reservation.records.is_empty()
+            || reservation.records.len() > MODERATION_PANEL_NOTIFICATION_ARCHIVE_MAX_RECORDS_V1
+            || available_records.len() < reservation.records.len()
+            || available_records[..reservation.records.len()] != reservation.records
+            || safe_terminal_archive_prefix_len(&available_records, reservation.records.len())?
+                != reservation.records.len()
+            || encoded_reservation
+                .len()
+                .checked_add(wrapper_bytes)
+                .is_none_or(|total| total > archive_max_bytes)
+        {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "terminal archive reservation is missing its exact canonical retained prefix"
+                    .to_owned(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -5737,6 +8673,16 @@ fn ensure_dead_letter_capacity(
         });
     }
     Ok(())
+}
+
+fn next_dead_letter_incident_sequence(
+    state: &mut ModerationOrchestratorCheckpointV1,
+) -> Result<u64, ModerationOrchestratorError> {
+    state.dead_letter_incident_sequence = state
+        .dead_letter_incident_sequence
+        .checked_add(1)
+        .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
+    Ok(state.dead_letter_incident_sequence)
 }
 
 fn make_panel_notification_capacity(
@@ -6193,7 +9139,7 @@ fn handoff_work_digest(handoff: &ModerationTerminalHandoffV1) -> [u8; 32] {
         ModerationTerminalHandoffKindV1::Settlement => 0,
         ModerationTerminalHandoffKindV1::Publication => 1,
     }];
-    let finalized_height = handoff.finalized_cursor.height.to_le_bytes();
+    let finalized_height = handoff.finalized_cursor.block_height.to_le_bytes();
     domain_hash(
         EXTERNAL_WORK_DIGEST_DOMAIN_V1,
         &[
@@ -6265,27 +9211,23 @@ fn reset_sign_claim(entry: &mut StoredOutboxEntryV1) {
     entry.work_claim = None;
 }
 
-fn recover_external_work_after_restart(state: &mut ModerationOrchestratorCheckpointV1) -> bool {
-    let mut recovered = false;
-    for entry in &mut state.outbox {
-        let Some(kind) = entry.work_claim.as_ref().map(|claim| claim.kind) else {
-            continue;
-        };
-        match kind {
-            StoredExternalWorkKindV1::Sign => reset_sign_claim(entry),
-            StoredExternalWorkKindV1::Submit | StoredExternalWorkKindV1::Lookup => {
-                entry.work_claim = None;
-            }
-            StoredExternalWorkKindV1::Handoff => continue,
-        }
-        recovered = true;
+fn recover_external_work_after_restart(
+    state: &mut ModerationOrchestratorCheckpointV1,
+) -> Result<bool, ModerationOrchestratorError> {
+    let has_claims = state.outbox.iter().any(|entry| entry.work_claim.is_some())
+        || state
+            .pending_handoffs
+            .iter()
+            .any(|entry| entry.work_claim.is_some());
+    if !has_claims {
+        return Ok(false);
     }
-    for entry in &mut state.pending_handoffs {
-        if entry.work_claim.take().is_some() {
-            recovered = true;
-        }
-    }
-    recovered
+
+    // A process restart is not evidence that another replica's durable lease
+    // has expired. Only the sealed finalized-ledger time may release a claim;
+    // preserving live claims prevents overlapping sign, submit, lookup, and
+    // terminal-handoff calls across replicas that share the checkpoint CAS.
+    recover_expired_external_work_claims(state)
 }
 
 fn recover_expired_external_work_claims(
@@ -6845,6 +9787,263 @@ fn refresh_panel_notification_record_digest(entry: &mut StoredPanelNotificationV
     entry.record_digest = panel_notification_record_digest(entry);
 }
 
+fn stored_dead_letter_reason_tag(reason: StoredDeadLetterReasonV1) -> u8 {
+    match reason {
+        StoredDeadLetterReasonV1::PermanentRejection => 0,
+        StoredDeadLetterReasonV1::FinalizedConflict => 1,
+        StoredDeadLetterReasonV1::RetryExhaustedNotFound => 2,
+        StoredDeadLetterReasonV1::HandoffPermanentRejection => 3,
+        StoredDeadLetterReasonV1::HandoffRetryExhausted => 4,
+    }
+}
+
+fn durable_dead_letter_source_record_digest(
+    entry: &StoredDeadLetterV1,
+) -> Result<[u8; 32], ModerationOrchestratorError> {
+    let redrive = norito::to_bytes(&entry.redrive).map_err(|error| {
+        ModerationOrchestratorError::CheckpointCorrupt(format!(
+            "encode durable dead-letter redrive source: {error}"
+        ))
+    })?;
+    Ok(domain_hash(
+        DURABLE_DEAD_LETTER_RECORD_DOMAIN_V1,
+        &[
+            &entry.incident_sequence.to_le_bytes(),
+            &entry.identity,
+            entry.action_label.as_bytes(),
+            &[stored_dead_letter_reason_tag(entry.reason)],
+            &entry.finalized_cursor.height.to_le_bytes(),
+            &entry.finalized_cursor.block_hash,
+            &entry.dead_lettered_at_unix_ms.to_le_bytes(),
+            &redrive,
+        ],
+    ))
+}
+
+fn native_operation_record_digest(
+    entry: &StoredOperationV1,
+) -> Result<[u8; 32], ModerationOrchestratorError> {
+    let bytes = norito::to_bytes(entry).map_err(|error| {
+        ModerationOrchestratorError::CheckpointCorrupt(format!(
+            "encode native operation tombstone: {error}"
+        ))
+    })?;
+    Ok(domain_hash(NATIVE_OPERATION_RECORD_DOMAIN_V1, &[&bytes]))
+}
+
+fn completed_handoff_record_digest(
+    entry: &StoredCompletedHandoffV1,
+) -> Result<[u8; 32], ModerationOrchestratorError> {
+    let witness = norito::to_bytes(&entry.handoff.source_event_witness).map_err(|error| {
+        ModerationOrchestratorError::CheckpointCorrupt(format!(
+            "encode completed handoff event witness: {error}"
+        ))
+    })?;
+    Ok(domain_hash(
+        COMPLETED_HANDOFF_RECORD_DOMAIN_V1,
+        &[
+            &entry.handoff.handoff_id,
+            &[match entry.handoff.kind {
+                ModerationTerminalHandoffKindV1::Settlement => 0,
+                ModerationTerminalHandoffKindV1::Publication => 1,
+            }],
+            &entry.handoff.outcome_digest,
+            &entry.handoff.outcome_finalized_at_unix_ms.to_le_bytes(),
+            &entry.handoff.finalized_cursor.sequence.to_le_bytes(),
+            &entry.handoff.finalized_cursor.block_height.to_le_bytes(),
+            &entry.handoff.finalized_cursor.block_hash,
+            &entry.handoff.finalized_cursor.event_index.to_le_bytes(),
+            &entry.completed_at_finalized_cursor.height.to_le_bytes(),
+            &entry.completed_at_finalized_cursor.block_hash,
+            &witness,
+        ],
+    ))
+}
+
+fn panel_notification_resolution_record_digest(
+    terminal_record: &ModerationPanelNotificationArchiveRecordV1,
+    resolution: &ModerationDeadLetterResolutionV1,
+    signature: [u8; 64],
+) -> Result<[u8; 32], ModerationOrchestratorError> {
+    let terminal_bytes = norito::to_bytes(terminal_record).map_err(|error| {
+        ModerationOrchestratorError::CheckpointCorrupt(format!(
+            "encode resolved panel dead letter: {error}"
+        ))
+    })?;
+    Ok(domain_hash(
+        DEAD_LETTER_RESOLUTION_DOMAIN_V1,
+        &[
+            b"panel-history",
+            &terminal_bytes,
+            &dead_letter_resolution_message(resolution),
+            &signature,
+        ],
+    ))
+}
+
+fn validate_dead_letter_resolution_shape(
+    resolution: &ModerationDeadLetterResolutionV1,
+) -> Result<(), ModerationOrchestratorError> {
+    let qualification = ModerationRuntimeProviderQualificationV1::new(
+        resolution.attestor_revision,
+        resolution.attestor_policy_digest,
+    );
+    if resolution.version != 1
+        || resolution.chain_id.is_empty()
+        || resolution.checkpoint_namespace_digest == [0; 32]
+        || resolution.checkpoint_generation == 0
+        || resolution.checkpoint_revision == [0; 32]
+        || resolution.checkpoint_digest == [0; 32]
+        || resolution.identity == [0; 32]
+        || resolution.source_record_digest == [0; 32]
+        || resolution.authorized_at_unix_ms == 0
+        || validate_production_runtime_handle(&resolution.attestor_handle).is_err()
+        || !qualification.is_valid()
+        || PublicKey::from_bytes(Algorithm::Ed25519, &resolution.attestor_public_key).is_err()
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    Ok(())
+}
+
+fn dead_letter_resolution_message(resolution: &ModerationDeadLetterResolutionV1) -> [u8; 32] {
+    domain_hash(
+        DEAD_LETTER_RESOLUTION_DOMAIN_V1,
+        &[
+            &resolution.version.to_le_bytes(),
+            resolution.chain_id.as_bytes(),
+            &resolution.checkpoint_namespace_digest,
+            &resolution.checkpoint_generation.to_le_bytes(),
+            &resolution.checkpoint_revision,
+            &resolution.checkpoint_digest,
+            &resolution.identity,
+            &[resolution.kind.tag()],
+            &[resolution.action.tag()],
+            &resolution.source_record_digest,
+            &resolution.authorized_at_unix_ms.to_le_bytes(),
+            resolution.attestor_handle.as_bytes(),
+            &resolution.attestor_revision.to_le_bytes(),
+            &resolution.attestor_policy_digest,
+            &resolution.attestor_public_key,
+        ],
+    )
+}
+
+fn verify_dead_letter_resolution_signature(
+    resolution: &ModerationDeadLetterResolutionV1,
+    signature: [u8; 64],
+) -> Result<(), ModerationOrchestratorError> {
+    validate_dead_letter_resolution_shape(resolution)?;
+    let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &resolution.attestor_public_key)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let signature = IrohaSignature::try_from_bytes(&signature)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    signature
+        .verify(&public_key, &dead_letter_resolution_message(resolution))
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)
+}
+
+fn unresolved_dead_letter_record_digest(
+    state: &ModerationOrchestratorCheckpointV1,
+    identity: [u8; 32],
+    kind: ModerationDeadLetterKindV1,
+) -> Result<[u8; 32], ModerationOrchestratorError> {
+    match kind {
+        ModerationDeadLetterKindV1::PanelNotification => state
+            .panel_notifications
+            .iter()
+            .find(|entry| {
+                entry.notification.notification_id == identity
+                    && entry.state == StoredPanelNotificationStateV1::DeadLetter
+            })
+            .map(|entry| entry.record_digest)
+            .ok_or(ModerationOrchestratorError::PanelNotificationArchiveRejected),
+        ModerationDeadLetterKindV1::NativeSubmission => state
+            .dead_letters
+            .iter()
+            .find(|entry| {
+                entry.identity == identity
+                    && entry.resolution.is_none()
+                    && matches!(
+                        entry.redrive,
+                        Some(StoredDeadLetterRedriveV1::NativeSubmission { .. })
+                    )
+            })
+            .ok_or(ModerationOrchestratorError::PanelNotificationArchiveRejected)
+            .and_then(durable_dead_letter_source_record_digest),
+        ModerationDeadLetterKindV1::TerminalHandoff => state
+            .dead_letters
+            .iter()
+            .find(|entry| {
+                entry.identity == identity
+                    && entry.resolution.is_none()
+                    && matches!(
+                        entry.redrive,
+                        Some(StoredDeadLetterRedriveV1::TerminalHandoff(_))
+                    )
+            })
+            .ok_or(ModerationOrchestratorError::PanelNotificationArchiveRejected)
+            .and_then(durable_dead_letter_source_record_digest),
+    }
+}
+
+fn dead_letter_redrive_is_available(
+    state: &ModerationOrchestratorCheckpointV1,
+    identity: [u8; 32],
+    kind: ModerationDeadLetterKindV1,
+) -> bool {
+    match kind {
+        ModerationDeadLetterKindV1::PanelNotification => {
+            state.panel_notifications.iter().any(|entry| {
+                entry.notification.notification_id == identity
+                    && entry.state == StoredPanelNotificationStateV1::DeadLetter
+            })
+        }
+        ModerationDeadLetterKindV1::NativeSubmission => state.dead_letters.iter().any(|entry| {
+            entry.identity == identity
+                && entry.resolution.is_none()
+                && matches!(
+                    entry.redrive,
+                    Some(StoredDeadLetterRedriveV1::NativeSubmission { .. })
+                )
+        }),
+        ModerationDeadLetterKindV1::TerminalHandoff => state.dead_letters.iter().any(|entry| {
+            entry.identity == identity
+                && entry.resolution.is_none()
+                && matches!(
+                    entry.redrive,
+                    Some(StoredDeadLetterRedriveV1::TerminalHandoff(_))
+                )
+        }),
+    }
+}
+
+fn unresolved_dead_letter_incident_time(
+    state: &ModerationOrchestratorCheckpointV1,
+    identity: [u8; 32],
+    kind: ModerationDeadLetterKindV1,
+) -> Result<u64, ModerationOrchestratorError> {
+    match kind {
+        ModerationDeadLetterKindV1::PanelNotification => state
+            .panel_notifications
+            .iter()
+            .find(|entry| {
+                entry.notification.notification_id == identity
+                    && entry.state == StoredPanelNotificationStateV1::DeadLetter
+            })
+            .and_then(|entry| entry.dead_lettered_at_unix_ms)
+            .ok_or(ModerationOrchestratorError::PanelNotificationArchiveRejected),
+        ModerationDeadLetterKindV1::NativeSubmission
+        | ModerationDeadLetterKindV1::TerminalHandoff => state
+            .dead_letters
+            .iter()
+            .find(|entry| entry.identity == identity && entry.resolution.is_none())
+            .map(|entry| entry.dead_lettered_at_unix_ms)
+            .filter(|timestamp| *timestamp != 0)
+            .ok_or(ModerationOrchestratorError::PanelNotificationArchiveRejected),
+    }
+}
+
 fn panel_notification_outbox_digest(state: &ModerationOrchestratorCheckpointV1) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(PANEL_NOTIFICATION_OUTBOX_DOMAIN_V1);
@@ -6861,6 +10060,112 @@ fn panel_notification_outbox_digest(state: &ModerationOrchestratorCheckpointV1) 
             hasher.update(&[0]);
         }
     }
+    for cursor in [
+        state.terminal_handoff_scanned_cursor,
+        state.terminal_handoff_archived_cursor,
+    ] {
+        match cursor {
+            Some(cursor) => {
+                hasher.update(&[1]);
+                hasher.update(&cursor.sequence.to_le_bytes());
+                hasher.update(&cursor.block_height.to_le_bytes());
+                hasher.update(&cursor.block_hash);
+                hasher.update(&cursor.event_index.to_le_bytes());
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
+    }
+    match state
+        .panel_notification_archive_compaction_reservation
+        .as_ref()
+    {
+        Some(payload) => {
+            hasher.update(&[1]);
+            match panel_notification_archive_payload_digest(payload) {
+                Ok(digest) => {
+                    hasher.update(&digest);
+                }
+                Err(_) => {
+                    hasher.update(&[0; 32]);
+                }
+            }
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    hasher.update(
+        &state
+            .panel_notification_archived_dead_letter_count
+            .to_le_bytes(),
+    );
+    hasher.update(
+        &u64::try_from(state.panel_notification_archive_signer_epochs.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for epoch in &state.panel_notification_archive_signer_epochs {
+        hasher.update(&epoch.epoch.to_le_bytes());
+        hasher.update(&epoch.epoch_digest);
+    }
+    match state.panel_notification_archive_head.as_ref() {
+        Some(head) => {
+            hasher.update(&[1]);
+            hasher.update(&head.head_digest);
+            hasher.update(&head.operation_id);
+            hasher.update(&head.chain_commitment);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    for publication_head in [
+        state
+            .panel_notification_archive_pending_publication
+            .as_ref(),
+        state.panel_notification_archive_published_head.as_ref(),
+    ] {
+        match publication_head {
+            Some(head) => {
+                hasher.update(&[1]);
+                hasher.update(&head.generation.to_le_bytes());
+                hasher.update(&head.head_digest);
+                hasher.update(&head.operation_id);
+                hasher.update(&head.chain_commitment);
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
+    }
+    match state.panel_notification_archive_audit_cursor.as_ref() {
+        Some(cursor) => {
+            hasher.update(&[1]);
+            hasher.update(&cursor.target_generation.to_le_bytes());
+            hasher.update(&cursor.target_head_digest);
+            hash_optional_archive_digest(&mut hasher, cursor.next_operation_id);
+            match cursor.expected_generation {
+                Some(generation) => {
+                    hasher.update(&[1]);
+                    hasher.update(&generation.to_le_bytes());
+                }
+                None => {
+                    hasher.update(&[0]);
+                }
+            }
+            hash_optional_archive_digest(&mut hasher, cursor.expected_head_digest);
+            hash_optional_archive_digest(&mut hasher, cursor.expected_chain_commitment);
+            hasher.update(&cursor.verified_head_count.to_le_bytes());
+            hasher.update(&cursor.chain_commitment);
+            hasher.update(&cursor.last_completed_generation.to_le_bytes());
+            hash_optional_archive_digest(&mut hasher, cursor.last_completed_head_digest);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
     hasher.update(
         &u64::try_from(state.panel_notifications.len())
             .unwrap_or(u64::MAX)
@@ -6870,11 +10175,2280 @@ fn panel_notification_outbox_digest(state: &ModerationOrchestratorCheckpointV1) 
         hasher.update(&entry.notification.notification_id);
         hasher.update(&entry.record_digest);
     }
+    hasher.update(
+        &u64::try_from(state.panel_notification_dead_letter_resolutions.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for entry in &state.panel_notification_dead_letter_resolutions {
+        hasher.update(&entry.record_digest);
+        hasher.update(&dead_letter_resolution_message(&entry.resolution));
+    }
     *hasher.finalize().as_bytes()
 }
 
 fn refresh_panel_notification_outbox_digest(state: &mut ModerationOrchestratorCheckpointV1) {
     state.panel_notification_outbox_digest = panel_notification_outbox_digest(state);
+}
+
+fn panel_notification_archive_payload_digest(
+    payload: &ModerationPanelNotificationArchivePayloadV1,
+) -> Result<[u8; 32], ModerationOrchestratorError> {
+    let bytes = norito::to_bytes(payload).map_err(|error| {
+        ModerationOrchestratorError::CheckpointCorrupt(format!(
+            "encode panel notification archive payload: {error}"
+        ))
+    })?;
+    Ok(domain_hash(
+        PANEL_NOTIFICATION_ARCHIVE_PAYLOAD_DOMAIN_V1,
+        &[
+            &u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes(),
+            &bytes,
+        ],
+    ))
+}
+
+fn hash_optional_archive_digest(hasher: &mut blake3::Hasher, value: Option<[u8; 32]>) {
+    match value {
+        Some(value) => {
+            hasher.update(&[1]);
+            hasher.update(&value);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+}
+
+fn panel_notification_archive_signer_epoch_digest(
+    epoch: &ModerationPanelNotificationArchiveSignerEpochV1,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(PANEL_NOTIFICATION_ARCHIVE_SIGNER_EPOCH_DOMAIN_V1);
+    hasher.update(&epoch.version.to_le_bytes());
+    hasher.update(&epoch.epoch.to_le_bytes());
+    hasher.update(&epoch.activated_at_generation.to_le_bytes());
+    hasher.update(&epoch.archive_id);
+    hasher.update(
+        &u64::try_from(epoch.archive_handle.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    hasher.update(epoch.archive_handle.as_bytes());
+    hasher.update(&epoch.archive_revision.to_le_bytes());
+    hasher.update(&epoch.archive_policy_digest);
+    hasher.update(&epoch.archive_public_key);
+    hash_optional_archive_digest(&mut hasher, epoch.predecessor_epoch_digest);
+    match epoch.predecessor_revocation_generation {
+        Some(generation) => {
+            hasher.update(&[1]);
+            hasher.update(&generation.to_le_bytes());
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    for signature in [
+        epoch.predecessor_authorization_signature,
+        epoch.new_key_possession_signature,
+    ] {
+        match signature {
+            Some(signature) => {
+                hasher.update(&[1]);
+                hasher.update(&signature);
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn panel_notification_archive_signer_rotation_message(
+    chain_id: &iroha_data_model::ChainId,
+    epoch: &ModerationPanelNotificationArchiveSignerEpochV1,
+) -> [u8; 32] {
+    domain_hash(
+        PANEL_NOTIFICATION_ARCHIVE_SIGNER_ROTATION_DOMAIN_V1,
+        &[
+            chain_id.as_str().as_bytes(),
+            &epoch.epoch.to_le_bytes(),
+            &epoch.activated_at_generation.to_le_bytes(),
+            &epoch.archive_id,
+            epoch.archive_handle.as_bytes(),
+            &epoch.archive_revision.to_le_bytes(),
+            &epoch.archive_policy_digest,
+            &epoch.archive_public_key,
+            &epoch.predecessor_epoch_digest.unwrap_or([0; 32]),
+            &epoch
+                .predecessor_revocation_generation
+                .unwrap_or(0)
+                .to_le_bytes(),
+        ],
+    )
+}
+
+fn panel_notification_archive_signer_pop_message(rotation_message: [u8; 32]) -> [u8; 32] {
+    domain_hash(
+        PANEL_NOTIFICATION_ARCHIVE_SIGNER_POP_DOMAIN_V1,
+        &[&rotation_message],
+    )
+}
+
+fn verify_archive_ed25519_signature(
+    public_key: [u8; 32],
+    signature: [u8; 64],
+    message: [u8; 32],
+) -> bool {
+    let Ok(public_key) = PublicKey::from_bytes(Algorithm::Ed25519, &public_key) else {
+        return false;
+    };
+    let Ok(signature) = IrohaSignature::try_from_bytes(&signature) else {
+        return false;
+    };
+    signature.verify(&public_key, &message).is_ok()
+}
+
+fn validate_panel_notification_archive_signer_epochs(
+    epochs: &[ModerationPanelNotificationArchiveSignerEpochV1],
+    chain_id: &iroha_data_model::ChainId,
+    expected_bootstrap_public_key: [u8; 32],
+    expected_archive_id: [u8; 32],
+) -> Result<(), ModerationOrchestratorError> {
+    if epochs.is_empty()
+        || epochs.len() > MODERATION_PANEL_NOTIFICATION_ARCHIVE_MAX_SIGNER_EPOCHS_V1
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    for (index, epoch) in epochs.iter().enumerate() {
+        let qualification = ModerationRuntimeProviderQualificationV1::new(
+            epoch.archive_revision,
+            epoch.archive_policy_digest,
+        );
+        if epoch.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
+            || epoch.epoch != u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1)
+            || epoch.activated_at_generation == 0
+            || epoch.archive_id != expected_archive_id
+            || validate_production_runtime_handle(&epoch.archive_handle).is_err()
+            || !qualification.is_valid()
+            || epoch.archive_public_key == [0; 32]
+            || PublicKey::from_bytes(Algorithm::Ed25519, &epoch.archive_public_key).is_err()
+            || epoch.epoch_digest == [0; 32]
+            || epoch.epoch_digest != panel_notification_archive_signer_epoch_digest(epoch)
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+        let Some(predecessor) = index.checked_sub(1).and_then(|value| epochs.get(value)) else {
+            if epoch.archive_public_key != expected_bootstrap_public_key
+                || epoch.activated_at_generation != 1
+                || epoch.predecessor_epoch_digest.is_some()
+                || epoch.predecessor_revocation_generation.is_some()
+                || epoch.predecessor_authorization_signature.is_some()
+                || epoch.new_key_possession_signature.is_some()
+            {
+                return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+            }
+            continue;
+        };
+        let (
+            Some(predecessor_epoch_digest),
+            Some(predecessor_revocation_generation),
+            Some(predecessor_authorization_signature),
+            Some(new_key_possession_signature),
+        ) = (
+            epoch.predecessor_epoch_digest,
+            epoch.predecessor_revocation_generation,
+            epoch.predecessor_authorization_signature,
+            epoch.new_key_possession_signature,
+        )
+        else {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        };
+        let rotation_message = panel_notification_archive_signer_rotation_message(chain_id, epoch);
+        if predecessor_epoch_digest != predecessor.epoch_digest
+            || predecessor_revocation_generation.checked_add(1)
+                != Some(epoch.activated_at_generation)
+            || !verify_archive_ed25519_signature(
+                predecessor.archive_public_key,
+                predecessor_authorization_signature,
+                rotation_message,
+            )
+            || !verify_archive_ed25519_signature(
+                epoch.archive_public_key,
+                new_key_possession_signature,
+                panel_notification_archive_signer_pop_message(rotation_message),
+            )
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+    }
+    Ok(())
+}
+
+fn verify_panel_notification_archive_head_signer_epoch(
+    head: &ModerationPanelNotificationArchiveHeadV1,
+    epochs: &[ModerationPanelNotificationArchiveSignerEpochV1],
+) -> Result<(), ModerationOrchestratorError> {
+    let index = usize::try_from(head.archive_signer_epoch.saturating_sub(1))
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let epoch = epochs
+        .get(index)
+        .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let next_epoch = epochs.get(index.saturating_add(1));
+    if head.archive_signer_epoch_digest != epoch.epoch_digest
+        || head.generation < epoch.activated_at_generation
+        || next_epoch.is_some_and(|next| {
+            next.predecessor_revocation_generation
+                .is_none_or(|cutoff| head.generation > cutoff)
+        })
+        || head.archive_id != epoch.archive_id
+        || head.archive_handle != epoch.archive_handle
+        || head.archive_revision != epoch.archive_revision
+        || head.archive_policy_digest != epoch.archive_policy_digest
+        || head.archive_public_key != epoch.archive_public_key
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    Ok(())
+}
+
+fn reconcile_panel_notification_archive_signer_epochs(
+    config: &ModerationOrchestratorConfigV1,
+    chain_id: &iroha_data_model::ChainId,
+    state: &mut ModerationOrchestratorCheckpointV1,
+) -> Result<bool, ModerationOrchestratorError> {
+    let mut changed = false;
+    if state.panel_notification_archive_signer_epochs.is_empty() {
+        if state.panel_notification_archive_head.is_some()
+            || state
+                .panel_notification_archive_pending_publication
+                .is_some()
+            || state.panel_notification_archive_published_head.is_some()
+            || state.panel_notification_archived_dead_letter_count != 0
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+        let mut bootstrap = ModerationPanelNotificationArchiveSignerEpochV1 {
+            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+            epoch: 1,
+            activated_at_generation: 1,
+            archive_id: config.panel_notification_archive_id,
+            archive_handle: config.panel_notification_archive_handle.clone(),
+            archive_revision: config
+                .expected_panel_notification_archive_qualification
+                .revision(),
+            archive_policy_digest: config
+                .expected_panel_notification_archive_qualification
+                .policy_digest(),
+            archive_public_key: config.panel_notification_archive_bootstrap_public_key,
+            predecessor_epoch_digest: None,
+            predecessor_revocation_generation: None,
+            predecessor_authorization_signature: None,
+            new_key_possession_signature: None,
+            epoch_digest: [0; 32],
+        };
+        bootstrap.epoch_digest = panel_notification_archive_signer_epoch_digest(&bootstrap);
+        state
+            .panel_notification_archive_signer_epochs
+            .push(bootstrap);
+        changed = true;
+    }
+    validate_panel_notification_archive_signer_epochs(
+        &state.panel_notification_archive_signer_epochs,
+        chain_id,
+        config.panel_notification_archive_bootstrap_public_key,
+        config.panel_notification_archive_id,
+    )?;
+    let latest = state
+        .panel_notification_archive_signer_epochs
+        .last()
+        .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let current_matches = latest.archive_handle == config.panel_notification_archive_handle
+        && latest.archive_revision
+            == config
+                .expected_panel_notification_archive_qualification
+                .revision()
+        && latest.archive_policy_digest
+            == config
+                .expected_panel_notification_archive_qualification
+                .policy_digest()
+        && latest.archive_id == config.panel_notification_archive_id
+        && latest.archive_public_key == config.panel_notification_archive_public_key;
+    if !current_matches {
+        if state
+            .panel_notification_archive_pending_publication
+            .is_some()
+            || state
+                .panel_notification_archive_compaction_reservation
+                .is_some()
+        {
+            return Err(ModerationOrchestratorError::InvalidConfiguration(
+                "archive signer rotation requires no pending compaction and a durably published predecessor head"
+                    .to_owned(),
+            ));
+        }
+        if state.panel_notification_archive_signer_epochs.len()
+            >= MODERATION_PANEL_NOTIFICATION_ARCHIVE_MAX_SIGNER_EPOCHS_V1
+        {
+            return Err(ModerationOrchestratorError::ResourceExhausted {
+                resource: "panel notification archive signer epochs",
+                limit: MODERATION_PANEL_NOTIFICATION_ARCHIVE_MAX_SIGNER_EPOCHS_V1,
+            });
+        }
+        let cutoff = state
+            .panel_notification_archive_head
+            .as_ref()
+            .map_or(0, |head| head.generation);
+        let (
+            Some(configured_cutoff),
+            Some(predecessor_authorization_signature),
+            Some(new_key_possession_signature),
+        ) = (
+            config.panel_notification_archive_predecessor_revocation_generation,
+            config.panel_notification_archive_predecessor_authorization_signature,
+            config.panel_notification_archive_new_key_possession_signature,
+        )
+        else {
+            return Err(ModerationOrchestratorError::InvalidConfiguration(
+                "archive signer transition is missing dual-control evidence".to_owned(),
+            ));
+        };
+        if configured_cutoff != cutoff {
+            return Err(ModerationOrchestratorError::InvalidConfiguration(
+                "archive signer predecessor cutoff does not equal the sealed archive head"
+                    .to_owned(),
+            ));
+        }
+        let latest = latest.clone();
+        let mut next = ModerationPanelNotificationArchiveSignerEpochV1 {
+            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+            epoch: latest
+                .epoch
+                .checked_add(1)
+                .ok_or(ModerationOrchestratorError::GenerationOverflow)?,
+            activated_at_generation: cutoff
+                .checked_add(1)
+                .ok_or(ModerationOrchestratorError::GenerationOverflow)?,
+            archive_id: config.panel_notification_archive_id,
+            archive_handle: config.panel_notification_archive_handle.clone(),
+            archive_revision: config
+                .expected_panel_notification_archive_qualification
+                .revision(),
+            archive_policy_digest: config
+                .expected_panel_notification_archive_qualification
+                .policy_digest(),
+            archive_public_key: config.panel_notification_archive_public_key,
+            predecessor_epoch_digest: Some(latest.epoch_digest),
+            predecessor_revocation_generation: Some(cutoff),
+            predecessor_authorization_signature: Some(predecessor_authorization_signature),
+            new_key_possession_signature: Some(new_key_possession_signature),
+            epoch_digest: [0; 32],
+        };
+        next.epoch_digest = panel_notification_archive_signer_epoch_digest(&next);
+        let mut candidate = state.panel_notification_archive_signer_epochs.clone();
+        candidate.push(next.clone());
+        validate_panel_notification_archive_signer_epochs(
+            &candidate,
+            chain_id,
+            config.panel_notification_archive_bootstrap_public_key,
+            config.panel_notification_archive_id,
+        )?;
+        state.panel_notification_archive_signer_epochs.push(next);
+        changed = true;
+    }
+    let latest = state
+        .panel_notification_archive_signer_epochs
+        .last()
+        .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    if latest.archive_handle != config.panel_notification_archive_handle
+        || latest.archive_revision
+            != config
+                .expected_panel_notification_archive_qualification
+                .revision()
+        || latest.archive_policy_digest
+            != config
+                .expected_panel_notification_archive_qualification
+                .policy_digest()
+        || latest.archive_public_key != config.panel_notification_archive_public_key
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    Ok(changed)
+}
+
+fn hash_panel_notification_archive_head_fields(
+    hasher: &mut blake3::Hasher,
+    head: &ModerationPanelNotificationArchiveHeadV1,
+) {
+    hasher.update(&head.version.to_le_bytes());
+    hasher.update(
+        &u64::try_from(head.chain_id.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    hasher.update(head.chain_id.as_bytes());
+    hasher.update(&head.generation.to_le_bytes());
+    hash_optional_archive_digest(hasher, head.predecessor_head_digest);
+    hash_optional_archive_digest(hasher, head.predecessor_operation_id);
+    hash_optional_archive_digest(hasher, head.predecessor_chain_commitment);
+    hasher.update(&head.source_checkpoint_generation.to_le_bytes());
+    hasher.update(&head.source_checkpoint_namespace_digest);
+    hasher.update(&head.source_checkpoint_revision);
+    hasher.update(&head.source_checkpoint_digest);
+    hasher.update(&head.source_manifest_digest);
+    hasher.update(&head.source_binding_digest);
+    hasher.update(
+        &u64::try_from(head.source_attestor_handle.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    hasher.update(head.source_attestor_handle.as_bytes());
+    hasher.update(&head.source_attestor_revision.to_le_bytes());
+    hasher.update(&head.source_attestor_policy_digest);
+    hasher.update(&head.source_attestor_public_key);
+    hasher.update(&head.source_attestation_digest);
+    hasher.update(&head.source_attestation_signature);
+    hasher.update(&head.terminal_record_count.to_le_bytes());
+    hasher.update(&head.dead_letter_record_count.to_le_bytes());
+    hasher.update(&head.cumulative_dead_letter_count.to_le_bytes());
+    hasher.update(&head.first_notification_id);
+    hasher.update(&head.last_notification_id);
+    hasher.update(&head.payload_digest);
+    hasher.update(
+        &u64::try_from(head.archive_handle.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    hasher.update(head.archive_handle.as_bytes());
+    hasher.update(&head.archive_revision.to_le_bytes());
+    hasher.update(&head.archive_policy_digest);
+    hasher.update(&head.archive_id);
+    hasher.update(&head.archive_public_key);
+    hasher.update(&head.archive_signer_epoch.to_le_bytes());
+    hasher.update(&head.archive_signer_epoch_digest);
+}
+
+fn panel_notification_archive_source_binding_digest(
+    statement: &ModerationPanelNotificationSourceAttestationV1,
+) -> [u8; 32] {
+    domain_hash(
+        PANEL_NOTIFICATION_ARCHIVE_SOURCE_DOMAIN_V1,
+        &[&panel_notification_source_attestation_message(statement)],
+    )
+}
+
+fn panel_notification_archive_source_manifest_digest(
+    manifest: &ModerationPanelNotificationArchiveSourceManifestV1,
+) -> Result<[u8; 32], ModerationOrchestratorError> {
+    let bytes = norito::to_bytes(manifest).map_err(|error| {
+        ModerationOrchestratorError::CheckpointCorrupt(format!(
+            "encode panel notification archive source manifest: {error}"
+        ))
+    })?;
+    Ok(domain_hash(
+        PANEL_NOTIFICATION_ARCHIVE_SOURCE_MANIFEST_DOMAIN_V1,
+        &[
+            &u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes(),
+            &bytes,
+        ],
+    ))
+}
+
+fn panel_notification_source_attestation_message(
+    statement: &ModerationPanelNotificationSourceAttestationV1,
+) -> [u8; 32] {
+    domain_hash(
+        PANEL_NOTIFICATION_ARCHIVE_SOURCE_ATTESTATION_DOMAIN_V1,
+        &[
+            &statement.version.to_le_bytes(),
+            &statement.attestor_slot.to_le_bytes(),
+            &u64::try_from(statement.chain_id.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+            statement.chain_id.as_bytes(),
+            &statement.checkpoint_namespace_digest,
+            &statement.checkpoint_generation.to_le_bytes(),
+            &statement.checkpoint_revision,
+            &statement.checkpoint_digest,
+            &statement.source_manifest_digest,
+            &statement.terminal_set_digest,
+            &statement.terminal_record_count.to_le_bytes(),
+            &statement.first_notification_id,
+            &statement.last_notification_id,
+            &u64::try_from(statement.attestor_handle.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+            statement.attestor_handle.as_bytes(),
+            &statement.attestor_revision.to_le_bytes(),
+            &statement.attestor_policy_digest,
+            &statement.attestor_public_key,
+        ],
+    )
+}
+
+fn validate_panel_notification_source_attestation(
+    statement: &ModerationPanelNotificationSourceAttestationV1,
+) -> Result<(), ModerationOrchestratorError> {
+    let qualification = ModerationRuntimeProviderQualificationV1::new(
+        statement.attestor_revision,
+        statement.attestor_policy_digest,
+    );
+    if statement.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
+        || statement.attestor_slot != MODERATION_PANEL_NOTIFICATION_SOURCE_ATTESTOR_BROKER_SLOT_V1
+        || statement.chain_id.is_empty()
+        || statement.checkpoint_namespace_digest == [0; 32]
+        || statement.checkpoint_generation == 0
+        || statement.checkpoint_revision == [0; 32]
+        || statement.checkpoint_digest == [0; 32]
+        || statement.source_manifest_digest == [0; 32]
+        || statement.terminal_set_digest == [0; 32]
+        || statement.terminal_record_count == 0
+        || statement.first_notification_id == [0; 32]
+        || statement.last_notification_id == [0; 32]
+        || validate_production_runtime_handle(&statement.attestor_handle).is_err()
+        || !qualification.is_valid()
+        || statement.attestor_public_key == [0; 32]
+        || PublicKey::from_bytes(Algorithm::Ed25519, &statement.attestor_public_key).is_err()
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    Ok(())
+}
+
+/// Validate one checkpoint-attestor broker request without accepting a caller-supplied message.
+///
+/// The exact terminal payload must equal the pre-CAS reservation sealed into
+/// `current_record`. The reservation is revalidated as the complete canonical
+/// eligible prefix before signing, so a caller cannot obtain signatures for
+/// shorter, longer, or substituted batches at the same checkpoint generation.
+///
+/// # Errors
+///
+/// Rejects a stale/substituted record, missing or noncanonical reservation,
+/// provider mismatch, or any statement field not derivable from the current sealed record.
+pub fn validate_moderation_panel_notification_source_attestation_for_broker_v1(
+    statement: &ModerationPanelNotificationSourceAttestationV1,
+    expected_chain_id: &iroha_data_model::ChainId,
+    expected_handle: &str,
+    expected_qualification: ModerationRuntimeProviderQualificationV1,
+    expected_public_key: [u8; 32],
+    current_record: &ModerationCheckpointStoreRecordV1,
+) -> Result<[u8; 32], ModerationOrchestratorError> {
+    validate_panel_notification_source_attestation(statement)?;
+    if statement.chain_id != expected_chain_id.as_str()
+        || statement.attestor_handle != expected_handle
+        || statement.attestor_revision != expected_qualification.revision()
+        || statement.attestor_policy_digest != expected_qualification.policy_digest()
+        || statement.attestor_public_key != expected_public_key
+        || !current_record.has_valid_provider_envelope(
+            expected_handle,
+            expected_qualification,
+            MODERATION_ORCHESTRATOR_CHECKPOINT_MAX_BYTES_V1,
+        )
+        || current_record.namespace_digest
+            != checkpoint_store::checkpoint_namespace(expected_chain_id)
+        || statement.checkpoint_namespace_digest != current_record.namespace_digest
+        || statement.checkpoint_generation != current_record.checkpoint_generation
+        || statement.checkpoint_revision != current_record.revision
+        || statement.checkpoint_digest != current_record.checkpoint_digest
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    let limits = checkpoint_decode_limits(MODERATION_ORCHESTRATOR_CHECKPOINT_MAX_BYTES_V1)?;
+    let source = decode_from_bytes_with_limits::<ModerationOrchestratorCheckpointV1>(
+        &current_record.checkpoint_bytes,
+        limits,
+    )
+    .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    if norito::to_bytes(&source)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?
+        != current_record.checkpoint_bytes
+        || source.version != MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1
+        || source.chain_id != expected_chain_id.as_str()
+        || source.generation != current_record.checkpoint_generation
+        || source.panel_notification_outbox_digest != panel_notification_outbox_digest(&source)
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    let source_manifest = ModerationPanelNotificationArchiveSourceManifestV1 {
+        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+        chain_id: expected_chain_id.as_str().to_owned(),
+        checkpoint_namespace_digest: current_record.namespace_digest,
+        checkpoint_generation: current_record.checkpoint_generation,
+        checkpoint_revision: current_record.revision,
+        checkpoint_digest: current_record.checkpoint_digest,
+        archive_signer_epochs: source.panel_notification_archive_signer_epochs.clone(),
+        predecessor_archive_head: source.panel_notification_archive_head.clone(),
+    };
+    if statement.source_manifest_digest
+        != panel_notification_archive_source_manifest_digest(&source_manifest)?
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    let requested_count = usize::try_from(statement.terminal_record_count)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let payload = source
+        .panel_notification_archive_compaction_reservation
+        .as_ref()
+        .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    if payload.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
+        || payload.records.is_empty()
+        || payload.records.len() > MODERATION_PANEL_NOTIFICATION_ARCHIVE_MAX_RECORDS_V1
+        || requested_count != payload.records.len()
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    let terminal_records = collect_terminal_archive_records(&source)?;
+    if terminal_records.len() < payload.records.len()
+        || terminal_records[..payload.records.len()] != payload.records
+        || safe_terminal_archive_prefix_len(&terminal_records, payload.records.len())?
+            != payload.records.len()
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    if payload
+        .records
+        .first()
+        .map(terminal_archive_record_boundary_id)
+        .transpose()?
+        != Some(statement.first_notification_id)
+        || payload
+            .records
+            .last()
+            .map(terminal_archive_record_boundary_id)
+            .transpose()?
+            != Some(statement.last_notification_id)
+        || panel_notification_archive_payload_digest(payload)? != statement.terminal_set_digest
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    Ok(panel_notification_source_attestation_message(statement))
+}
+
+fn panel_notification_source_attestation_from_head(
+    head: &ModerationPanelNotificationArchiveHeadV1,
+) -> ModerationPanelNotificationSourceAttestationV1 {
+    ModerationPanelNotificationSourceAttestationV1 {
+        version: head.version,
+        attestor_slot: MODERATION_PANEL_NOTIFICATION_SOURCE_ATTESTOR_BROKER_SLOT_V1,
+        chain_id: head.chain_id.clone(),
+        checkpoint_namespace_digest: head.source_checkpoint_namespace_digest,
+        checkpoint_generation: head.source_checkpoint_generation,
+        checkpoint_revision: head.source_checkpoint_revision,
+        checkpoint_digest: head.source_checkpoint_digest,
+        source_manifest_digest: head.source_manifest_digest,
+        terminal_set_digest: head.payload_digest,
+        terminal_record_count: head.terminal_record_count,
+        first_notification_id: head.first_notification_id,
+        last_notification_id: head.last_notification_id,
+        attestor_handle: head.source_attestor_handle.clone(),
+        attestor_revision: head.source_attestor_revision,
+        attestor_policy_digest: head.source_attestor_policy_digest,
+        attestor_public_key: head.source_attestor_public_key,
+    }
+}
+
+fn panel_notification_archive_operation_id(
+    head: &ModerationPanelNotificationArchiveHeadV1,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(PANEL_NOTIFICATION_ARCHIVE_OPERATION_DOMAIN_V1);
+    hash_panel_notification_archive_head_fields(&mut hasher, head);
+    *hasher.finalize().as_bytes()
+}
+
+fn panel_notification_archive_head_digest(
+    head: &ModerationPanelNotificationArchiveHeadV1,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(PANEL_NOTIFICATION_ARCHIVE_HEAD_DOMAIN_V1);
+    hash_panel_notification_archive_head_fields(&mut hasher, head);
+    hasher.update(&head.operation_id);
+    *hasher.finalize().as_bytes()
+}
+
+fn panel_notification_archive_chain_commitment(
+    head: &ModerationPanelNotificationArchiveHeadV1,
+) -> [u8; 32] {
+    let predecessor = head.predecessor_chain_commitment.unwrap_or([0; 32]);
+    domain_hash(
+        PANEL_NOTIFICATION_ARCHIVE_AUDIT_DOMAIN_V1,
+        &[
+            &head.generation.to_le_bytes(),
+            &predecessor,
+            &head.operation_id,
+            &head.head_digest,
+        ],
+    )
+}
+
+fn panel_notification_archive_audit_page_commitment(
+    previous: [u8; 32],
+    head: &ModerationPanelNotificationArchiveHeadV1,
+) -> [u8; 32] {
+    domain_hash(
+        PANEL_NOTIFICATION_ARCHIVE_AUDIT_DOMAIN_V1,
+        &[
+            b"page",
+            &previous,
+            &head.generation.to_le_bytes(),
+            &head.operation_id,
+            &head.head_digest,
+            &head.chain_commitment,
+        ],
+    )
+}
+
+fn panel_notification_archive_receipt_message(
+    head: &ModerationPanelNotificationArchiveHeadV1,
+) -> [u8; 32] {
+    domain_hash(
+        PANEL_NOTIFICATION_ARCHIVE_RECEIPT_DOMAIN_V1,
+        &[
+            &MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_SLOT_V1.to_le_bytes(),
+            head.chain_id.as_bytes(),
+            &head.archive_id,
+            &head.archive_public_key,
+            &head.operation_id,
+            &head.head_digest,
+            &head.chain_commitment,
+        ],
+    )
+}
+
+fn verify_panel_notification_archive_head_core(
+    head: &ModerationPanelNotificationArchiveHeadV1,
+) -> Result<(), ModerationOrchestratorError> {
+    let head_qualification = ModerationRuntimeProviderQualificationV1::new(
+        head.archive_revision,
+        head.archive_policy_digest,
+    );
+    let source_attestation = panel_notification_source_attestation_from_head(head);
+    let source_attestation_message =
+        panel_notification_source_attestation_message(&source_attestation);
+    let lineage_valid = match head.generation {
+        1 => {
+            head.predecessor_head_digest.is_none()
+                && head.predecessor_operation_id.is_none()
+                && head.predecessor_chain_commitment.is_none()
+        }
+        2.. => {
+            head.predecessor_head_digest
+                .is_some_and(|digest| digest != [0; 32])
+                && head
+                    .predecessor_operation_id
+                    .is_some_and(|operation_id| operation_id != [0; 32])
+                && head
+                    .predecessor_chain_commitment
+                    .is_some_and(|commitment| commitment != [0; 32])
+        }
+        0 => false,
+    };
+    if head.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
+        || head.chain_id.is_empty()
+        || !lineage_valid
+        || head.source_checkpoint_generation == 0
+        || head.source_checkpoint_namespace_digest == [0; 32]
+        || head.source_checkpoint_revision == [0; 32]
+        || head.source_checkpoint_digest == [0; 32]
+        || head.source_manifest_digest == [0; 32]
+        || head.source_binding_digest == [0; 32]
+        || head.source_binding_digest
+            != panel_notification_archive_source_binding_digest(&source_attestation)
+        || head.source_attestation_digest != source_attestation_message
+        || source_attestation
+            .verify(head.source_attestation_signature)
+            .is_err()
+        || head.terminal_record_count == 0
+        || head.dead_letter_record_count > head.terminal_record_count
+        || head.cumulative_dead_letter_count < u64::from(head.dead_letter_record_count)
+        || (head.generation == 1
+            && head.cumulative_dead_letter_count != u64::from(head.dead_letter_record_count))
+        || head.first_notification_id == [0; 32]
+        || head.last_notification_id == [0; 32]
+        || head.payload_digest == [0; 32]
+        || validate_production_runtime_handle(&head.archive_handle).is_err()
+        || !head_qualification.is_valid()
+        || head.archive_id == [0; 32]
+        || head.archive_public_key == [0; 32]
+        || head.archive_signer_epoch == 0
+        || head.archive_signer_epoch_digest == [0; 32]
+        || head.operation_id == [0; 32]
+        || head.head_digest == [0; 32]
+        || head.chain_commitment == [0; 32]
+        || head.predecessor_head_digest == Some(head.head_digest)
+        || head.predecessor_operation_id == Some(head.operation_id)
+        || head.operation_id != panel_notification_archive_operation_id(head)
+        || head.head_digest != panel_notification_archive_head_digest(head)
+        || head.chain_commitment != panel_notification_archive_chain_commitment(head)
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    PublicKey::from_bytes(Algorithm::Ed25519, &head.archive_public_key)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    Ok(())
+}
+
+fn verify_panel_notification_archive_head(
+    head: &ModerationPanelNotificationArchiveHeadV1,
+) -> Result<(), ModerationOrchestratorError> {
+    verify_panel_notification_archive_head_core(head)?;
+    if head.archive_signature == [0; 64] {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    let key = PublicKey::from_bytes(Algorithm::Ed25519, &head.archive_public_key)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let signature = IrohaSignature::try_from_bytes(&head.archive_signature)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    signature
+        .verify(&key, &panel_notification_archive_receipt_message(head))
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)
+}
+
+fn verify_panel_notification_archive_head_is_current(
+    head: &ModerationPanelNotificationArchiveHeadV1,
+    expected_handle: &str,
+    expected_qualification: ModerationRuntimeProviderQualificationV1,
+    expected_archive_id: [u8; 32],
+    expected_public_key: [u8; 32],
+) -> Result<(), ModerationOrchestratorError> {
+    verify_panel_notification_archive_head(head)?;
+    verify_panel_notification_archive_head_core_is_current(
+        head,
+        expected_handle,
+        expected_qualification,
+        expected_archive_id,
+        expected_public_key,
+    )
+}
+
+fn verify_panel_notification_archive_head_core_is_current(
+    head: &ModerationPanelNotificationArchiveHeadV1,
+    expected_handle: &str,
+    expected_qualification: ModerationRuntimeProviderQualificationV1,
+    expected_archive_id: [u8; 32],
+    expected_public_key: [u8; 32],
+) -> Result<(), ModerationOrchestratorError> {
+    verify_panel_notification_archive_head_core(head)?;
+    if head.archive_handle != expected_handle
+        || head.archive_revision != expected_qualification.revision()
+        || head.archive_policy_digest != expected_qualification.policy_digest()
+        || head.archive_id != expected_archive_id
+        || head.archive_public_key != expected_public_key
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    Ok(())
+}
+
+fn verify_panel_notification_archive_lineage_link(
+    successor: &ModerationPanelNotificationArchiveHeadV1,
+    predecessor: &ModerationPanelNotificationArchiveHeadV1,
+) -> Result<(), ModerationOrchestratorError> {
+    if predecessor.generation.checked_add(1) != Some(successor.generation)
+        || successor.predecessor_head_digest != Some(predecessor.head_digest)
+        || successor.predecessor_operation_id != Some(predecessor.operation_id)
+        || successor.predecessor_chain_commitment != Some(predecessor.chain_commitment)
+        || successor.source_checkpoint_generation <= predecessor.source_checkpoint_generation
+        || successor.chain_id != predecessor.chain_id
+        || predecessor
+            .cumulative_dead_letter_count
+            .checked_add(u64::from(successor.dead_letter_record_count))
+            != Some(successor.cumulative_dead_letter_count)
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    Ok(())
+}
+
+fn panel_notification_archive_record_from_stored(
+    entry: &StoredPanelNotificationV1,
+) -> Result<ModerationPanelNotificationArchiveRecordV1, ModerationOrchestratorError> {
+    let terminal_status = match entry.state {
+        StoredPanelNotificationStateV1::Delivered => {
+            let (Some(receipt_digest), Some(delivered_at_unix_ms)) =
+                (entry.receipt_digest, entry.delivered_at_unix_ms)
+            else {
+                return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+            };
+            if entry.dead_letter_reason.is_some() || entry.dead_lettered_at_unix_ms.is_some() {
+                return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+            }
+            ModerationPanelNotificationArchiveTerminalStatusV1::Delivered {
+                receipt_digest,
+                delivered_at_unix_ms,
+            }
+        }
+        StoredPanelNotificationStateV1::DeadLetter => {
+            let (Some(reason), Some(dead_lettered_at_unix_ms)) =
+                (entry.dead_letter_reason, entry.dead_lettered_at_unix_ms)
+            else {
+                return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+            };
+            if entry.claimed_by.is_some()
+                || entry.lease_token.is_some()
+                || entry.claimed_at_unix_ms.is_some()
+                || entry.lease_expires_at_unix_ms.is_some()
+                || entry.receipt_digest.is_some()
+                || entry.delivered_at_unix_ms.is_some()
+            {
+                return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+            }
+            ModerationPanelNotificationArchiveTerminalStatusV1::DeadLettered {
+                reason,
+                dead_lettered_at_unix_ms,
+            }
+        }
+        StoredPanelNotificationStateV1::Pending | StoredPanelNotificationStateV1::Claimed => {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+    };
+    Ok(ModerationPanelNotificationArchiveRecordV1 {
+        notification_id: entry.notification.notification_id,
+        terminal_status,
+        source_record_digest: entry.record_digest,
+    })
+}
+
+fn archived_panel_notification_record_matches_source(
+    record: &ModerationPanelNotificationArchiveRecordV1,
+) -> impl FnOnce(&StoredPanelNotificationV1) -> bool + '_ {
+    move |source| {
+        if source.notification.notification_id != record.notification_id
+            || source.record_digest != record.source_record_digest
+            || source.record_digest != panel_notification_record_digest(source)
+        {
+            return false;
+        }
+        match record.terminal_status {
+            ModerationPanelNotificationArchiveTerminalStatusV1::Delivered {
+                receipt_digest,
+                delivered_at_unix_ms,
+            } => {
+                source.state == StoredPanelNotificationStateV1::Delivered
+                    && source.receipt_digest == Some(receipt_digest)
+                    && source.delivered_at_unix_ms == Some(delivered_at_unix_ms)
+                    && source.dead_letter_reason.is_none()
+                    && source.dead_lettered_at_unix_ms.is_none()
+            }
+            ModerationPanelNotificationArchiveTerminalStatusV1::DeadLettered {
+                reason,
+                dead_lettered_at_unix_ms,
+            } => {
+                source.state == StoredPanelNotificationStateV1::DeadLetter
+                    && source.dead_letter_reason == Some(reason)
+                    && source.dead_lettered_at_unix_ms == Some(dead_lettered_at_unix_ms)
+                    && source.receipt_digest.is_none()
+                    && source.delivered_at_unix_ms.is_none()
+            }
+        }
+    }
+}
+
+fn validate_archived_panel_notification_record_shape(
+    record: &ModerationPanelNotificationArchiveRecordV1,
+) -> Result<(), ModerationOrchestratorError> {
+    if record.notification_id == [0; 32] || record.source_record_digest == [0; 32] {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    match record.terminal_status {
+        ModerationPanelNotificationArchiveTerminalStatusV1::Delivered {
+            receipt_digest,
+            delivered_at_unix_ms,
+        } if receipt_digest != [0; 32] && delivered_at_unix_ms != 0 => Ok(()),
+        ModerationPanelNotificationArchiveTerminalStatusV1::DeadLettered {
+            dead_lettered_at_unix_ms,
+            ..
+        } if dead_lettered_at_unix_ms != 0 => Ok(()),
+        ModerationPanelNotificationArchiveTerminalStatusV1::Delivered { .. }
+        | ModerationPanelNotificationArchiveTerminalStatusV1::DeadLettered { .. } => {
+            Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid)
+        }
+    }
+}
+
+fn validate_archived_panel_notification_record(
+    record: &ModerationPanelNotificationArchiveRecordV1,
+    source: &StoredPanelNotificationV1,
+) -> Result<(), ModerationOrchestratorError> {
+    validate_archived_panel_notification_record_shape(record)?;
+    if !archived_panel_notification_record_matches_source(record)(source) {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    match record.terminal_status {
+        ModerationPanelNotificationArchiveTerminalStatusV1::Delivered {
+            receipt_digest,
+            delivered_at_unix_ms,
+        } => {
+            if receipt_digest == [0; 32]
+                || delivered_at_unix_ms < source.notification.source_occurred_at_unix_ms
+            {
+                return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+            }
+        }
+        ModerationPanelNotificationArchiveTerminalStatusV1::DeadLettered {
+            reason,
+            dead_lettered_at_unix_ms,
+        } => {
+            if dead_lettered_at_unix_ms < source.notification.source_occurred_at_unix_ms
+                || dead_lettered_at_unix_ms < source.available_at_unix_ms
+                || (reason == ModerationPanelNotificationDeadLetterReasonV1::RetryExhausted
+                    && source.attempts != source.attempt_limit)
+            {
+                return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn terminal_handoff_outcome_group_identity(
+    cursor: ModerationFinalizedEventCursorV1,
+    outcome_digest: [u8; 32],
+) -> [u8; 32] {
+    domain_hash(
+        TERMINAL_ARCHIVE_RECORD_KEY_DOMAIN_V1,
+        &[
+            b"handoff-outcome",
+            &cursor.sequence.to_le_bytes(),
+            &cursor.block_height.to_le_bytes(),
+            &cursor.block_hash,
+            &cursor.event_index.to_le_bytes(),
+            &outcome_digest,
+        ],
+    )
+}
+
+fn terminal_archive_record_key(
+    record: &ModerationTerminalArchiveRecordV1,
+) -> Result<(u8, [u8; 32], [u8; 32]), ModerationOrchestratorError> {
+    match record {
+        ModerationTerminalArchiveRecordV1::PanelNotification(record) => {
+            Ok((0, record.notification_id, record.source_record_digest))
+        }
+        ModerationTerminalArchiveRecordV1::ResolvedPanelDeadLetter {
+            terminal_record,
+            source_record_digest,
+            ..
+        } => Ok((1, terminal_record.notification_id, *source_record_digest)),
+        ModerationTerminalArchiveRecordV1::NativeOperation {
+            operation_id,
+            source_record_digest,
+            ..
+        } => Ok((2, *operation_id, *source_record_digest)),
+        ModerationTerminalArchiveRecordV1::DurableDeadLetter {
+            identity,
+            resolution,
+            handoff_outcome_digest,
+            handoff_finalized_cursor,
+            source_record_digest,
+            ..
+        } => {
+            if resolution.kind == ModerationDeadLetterKindV1::TerminalHandoff
+                && resolution.action == ModerationDeadLetterResolutionActionV1::Acknowledge
+            {
+                let outcome_digest = handoff_outcome_digest
+                    .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+                let cursor = handoff_finalized_cursor
+                    .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+                Ok((
+                    4,
+                    terminal_handoff_outcome_group_identity(cursor, outcome_digest),
+                    *source_record_digest,
+                ))
+            } else {
+                Ok((3, *identity, *source_record_digest))
+            }
+        }
+        ModerationTerminalArchiveRecordV1::CompletedHandoff {
+            finalized_cursor,
+            outcome_digest,
+            source_record_digest,
+            ..
+        } => Ok((
+            4,
+            terminal_handoff_outcome_group_identity(*finalized_cursor, *outcome_digest),
+            *source_record_digest,
+        )),
+    }
+}
+
+fn terminal_archive_record_boundary_id(
+    record: &ModerationTerminalArchiveRecordV1,
+) -> Result<[u8; 32], ModerationOrchestratorError> {
+    let (tag, identity, source_digest) = terminal_archive_record_key(record)?;
+    Ok(domain_hash(
+        TERMINAL_ARCHIVE_RECORD_KEY_DOMAIN_V1,
+        &[&[tag], &identity, &source_digest],
+    ))
+}
+
+fn terminal_archive_record_is_dead_letter(record: &ModerationTerminalArchiveRecordV1) -> bool {
+    matches!(
+        record,
+        ModerationTerminalArchiveRecordV1::ResolvedPanelDeadLetter { .. }
+            | ModerationTerminalArchiveRecordV1::DurableDeadLetter { .. }
+    )
+}
+
+fn validate_terminal_archive_record_shape(
+    record: &ModerationTerminalArchiveRecordV1,
+) -> Result<(), ModerationOrchestratorError> {
+    match record {
+        ModerationTerminalArchiveRecordV1::PanelNotification(record) => {
+            validate_archived_panel_notification_record_shape(record)?;
+            if !matches!(
+                record.terminal_status,
+                ModerationPanelNotificationArchiveTerminalStatusV1::Delivered { .. }
+            ) {
+                return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+            }
+        }
+        ModerationTerminalArchiveRecordV1::ResolvedPanelDeadLetter {
+            terminal_record,
+            resolution,
+            resolution_signature,
+            source_record_digest,
+        } => {
+            validate_archived_panel_notification_record_shape(terminal_record)?;
+            if !matches!(
+                terminal_record.terminal_status,
+                ModerationPanelNotificationArchiveTerminalStatusV1::DeadLettered { .. }
+            ) || resolution.kind != ModerationDeadLetterKindV1::PanelNotification
+                || resolution.identity != terminal_record.notification_id
+                || resolution.source_record_digest != terminal_record.source_record_digest
+                || *source_record_digest
+                    != panel_notification_resolution_record_digest(
+                        terminal_record,
+                        resolution,
+                        *resolution_signature,
+                    )?
+            {
+                return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+            }
+            verify_dead_letter_resolution_signature(resolution, *resolution_signature)?;
+        }
+        ModerationTerminalArchiveRecordV1::NativeOperation {
+            operation_id,
+            status,
+            source_record_digest,
+            ..
+        } => {
+            if *operation_id == [0; 32]
+                || *status != StoredOperationStatusV1::Finalized
+                || *source_record_digest == [0; 32]
+            {
+                return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+            }
+        }
+        ModerationTerminalArchiveRecordV1::DurableDeadLetter {
+            incident_sequence,
+            identity,
+            reason,
+            finalized_cursor,
+            dead_lettered_at_unix_ms,
+            resolution,
+            resolution_signature,
+            operation_source_record_digest,
+            handoff_kind,
+            handoff_outcome_digest,
+            handoff_finalized_cursor,
+            source_record_digest,
+        } => {
+            let expected_kind = match reason {
+                StoredDeadLetterReasonV1::HandoffPermanentRejection
+                | StoredDeadLetterReasonV1::HandoffRetryExhausted => {
+                    ModerationDeadLetterKindV1::TerminalHandoff
+                }
+                StoredDeadLetterReasonV1::PermanentRejection
+                | StoredDeadLetterReasonV1::FinalizedConflict
+                | StoredDeadLetterReasonV1::RetryExhaustedNotFound => {
+                    ModerationDeadLetterKindV1::NativeSubmission
+                }
+            };
+            if *incident_sequence == 0
+                || *identity == [0; 32]
+                || finalized_cursor.height == 0
+                || finalized_cursor.block_hash == [0; 32]
+                || *dead_lettered_at_unix_ms == 0
+                || resolution.authorized_at_unix_ms < *dead_lettered_at_unix_ms
+                || resolution.identity != *identity
+                || resolution.kind != expected_kind
+                || resolution.source_record_digest == [0; 32]
+                || resolution.source_record_digest != *source_record_digest
+                || *source_record_digest == [0; 32]
+                || (expected_kind == ModerationDeadLetterKindV1::TerminalHandoff
+                    && operation_source_record_digest.is_some())
+                || (expected_kind == ModerationDeadLetterKindV1::TerminalHandoff
+                    && (handoff_kind.is_none()
+                        || handoff_outcome_digest.is_none_or(|digest| digest == [0; 32])
+                        || handoff_finalized_cursor.is_none()))
+                || (expected_kind == ModerationDeadLetterKindV1::NativeSubmission
+                    && (handoff_kind.is_some()
+                        || handoff_outcome_digest.is_some()
+                        || handoff_finalized_cursor.is_some()))
+            {
+                return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+            }
+            verify_dead_letter_resolution_signature(resolution, *resolution_signature)?;
+        }
+        ModerationTerminalArchiveRecordV1::CompletedHandoff {
+            handoff_id,
+            outcome_digest,
+            finalized_cursor,
+            completed_at_finalized_cursor,
+            source_record_digest,
+            ..
+        } => {
+            if *handoff_id == [0; 32]
+                || *outcome_digest == [0; 32]
+                || finalized_cursor.sequence == 0
+                || finalized_cursor.block_height == 0
+                || finalized_cursor.block_hash == [0; 32]
+                || completed_at_finalized_cursor.height < finalized_cursor.block_height
+                || completed_at_finalized_cursor.block_hash == [0; 32]
+                || *source_record_digest == [0; 32]
+            {
+                return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_terminal_archive_records(
+    state: &ModerationOrchestratorCheckpointV1,
+) -> Result<Vec<ModerationTerminalArchiveRecordV1>, ModerationOrchestratorError> {
+    let mut records = Vec::new();
+    for entry in &state.panel_notifications {
+        if entry.state == StoredPanelNotificationStateV1::Delivered {
+            records.push(ModerationTerminalArchiveRecordV1::PanelNotification(
+                panel_notification_archive_record_from_stored(entry)?,
+            ));
+        }
+    }
+    for entry in &state.panel_notification_dead_letter_resolutions {
+        records.push(ModerationTerminalArchiveRecordV1::ResolvedPanelDeadLetter {
+            terminal_record: entry.terminal_record.clone(),
+            resolution: entry.resolution.clone(),
+            resolution_signature: entry.resolution_signature,
+            source_record_digest: entry.record_digest,
+        });
+    }
+    for entry in &state.operations {
+        if entry.status == StoredOperationStatusV1::Finalized {
+            records.push(ModerationTerminalArchiveRecordV1::NativeOperation {
+                operation_id: entry.operation_id,
+                status: entry.status,
+                transaction_id: entry.transaction_id,
+                source_record_digest: native_operation_record_digest(entry)?,
+            });
+        }
+    }
+    let latest_native_incident = state
+        .dead_letters
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.redrive,
+                Some(StoredDeadLetterRedriveV1::NativeSubmission { .. })
+            )
+        })
+        .fold(BTreeMap::<[u8; 32], u64>::new(), |mut latest, entry| {
+            latest
+                .entry(entry.identity)
+                .and_modify(|sequence| *sequence = (*sequence).max(entry.incident_sequence))
+                .or_insert(entry.incident_sequence);
+            latest
+        });
+    for entry in &state.dead_letters {
+        let (Some(resolution), Some(resolution_signature)) =
+            (entry.resolution.as_ref(), entry.resolution_signature)
+        else {
+            continue;
+        };
+        let operation_source_record_digest = if resolution.kind
+            == ModerationDeadLetterKindV1::NativeSubmission
+            && resolution.action == ModerationDeadLetterResolutionActionV1::Acknowledge
+            && latest_native_incident.get(&entry.identity) == Some(&entry.incident_sequence)
+        {
+            state
+                .operations
+                .iter()
+                .find(|operation| {
+                    operation.operation_id == entry.identity
+                        && operation.status == StoredOperationStatusV1::Rejected
+                })
+                .map(native_operation_record_digest)
+                .transpose()?
+        } else {
+            None
+        };
+        let (handoff_kind, handoff_outcome_digest, handoff_finalized_cursor) = match entry
+            .redrive
+            .as_ref()
+        {
+            Some(StoredDeadLetterRedriveV1::TerminalHandoff(handoff)) => (
+                Some(handoff.kind),
+                Some(handoff.outcome_digest),
+                Some(handoff.finalized_cursor),
+            ),
+            Some(StoredDeadLetterRedriveV1::NativeSubmission { .. }) | None => (None, None, None),
+        };
+        records.push(ModerationTerminalArchiveRecordV1::DurableDeadLetter {
+            incident_sequence: entry.incident_sequence,
+            identity: entry.identity,
+            reason: entry.reason,
+            finalized_cursor: entry.finalized_cursor,
+            dead_lettered_at_unix_ms: entry.dead_lettered_at_unix_ms,
+            resolution: resolution.clone(),
+            resolution_signature,
+            operation_source_record_digest,
+            handoff_kind,
+            handoff_outcome_digest,
+            handoff_finalized_cursor,
+            source_record_digest: durable_dead_letter_source_record_digest(entry)?,
+        });
+    }
+
+    for completed in &state.completed_handoffs {
+        records.push(ModerationTerminalArchiveRecordV1::CompletedHandoff {
+            handoff_id: completed.handoff.handoff_id,
+            kind: completed.handoff.kind,
+            outcome_digest: completed.handoff.outcome_digest,
+            finalized_cursor: completed.handoff.finalized_cursor,
+            completed_at_finalized_cursor: completed.completed_at_finalized_cursor,
+            source_record_digest: completed.record_digest,
+        });
+    }
+    let mut terminal_groups = BTreeMap::<[u8; 32], (usize, BTreeSet<u8>)>::new();
+    for record in &records {
+        let key = terminal_archive_record_key(record)?;
+        if key.0 != 4 {
+            continue;
+        }
+        let kind = match record {
+            ModerationTerminalArchiveRecordV1::CompletedHandoff { kind, .. } => *kind,
+            ModerationTerminalArchiveRecordV1::DurableDeadLetter {
+                handoff_kind: Some(kind),
+                ..
+            } => *kind,
+            _ => return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid),
+        };
+        let entry = terminal_groups.entry(key.1).or_default();
+        entry.0 = entry.0.saturating_add(1);
+        entry.1.insert(match kind {
+            ModerationTerminalHandoffKindV1::Settlement => 0,
+            ModerationTerminalHandoffKindV1::Publication => 1,
+        });
+    }
+    let mut terminal_outcome_order = BTreeMap::<(u64, u64, u32, [u8; 32]), [u8; 32]>::new();
+    let mut observe_handoff = |handoff: &ModerationTerminalHandoffV1| {
+        let group = terminal_handoff_outcome_group_identity(
+            handoff.finalized_cursor,
+            handoff.outcome_digest,
+        );
+        terminal_outcome_order.insert(
+            (
+                handoff.finalized_cursor.sequence,
+                handoff.finalized_cursor.block_height,
+                handoff.finalized_cursor.event_index,
+                handoff.finalized_cursor.block_hash,
+            ),
+            group,
+        );
+    };
+    for entry in &state.pending_handoffs {
+        observe_handoff(&entry.handoff);
+    }
+    for entry in &state.completed_handoffs {
+        observe_handoff(&entry.handoff);
+    }
+    for entry in &state.dead_letters {
+        if let Some(StoredDeadLetterRedriveV1::TerminalHandoff(handoff)) = entry.redrive.as_ref() {
+            observe_handoff(handoff);
+        }
+    }
+    let mut allowed_terminal_groups = BTreeSet::new();
+    for ((sequence, _, _, _), group) in terminal_outcome_order {
+        if state
+            .terminal_handoff_archived_cursor
+            .is_some_and(|archived| sequence <= archived.sequence)
+        {
+            continue;
+        }
+        if terminal_groups
+            .get(&group)
+            .is_some_and(|(count, kinds)| *count == 2 && kinds.len() == 2)
+        {
+            allowed_terminal_groups.insert(group);
+        } else {
+            break;
+        }
+    }
+    records.retain(|record| {
+        let Ok((tag, identity, _)) = terminal_archive_record_key(record) else {
+            return false;
+        };
+        tag != 4 || allowed_terminal_groups.contains(&identity)
+    });
+    records.sort_by_key(|record| {
+        terminal_archive_record_key(record).unwrap_or((u8::MAX, [u8::MAX; 32], [u8::MAX; 32]))
+    });
+    let mut previous = None;
+    for record in &records {
+        let key = terminal_archive_record_key(record)?;
+        if previous.as_ref().is_some_and(|prior| prior >= &key)
+            || validate_terminal_archive_record_shape(record).is_err()
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+        previous = Some(key);
+    }
+    Ok(records)
+}
+
+fn safe_terminal_archive_prefix_len(
+    records: &[ModerationTerminalArchiveRecordV1],
+    requested: usize,
+) -> Result<usize, ModerationOrchestratorError> {
+    let mut length = requested.min(records.len());
+    if length == records.len() || length == 0 {
+        return Ok(length);
+    }
+    let next = terminal_archive_record_key(&records[length])?;
+    while length != 0 {
+        let prior = terminal_archive_record_key(&records[length - 1])?;
+        if prior.0 != 4 || next.0 != 4 || prior.1 != next.1 {
+            break;
+        }
+        length -= 1;
+    }
+    Ok(length)
+}
+
+fn panel_notification_archive_decode_limits(max_bytes: usize, max_records: usize) -> DecodeLimits {
+    DecodeLimits::new(
+        max_bytes,
+        max_records.max(MODERATION_PANEL_NOTIFICATION_ARCHIVE_MAX_SIGNER_EPOCHS_V1),
+        max_bytes.saturating_mul(2),
+        max_bytes.saturating_mul(2),
+        128,
+    )
+}
+
+fn verify_panel_notification_archive_artifact_with_bounds(
+    max_bytes: usize,
+    _checkpoint_max_bytes: u64,
+    max_records: usize,
+    chain_id: &iroha_data_model::ChainId,
+    bytes: &[u8],
+) -> Result<ModerationPanelNotificationArchiveArtifactV1, ModerationOrchestratorError> {
+    if bytes.is_empty() || bytes.len() > max_bytes || max_records == 0 {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    let artifact = decode_from_bytes_with_limits::<ModerationPanelNotificationArchiveArtifactV1>(
+        bytes,
+        panel_notification_archive_decode_limits(max_bytes, max_records),
+    )
+    .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let canonical = norito::to_bytes(&artifact)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    if canonical != bytes {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    verify_panel_notification_archive_head_core(&artifact.head)?;
+    let terminal_record_count = u32::try_from(artifact.payload.records.len())
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let dead_letter_record_count = u32::try_from(
+        artifact
+            .payload
+            .records
+            .iter()
+            .filter(|record| terminal_archive_record_is_dead_letter(record))
+            .count(),
+    )
+    .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let source_manifest = &artifact.source_manifest;
+    if artifact.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
+        || artifact.payload.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
+        || artifact.head.chain_id != chain_id.as_str()
+        || artifact.head.archive_signature != [0; 64]
+        || terminal_record_count == 0
+        || terminal_record_count != artifact.head.terminal_record_count
+        || dead_letter_record_count != artifact.head.dead_letter_record_count
+        || usize::try_from(terminal_record_count).unwrap_or(usize::MAX) > max_records
+        || artifact
+            .payload
+            .records
+            .first()
+            .map(terminal_archive_record_boundary_id)
+            .transpose()?
+            != Some(artifact.head.first_notification_id)
+        || artifact
+            .payload
+            .records
+            .last()
+            .map(terminal_archive_record_boundary_id)
+            .transpose()?
+            != Some(artifact.head.last_notification_id)
+        || panel_notification_archive_payload_digest(&artifact.payload)?
+            != artifact.head.payload_digest
+        || source_manifest.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
+        || source_manifest.chain_id != chain_id.as_str()
+        || source_manifest.checkpoint_namespace_digest
+            != artifact.head.source_checkpoint_namespace_digest
+        || source_manifest.checkpoint_generation != artifact.head.source_checkpoint_generation
+        || source_manifest.checkpoint_revision != artifact.head.source_checkpoint_revision
+        || source_manifest.checkpoint_digest != artifact.head.source_checkpoint_digest
+        || panel_notification_archive_source_manifest_digest(source_manifest)?
+            != artifact.head.source_manifest_digest
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    let mut previous_key = None;
+    let mut terminal_groups = BTreeMap::<[u8; 32], (usize, BTreeSet<u8>)>::new();
+    for record in &artifact.payload.records {
+        let key = terminal_archive_record_key(record)?;
+        if previous_key
+            .as_ref()
+            .is_some_and(|previous| previous >= &key)
+            || validate_terminal_archive_record_shape(record).is_err()
+        {
+            return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+        }
+        if key.0 == 4 {
+            let kind = match record {
+                ModerationTerminalArchiveRecordV1::CompletedHandoff { kind, .. }
+                | ModerationTerminalArchiveRecordV1::DurableDeadLetter {
+                    handoff_kind: Some(kind),
+                    ..
+                } => *kind,
+                _ => return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid),
+            };
+            let group = terminal_groups.entry(key.1).or_default();
+            group.0 = group.0.saturating_add(1);
+            group.1.insert(match kind {
+                ModerationTerminalHandoffKindV1::Settlement => 0,
+                ModerationTerminalHandoffKindV1::Publication => 1,
+            });
+        }
+        previous_key = Some(key);
+    }
+    if terminal_groups
+        .values()
+        .any(|(count, kinds)| *count != 2 || kinds.len() != 2)
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    let statement = panel_notification_source_attestation_from_head(&artifact.head);
+    if statement.terminal_set_digest != artifact.head.payload_digest
+        || statement.terminal_record_count != terminal_record_count
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    let source_bootstrap_public_key = source_manifest
+        .archive_signer_epochs
+        .first()
+        .map(|epoch| epoch.archive_public_key)
+        .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    validate_panel_notification_archive_signer_epochs(
+        &source_manifest.archive_signer_epochs,
+        chain_id,
+        source_bootstrap_public_key,
+        artifact.head.archive_id,
+    )?;
+    if source_manifest
+        .archive_signer_epochs
+        .last()
+        .map(|epoch| epoch.epoch)
+        != Some(artifact.head.archive_signer_epoch)
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    verify_panel_notification_archive_head_signer_epoch(
+        &artifact.head,
+        &source_manifest.archive_signer_epochs,
+    )?;
+    let source_predecessor_matches = match (
+        artifact.head.generation,
+        source_manifest.predecessor_archive_head.as_ref(),
+    ) {
+        (1, None) => true,
+        (2.., Some(predecessor)) => {
+            verify_panel_notification_archive_head(predecessor).is_ok()
+                && verify_panel_notification_archive_head_signer_epoch(
+                    predecessor,
+                    &source_manifest.archive_signer_epochs,
+                )
+                .is_ok()
+                && verify_panel_notification_archive_lineage_link(&artifact.head, predecessor)
+                    .is_ok()
+        }
+        _ => false,
+    };
+    if !source_predecessor_matches {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    Ok(artifact)
+}
+
+/// Strictly validate a canonical archive artifact at the dedicated slot-55 broker boundary.
+///
+/// All signable values are derived internally from canonical bytes. The caller cannot supply
+/// an alternative operation identifier, receipt message, chain binding, or source claim.
+///
+/// # Errors
+///
+/// Rejects oversized/noncanonical bytes, malformed terminal membership, stale or substituted
+/// provider identities, invalid source attestations, chain forks/gaps, and signing-oracle input.
+pub fn validate_moderation_panel_notification_archive_artifact_for_broker_v1(
+    canonical_artifact: &[u8],
+    expected: &ModerationPanelNotificationArchiveBrokerExpectationV1<'_>,
+) -> Result<ModerationPanelNotificationArchiveBrokerValidationV1, ModerationOrchestratorError> {
+    let archive_max_bytes = usize::try_from(expected.archive_max_bytes)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let artifact = verify_panel_notification_archive_artifact_with_bounds(
+        archive_max_bytes,
+        expected.checkpoint_max_bytes,
+        expected.max_records,
+        expected.chain_id,
+        canonical_artifact,
+    )?;
+    verify_panel_notification_archive_head_core_is_current(
+        &artifact.head,
+        expected.archive_handle,
+        expected.archive_qualification,
+        expected.archive_id,
+        expected.archive_public_key,
+    )?;
+    validate_moderation_panel_notification_archive_artifact_source_for_broker_v1(
+        &artifact, expected,
+    )?;
+    Ok(ModerationPanelNotificationArchiveBrokerValidationV1 {
+        operation_id: artifact.head.operation_id,
+        receipt_message: panel_notification_archive_receipt_message(&artifact.head),
+        archive_public_key: artifact.head.archive_public_key,
+        head_digest: artifact.head.head_digest,
+        chain_commitment: artifact.head.chain_commitment,
+        generation: artifact.head.generation,
+        source_attestation_digest: artifact.head.source_attestation_digest,
+    })
+}
+
+fn validate_moderation_panel_notification_archive_artifact_source_for_broker_v1(
+    artifact: &ModerationPanelNotificationArchiveArtifactV1,
+    expected: &ModerationPanelNotificationArchiveBrokerExpectationV1<'_>,
+) -> Result<(), ModerationOrchestratorError> {
+    if artifact.head.archive_id != expected.archive_id
+        || artifact.head.source_checkpoint_namespace_digest
+            != checkpoint_store::checkpoint_namespace(expected.chain_id)
+        || artifact.head.source_attestor_handle != expected.checkpoint_handle
+        || artifact.head.source_attestor_revision != expected.checkpoint_qualification.revision()
+        || artifact.head.source_attestor_policy_digest
+            != expected.checkpoint_qualification.policy_digest()
+        || artifact.head.source_attestor_public_key != expected.checkpoint_attestation_public_key
+        || artifact
+            .source_manifest
+            .archive_signer_epochs
+            .first()
+            .map(|epoch| epoch.archive_public_key)
+            != Some(expected.archive_bootstrap_public_key)
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    Ok(())
+}
+
+/// Validate an installed historical archive artifact without pinning it to the current signer.
+///
+/// Historical signer bindings are authenticated by the minimal embedded epoch
+/// log, anchored to `archive_bootstrap_public_key` and the stable archive id.
+/// The checkpoint-attestor binding is intentionally archive-lifetime-stable in
+/// V1 and remains pinned exactly.
+///
+/// # Errors
+///
+/// Rejects malformed bytes, a signer epoch not rooted in the configured
+/// bootstrap key, a substituted predecessor or archive id, or any change to the
+/// stable checkpoint-attestor trust anchor.
+pub fn validate_moderation_panel_notification_archive_readback_for_broker_v1(
+    canonical_artifact: &[u8],
+    expected: &ModerationPanelNotificationArchiveBrokerExpectationV1<'_>,
+) -> Result<ModerationPanelNotificationArchiveBrokerValidationV1, ModerationOrchestratorError> {
+    let archive_max_bytes = usize::try_from(expected.archive_max_bytes)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let artifact = verify_panel_notification_archive_artifact_with_bounds(
+        archive_max_bytes,
+        expected.checkpoint_max_bytes,
+        expected.max_records,
+        expected.chain_id,
+        canonical_artifact,
+    )?;
+    validate_moderation_panel_notification_archive_artifact_source_for_broker_v1(
+        &artifact, expected,
+    )?;
+    Ok(ModerationPanelNotificationArchiveBrokerValidationV1 {
+        operation_id: artifact.head.operation_id,
+        receipt_message: panel_notification_archive_receipt_message(&artifact.head),
+        archive_public_key: artifact.head.archive_public_key,
+        head_digest: artifact.head.head_digest,
+        chain_commitment: artifact.head.chain_commitment,
+        generation: artifact.head.generation,
+        source_attestation_digest: artifact.head.source_attestation_digest,
+    })
+}
+
+/// Strictly validate canonical signed archive-head bytes for the existing slot-20
+/// `ModerationPublicationHandoff` broker op116.
+///
+/// # Errors
+///
+/// Rejects noncanonical bytes, any chain/provider/source substitution, invalid source or
+/// archive signatures, and inconsistent operation, head, or chain-accumulator derivations.
+pub fn validate_moderation_panel_notification_archive_head_for_broker_v1(
+    canonical_head: &[u8],
+    expected: &ModerationPanelNotificationArchiveBrokerExpectationV1<'_>,
+) -> Result<
+    (
+        ModerationPanelNotificationArchiveHeadV1,
+        ModerationPanelNotificationArchiveBrokerValidationV1,
+    ),
+    ModerationOrchestratorError,
+> {
+    let max_bytes = usize::try_from(expected.archive_max_bytes)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    if canonical_head.is_empty() || canonical_head.len() > max_bytes {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    let head = decode_from_bytes_with_limits::<ModerationPanelNotificationArchiveHeadV1>(
+        canonical_head,
+        DecodeLimits::new(max_bytes, 16, max_bytes, max_bytes, 32),
+    )
+    .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    if norito::to_bytes(&head)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?
+        != canonical_head
+        || head.chain_id != expected.chain_id.as_str()
+        || head.source_checkpoint_namespace_digest
+            != checkpoint_store::checkpoint_namespace(expected.chain_id)
+        || head.source_attestor_handle != expected.checkpoint_handle
+        || head.source_attestor_revision != expected.checkpoint_qualification.revision()
+        || head.source_attestor_policy_digest != expected.checkpoint_qualification.policy_digest()
+        || head.source_attestor_public_key != expected.checkpoint_attestation_public_key
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    verify_panel_notification_archive_head_is_current(
+        &head,
+        expected.archive_handle,
+        expected.archive_qualification,
+        expected.archive_id,
+        expected.archive_public_key,
+    )?;
+    let validation = ModerationPanelNotificationArchiveBrokerValidationV1 {
+        operation_id: head.operation_id,
+        receipt_message: panel_notification_archive_receipt_message(&head),
+        archive_public_key: head.archive_public_key,
+        head_digest: head.head_digest,
+        chain_commitment: head.chain_commitment,
+        generation: head.generation,
+        source_attestation_digest: head.source_attestation_digest,
+    };
+    Ok((head, validation))
+}
+
+/// Build one deterministic generation-one archive fixture for broker protocol tests.
+///
+/// The fixed seeds are test material, never production credentials. Every signature,
+/// source claim, terminal record, operation, and chain commitment is produced by the
+/// same implementation used in production validation.
+#[doc(hidden)]
+pub fn moderation_panel_notification_archive_broker_fixture_v1()
+-> Result<ModerationPanelNotificationArchiveBrokerFixtureV1, ModerationOrchestratorError> {
+    fn public_key_bytes(key: &KeyPair) -> Result<[u8; 32], ModerationOrchestratorError> {
+        key.public_key()
+            .to_bytes()
+            .1
+            .try_into()
+            .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)
+    }
+
+    fn sign_message(
+        key: &KeyPair,
+        message: [u8; 32],
+    ) -> Result<[u8; 64], ModerationOrchestratorError> {
+        IrohaSignature::try_new(key.private_key(), &message)
+            .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?
+            .payload()
+            .try_into()
+            .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)
+    }
+
+    let archive_signing_seed = [0xA9; 32];
+    let checkpoint_attestation_signing_seed = [0xC9; 32];
+    let archive_key = KeyPair::try_from_seed(archive_signing_seed.to_vec(), Algorithm::Ed25519)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let checkpoint_key = KeyPair::try_from_seed(
+        checkpoint_attestation_signing_seed.to_vec(),
+        Algorithm::Ed25519,
+    )
+    .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let archive_public_key = public_key_bytes(&archive_key)?;
+    let checkpoint_attestation_public_key = public_key_bytes(&checkpoint_key)?;
+    let chain_id = iroha_data_model::ChainId::from("moderation-archive-broker-fixture-v1");
+    let archive_handle = "immutable.moderation-archive.fixture-v1".to_owned();
+    let archive_qualification = ModerationRuntimeProviderQualificationV1::new(7, [0x71; 32]);
+    let archive_id = [0xA7; 32];
+    let checkpoint_handle = "sealed-cas.moderation-checkpoint.fixture-v1".to_owned();
+    let checkpoint_qualification = ModerationRuntimeProviderQualificationV1::new(9, [0x91; 32]);
+    let cursor = ModerationFinalizedEventCursorV1 {
+        sequence: 1,
+        block_height: 1,
+        block_hash: [0xB1; 32],
+        event_index: 0,
+    };
+    let recipient = AccountId::new(checkpoint_key.public_key().clone());
+    let notification_id = panel_notification_id(
+        &chain_id,
+        [0x31; 32],
+        [0x32; 32],
+        ModerationPanelNotificationKindV1::PrimaryAssignment,
+        &recipient,
+        cursor,
+        1_000,
+    );
+    let worker_id = [0x41; 32];
+    let claimed_at_unix_ms = 1_100;
+    let lease_expires_at_unix_ms = claimed_at_unix_ms + MODERATION_PANEL_NOTIFICATION_LEASE_MS_V1;
+    let lease_token = panel_notification_lease_token(
+        notification_id,
+        worker_id,
+        1,
+        1,
+        claimed_at_unix_ms,
+        lease_expires_at_unix_ms,
+    );
+    let mut stored = StoredPanelNotificationV1 {
+        notification: ModerationPanelNotificationV1 {
+            notification_id,
+            source_operation_id: [0x31; 32],
+            scope_digest: [0x32; 32],
+            kind: ModerationPanelNotificationKindV1::PrimaryAssignment,
+            recipient,
+            finalized_event_cursor: cursor,
+            source_occurred_at_unix_ms: 1_000,
+        },
+        attempt_limit: 3,
+        attempts: 1,
+        claim_generation: 1,
+        available_at_unix_ms: 1_000,
+        state: StoredPanelNotificationStateV1::Delivered,
+        claimed_by: Some(worker_id),
+        lease_token: Some(lease_token),
+        claimed_at_unix_ms: Some(claimed_at_unix_ms),
+        lease_expires_at_unix_ms: Some(lease_expires_at_unix_ms),
+        receipt_digest: Some([0x51; 32]),
+        delivered_at_unix_ms: Some(1_200),
+        dead_letter_reason: None,
+        dead_lettered_at_unix_ms: None,
+        record_digest: [0; 32],
+    };
+    refresh_panel_notification_record_digest(&mut stored);
+    let second_cursor = ModerationFinalizedEventCursorV1 {
+        sequence: 2,
+        block_height: 1,
+        block_hash: [0xB1; 32],
+        event_index: 1,
+    };
+    let second_notification_id = panel_notification_id(
+        &chain_id,
+        [0x33; 32],
+        [0x34; 32],
+        ModerationPanelNotificationKindV1::PrimaryAssignment,
+        &stored.notification.recipient,
+        second_cursor,
+        1_001,
+    );
+    let mut second_stored = stored.clone();
+    second_stored.notification.notification_id = second_notification_id;
+    second_stored.notification.source_operation_id = [0x33; 32];
+    second_stored.notification.scope_digest = [0x34; 32];
+    second_stored.notification.finalized_event_cursor = second_cursor;
+    second_stored.notification.source_occurred_at_unix_ms = 1_001;
+    second_stored.available_at_unix_ms = 1_001;
+    second_stored.lease_token = Some(panel_notification_lease_token(
+        second_notification_id,
+        worker_id,
+        1,
+        1,
+        claimed_at_unix_ms,
+        lease_expires_at_unix_ms,
+    ));
+    second_stored.receipt_digest = Some([0x52; 32]);
+    refresh_panel_notification_record_digest(&mut second_stored);
+    let mut signer_epoch = ModerationPanelNotificationArchiveSignerEpochV1 {
+        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+        epoch: 1,
+        activated_at_generation: 1,
+        archive_id,
+        archive_handle: archive_handle.clone(),
+        archive_revision: archive_qualification.revision(),
+        archive_policy_digest: archive_qualification.policy_digest(),
+        archive_public_key,
+        predecessor_epoch_digest: None,
+        predecessor_revocation_generation: None,
+        predecessor_authorization_signature: None,
+        new_key_possession_signature: None,
+        epoch_digest: [0; 32],
+    };
+    signer_epoch.epoch_digest = panel_notification_archive_signer_epoch_digest(&signer_epoch);
+    let mut source = ModerationOrchestratorCheckpointV1::new(&chain_id);
+    source.generation = 1;
+    source.panel_notification_clock_unix_ms = 1_200;
+    source.panel_notification_scanned_cursor = Some(second_cursor);
+    source.panel_notification_archive_signer_epochs = vec![signer_epoch.clone()];
+    source.panel_notifications = vec![stored, second_stored];
+    source
+        .panel_notifications
+        .sort_by_key(|entry| entry.notification.notification_id);
+    let payload = ModerationPanelNotificationArchivePayloadV1 {
+        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+        records: collect_terminal_archive_records(&source)?,
+    };
+    source.panel_notification_archive_compaction_reservation = Some(payload.clone());
+    refresh_panel_notification_outbox_digest(&mut source);
+    let source_checkpoint_bytes = norito::to_bytes(&source)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let source_checkpoint_digest = domain_hash(
+        b"sorafs.moderation.checkpoint-bytes.v1",
+        &[&source_checkpoint_bytes],
+    );
+    let mut current_checkpoint_record = ModerationCheckpointStoreRecordV1 {
+        version: MODERATION_CHECKPOINT_STORE_RECORD_VERSION_V1,
+        namespace_digest: checkpoint_store::checkpoint_namespace(&chain_id),
+        checkpoint_generation: 1,
+        predecessor_revision: Some([0x11; 32]),
+        predecessor_checkpoint_digest: Some([0x12; 32]),
+        checkpoint_digest: source_checkpoint_digest,
+        checkpoint_bytes: source_checkpoint_bytes.clone(),
+        checkpoint_store_handle: checkpoint_handle.clone(),
+        checkpoint_store_revision: checkpoint_qualification.revision(),
+        checkpoint_store_policy_digest: checkpoint_qualification.policy_digest(),
+        revision: [0; 32],
+    };
+    current_checkpoint_record.revision =
+        checkpoint_store::record_revision(&current_checkpoint_record);
+    let source_manifest = ModerationPanelNotificationArchiveSourceManifestV1 {
+        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+        chain_id: chain_id.as_str().to_owned(),
+        checkpoint_namespace_digest: current_checkpoint_record.namespace_digest,
+        checkpoint_generation: current_checkpoint_record.checkpoint_generation,
+        checkpoint_revision: current_checkpoint_record.revision,
+        checkpoint_digest: current_checkpoint_record.checkpoint_digest,
+        archive_signer_epochs: vec![signer_epoch.clone()],
+        predecessor_archive_head: None,
+    };
+    let source_manifest_digest =
+        panel_notification_archive_source_manifest_digest(&source_manifest)?;
+    let payload_digest = panel_notification_archive_payload_digest(&payload)?;
+    let first_boundary_id = terminal_archive_record_boundary_id(&payload.records[0])?;
+    let last_boundary_id = terminal_archive_record_boundary_id(
+        payload
+            .records
+            .last()
+            .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?,
+    )?;
+    let terminal_record_count = u32::try_from(payload.records.len())
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let source_attestation = ModerationPanelNotificationSourceAttestationV1 {
+        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+        attestor_slot: MODERATION_PANEL_NOTIFICATION_SOURCE_ATTESTOR_BROKER_SLOT_V1,
+        chain_id: chain_id.as_str().to_owned(),
+        checkpoint_namespace_digest: current_checkpoint_record.namespace_digest,
+        checkpoint_generation: current_checkpoint_record.checkpoint_generation,
+        checkpoint_revision: current_checkpoint_record.revision,
+        checkpoint_digest: current_checkpoint_record.checkpoint_digest,
+        source_manifest_digest,
+        terminal_set_digest: payload_digest,
+        terminal_record_count,
+        first_notification_id: first_boundary_id,
+        last_notification_id: last_boundary_id,
+        attestor_handle: checkpoint_handle.clone(),
+        attestor_revision: checkpoint_qualification.revision(),
+        attestor_policy_digest: checkpoint_qualification.policy_digest(),
+        attestor_public_key: checkpoint_attestation_public_key,
+    };
+    let source_attestation_signature = sign_message(
+        &checkpoint_key,
+        panel_notification_source_attestation_message(&source_attestation),
+    )?;
+    let mut head = ModerationPanelNotificationArchiveHeadV1 {
+        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+        chain_id: chain_id.as_str().to_owned(),
+        generation: 1,
+        predecessor_head_digest: None,
+        predecessor_operation_id: None,
+        predecessor_chain_commitment: None,
+        source_checkpoint_generation: current_checkpoint_record.checkpoint_generation,
+        source_checkpoint_namespace_digest: current_checkpoint_record.namespace_digest,
+        source_checkpoint_revision: current_checkpoint_record.revision,
+        source_checkpoint_digest: current_checkpoint_record.checkpoint_digest,
+        source_manifest_digest,
+        source_binding_digest: panel_notification_archive_source_binding_digest(
+            &source_attestation,
+        ),
+        source_attestor_handle: checkpoint_handle.clone(),
+        source_attestor_revision: checkpoint_qualification.revision(),
+        source_attestor_policy_digest: checkpoint_qualification.policy_digest(),
+        source_attestor_public_key: checkpoint_attestation_public_key,
+        source_attestation_digest: panel_notification_source_attestation_message(
+            &source_attestation,
+        ),
+        source_attestation_signature,
+        terminal_record_count,
+        dead_letter_record_count: 0,
+        cumulative_dead_letter_count: 0,
+        first_notification_id: first_boundary_id,
+        last_notification_id: last_boundary_id,
+        payload_digest,
+        archive_handle: archive_handle.clone(),
+        archive_revision: archive_qualification.revision(),
+        archive_policy_digest: archive_qualification.policy_digest(),
+        archive_id,
+        archive_public_key,
+        archive_signer_epoch: signer_epoch.epoch,
+        archive_signer_epoch_digest: signer_epoch.epoch_digest,
+        operation_id: [0; 32],
+        head_digest: [0; 32],
+        chain_commitment: [0; 32],
+        archive_signature: [0; 64],
+    };
+    head.operation_id = panel_notification_archive_operation_id(&head);
+    head.head_digest = panel_notification_archive_head_digest(&head);
+    head.chain_commitment = panel_notification_archive_chain_commitment(&head);
+    let artifact = ModerationPanelNotificationArchiveArtifactV1 {
+        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+        head: head.clone(),
+        source_manifest,
+        payload,
+    };
+    let canonical_artifact = norito::to_bytes(&artifact)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let archive_signature = sign_message(
+        &archive_key,
+        panel_notification_archive_receipt_message(&head),
+    )?;
+    head.archive_signature = archive_signature;
+    let canonical_signed_head = norito::to_bytes(&head)
+        .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let validation = ModerationPanelNotificationArchiveBrokerValidationV1 {
+        operation_id: head.operation_id,
+        receipt_message: panel_notification_archive_receipt_message(&head),
+        archive_public_key: head.archive_public_key,
+        head_digest: head.head_digest,
+        chain_commitment: head.chain_commitment,
+        generation: head.generation,
+        source_attestation_digest: head.source_attestation_digest,
+    };
+    Ok(ModerationPanelNotificationArchiveBrokerFixtureV1 {
+        chain_id,
+        archive_handle,
+        archive_qualification,
+        archive_id,
+        archive_public_key,
+        archive_signing_seed,
+        checkpoint_handle,
+        checkpoint_qualification,
+        checkpoint_attestation_public_key,
+        checkpoint_attestation_signing_seed,
+        current_checkpoint_record,
+        source_attestation,
+        canonical_artifact,
+        archive_signature,
+        canonical_signed_head,
+        validation,
+        checkpoint_max_bytes: MODERATION_ORCHESTRATOR_CHECKPOINT_MAX_BYTES_V1,
+        archive_max_bytes: MODERATION_ORCHESTRATOR_CHECKPOINT_MAX_BYTES_V1
+            + MODERATION_PANEL_NOTIFICATION_ARCHIVE_WRAPPER_MAX_BYTES_V1,
+    })
+}
+
+fn verify_panel_notification_archive_artifact(
+    config: &ModerationOrchestratorConfigV1,
+    chain_id: &iroha_data_model::ChainId,
+    bytes: &[u8],
+) -> Result<ModerationPanelNotificationArchiveArtifactV1, ModerationOrchestratorError> {
+    let max_bytes = usize::try_from(config.panel_notification_archive_max_bytes).map_err(|_| {
+        ModerationOrchestratorError::InvalidConfiguration(
+            "notification archive byte limit does not fit usize".to_owned(),
+        )
+    })?;
+    let artifact = verify_panel_notification_archive_artifact_with_bounds(
+        max_bytes,
+        config.checkpoint_max_bytes,
+        config.max_handoffs,
+        chain_id,
+        bytes,
+    )?;
+    if artifact.head.archive_id != config.panel_notification_archive_id
+        || artifact.head.source_checkpoint_namespace_digest
+            != checkpoint_store::checkpoint_namespace(chain_id)
+        || artifact.head.source_attestor_handle != config.checkpoint_store_handle
+        || artifact.head.source_attestor_revision
+            != config.expected_checkpoint_store_qualification.revision()
+        || artifact.head.source_attestor_policy_digest
+            != config
+                .expected_checkpoint_store_qualification
+                .policy_digest()
+        || artifact.head.source_attestor_public_key
+            != config.checkpoint_store_attestation_public_key
+        || artifact
+            .source_manifest
+            .archive_signer_epochs
+            .first()
+            .map(|epoch| epoch.archive_public_key)
+            != Some(config.panel_notification_archive_bootstrap_public_key)
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    Ok(artifact)
+}
+
+fn verify_panel_notification_archive_readback(
+    config: &ModerationOrchestratorConfigV1,
+    chain_id: &iroha_data_model::ChainId,
+    readback: &ModerationPanelNotificationArchiveReadbackV1,
+) -> Result<
+    (
+        ModerationPanelNotificationArchiveArtifactV1,
+        ModerationPanelNotificationArchiveHeadV1,
+    ),
+    ModerationOrchestratorError,
+> {
+    let artifact =
+        verify_panel_notification_archive_artifact(config, chain_id, &readback.canonical_artifact)?;
+    let mut head = artifact.head.clone();
+    head.archive_signature = readback.signature;
+    verify_panel_notification_archive_head(&head)?;
+    Ok((artifact, head))
+}
+
+fn load_verified_panel_notification_archive_head(
+    config: &ModerationOrchestratorConfigV1,
+    chain_id: &iroha_data_model::ChainId,
+    archive: &QualifiedModerationPanelNotificationArchiveV1,
+    operation_id: [u8; 32],
+) -> Result<ModerationPanelNotificationArchiveHeadV1, ModerationOrchestratorError> {
+    let readback = archive
+        .read(operation_id)
+        .map_err(map_panel_notification_archive_error)?
+        .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+    let (_, head) = verify_panel_notification_archive_readback(config, chain_id, &readback)?;
+    if head.operation_id != operation_id {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    Ok(head)
+}
+
+fn verify_current_panel_notification_archive_readback(
+    config: &ModerationOrchestratorConfigV1,
+    chain_id: &iroha_data_model::ChainId,
+    archive: &QualifiedModerationPanelNotificationArchiveV1,
+    head: Option<&ModerationPanelNotificationArchiveHeadV1>,
+) -> Result<(), ModerationOrchestratorError> {
+    let Some(head) = head else {
+        return Ok(());
+    };
+    verify_panel_notification_archive_head(head)?;
+    let installed = load_verified_panel_notification_archive_head(
+        config,
+        chain_id,
+        archive,
+        head.operation_id,
+    )?;
+    if &installed != head {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
+    }
+    match (head.generation, head.predecessor_operation_id) {
+        (1, None) => Ok(()),
+        (2.., Some(predecessor_operation_id)) => {
+            let predecessor = load_verified_panel_notification_archive_head(
+                config,
+                chain_id,
+                archive,
+                predecessor_operation_id,
+            )?;
+            verify_panel_notification_archive_lineage_link(head, &predecessor)
+        }
+        _ => Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid),
+    }
+}
+
+fn map_panel_notification_archive_error(
+    error: ModerationPanelNotificationArchiveExternalErrorV1,
+) -> ModerationOrchestratorError {
+    match error {
+        ModerationPanelNotificationArchiveExternalErrorV1::Unavailable => {
+            ModerationOrchestratorError::PanelNotificationArchiveUnavailable
+        }
+        ModerationPanelNotificationArchiveExternalErrorV1::Ambiguous => {
+            ModerationOrchestratorError::PanelNotificationArchiveAmbiguous
+        }
+        ModerationPanelNotificationArchiveExternalErrorV1::Rejected => {
+            ModerationOrchestratorError::PanelNotificationArchiveRejected
+        }
+    }
+}
+
+fn map_checkpoint_store_attestation_error(
+    error: ModerationCheckpointStoreExternalErrorV1,
+) -> ModerationOrchestratorError {
+    match error {
+        ModerationCheckpointStoreExternalErrorV1::Unavailable => {
+            ModerationOrchestratorError::CheckpointStoreUnavailable
+        }
+        ModerationCheckpointStoreExternalErrorV1::Rejected => {
+            ModerationOrchestratorError::PanelNotificationArchiveRejected
+        }
+        ModerationCheckpointStoreExternalErrorV1::Ambiguous => {
+            ModerationOrchestratorError::CheckpointStoreAmbiguous
+        }
+    }
+}
+
+fn map_panel_notification_archive_publication_error(
+    error: ModerationHandoffFailureV1,
+) -> ModerationOrchestratorError {
+    match error {
+        ModerationHandoffFailureV1::NotDelivered => {
+            ModerationOrchestratorError::PanelNotificationArchiveUnavailable
+        }
+        ModerationHandoffFailureV1::Ambiguous => {
+            ModerationOrchestratorError::PanelNotificationArchiveAmbiguous
+        }
+        ModerationHandoffFailureV1::Permanent => {
+            ModerationOrchestratorError::PanelNotificationArchiveRejected
+        }
+    }
+}
+
+fn verify_published_panel_notification_archive_head_readback(
+    publication_sink: &QualifiedModerationTerminalHandoffSinkV1,
+    expected: Option<&ModerationPanelNotificationArchiveHeadV1>,
+) -> Result<(), ModerationOrchestratorError> {
+    let observed = publication_sink
+        .read_panel_notification_archive_head()
+        .map_err(map_panel_notification_archive_publication_error)?;
+    if observed.as_ref() != expected
+        || observed
+            .as_ref()
+            .is_some_and(|head| verify_panel_notification_archive_head(head).is_err())
+    {
+        return Err(ModerationOrchestratorError::PanelNotificationArchiveRejected);
+    }
+    Ok(())
 }
 
 fn checkpoint_decode_limits(max_bytes: u64) -> Result<DecodeLimits, ModerationOrchestratorError> {
@@ -7264,6 +12838,18 @@ pub enum ModerationOrchestratorError {
         /// Stable notification identity.
         notification_id: [u8; 32],
     },
+    /// The immutable notification-receipt archive is unavailable.
+    #[error("moderation panel-notification receipt archive is unavailable")]
+    PanelNotificationArchiveUnavailable,
+    /// The archive operation has an unresolved commit result.
+    #[error("moderation panel-notification receipt archive result is ambiguous")]
+    PanelNotificationArchiveAmbiguous,
+    /// The archive rejected a stale or substituted transition.
+    #[error("moderation panel-notification receipt archive rejected the transition")]
+    PanelNotificationArchiveRejected,
+    /// Archive bytes, lineage, identity, or signature were invalid.
+    #[error("moderation panel-notification receipt archive is invalid")]
+    PanelNotificationArchiveInvalid,
     /// A stable semantic identity was reused for different action bytes.
     #[error("moderation operation idempotency conflict for {}", hex::encode(.operation_id))]
     IdempotencyConflict {
@@ -7352,6 +12938,7 @@ mod tests {
         thread,
     };
 
+    use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         ChainId,
@@ -7385,7 +12972,12 @@ mod tests {
     const STRICT_INGRESS_HANDLE: &str = "moderation-ingress-primary";
     const HANDOFF_PROVIDER_HANDLE: &str = "moderation-handoff-primary";
     const PANEL_NOTIFICATION_PROVIDER_HANDLE: &str = "moderation-notification-primary";
+    const PANEL_NOTIFICATION_ARCHIVE_HANDLE: &str = "object-lock:prod-moderation-receipts";
+    const PANEL_NOTIFICATION_ARCHIVE_ID: [u8; 32] = [0xD4; 32];
+    const PANEL_NOTIFICATION_ARCHIVE_SIGNING_SEED: [u8; 32] = [0xE4; 32];
+    const PANEL_NOTIFICATION_ARCHIVE_ROTATED_SIGNING_SEED: [u8; 32] = [0xE5; 32];
     const CHECKPOINT_STORE_HANDLE: &str = "sealed-cas:moderation-checkpoint-primary";
+    const CHECKPOINT_STORE_ATTESTATION_SIGNING_SEED: [u8; 32] = [0xE7; 32];
     const TRANSACTION_SIGNER_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
         ModerationRuntimeProviderQualificationV1::new(1, [0xA1; 32]);
     const STRICT_INGRESS_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
@@ -7394,6 +12986,11 @@ mod tests {
         ModerationRuntimeProviderQualificationV1::new(1, [0xA3; 32]);
     const PANEL_NOTIFICATION_PROVIDER_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
         ModerationRuntimeProviderQualificationV1::new(1, [0xA4; 32]);
+    const PANEL_NOTIFICATION_ARCHIVE_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
+        ModerationRuntimeProviderQualificationV1::new(1, [0xA5; 32]);
+    const PANEL_NOTIFICATION_ARCHIVE_ROTATED_QUALIFICATION:
+        ModerationRuntimeProviderQualificationV1 =
+        ModerationRuntimeProviderQualificationV1::new(2, [0xB5; 32]);
     const CHECKPOINT_STORE_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
         ModerationRuntimeProviderQualificationV1::new(7, [0xA7; 32]);
 
@@ -7715,6 +13312,8 @@ mod tests {
     struct MockHandoffSink {
         provider: MockRuntimeProvider,
         delivered: Mutex<Vec<[u8; 32]>>,
+        published_archive_heads:
+            Mutex<BTreeMap<[u8; 32], ModerationPanelNotificationArchiveHeadV1>>,
         calls: AtomicUsize,
     }
 
@@ -7726,6 +13325,7 @@ mod tests {
                     HANDOFF_PROVIDER_QUALIFICATION,
                 ),
                 delivered: Mutex::new(Vec::new()),
+                published_archive_heads: Mutex::new(BTreeMap::new()),
                 calls: AtomicUsize::new(0),
             }
         }
@@ -7738,6 +13338,13 @@ mod tests {
 
         fn calls(&self) -> usize {
             self.calls.load(AtomicOrdering::Relaxed)
+        }
+
+        fn published_archive_head_count(&self) -> usize {
+            self.published_archive_heads
+                .lock()
+                .expect("archive publication lock")
+                .len()
         }
     }
 
@@ -7767,6 +13374,46 @@ mod tests {
                 delivered.push(handoff.handoff_id);
             }
             Ok(())
+        }
+
+        fn publish_panel_notification_archive_head(
+            &self,
+            head: &ModerationPanelNotificationArchiveHeadV1,
+        ) -> Result<(), ModerationHandoffFailureV1> {
+            verify_panel_notification_archive_head(head)
+                .map_err(|_| ModerationHandoffFailureV1::Permanent)?;
+            let mut published = self
+                .published_archive_heads
+                .lock()
+                .expect("archive publication lock");
+            if let Some(existing) = published.get(&head.operation_id) {
+                return if existing == head {
+                    Ok(())
+                } else {
+                    Err(ModerationHandoffFailureV1::Permanent)
+                };
+            }
+            if let Some(predecessor) = published.values().max_by_key(|value| value.generation) {
+                verify_panel_notification_archive_lineage_link(head, predecessor)
+                    .map_err(|_| ModerationHandoffFailureV1::Permanent)?;
+            } else if head.generation != 1 {
+                return Err(ModerationHandoffFailureV1::Permanent);
+            }
+            published.insert(head.operation_id, head.clone());
+            Ok(())
+        }
+
+        fn read_panel_notification_archive_head(
+            &self,
+        ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationHandoffFailureV1>
+        {
+            Ok(self
+                .published_archive_heads
+                .lock()
+                .expect("archive publication lock")
+                .values()
+                .max_by_key(|head| head.generation)
+                .cloned())
         }
     }
 
@@ -7895,6 +13542,22 @@ mod tests {
         ) -> Result<(), ModerationHandoffFailureV1> {
             self.probe.check();
             self.inner.deliver(handoff)
+        }
+
+        fn publish_panel_notification_archive_head(
+            &self,
+            head: &ModerationPanelNotificationArchiveHeadV1,
+        ) -> Result<(), ModerationHandoffFailureV1> {
+            self.probe.check();
+            self.inner.publish_panel_notification_archive_head(head)
+        }
+
+        fn read_panel_notification_archive_head(
+            &self,
+        ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationHandoffFailureV1>
+        {
+            self.probe.check();
+            self.inner.read_panel_notification_archive_head()
         }
     }
 
@@ -8064,6 +13727,24 @@ mod tests {
                 .set_qualification(self.qualification_after_delivery);
             result
         }
+
+        fn publish_panel_notification_archive_head(
+            &self,
+            head: &ModerationPanelNotificationArchiveHeadV1,
+        ) -> Result<(), ModerationHandoffFailureV1> {
+            let result = self.inner.publish_panel_notification_archive_head(head);
+            self.inner
+                .provider
+                .set_qualification(self.qualification_after_delivery);
+            result
+        }
+
+        fn read_panel_notification_archive_head(
+            &self,
+        ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationHandoffFailureV1>
+        {
+            self.inner.read_panel_notification_archive_head()
+        }
     }
 
     #[derive(Debug)]
@@ -8147,6 +13828,285 @@ mod tests {
                     .source_occurred_at_unix_ms
                     .saturating_add(1),
             ))
+        }
+    }
+
+    struct MockPanelNotificationArchive {
+        provider: MockRuntimeProvider,
+        archive_id: [u8; 32],
+        signing_key: Mutex<SigningKey>,
+        artifacts:
+            Mutex<BTreeMap<[u8; 32], ([u8; 32], ModerationPanelNotificationArchiveReadbackV1)>>,
+        install_calls: AtomicUsize,
+        read_calls: AtomicUsize,
+        next_install_behavior: AtomicUsize,
+        next_read_behavior: AtomicUsize,
+    }
+
+    impl fmt::Debug for MockPanelNotificationArchive {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("MockPanelNotificationArchive")
+                .field("provider", &self.provider)
+                .field("archive_id", &self.archive_id)
+                .field("signing_key", &"<test-signing-key>")
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl Default for MockPanelNotificationArchive {
+        fn default() -> Self {
+            Self::with_handle(PANEL_NOTIFICATION_ARCHIVE_HANDLE)
+        }
+    }
+
+    impl MockPanelNotificationArchive {
+        fn with_handle(handle: impl Into<String>) -> Self {
+            Self {
+                provider: MockRuntimeProvider::new(
+                    handle,
+                    PANEL_NOTIFICATION_ARCHIVE_QUALIFICATION,
+                ),
+                archive_id: PANEL_NOTIFICATION_ARCHIVE_ID,
+                signing_key: Mutex::new(SigningKey::from_bytes(
+                    &PANEL_NOTIFICATION_ARCHIVE_SIGNING_SEED,
+                )),
+                artifacts: Mutex::new(BTreeMap::new()),
+                install_calls: AtomicUsize::new(0),
+                read_calls: AtomicUsize::new(0),
+                next_install_behavior: AtomicUsize::new(0),
+                next_read_behavior: AtomicUsize::new(0),
+            }
+        }
+
+        fn public_key(&self) -> [u8; 32] {
+            self.signing_key
+                .lock()
+                .expect("notification archive signing key")
+                .verifying_key()
+                .to_bytes()
+        }
+
+        fn rotate_signing_key(&self, signing_seed: [u8; 32]) {
+            *self
+                .signing_key
+                .lock()
+                .expect("notification archive signing key") = SigningKey::from_bytes(&signing_seed);
+        }
+
+        fn fail_next_install(&self, behavior: usize) {
+            self.next_install_behavior
+                .store(behavior, AtomicOrdering::SeqCst);
+        }
+
+        fn fail_next_read(&self, behavior: usize) {
+            self.next_read_behavior
+                .store(behavior, AtomicOrdering::SeqCst);
+        }
+
+        fn install_calls(&self) -> usize {
+            self.install_calls.load(AtomicOrdering::SeqCst)
+        }
+
+        fn read_calls(&self) -> usize {
+            self.read_calls.load(AtomicOrdering::SeqCst)
+        }
+
+        fn artifact_count(&self) -> usize {
+            self.artifacts
+                .lock()
+                .expect("notification archive artifacts")
+                .len()
+        }
+
+        fn artifact(&self, operation_id: [u8; 32]) -> Vec<u8> {
+            self.artifacts
+                .lock()
+                .expect("notification archive artifacts")
+                .get(&operation_id)
+                .expect("installed notification archive artifact")
+                .1
+                .canonical_artifact
+                .clone()
+        }
+
+        fn replace_artifact(&self, operation_id: [u8; 32], bytes: Vec<u8>) {
+            self.artifacts
+                .lock()
+                .expect("notification archive artifacts")
+                .get_mut(&operation_id)
+                .expect("installed notification archive artifact")
+                .1
+                .canonical_artifact = bytes;
+        }
+    }
+
+    impl ModerationRuntimeProviderV1 for MockPanelNotificationArchive {
+        fn handle(&self) -> &str {
+            self.provider.handle()
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ModerationRuntimeProviderQualificationV1,
+            ModerationRuntimeProviderReadinessErrorV1,
+        > {
+            self.provider.qualification()
+        }
+    }
+
+    impl ModerationPanelNotificationArchiveV1 for MockPanelNotificationArchive {
+        fn archive_id(&self) -> [u8; 32] {
+            self.archive_id
+        }
+
+        fn signing_public_key(&self) -> [u8; 32] {
+            self.public_key()
+        }
+
+        fn install(
+            &self,
+            operation_id: [u8; 32],
+            receipt_message: [u8; 32],
+            canonical_artifact: &[u8],
+        ) -> Result<[u8; 64], ModerationPanelNotificationArchiveExternalErrorV1> {
+            self.install_calls.fetch_add(1, AtomicOrdering::SeqCst);
+            let behavior = self.next_install_behavior.swap(0, AtomicOrdering::SeqCst);
+            if behavior == 1 {
+                return Err(ModerationPanelNotificationArchiveExternalErrorV1::Unavailable);
+            }
+            let mut artifacts = self
+                .artifacts
+                .lock()
+                .map_err(|_| ModerationPanelNotificationArchiveExternalErrorV1::Unavailable)?;
+            let result = match artifacts.get(&operation_id) {
+                Some((existing_message, existing))
+                    if *existing_message == receipt_message
+                        && existing.canonical_artifact.as_slice() == canonical_artifact =>
+                {
+                    Ok(existing.signature)
+                }
+                Some(_) => Err(ModerationPanelNotificationArchiveExternalErrorV1::Rejected),
+                None => {
+                    let signature = self
+                        .signing_key
+                        .lock()
+                        .map_err(|_| {
+                            ModerationPanelNotificationArchiveExternalErrorV1::Unavailable
+                        })?
+                        .sign(&receipt_message)
+                        .to_bytes();
+                    artifacts.insert(
+                        operation_id,
+                        (
+                            receipt_message,
+                            ModerationPanelNotificationArchiveReadbackV1 {
+                                canonical_artifact: canonical_artifact.to_vec(),
+                                signature,
+                            },
+                        ),
+                    );
+                    Ok(signature)
+                }
+            };
+            if behavior == 2 && result.is_ok() {
+                Err(ModerationPanelNotificationArchiveExternalErrorV1::Ambiguous)
+            } else {
+                result
+            }
+        }
+
+        fn read(
+            &self,
+            operation_id: [u8; 32],
+        ) -> Result<
+            Option<ModerationPanelNotificationArchiveReadbackV1>,
+            ModerationPanelNotificationArchiveExternalErrorV1,
+        > {
+            self.read_calls.fetch_add(1, AtomicOrdering::SeqCst);
+            let behavior = self.next_read_behavior.swap(0, AtomicOrdering::SeqCst);
+            if behavior == 1 {
+                return Ok(None);
+            }
+            if behavior == 5 {
+                return Err(ModerationPanelNotificationArchiveExternalErrorV1::Unavailable);
+            }
+            let mut readback = self
+                .artifacts
+                .lock()
+                .map_err(|_| ModerationPanelNotificationArchiveExternalErrorV1::Unavailable)?
+                .get(&operation_id)
+                .map(|(_, readback)| readback.clone());
+            if let Some(readback) = readback.as_mut() {
+                match behavior {
+                    2 => {
+                        if let Some(byte) = readback.canonical_artifact.first_mut() {
+                            *byte ^= 1;
+                        }
+                    }
+                    3 => readback.signature[0] ^= 1,
+                    4 => readback.canonical_artifact.push(0),
+                    _ => {}
+                }
+            }
+            Ok(readback)
+        }
+    }
+
+    #[derive(Debug)]
+    struct ProbedPanelNotificationArchive {
+        inner: Arc<MockPanelNotificationArchive>,
+        probe: Arc<ReentrantLockProbe>,
+    }
+
+    impl ModerationRuntimeProviderV1 for ProbedPanelNotificationArchive {
+        fn handle(&self) -> &str {
+            self.inner.handle()
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ModerationRuntimeProviderQualificationV1,
+            ModerationRuntimeProviderReadinessErrorV1,
+        > {
+            self.probe.check();
+            self.inner.qualification()
+        }
+    }
+
+    impl ModerationPanelNotificationArchiveV1 for ProbedPanelNotificationArchive {
+        fn archive_id(&self) -> [u8; 32] {
+            self.probe.check();
+            self.inner.archive_id()
+        }
+
+        fn signing_public_key(&self) -> [u8; 32] {
+            self.probe.check();
+            self.inner.signing_public_key()
+        }
+
+        fn install(
+            &self,
+            operation_id: [u8; 32],
+            receipt_message: [u8; 32],
+            canonical_artifact: &[u8],
+        ) -> Result<[u8; 64], ModerationPanelNotificationArchiveExternalErrorV1> {
+            self.probe.check();
+            self.inner
+                .install(operation_id, receipt_message, canonical_artifact)
+        }
+
+        fn read(
+            &self,
+            operation_id: [u8; 32],
+        ) -> Result<
+            Option<ModerationPanelNotificationArchiveReadbackV1>,
+            ModerationPanelNotificationArchiveExternalErrorV1,
+        > {
+            self.probe.check();
+            self.inner.read(operation_id)
         }
     }
 
@@ -8559,6 +14519,11 @@ mod tests {
             checkpoint_path: canonical_temp.join(name),
             checkpoint_store_handle: CHECKPOINT_STORE_HANDLE.to_owned(),
             expected_checkpoint_store_qualification: CHECKPOINT_STORE_QUALIFICATION,
+            checkpoint_store_attestation_public_key: SigningKey::from_bytes(
+                &CHECKPOINT_STORE_ATTESTATION_SIGNING_SEED,
+            )
+            .verifying_key()
+            .to_bytes(),
             max_cases: 64,
             max_events: 256,
             max_outbox_entries: 16,
@@ -8566,6 +14531,7 @@ mod tests {
             max_handoffs: 64,
             max_submit_attempts: 3,
             checkpoint_max_bytes: 4 * 1024 * 1024,
+            panel_notification_archive_max_bytes: 5 * 1024 * 1024,
             transaction_signer_handle: TRANSACTION_SIGNER_HANDLE.to_owned(),
             expected_transaction_signer_qualification: TRANSACTION_SIGNER_QUALIFICATION,
             strict_ingress_handle: STRICT_INGRESS_HANDLE.to_owned(),
@@ -8576,6 +14542,23 @@ mod tests {
             expected_publication_handoff_qualification: HANDOFF_PROVIDER_QUALIFICATION,
             panel_notification_handle: PANEL_NOTIFICATION_PROVIDER_HANDLE.to_owned(),
             expected_panel_notification_qualification: PANEL_NOTIFICATION_PROVIDER_QUALIFICATION,
+            panel_notification_archive_handle: PANEL_NOTIFICATION_ARCHIVE_HANDLE.to_owned(),
+            expected_panel_notification_archive_qualification:
+                PANEL_NOTIFICATION_ARCHIVE_QUALIFICATION,
+            panel_notification_archive_id: PANEL_NOTIFICATION_ARCHIVE_ID,
+            panel_notification_archive_bootstrap_public_key: SigningKey::from_bytes(
+                &PANEL_NOTIFICATION_ARCHIVE_SIGNING_SEED,
+            )
+            .verifying_key()
+            .to_bytes(),
+            panel_notification_archive_public_key: SigningKey::from_bytes(
+                &PANEL_NOTIFICATION_ARCHIVE_SIGNING_SEED,
+            )
+            .verifying_key()
+            .to_bytes(),
+            panel_notification_archive_predecessor_revocation_generation: None,
+            panel_notification_archive_predecessor_authorization_signature: None,
+            panel_notification_archive_new_key_possession_signature: None,
         }
     }
 
@@ -8849,6 +14832,7 @@ mod tests {
             settlement_sink: Arc::new(MockHandoffSink::default()),
             publication_sink: Arc::new(MockHandoffSink::default()),
             panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
+            panel_notification_archive: Arc::new(MockPanelNotificationArchive::default()),
         }
     }
 
@@ -9223,6 +15207,7 @@ mod tests {
                         probe: Arc::clone(&probe),
                     }),
                     panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
+                    panel_notification_archive: Arc::new(MockPanelNotificationArchive::default()),
                 },
             )
             .expect("orchestrator"),
@@ -9265,6 +15250,7 @@ mod tests {
                     settlement_sink: Arc::new(MockHandoffSink::default()),
                     publication_sink: Arc::new(MockHandoffSink::default()),
                     panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
+                    panel_notification_archive: Arc::new(MockPanelNotificationArchive::default()),
                 },
             )
             .expect("orchestrator"),
@@ -9984,7 +15970,9 @@ mod tests {
         drop(interrupted);
         drop(orchestrator);
 
-        reader.replace(empty_snapshot(2, [2; 32]));
+        let mut after_lease = empty_snapshot(2, [2; 32]);
+        after_lease.finalized_at_unix_ms = MODERATION_EXTERNAL_WORK_LEASE_MS_V1 + 2;
+        reader.replace(after_lease);
         let restarted =
             ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
                 .expect("restart");
@@ -10042,7 +16030,9 @@ mod tests {
         drop(interrupted);
         drop(orchestrator);
 
-        reader.replace(empty_snapshot(2, [2; 32]));
+        let mut after_lease = empty_snapshot(2, [2; 32]);
+        after_lease.finalized_at_unix_ms = MODERATION_EXTERNAL_WORK_LEASE_MS_V1 + 2;
+        reader.replace(after_lease);
         let restarted =
             ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
                 .expect("restart");
@@ -10299,7 +16289,7 @@ mod tests {
     }
 
     #[test]
-    fn restart_recovers_signing_claim_to_unsigned_ready_only() {
+    fn restart_preserves_unexpired_signing_claim_without_overlap() {
         let temp = tempfile::tempdir().expect("tempdir");
         let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
         let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
@@ -10330,20 +16320,24 @@ mod tests {
         drop(orchestrator);
 
         let restarted = ModerationOrchestratorV1::open(checkpoint, deps(reader, submitter))
-            .expect("recover signer-only crash state");
+            .expect("retain signer-only crash state");
         let state = restarted.state.lock().expect("restarted state");
         let entry = state
             .outbox
             .iter()
             .find(|entry| entry.operation_id == operation_id)
             .expect("recovered entry");
-        assert_eq!(entry.state, StoredOutboxStateV1::Ready);
-        assert_eq!(entry.baseline_finalized_height, 0);
-        assert_eq!(entry.baseline_finalized_block_hash, [0; 32]);
+        assert_eq!(entry.state, StoredOutboxStateV1::Signing);
+        assert_eq!(entry.baseline_finalized_height, 1);
+        assert_eq!(entry.baseline_finalized_block_hash, [1; 32]);
         assert!(entry.transaction_id.is_none());
         assert!(entry.signed_transaction_digest.is_none());
         assert!(entry.signed_transaction_bytes.is_none());
         assert_eq!(entry.attempts, 0);
+        assert!(entry.work_claim.as_ref().is_some_and(|claim| {
+            claim.kind == StoredExternalWorkKindV1::Sign
+                && claim.lease_expires_at_unix_ms == 1 + MODERATION_EXTERNAL_WORK_LEASE_MS_V1
+        }));
     }
 
     #[test]
@@ -10551,6 +16545,13 @@ mod tests {
             [3; 32],
             governance,
         );
+        let mut lease_expired = finalized.clone();
+        lease_expired.finalized_height = 4;
+        lease_expired.finalized_block_hash = [4; 32];
+        lease_expired.finalized_at_unix_ms = finalized
+            .finalized_at_unix_ms
+            .saturating_add(MODERATION_EXTERNAL_WORK_LEASE_MS_V1)
+            .saturating_add(1);
         let reader = Arc::new(MockSnapshotReader::new(finalized));
         let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
             observed_finalized_height: 3,
@@ -10565,6 +16566,7 @@ mod tests {
             settlement_sink: settlement.clone(),
             publication_sink: publication.clone(),
             panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
+            panel_notification_archive: Arc::new(MockPanelNotificationArchive::default()),
         };
         let orchestrator = ModerationOrchestratorV1::open(checkpoint.clone(), runtime_deps())
             .expect("orchestrator");
@@ -10599,7 +16601,23 @@ mod tests {
             ModerationOrchestratorV1::open(checkpoint, runtime_deps()).expect("restart");
         restarted
             .reconcile()
-            .expect("retry identical terminal handoff after crash");
+            .expect("preserve the unexpired terminal-handoff claim after restart");
+        assert_eq!(
+            settlement.calls(),
+            1,
+            "restart must not overlap a live lease"
+        );
+        assert_eq!(publication.calls(), 1);
+        {
+            let state = restarted.state.lock().expect("restarted state");
+            assert_eq!(state.pending_handoffs.len(), 1);
+            assert_eq!(state.completed_handoffs.len(), 1);
+        }
+
+        reader.replace(lease_expired);
+        restarted
+            .reconcile()
+            .expect("retry identical handoff after sealed finalized time expires the lease");
         assert_eq!(settlement.calls(), 2);
         assert_eq!(settlement.delivered(), vec![handoff.handoff_id]);
         assert_eq!(publication.calls(), 1);
@@ -10629,6 +16647,7 @@ mod tests {
             settlement_sink: settlement_sink.clone(),
             publication_sink: publication_sink.clone(),
             panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
+            panel_notification_archive: Arc::new(MockPanelNotificationArchive::default()),
         };
         let first_checkpoint = config(&temp, "terminal-first.norito");
         let second_checkpoint = config(&temp, "terminal-second.norito");
@@ -10940,6 +16959,7 @@ mod tests {
                 settlement_sink: Arc::new(MockHandoffSink::default()),
                 publication_sink: Arc::new(MockHandoffSink::default()),
                 panel_notification_sink: sink.clone(),
+                panel_notification_archive: Arc::new(MockPanelNotificationArchive::default()),
             },
         )
         .expect("orchestrator");
@@ -11023,6 +17043,8 @@ mod tests {
         bounds: ModerationOrchestratorConfigV1,
         governance: AccountId,
         reader: Arc<MockSnapshotReader>,
+        checkpoint_store: Arc<MockCheckpointStore>,
+        archive: Arc<MockPanelNotificationArchive>,
         orchestrator: ModerationOrchestratorV1,
     }
 
@@ -11030,17 +17052,39 @@ mod tests {
         temp: &TempDir,
         checkpoint_name: &str,
     ) -> SaturatedPanelNotificationFixture {
+        saturated_delivered_panel_notifications_with_probe(temp, checkpoint_name, None)
+    }
+
+    fn saturated_delivered_panel_notifications_with_probe(
+        temp: &TempDir,
+        checkpoint_name: &str,
+        probe: Option<Arc<ReentrantLockProbe>>,
+    ) -> SaturatedPanelNotificationFixture {
         let governance = account(99);
         let (awaiting, _) = awaiting_acceptance_snapshot(2, [0x29; 32], governance.clone());
         let reader = Arc::new(MockSnapshotReader::new(awaiting));
         let mut bounds = config(temp, checkpoint_name);
         bounds.max_handoffs = 3;
+        let checkpoint_store = Arc::new(MockCheckpointStore::default());
+        let archive = Arc::new(MockPanelNotificationArchive::default());
+        let archive_dependency: Arc<dyn ModerationPanelNotificationArchiveV1> = match probe {
+            Some(probe) => Arc::new(ProbedPanelNotificationArchive {
+                inner: archive.clone(),
+                probe,
+            }),
+            None => archive.clone(),
+        };
         let orchestrator = ModerationOrchestratorV1::open(
             bounds.clone(),
-            deps(
-                Arc::clone(&reader),
-                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
-            ),
+            ModerationOrchestratorDepsV1 {
+                checkpoint_store: checkpoint_store.clone(),
+                submitter: Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
+                snapshot_reader: reader.clone(),
+                settlement_sink: Arc::new(MockHandoffSink::default()),
+                publication_sink: Arc::new(MockHandoffSink::default()),
+                panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
+                panel_notification_archive: archive_dependency,
+            },
         )
         .expect("orchestrator");
         orchestrator.reconcile().expect("queue assignments");
@@ -11076,23 +17120,22 @@ mod tests {
             bounds,
             governance,
             reader,
+            checkpoint_store,
+            archive,
             orchestrator,
         }
     }
 
     #[test]
-    fn panel_notification_capacity_without_signed_archive_is_fail_closed_and_non_mutating() {
+    fn panel_notification_capacity_recovers_only_after_exact_signed_archive_readback() {
         let temp = tempfile::tempdir().expect("tempdir");
         let SaturatedPanelNotificationFixture {
-            bounds,
             governance,
             reader,
+            archive,
             orchestrator,
-        } = saturated_delivered_panel_notifications(&temp, "panel-capacity-fail-closed.norito");
-        let before_state = orchestrator.state.lock().expect("state").clone();
-        let before_checkpoint =
-            std::fs::read(&bounds.checkpoint_path).expect("read saturated checkpoint");
-
+            ..
+        } = saturated_delivered_panel_notifications(&temp, "panel-capacity-archive.norito");
         reader.replace(activated_case_snapshot(3, [0x2A; 32], governance));
         assert!(matches!(
             orchestrator.reconcile(),
@@ -11102,69 +17145,575 @@ mod tests {
             })
         ));
 
-        let after_state = orchestrator.state.lock().expect("state").clone();
-        let after_checkpoint =
-            std::fs::read(&bounds.checkpoint_path).expect("read checkpoint after exhaustion");
-        assert_eq!(after_state, before_state);
-        assert_eq!(after_checkpoint, before_checkpoint);
+        let before = orchestrator.state.lock().expect("state").clone();
+        archive.fail_next_read(1);
+        assert_eq!(
+            orchestrator.compact_panel_notification_receipts(2),
+            Err(ModerationOrchestratorError::PanelNotificationArchiveUnavailable)
+        );
+        assert_eq!(orchestrator.state.lock().expect("state").clone(), before);
+        assert_eq!(archive.artifact_count(), 1);
+
+        let head = orchestrator
+            .compact_panel_notification_receipts(2)
+            .expect("retry exact archived batch")
+            .expect("archive head");
+        assert_eq!(head.generation, 1);
+        assert_eq!(head.terminal_record_count, 2);
+        assert_ne!(head.archive_signature, [0; 64]);
+        assert_eq!(archive.read_calls(), 2);
+        assert_eq!(
+            orchestrator
+                .state
+                .lock()
+                .expect("state")
+                .panel_notifications
+                .len(),
+            1
+        );
+        assert!(
+            orchestrator
+                .reconcile_panel_notification_archive_publication()
+                .expect("publish sealed archive head")
+        );
+        orchestrator
+            .reconcile()
+            .expect("capacity recovers after authenticated archive readback");
+        assert_eq!(
+            orchestrator
+                .state
+                .lock()
+                .expect("state")
+                .panel_notifications
+                .len(),
+            3
+        );
+        assert_eq!(
+            orchestrator
+                .panel_notification_archive_head()
+                .expect("authenticated archive head"),
+            Some(head)
+        );
     }
 
     #[test]
-    fn panel_notification_capacity_failure_is_restart_stable_and_preserves_terminal_receipts() {
+    fn panel_notification_archive_publishes_audits_and_rotates_signers() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let governance = account(99);
+        let (awaiting, _) = awaiting_acceptance_snapshot(2, [0x2B; 32], governance);
+        let reader = Arc::new(MockSnapshotReader::new(awaiting));
+        let checkpoint_store = Arc::new(MockCheckpointStore::default());
+        let archive = Arc::new(MockPanelNotificationArchive::default());
+        let publication_sink = Arc::new(MockHandoffSink::default());
+        let mut bounds = config(&temp, "panel-archive-rotation.norito");
+        bounds.max_handoffs = 3;
+        let runtime_deps = || ModerationOrchestratorDepsV1 {
+            checkpoint_store: checkpoint_store.clone(),
+            submitter: Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
+            snapshot_reader: reader.clone(),
+            settlement_sink: Arc::new(MockHandoffSink::default()),
+            publication_sink: publication_sink.clone(),
+            panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
+            panel_notification_archive: archive.clone(),
+        };
+        let orchestrator =
+            ModerationOrchestratorV1::open(bounds.clone(), runtime_deps()).expect("orchestrator");
+        orchestrator.reconcile().expect("queue assignments");
+        let mut claims = orchestrator
+            .claim_panel_notifications([0xA1; 32], 1_000, 3)
+            .expect("claim assignments");
+        assert_eq!(claims.len(), 3);
+        claims.sort_by_key(|claim| claim.notification.notification_id);
+
+        let delivery_sink = MockPanelNotificationSink::default();
+        for claim in &claims {
+            let receipt = delivery_sink.deliver(claim, 1_001);
+            orchestrator
+                .finalize_panel_notification_delivery(
+                    claim.worker_id,
+                    claim.lease_token,
+                    receipt,
+                    1_001,
+                )
+                .expect("terminal delivery receipt");
+        }
+
+        let first = orchestrator
+            .compact_panel_notification_receipts(2)
+            .expect("first archive compaction")
+            .expect("first archive head");
+        let first_artifact_bytes = archive.artifact(first.operation_id);
+        let first_artifact = verify_panel_notification_archive_artifact(
+            &bounds,
+            &orchestrator.chain_id,
+            &first_artifact_bytes,
+        )
+        .expect("strict first archive artifact");
+        assert_eq!(first_artifact.payload.records.len(), 2);
+        assert!(first_artifact.payload.records.iter().all(|record| {
+            matches!(
+                record,
+                ModerationTerminalArchiveRecordV1::PanelNotification(
+                    ModerationPanelNotificationArchiveRecordV1 {
+                        notification_id,
+                        terminal_status:
+                            ModerationPanelNotificationArchiveTerminalStatusV1::Delivered { .. },
+                        source_record_digest,
+                    }
+                ) if *notification_id != [0; 32] && *source_record_digest != [0; 32]
+            )
+        }));
+
+        let unpublished = orchestrator
+            .durable_health()
+            .expect("unpublished archive health");
+        assert_eq!(unpublished.panel_notification_archive_generation, 1);
+        assert_eq!(
+            unpublished.panel_notification_archive_published_generation,
+            0
+        );
+        assert!(!unpublished.archive_is_fresh());
+        assert!(
+            orchestrator
+                .reconcile_panel_notification_archive_publication()
+                .expect("publish first head")
+        );
+        assert!(
+            !orchestrator
+                .reconcile_panel_notification_archive_publication()
+                .expect("idempotent empty publication replay")
+        );
+        assert_eq!(publication_sink.published_archive_head_count(), 1);
+        let first_audit = orchestrator
+            .audit_panel_notification_archive(
+                MODERATION_PANEL_NOTIFICATION_ARCHIVE_AUDIT_PAGE_MAX_V1,
+            )
+            .expect("complete first audit sweep");
+        assert_eq!(first_audit.verified_heads, 1);
+        assert_eq!(first_audit.last_completed_generation, 1);
+        assert!(first_audit.cycle_complete);
+        assert!(
+            orchestrator
+                .durable_health()
+                .expect("fresh first archive health")
+                .archive_is_fresh()
+        );
+
+        let previous_epoch = orchestrator
+            .panel_notification_archive_signer_epochs()
+            .expect("bootstrap signer epoch")
+            .into_iter()
+            .next()
+            .expect("bootstrap epoch");
+        let chain_id = orchestrator.chain_id.clone();
+        drop(orchestrator);
+
+        let predecessor_key = SigningKey::from_bytes(&PANEL_NOTIFICATION_ARCHIVE_SIGNING_SEED);
+        let rotated_key = SigningKey::from_bytes(&PANEL_NOTIFICATION_ARCHIVE_ROTATED_SIGNING_SEED);
+        let mut proposed_epoch = ModerationPanelNotificationArchiveSignerEpochV1 {
+            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+            epoch: 2,
+            activated_at_generation: 2,
+            archive_id: PANEL_NOTIFICATION_ARCHIVE_ID,
+            archive_handle: PANEL_NOTIFICATION_ARCHIVE_HANDLE.to_owned(),
+            archive_revision: PANEL_NOTIFICATION_ARCHIVE_ROTATED_QUALIFICATION.revision(),
+            archive_policy_digest: PANEL_NOTIFICATION_ARCHIVE_ROTATED_QUALIFICATION.policy_digest(),
+            archive_public_key: rotated_key.verifying_key().to_bytes(),
+            predecessor_epoch_digest: Some(previous_epoch.epoch_digest),
+            predecessor_revocation_generation: Some(1),
+            predecessor_authorization_signature: None,
+            new_key_possession_signature: None,
+            epoch_digest: [0; 32],
+        };
+        let authorization_message = proposed_epoch
+            .rotation_authorization_message(&chain_id)
+            .expect("canonical predecessor authorization message");
+        let possession_message = proposed_epoch
+            .new_key_possession_message(&chain_id)
+            .expect("canonical new-key possession message");
+        let predecessor_authorization_signature =
+            predecessor_key.sign(&authorization_message).to_bytes();
+        let new_key_possession_signature = rotated_key.sign(&possession_message).to_bytes();
+        proposed_epoch.predecessor_authorization_signature =
+            Some(predecessor_authorization_signature);
+        proposed_epoch.new_key_possession_signature = Some(new_key_possession_signature);
+
+        bounds.expected_panel_notification_archive_qualification =
+            PANEL_NOTIFICATION_ARCHIVE_ROTATED_QUALIFICATION;
+        bounds.panel_notification_archive_public_key = rotated_key.verifying_key().to_bytes();
+        bounds.panel_notification_archive_predecessor_revocation_generation = Some(1);
+        bounds.panel_notification_archive_predecessor_authorization_signature =
+            Some(predecessor_authorization_signature);
+        bounds.panel_notification_archive_new_key_possession_signature =
+            Some(new_key_possession_signature);
+        archive
+            .provider
+            .set_qualification(PANEL_NOTIFICATION_ARCHIVE_ROTATED_QUALIFICATION);
+        archive.rotate_signing_key(PANEL_NOTIFICATION_ARCHIVE_ROTATED_SIGNING_SEED);
+
+        let mut substituted = bounds.clone();
+        substituted
+            .panel_notification_archive_predecessor_authorization_signature
+            .as_mut()
+            .expect("configured authorization")[0] ^= 1;
+        assert!(matches!(
+            ModerationOrchestratorV1::open(substituted, runtime_deps()),
+            Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid)
+        ));
+
+        let rotated =
+            ModerationOrchestratorV1::open(bounds.clone(), runtime_deps()).expect("rotated signer");
+        let epochs = rotated
+            .panel_notification_archive_signer_epochs()
+            .expect("authenticated rotated signer log");
+        assert_eq!(epochs.len(), 2);
+        assert_eq!(
+            epochs[1].archive_public_key,
+            rotated_key.verifying_key().to_bytes()
+        );
+        assert_eq!(epochs[1].predecessor_revocation_generation, Some(1));
+        assert_eq!(
+            epochs[1].predecessor_authorization_signature,
+            proposed_epoch.predecessor_authorization_signature
+        );
+        assert_eq!(
+            epochs[1].new_key_possession_signature,
+            proposed_epoch.new_key_possession_signature
+        );
+
+        let second = rotated
+            .compact_panel_notification_receipts(2)
+            .expect("post-rotation archive compaction")
+            .expect("second archive head");
+        assert_eq!(second.generation, 2);
+        assert_eq!(second.archive_signer_epoch, 2);
+        assert_eq!(
+            second.archive_public_key,
+            rotated_key.verifying_key().to_bytes()
+        );
+        assert_eq!(second.predecessor_operation_id, Some(first.operation_id));
+        assert!(
+            rotated
+                .reconcile_panel_notification_archive_publication()
+                .expect("publish rotated head")
+        );
+        assert_eq!(publication_sink.published_archive_head_count(), 2);
+        let second_audit = rotated
+            .audit_panel_notification_archive(
+                MODERATION_PANEL_NOTIFICATION_ARCHIVE_AUDIT_PAGE_MAX_V1,
+            )
+            .expect("audit both signer epochs");
+        assert_eq!(second_audit.verified_heads, 2);
+        assert_eq!(second_audit.last_completed_generation, 2);
+        assert!(second_audit.cycle_complete);
+        assert!(
+            rotated
+                .durable_health()
+                .expect("fresh rotated archive health")
+                .archive_is_fresh()
+        );
+
+        let mut corrupt_predecessor = first_artifact_bytes;
+        corrupt_predecessor.push(0);
+        archive.replace_artifact(first.operation_id, corrupt_predecessor);
+        assert_eq!(
+            rotated.audit_panel_notification_archive_full_history(
+                MODERATION_PANEL_NOTIFICATION_ARCHIVE_AUDIT_PAGE_MAX_V1,
+            ),
+            Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid)
+        );
+    }
+
+    #[test]
+    fn panel_notification_archive_broker_fixture_is_canonical_and_source_bound() {
+        let fixture = moderation_panel_notification_archive_broker_fixture_v1()
+            .expect("deterministic broker fixture");
+        let expectation = fixture.expectation();
+        assert_eq!(
+            validate_moderation_panel_notification_source_attestation_for_broker_v1(
+                &fixture.source_attestation,
+                &fixture.chain_id,
+                &fixture.checkpoint_handle,
+                fixture.checkpoint_qualification,
+                fixture.checkpoint_attestation_public_key,
+                &fixture.current_checkpoint_record,
+            )
+            .expect("strict source statement"),
+            fixture.validation.source_attestation_digest
+        );
+        assert_eq!(
+            validate_moderation_panel_notification_archive_artifact_for_broker_v1(
+                &fixture.canonical_artifact,
+                &expectation,
+            )
+            .expect("strict unsigned archive artifact"),
+            fixture.validation
+        );
+        let (signed_head, head_validation) =
+            validate_moderation_panel_notification_archive_head_for_broker_v1(
+                &fixture.canonical_signed_head,
+                &expectation,
+            )
+            .expect("strict signed archive head");
+        assert_eq!(head_validation, fixture.validation);
+        assert_eq!(signed_head.archive_signature, fixture.archive_signature);
+
+        let mut trailing_artifact = fixture.canonical_artifact.clone();
+        trailing_artifact.push(0);
+        assert_eq!(
+            validate_moderation_panel_notification_archive_artifact_for_broker_v1(
+                &trailing_artifact,
+                &expectation,
+            ),
+            Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid)
+        );
+        for substituted_source in [
+            {
+                let mut statement = fixture.source_attestation.clone();
+                statement.terminal_record_count = 1;
+                statement
+            },
+            {
+                let mut statement = fixture.source_attestation.clone();
+                statement.terminal_record_count = 3;
+                statement
+            },
+            {
+                let mut statement = fixture.source_attestation.clone();
+                statement.terminal_set_digest[0] ^= 0x80;
+                statement
+            },
+            {
+                let mut statement = fixture.source_attestation.clone();
+                statement.first_notification_id[0] ^= 0x80;
+                statement
+            },
+        ] {
+            assert_eq!(
+                validate_moderation_panel_notification_source_attestation_for_broker_v1(
+                    &substituted_source,
+                    &fixture.chain_id,
+                    &fixture.checkpoint_handle,
+                    fixture.checkpoint_qualification,
+                    fixture.checkpoint_attestation_public_key,
+                    &fixture.current_checkpoint_record,
+                ),
+                Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid)
+            );
+        }
+    }
+
+    #[test]
+    fn panel_notification_archive_callbacks_run_without_the_state_mutex() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let probe = Arc::new(ReentrantLockProbe::default());
+        let SaturatedPanelNotificationFixture { orchestrator, .. } =
+            saturated_delivered_panel_notifications_with_probe(
+                &temp,
+                "panel-archive-reentrant.norito",
+                Some(probe.clone()),
+            );
+        let orchestrator = Arc::new(orchestrator);
+        probe.attach(&orchestrator);
+
+        let head = orchestrator
+            .compact_panel_notification_receipts(1)
+            .expect("archive outside state mutex")
+            .expect("archive head");
+        assert!(
+            orchestrator
+                .reconcile_panel_notification_archive_publication()
+                .expect("publication outside state mutex")
+        );
+        assert_eq!(
+            orchestrator
+                .panel_notification_archive_head()
+                .expect("read archive head outside state mutex"),
+            Some(head)
+        );
+        assert!(probe.checks() >= 12);
+    }
+
+    #[test]
+    fn panel_notification_archive_provider_is_mandatory_and_exactly_qualified() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = config(&temp, "missing/panel-archive-provider.norito");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let missing_parent = config
+            .checkpoint_path
+            .parent()
+            .expect("checkpoint parent")
+            .to_path_buf();
+
+        for archive in [
+            Arc::new(MockPanelNotificationArchive::default()),
+            Arc::new(MockPanelNotificationArchive::with_handle(
+                "object-lock:prod-moderation-receipts-secondary",
+            )),
+            Arc::new(MockPanelNotificationArchive::with_handle(
+                "object-lock:test-moderation-receipts",
+            )),
+        ] {
+            if archive.handle() == PANEL_NOTIFICATION_ARCHIVE_HANDLE {
+                archive
+                    .provider
+                    .set_readiness(ModerationRuntimeProviderReadinessErrorV1::Unavailable);
+            }
+            let mut runtime_deps = deps(
+                reader.clone(),
+                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
+            );
+            runtime_deps.panel_notification_archive = archive;
+            assert!(matches!(
+                ModerationOrchestratorV1::open(config.clone(), runtime_deps),
+                Err(ModerationOrchestratorError::InvalidConfiguration(message))
+                    if message.contains("runtime provider binding")
+            ));
+            assert!(!missing_parent.exists());
+        }
+    }
+
+    #[test]
+    fn panel_notification_archive_rejects_corrupt_signature_rollback_and_predecessor_substitution()
+    {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let SaturatedPanelNotificationFixture {
+            archive,
+            orchestrator,
+            ..
+        } = saturated_delivered_panel_notifications(&temp, "panel-archive-adversarial.norito");
+        let first = orchestrator
+            .compact_panel_notification_receipts(1)
+            .expect("first compaction")
+            .expect("first head");
+        let first_bytes = archive.artifact(first.operation_id);
+        orchestrator
+            .reconcile_panel_notification_archive_publication()
+            .expect("publish first archive head");
+        let second = orchestrator
+            .compact_panel_notification_receipts(1)
+            .expect("second compaction")
+            .expect("second head");
+        orchestrator
+            .reconcile_panel_notification_archive_publication()
+            .expect("publish second archive head");
+        let second_bytes = archive.artifact(second.operation_id);
+        assert_eq!(second.generation, 2);
+        assert_eq!(second.predecessor_head_digest, Some(first.head_digest));
+        assert_eq!(second.predecessor_operation_id, Some(first.operation_id));
+
+        for behavior in [2, 3, 4] {
+            archive.fail_next_read(behavior);
+            assert_eq!(
+                orchestrator.panel_notification_archive_head(),
+                Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid)
+            );
+        }
+
+        archive.replace_artifact(second.operation_id, first_bytes.clone());
+        assert_eq!(
+            orchestrator.panel_notification_archive_head(),
+            Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid)
+        );
+        archive.replace_artifact(second.operation_id, second_bytes.clone());
+
+        archive.replace_artifact(first.operation_id, second_bytes);
+        assert_eq!(
+            orchestrator.panel_notification_archive_head(),
+            Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid)
+        );
+        archive.replace_artifact(first.operation_id, first_bytes);
+        assert_eq!(
+            orchestrator
+                .panel_notification_archive_head()
+                .expect("restored exact archive lineage"),
+            Some(second)
+        );
+    }
+
+    #[test]
+    fn panel_notification_archive_crash_boundary_replays_exact_batch_after_restart() {
         let temp = tempfile::tempdir().expect("tempdir");
         let SaturatedPanelNotificationFixture {
             bounds,
-            governance,
             reader,
+            checkpoint_store,
+            archive,
             orchestrator,
-        } = saturated_delivered_panel_notifications(&temp, "panel-capacity-restart.norito");
-        let expected_state = orchestrator.state.lock().expect("state").clone();
-        let expected_checkpoint =
-            std::fs::read(&bounds.checkpoint_path).expect("read saturated checkpoint");
-
-        reader.replace(activated_case_snapshot(3, [0x2A; 32], governance));
-        assert!(matches!(
-            orchestrator.reconcile(),
-            Err(ModerationOrchestratorError::ResourceExhausted {
-                resource: "panel notifications",
-                limit: 3
-            })
-        ));
+            ..
+        } = saturated_delivered_panel_notifications(&temp, "panel-archive-crash.norito");
+        archive.fail_next_install(2);
+        checkpoint_store.fail_next_cas(3);
+        assert_eq!(
+            orchestrator.compact_panel_notification_receipts(2),
+            Err(ModerationOrchestratorError::CheckpointStoreFenced)
+        );
+        assert_eq!(archive.artifact_count(), 1);
         drop(orchestrator);
 
         let restarted = ModerationOrchestratorV1::open(
-            bounds.clone(),
-            deps(
-                Arc::clone(&reader),
-                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
-            ),
+            bounds,
+            ModerationOrchestratorDepsV1 {
+                checkpoint_store,
+                submitter: Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
+                snapshot_reader: reader,
+                settlement_sink: Arc::new(MockHandoffSink::default()),
+                publication_sink: Arc::new(MockHandoffSink::default()),
+                panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
+                panel_notification_archive: archive.clone(),
+            },
         )
-        .expect("restart from saturated checkpoint");
-        assert_eq!(
-            restarted.state.lock().expect("restarted state").clone(),
-            expected_state
-        );
-        assert_eq!(
-            std::fs::read(&bounds.checkpoint_path).expect("read restarted checkpoint"),
-            expected_checkpoint
-        );
+        .expect("restart from pre-prune sealed checkpoint");
+        let recovered = restarted
+            .compact_panel_notification_receipts(2)
+            .expect("replay exact archived batch")
+            .expect("recovered archive head");
+        assert_eq!(recovered.generation, 1);
+        assert_eq!(archive.artifact_count(), 1);
+        assert_eq!(archive.install_calls(), 2);
+    }
 
-        assert!(matches!(
-            restarted.reconcile(),
-            Err(ModerationOrchestratorError::ResourceExhausted {
-                resource: "panel notifications",
-                limit: 3
-            })
-        ));
+    #[test]
+    fn panel_notification_archive_conflicting_replica_is_fenced_by_sealed_checkpoint_cas() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let SaturatedPanelNotificationFixture {
+            mut bounds,
+            reader,
+            checkpoint_store,
+            archive,
+            orchestrator: first,
+            ..
+        } = saturated_delivered_panel_notifications(&temp, "panel-archive-replica-a.norito");
+        bounds.checkpoint_path = temp
+            .path()
+            .canonicalize()
+            .expect("canonical tempdir")
+            .join("panel-archive-replica-b.norito");
+        let second = ModerationOrchestratorV1::open(
+            bounds,
+            ModerationOrchestratorDepsV1 {
+                checkpoint_store,
+                submitter: Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
+                snapshot_reader: reader,
+                settlement_sink: Arc::new(MockHandoffSink::default()),
+                publication_sink: Arc::new(MockHandoffSink::default()),
+                panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
+                panel_notification_archive: archive.clone(),
+            },
+        )
+        .expect("open second replica at the same sealed source checkpoint");
+
+        let committed = first
+            .compact_panel_notification_receipts(1)
+            .expect("first replica compaction")
+            .expect("first replica head");
         assert_eq!(
-            restarted.state.lock().expect("restarted state").clone(),
-            expected_state
+            second.compact_panel_notification_receipts(2),
+            Err(ModerationOrchestratorError::CheckpointStoreFenced)
         );
-        assert_eq!(
-            std::fs::read(&bounds.checkpoint_path)
-                .expect("read checkpoint after restarted exhaustion"),
-            expected_checkpoint
-        );
+        assert_eq!(committed.generation, 1);
+        assert_eq!(archive.artifact_count(), 1);
+        assert_eq!(archive.install_calls(), 1);
     }
 
     #[test]

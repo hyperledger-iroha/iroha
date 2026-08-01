@@ -2276,7 +2276,15 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
     assert set(bindings) == {
         "queue_plan_selection_and_reservation_fsync",
         "reservation_cleanup_prefixes",
+        "producer_kura_activation",
+        "execution_input_persistence",
         "durable_autonomous_bundle",
+        "ready_qc_persistence",
+        "lane_commit_persistence",
+        "kura_slot_retirement_persistence",
+        "kura_claim_release_prefixes",
+        "queue_release_preparation_handoff",
+        "queue_release_completion_publication",
         "ready_authorization",
         "ready_signature",
         "canonical_wsv_commit_authorization",
@@ -2312,8 +2320,52 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
             "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED",
         ),
         (
+            "producer_kura_activation",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA",
+        ),
+        (
+            "execution_input_persistence",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT",
+        ),
+        (
             "durable_autonomous_bundle",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT",
+        ),
+        (
+            "ready_qc_persistence",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC",
+        ),
+        (
+            "lane_commit_persistence",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT",
+        ),
+        (
+            "kura_slot_retirement_persistence",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_KURA_RETIREMENT",
+        ),
+        (
+            "kura_claim_release_prefixes",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING",
+        ),
+        (
+            "kura_claim_release_prefixes",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED",
+        ),
+        (
+            "queue_release_preparation_handoff",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PREPARE_RESERVATION_RELEASE",
+        ),
+        (
+            "queue_release_completion_publication",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE",
+        ),
+        (
+            "queue_release_completion_publication",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO",
+        ),
+        (
+            "queue_release_completion_publication",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE",
         ),
         (
             "ready_authorization",
@@ -2365,7 +2417,15 @@ def test_production_trace_certificate_rejects_each_disconnected_runtime_link(
     (
         "queue_plan_selection_and_reservation_fsync",
         "reservation_cleanup_prefixes",
+        "producer_kura_activation",
+        "execution_input_persistence",
         "durable_autonomous_bundle",
+        "ready_qc_persistence",
+        "lane_commit_persistence",
+        "kura_slot_retirement_persistence",
+        "kura_claim_release_prefixes",
+        "queue_release_preparation_handoff",
+        "queue_release_completion_publication",
         "ready_authorization",
         "ready_signature",
         "canonical_wsv_commit_authorization",
@@ -2382,16 +2442,24 @@ def test_production_trace_certificate_rejects_each_disconnected_carrier_identity
         for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
     ]
     binding = next(candidate for candidate in bindings if candidate["id"] == binding_id)
-    source_path = ROOT_DIR / binding["path"]
-    source = source_path.read_text(encoding="utf-8")
     helper = "canonical_lane_queue_reservation_group_identity_projection"
+    endpoint = binding
+    authority = binding.get("authorization_source")
+    if authority is not None and helper in authority["required_tokens"]:
+        endpoint = authority
+    source_path = ROOT_DIR / endpoint["path"]
+    source = source_path.read_text(encoding="utf-8")
+    if helper not in source:
+        endpoint = binding["authorization_source"]
+        source_path = ROOT_DIR / endpoint["path"]
+        source = source_path.read_text(encoding="utf-8")
     assert helper in source
     mutated_path = tmp_path / f"{binding_id}-identity.rs"
     mutated_path.write_text(
         source.replace(helper, f"{helper}_DISCONNECTED"),
         encoding="utf-8",
     )
-    binding["path"] = str(mutated_path.resolve())
+    endpoint["path"] = str(mutated_path.resolve())
     monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_BINDINGS", tuple(bindings))
 
     with pytest.raises(ValueError) as failure:
@@ -2468,6 +2536,292 @@ def test_production_trace_certificate_rejects_disconnected_ready_signature_sink(
     message = str(failure.value)
     assert "missing canonical commit sink tokens" in message
     assert "consume_signing_request" in message
+
+
+@pytest.mark.parametrize(
+    ("edge", "required", "replacement", "expected_message"),
+    (
+        (
+            "authorization_source",
+            "lane_queue_reservation_group_binding_from_ordered_keys",
+            "disconnected_lane_queue_reservation_group_binding",
+            "missing canonical authorization source tokens",
+        ),
+        (
+            "commit_sink",
+            "write_autonomous_lane_block_view_state_record_locked",
+            "disconnect_autonomous_lane_block_view_state_record_locked",
+            "missing canonical commit sink tokens",
+        ),
+    ),
+)
+def test_production_trace_certificate_rejects_disconnected_ready_qc_edges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    edge: str,
+    required: str,
+    replacement: str,
+    expected_message: str,
+) -> None:
+    module = load_checker()
+    bindings = [
+        copy.deepcopy(binding)
+        for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
+    ]
+    binding = next(
+        candidate for candidate in bindings if candidate["id"] == "ready_qc_persistence"
+    )
+    endpoint = binding[edge]
+    source_path = ROOT_DIR / endpoint["path"]
+    source = source_path.read_text(encoding="utf-8")
+    assert required in source
+    mutated_path = tmp_path / f"ready-qc-{edge}-disconnected.rs"
+    mutated_path.write_text(source.replace(required, replacement), encoding="utf-8")
+    endpoint["path"] = str(mutated_path.resolve())
+    monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_BINDINGS", tuple(bindings))
+
+    with pytest.raises(ValueError) as failure:
+        module._production_trace_extraction_source_snapshot()
+
+    message = str(failure.value)
+    assert expected_message in message
+    assert required.split("(", maxsplit=1)[0] in message
+
+
+@pytest.mark.parametrize(
+    ("edge", "required", "replacement", "expected_message"),
+    (
+        (
+            "authorization_source",
+            "lane_queue_reservation_group_binding_from_ordered_keys",
+            "disconnected_lane_queue_reservation_group_binding",
+            "missing canonical authorization source tokens",
+        ),
+        (
+            "commit_sink",
+            "sync_indexed_sidecar_initial_data",
+            "disconnect_indexed_sidecar_initial_data",
+            "missing canonical commit sink tokens",
+        ),
+    ),
+)
+def test_production_trace_certificate_rejects_disconnected_execution_input_edges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    edge: str,
+    required: str,
+    replacement: str,
+    expected_message: str,
+) -> None:
+    module = load_checker()
+    bindings = [
+        copy.deepcopy(binding)
+        for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
+    ]
+    binding = next(
+        candidate for candidate in bindings if candidate["id"] == "execution_input_persistence"
+    )
+    endpoint = binding[edge]
+    source_path = ROOT_DIR / endpoint["path"]
+    source = source_path.read_text(encoding="utf-8")
+    assert required in source
+    mutated_path = tmp_path / f"execution-input-{edge}-disconnected.rs"
+    mutated_path.write_text(source.replace(required, replacement), encoding="utf-8")
+    endpoint["path"] = str(mutated_path.resolve())
+    monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_BINDINGS", tuple(bindings))
+
+    with pytest.raises(ValueError) as failure:
+        module._production_trace_extraction_source_snapshot()
+
+    message = str(failure.value)
+    assert expected_message in message
+    assert required.split("(", maxsplit=1)[0] in message
+
+
+@pytest.mark.parametrize(
+    ("edge", "required", "replacement", "expected_message"),
+    (
+        (
+            "authorization_source",
+            "lane_queue_reservation_group_binding_from_ordered_keys",
+            "disconnected_lane_queue_reservation_group_binding",
+            "missing canonical authorization source tokens",
+        ),
+        (
+            "commit_sink",
+            "promote_bound_progress_temp",
+            "disconnect_bound_progress_temp",
+            "missing canonical commit sink tokens",
+        ),
+    ),
+)
+def test_production_trace_certificate_rejects_disconnected_lane_commit_edges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    edge: str,
+    required: str,
+    replacement: str,
+    expected_message: str,
+) -> None:
+    module = load_checker()
+    bindings = [
+        copy.deepcopy(binding)
+        for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
+    ]
+    binding = next(
+        candidate for candidate in bindings if candidate["id"] == "lane_commit_persistence"
+    )
+    endpoint = binding[edge]
+    source_path = ROOT_DIR / endpoint["path"]
+    source = source_path.read_text(encoding="utf-8")
+    assert required in source
+    mutated_path = tmp_path / f"lane-commit-{edge}-disconnected.rs"
+    mutated_path.write_text(source.replace(required, replacement), encoding="utf-8")
+    endpoint["path"] = str(mutated_path.resolve())
+    monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_BINDINGS", tuple(bindings))
+
+    with pytest.raises(ValueError) as failure:
+        module._production_trace_extraction_source_snapshot()
+
+    message = str(failure.value)
+    assert expected_message in message
+    assert required.split("(", maxsplit=1)[0] in message
+
+
+@pytest.mark.parametrize(
+    ("binding_id", "edge", "required", "replacement", "expected_message"),
+    (
+        (
+            "kura_slot_retirement_persistence",
+            "authorization_source",
+            "canonical_lane_queue_reservation_group_identity_projection",
+            "disconnected_lane_queue_reservation_group_identity_projection",
+            "missing canonical authorization source tokens",
+        ),
+        (
+            "kura_slot_retirement_persistence",
+            "commit_sink",
+            "write_atomic_synced_replace",
+            "disconnected_atomic_synced_replace",
+            "missing canonical commit sink tokens",
+        ),
+        (
+            "kura_claim_release_prefixes",
+            "authorization_source",
+            "replacement.retirement_hash()",
+            "replacement.disconnected_retirement_hash()",
+            "missing canonical authorization source tokens",
+        ),
+        (
+            "kura_claim_release_prefixes",
+            "commit_sink",
+            "persist(path)",
+            "disconnected_persist(path)",
+            "missing canonical commit sink tokens",
+        ),
+        (
+            "queue_release_preparation_handoff",
+            "authorization_source",
+            "autonomous_lane_entrypoint_claim_release_progress_locked",
+            "disconnected_lane_entrypoint_claim_release_progress_locked",
+            "missing canonical authorization source tokens",
+        ),
+        (
+            "queue_release_preparation_handoff",
+            "commit_sink",
+            "journal.prepare_release(barrier.clone())",
+            "journal.disconnected_prepare_release(barrier.clone())",
+            "missing canonical commit sink tokens",
+        ),
+        (
+            "queue_release_completion_publication",
+            "authorization_source",
+            "consume_for_claim_transition",
+            "disconnected_claim_transition",
+            "missing canonical authorization source tokens",
+        ),
+    ),
+)
+def test_production_trace_certificate_rejects_disconnected_kura_release_edges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    binding_id: str,
+    edge: str,
+    required: str,
+    replacement: str,
+    expected_message: str,
+) -> None:
+    module = load_checker()
+    bindings = [
+        copy.deepcopy(binding)
+        for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
+    ]
+    binding = next(candidate for candidate in bindings if candidate["id"] == binding_id)
+    endpoint = binding[edge]
+    source_path = ROOT_DIR / endpoint["path"]
+    source = source_path.read_text(encoding="utf-8")
+    assert required in source
+    mutated_path = tmp_path / f"{binding_id}-{edge}-disconnected.rs"
+    mutated_path.write_text(source.replace(required, replacement), encoding="utf-8")
+    endpoint["path"] = str(mutated_path.resolve())
+    monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_BINDINGS", tuple(bindings))
+
+    with pytest.raises(ValueError) as failure:
+        module._production_trace_extraction_source_snapshot()
+
+    message = str(failure.value)
+    assert expected_message in message
+    assert required.split("(", maxsplit=1)[0] in message
+
+
+@pytest.mark.parametrize(
+    ("edge", "required", "replacement", "expected_message"),
+    (
+        (
+            "authorization_source",
+            "authorization.height_context_id()",
+            "authorization.disconnected_height_context_id()",
+            "missing canonical authorization source tokens",
+        ),
+        (
+            "commit_sink",
+            "finalize_autonomous_lane_entrypoint_claims_locked",
+            "disconnect_autonomous_lane_entrypoint_claims_locked",
+            "missing canonical commit sink tokens",
+        ),
+    ),
+)
+def test_production_trace_certificate_rejects_disconnected_kura_activation_edges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    edge: str,
+    required: str,
+    replacement: str,
+    expected_message: str,
+) -> None:
+    module = load_checker()
+    bindings = [
+        copy.deepcopy(binding)
+        for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
+    ]
+    binding = next(
+        candidate for candidate in bindings if candidate["id"] == "producer_kura_activation"
+    )
+    endpoint = binding[edge]
+    source_path = ROOT_DIR / endpoint["path"]
+    source = source_path.read_text(encoding="utf-8")
+    assert required in source
+    mutated_path = tmp_path / f"producer-kura-{edge}-disconnected.rs"
+    mutated_path.write_text(source.replace(required, replacement), encoding="utf-8")
+    endpoint["path"] = str(mutated_path.resolve())
+    monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_BINDINGS", tuple(bindings))
+
+    with pytest.raises(ValueError) as failure:
+        module._production_trace_extraction_source_snapshot()
+
+    message = str(failure.value)
+    assert expected_message in message
+    assert required.split("(", maxsplit=1)[0] in message
 
 
 def test_production_trace_certificate_writer_emits_one_canonical_encoding(

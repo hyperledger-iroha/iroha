@@ -111,9 +111,13 @@ const SHA256_ROUND_CONSTANTS_V1: [u32; 64] = [
     0xc671_78f2,
 ];
 
+#[cfg(test)]
 const WORD_AIR_ROWS_PER_BLOCK_V1: usize = 1_728;
+#[cfg(test)]
 const INITIAL_WORD_AIR_ROWS_V1: usize = 8;
+#[cfg(test)]
 const WORD_MEMORY_ROWS_PER_BLOCK_V1: usize = 2_136;
+#[cfg(test)]
 const FIXED_WORD_MEMORY_ROWS_V1: usize = 16;
 pub(crate) const WORD_MEMORY_PERMUTATION_LANES_V1: usize = 4;
 
@@ -976,6 +980,7 @@ pub(crate) fn build_sha256_word_circuit_v1(
 }
 
 /// Exact conceptual local rows for one message length.
+#[cfg(test)]
 pub(crate) fn sha256_word_air_rows_for_message_len_v1(
     message_len: usize,
 ) -> Result<usize, ZkX509Sha256WordAirErrorV1> {
@@ -988,6 +993,7 @@ pub(crate) fn sha256_word_air_rows_for_message_len_v1(
 }
 
 /// Exact global word-copy rows for one message length.
+#[cfg(test)]
 pub(crate) fn sha256_word_memory_rows_for_message_len_v1(
     message_len: usize,
 ) -> Result<usize, ZkX509Sha256WordAirErrorV1> {
@@ -1000,6 +1006,7 @@ pub(crate) fn sha256_word_memory_rows_for_message_len_v1(
 }
 
 /// Exact local plus global-copy rows for one message length.
+#[cfg(test)]
 pub(crate) fn sha256_word_total_rows_for_message_len_v1(
     message_len: usize,
 ) -> Result<usize, ZkX509Sha256WordAirErrorV1> {

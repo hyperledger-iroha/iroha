@@ -1769,7 +1769,7 @@ pub(crate) fn evaluate_p256_value_execution_aggregate_residues_v1(
 }
 
 /// Construct the explicit writer claim from native first/final rows.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn p256_value_execution_cross_terminal_claim_v1(
     first_aux: &[F; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1],
     terminal_aux: &[F; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1],
@@ -2319,7 +2319,7 @@ pub(crate) fn p256_arithmetic_last_selector_v1(
 
 /// Bind the complete value-bus arithmetic-access product to every directly
 /// opened arithmetic `a`, `b`, and `c` limb.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn evaluate_p256_arithmetic_copy_terminal_openings_v1(
     value_bus: [F; P256_ARITHMETIC_COPY_LANES_V1],
     arithmetic: [F; P256_ARITHMETIC_COPY_LANES_V1],
@@ -2719,7 +2719,7 @@ pub(crate) fn evaluate_p256_window_aggregate_residues_v1(
 }
 
 /// Construct the explicit window claim from native first/final rows.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn p256_window_cross_terminal_claim_v1(
     first_aux: &[F; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1],
     terminal_aux: &[F; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1],
@@ -2802,6 +2802,7 @@ fn reduction_cross_events_v1(
 pub(crate) struct P256ReductionAggregateRowsV1<'a> {
     role: P256ReductionAggregateRoleV1,
     trace: &'a P256ReductionTraceV1,
+    #[cfg(test)]
     fixed: P256ComparisonStarkFixedProviderV1,
 }
 
@@ -2816,6 +2817,7 @@ impl<'a> P256ReductionAggregateRowsV1<'a> {
         Ok(Self {
             role,
             trace,
+            #[cfg(test)]
             fixed: P256ComparisonStarkFixedProviderV1::reduction_v1(
                 P256_REDUCTION_AGGREGATE_TRACE_SIZE_V1,
             )?,
@@ -2854,6 +2856,7 @@ impl<'a> P256ReductionAggregateRowsV1<'a> {
     }
 
     /// Exact flat fixed row.
+    #[cfg(test)]
     pub(crate) fn fixed_row_v1(
         &self,
         row: usize,
@@ -2927,6 +2930,7 @@ impl<'a> P256ReductionAggregateAuxStreamV1<'a> {
     }
 
     /// Direct committed base row.
+    #[cfg(test)]
     pub(crate) fn base_row_v1(
         &self,
         row: usize,
@@ -2935,6 +2939,7 @@ impl<'a> P256ReductionAggregateAuxStreamV1<'a> {
     }
 
     /// Exact flat fixed row.
+    #[cfg(test)]
     pub(crate) fn fixed_row_v1(
         &self,
         row: usize,
@@ -3089,7 +3094,7 @@ pub(crate) fn evaluate_p256_reduction_aggregate_residues_v1(
 }
 
 /// Construct an explicit reduction claim from native first/final rows.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn p256_reduction_cross_terminal_claim_v1(
     role: P256ReductionAggregateRoleV1,
     first_aux: &[F; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1],
@@ -3142,6 +3147,7 @@ fn low_s_cross_event_v1(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256LowSAggregateRowsV1<'a> {
     trace: &'a P256LowSTraceV1,
+    #[cfg(test)]
     fixed: P256ComparisonStarkFixedProviderV1,
 }
 
@@ -3158,6 +3164,7 @@ impl<'a> P256LowSAggregateRowsV1<'a> {
         trace.validate()?;
         Ok(Self {
             trace,
+            #[cfg(test)]
             fixed: P256ComparisonStarkFixedProviderV1::low_s_v1(
                 P256_LOW_S_AGGREGATE_TRACE_SIZE_V1,
             )?,
@@ -3192,6 +3199,7 @@ impl<'a> P256LowSAggregateRowsV1<'a> {
     }
 
     /// Exact flat fixed row.
+    #[cfg(test)]
     pub(crate) fn fixed_row_v1(
         &self,
         row: usize,
@@ -3261,6 +3269,7 @@ impl<'a> P256LowSAggregateAuxStreamV1<'a> {
     }
 
     /// Direct committed base row.
+    #[cfg(test)]
     pub(crate) fn base_row_v1(
         &self,
         row: usize,
@@ -3269,6 +3278,7 @@ impl<'a> P256LowSAggregateAuxStreamV1<'a> {
     }
 
     /// Exact flat fixed row.
+    #[cfg(test)]
     pub(crate) fn fixed_row_v1(
         &self,
         row: usize,
@@ -3418,7 +3428,7 @@ pub(crate) fn evaluate_p256_low_s_aggregate_residues_v1(
 }
 
 /// Construct the explicit wallet low-S claim from native first/final rows.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn p256_low_s_cross_terminal_claim_v1(
     first_aux: &[F; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1],
     terminal_aux: &[F; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1],
@@ -5042,6 +5052,7 @@ impl P256MainBaseSourceV1 {
     }
 
     /// Replay one complete verifier-preprocessed column.
+    #[cfg(test)]
     pub(crate) fn fill_fixed_column_v1(
         &self,
         registration: P256MainRegistrationV1,

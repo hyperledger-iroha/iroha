@@ -74,6 +74,8 @@ fn validate_operation_payload(
         IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore.wire_id();
     let moderation_checkpoint_slot =
         IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id();
+    let moderation_panel_notification_archive_slot =
+        IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id();
     let evidence_archive_slot =
         IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive.wire_id();
     let evidence_transparency_publisher_slot =
@@ -210,6 +212,22 @@ fn validate_operation_payload(
                 MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
             )?;
             validate_moderation_handoff_request(&handoff, slot)?;
+        }
+        (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1)
+            if slot == moderation_publication_handoff_slot =>
+        {
+            let publish = decode_canonical::<
+                ModerationPanelNotificationArchiveHeadPublishRequestWireV1,
+            >(&request.payload, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1)?;
+            validate_moderation_panel_notification_archive_head_publish_request(
+                &publish,
+                session_chain_id.ok_or(BrokerError::BindingMismatch)?,
+            )?;
+        }
+        (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1)
+            if slot == moderation_publication_handoff_slot =>
+        {
+            decode_canonical::<()>(&request.payload, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1)?;
         }
         (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_DELIVER_ONCE_V1)
             if slot == moderation_panel_notification_slot =>
@@ -1209,6 +1227,108 @@ fn validate_operation_payload(
                 return Err(BrokerError::Rejected);
             }
         }
+        (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1)
+            if slot == moderation_panel_notification_archive_slot =>
+        {
+            let qualify = decode_canonical::<ModerationPanelNotificationArchiveQualifyRequestWireV1>(
+                &request.payload,
+                MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+            )?;
+            validate_moderation_panel_notification_archive_wire_scope(
+                qualify.version,
+                qualify.slot,
+                &qualify.chain_id,
+                session_chain_id,
+            )?;
+        }
+        (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1)
+            if slot == moderation_panel_notification_archive_slot =>
+        {
+            let install = decode_canonical::<ModerationPanelNotificationArchiveInstallRequestWireV1>(
+                &request.payload,
+                MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+            )?;
+            validate_moderation_panel_notification_archive_wire_scope(
+                install.version,
+                install.slot,
+                &install.chain_id,
+                session_chain_id,
+            )?;
+            let max_bytes = usize::try_from(
+                request
+                    .binding
+                    .moderation_panel_notification_archive_binding
+                    .ok_or(BrokerError::BindingMismatch)?
+                    .max_bytes,
+            )
+            .map_err(|_| BrokerError::Rejected)?;
+            if install.operation_id == [0; 32]
+                || install.receipt_message == [0; 32]
+                || install.canonical_artifact.is_empty()
+                || install.canonical_artifact.len() > max_bytes
+            {
+                return Err(BrokerError::Rejected);
+            }
+        }
+        (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1)
+            if slot == moderation_panel_notification_archive_slot =>
+        {
+            let read = decode_canonical::<ModerationPanelNotificationArchiveReadRequestWireV1>(
+                &request.payload,
+                MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+            )?;
+            validate_moderation_panel_notification_archive_wire_scope(
+                read.version,
+                read.slot,
+                &read.chain_id,
+                session_chain_id,
+            )?;
+            if read.operation_id == [0; 32] {
+                return Err(BrokerError::Rejected);
+            }
+        }
+        (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1)
+            if slot == moderation_checkpoint_slot =>
+        {
+            let attest = decode_canonical::<ModerationPanelNotificationSourceAttestRequestWireV1>(
+                &request.payload,
+                MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+            )?;
+            validate_moderation_panel_notification_source_attest_wire_scope(
+                attest.version,
+                attest.slot,
+                &attest.chain_id,
+                session_chain_id,
+            )?;
+            let statement = &attest.statement;
+            if statement.version
+                != sorafs_node::moderation_orchestrator::
+                    MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
+                || statement.attestor_slot != slot
+                || statement.chain_id != attest.chain_id
+                || statement.checkpoint_namespace_digest == [0; 32]
+                || statement.checkpoint_generation == 0
+                || statement.checkpoint_revision == [0; 32]
+                || statement.checkpoint_digest == [0; 32]
+                || statement.terminal_set_digest == [0; 32]
+                || statement.terminal_record_count == 0
+                || usize::try_from(statement.terminal_record_count).map_or(true, |count| {
+                    count
+                        > sorafs_node::moderation_orchestrator::
+                            MODERATION_PANEL_NOTIFICATION_ARCHIVE_MAX_RECORDS_V1
+                })
+                || statement.first_notification_id == [0; 32]
+                || statement.last_notification_id == [0; 32]
+                || statement.first_notification_id > statement.last_notification_id
+                || statement.attestor_handle != request.binding.handle
+                || Some(statement.attestor_revision) != request.binding.revision
+                || Some(statement.attestor_policy_digest) != request.binding.policy_digest
+                || Some(statement.attestor_public_key)
+                    != request.binding.moderation_checkpoint_attestation_public_key
+            {
+                return Err(BrokerError::Rejected);
+            }
+        }
         (slot, OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1)
             if slot == evidence_transparency_publisher_slot =>
         {
@@ -1226,6 +1346,48 @@ fn validate_operation_payload(
             validate_evidence_viewer_transparency_head_body(&body, &request.binding)?;
         }
         _ => return Err(BrokerError::BindingMismatch),
+    }
+    Ok(())
+}
+
+fn validate_moderation_panel_notification_archive_wire_scope(
+    version: u16,
+    slot: u16,
+    chain_id: &str,
+    session_chain_id: Option<&str>,
+) -> Result<(), BrokerError> {
+    let authenticated_chain_id = session_chain_id.ok_or(BrokerError::BindingMismatch)?;
+    if version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+        || slot != IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id()
+        || slot != sorafs_node::moderation_orchestrator::
+            MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_SLOT_V1
+        || chain_id != authenticated_chain_id
+        || chain_id.is_empty()
+        || chain_id.len() > MAX_CHAIN_ID_BYTES_V1
+        || chain_id.as_bytes().contains(&0)
+        || chain_id.parse::<iroha_data_model::ChainId>().is_err()
+    {
+        return Err(BrokerError::BindingMismatch);
+    }
+    Ok(())
+}
+
+fn validate_moderation_panel_notification_source_attest_wire_scope(
+    version: u16,
+    slot: u16,
+    chain_id: &str,
+    session_chain_id: Option<&str>,
+) -> Result<(), BrokerError> {
+    let authenticated_chain_id = session_chain_id.ok_or(BrokerError::BindingMismatch)?;
+    if version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+        || slot != IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id()
+        || slot
+            != sorafs_node::moderation_orchestrator::
+                MODERATION_PANEL_NOTIFICATION_SOURCE_ATTESTOR_BROKER_SLOT_V1
+        || chain_id != authenticated_chain_id
+        || chain_id.parse::<iroha_data_model::ChainId>().is_err()
+    {
+        return Err(BrokerError::BindingMismatch);
     }
     Ok(())
 }

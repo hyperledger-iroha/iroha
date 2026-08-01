@@ -91,16 +91,7 @@
             .mark_runtime(replay.token(), runtime_owner)
             .expect("rebind restored runtime");
         reopened
-            .mark_terminal(
-                &runtime,
-                LeaderWireStableTerminalEvidence::DurableBody(
-                    LeaderWireDurableBodyTerminalEvidence::from_receipt(
-                        &durable_body,
-                        OWNER_A,
-                        runtime_owner,
-                    ),
-                ),
-            )
+            .mark_durable_body_terminal(&runtime, &durable_body)
             .expect("publish body-backed terminal");
 
         let (_, stable) = LeaderWireLifecycleStoreGate::open(

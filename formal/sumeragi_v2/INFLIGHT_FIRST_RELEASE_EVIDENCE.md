@@ -87,36 +87,83 @@ operation decoder reject its old bytes without compatibility replay.
 
 Current production bindings cover several bounded slices. For selection, the
 canonical autonomous slot plan creates a move-only authorization containing
-the exact reservation scope, committee width, and one-hot producer. After
+the exact reservation scope, frozen height-context identity, committee width,
+and one-hot producer. After
 exact QueuePlan V4/global registry/FIFO selection, Queue derives the complete
 ordered reservation-group identity, checks `SelectQueuePlanV4Conjunction`, and
 carries the checked `FsyncReservationV5` projection directly to the exact
 journal `put_batch` append. A 4,097-entry request fails before culling, FIFO
 mutation, or journal I/O.
 
-The durable merge-source reader revalidates the exact same group while checking
-`PersistExecutionInput`, `PersistReadyQc`, and `LaneCommit`. Kura's move-only
+For the local producer's Kura boundary, Queue revalidates that complete group
+against the live V4 claims, V5 records, immutable FIFO ordinals, and exact
+queued transactions. It returns a move-only authorization which retains the
+per-transaction Queue transition fence. Kura validates the signed executable
+payload, recomputes its canonical reservation-owner and proposal hashes from
+the frozen height context and exact proposal descriptor, matches the ordered
+group and producer committee bit, checks `ActivateKura`, and consumes that
+authorization while the durable payload write runs. A substituted predecessor,
+committee, QC domain, group member, or FIFO order therefore fails before the
+producer persistence sink; concurrent Commit or release cannot invalidate the
+checked Queue facts during that write.
+
+Before the first autonomous execution-input sidecar append, Kura performs a
+repair-disabled read of the exact producer-authenticated payload, reconstructs
+the complete input, reservation group, committee geometry, and writer witness,
+and mints a move-only authorization. The indexed writer matches the exact
+input again, checks `PersistExecutionInput`, and consumes the authorization
+before data/index publication; an exact replay only reissues durability
+barriers and is an explicit storage stutter.
+
+Before the first READY-QC view-state write, Kura validates the exact certificate,
+canonical ordered reservation group, committee bitmap, producer, payload hash,
+proposal hash, chain, and epoch into a move-only authorization. The writer
+consumes it, checks `PersistReadyQc`, and only then calls the durable Kura sink;
+an exact replay remains an explicit stutter. Before the first autonomous
+certified-session publication, Kura reconstructs the exact repair-disabled
+merge source, binds its payload, execution input, READY and Commit signer
+sets, canonical source bytes, and reservation group into another move-only
+authorization, then checks and consumes `LaneCommit` before the latest-frontier
+sink. An exact certified-session replay remains a storage stutter. The durable
+merge-source reader independently revalidates the exact same group while
+checking `PersistExecutionInput`, `PersistReadyQc`, and `LaneCommit`. Kura's move-only
 READY authorization checks `AuthorizeReady` from repair-disabled durable input
 and carries the exact input hash, proposal, availability body, reservation
 group, producer, signer, and height context. Its one-shot signer rederives the
 committee bits and shared group identity, checks `SignReady`, and consumes the
 checked projection immediately before `Signature::try_new`.
 
+Before the first autonomous slot-retirement tombstone, Kura revalidates the
+exact payload, incarnation-bound reservation group, committee geometry,
+producer/writer custody, retirement identity, and target view-state path into a
+move-only authorization. The writer consumes it, rechecks
+`PersistKuraRetirement`, and reaches the validated atomic view-state sink only
+afterward; an exact durable retirement retry is a storage stutter. Claim release
+then reads and validates the complete ordered group before promoting a crash
+temporary, deleting a redundant temporary, or replacing any claim. Only
+`ReleasePending* / Active*` and `Released* / ReleasePending*` crash prefixes are
+accepted. Each missing prefix element gets its own path-and-replacement-bound
+authorization and checked `AdvanceReleasePendingPrefix` or
+`AdvanceReleasedPrefix` projection immediately before the synced atomic replace.
+The source contract binds the write/flush/fsync/rename/fsync-directory order,
+and adversarial tests require invalid mixed-stage groups to remain byte-identical
+while canonical restart prefixes resume idempotently.
+
 Canonical application checks `ApplyCarrier` before the WSV commit sink. Queue
 then checks each ordered `PersistReservationCommitted`,
 `PersistPlanTombstone`, and `ForgetReservationCommit` prefix against the same
-group. Separately, the pre-Kura reservation-batch release path holds the Queue
-transition and FIFO locks while it revalidates QueuePlan V4, reservation V5,
-FIFO order, group binding, and committee geometry, then consumes its move-only
+group. Separately, the pre-Kura reservation-batch release path uses the same
+complete-group revalidation predicate while holding the Queue transition and
+FIFO locks, checks committee geometry, then consumes its move-only
 checked `DirectReleased` token immediately before the journal `release_batch`
 append. These local slices are not a complete production trace-extraction
 theorem.
 
 The remaining exact blocker is a machine-checked extraction from every other
 Rust QueuePlan journal V4 and reservation journal V5 transition, Kura, recovery,
-filesystem-error, restart, READY authorization/signature/QC, lane-commit,
-atomic WSV application, post-carrier cleanup, and remaining Release
-transitions into
+filesystem-error, restart, remaining READY/input recovery and lane-decision paths,
+atomic WSV application, post-carrier cleanup, and the remaining Queue
+PrepareRelease/CompleteRelease/FIFO/ForgetRelease transitions into
 `InFlightFirstReleaseSpec`, plus a backward ownership projection for every
 concrete terminal Commit/Release outcome into the implemented reverse
 terminal-owner projection.

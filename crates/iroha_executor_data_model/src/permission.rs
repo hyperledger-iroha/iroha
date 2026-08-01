@@ -683,8 +683,8 @@ pub mod settlement {
         /// Exact consent from a debited counterparty for one bilateral settlement intent.
         ///
         /// Only the account named by `debited_asset` may delegate or revoke this
-        /// token. The intent hash commits to the complete domain-separated DvP,
-        /// PvP, or repo phase, so changing any economic term or the settlement
+        /// token. The intent hash commits to the complete domain-separated `DvP`,
+        /// `PvP`, or repo phase, so changing any economic term or the settlement
         /// identifier requires fresh consent. Repo initiation requires distinct
         /// cash-debit and maturity-collateral consents before any asset moves.
         pub struct CanExecuteSettlement {
@@ -1070,9 +1070,7 @@ mod tests {
     use super::oracle::{
         CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
     };
-    use super::query::{
-        CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace,
-    };
+    use super::query::{CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace};
     use crate::permission::Permission as _;
     use iroha_crypto::KeyPair;
     use iroha_data_model::oracle::OracleChangeStage;

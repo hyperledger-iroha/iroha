@@ -8,7 +8,9 @@
 //! advanced per hash row, keeping the maximum committed-column degree at three.
 
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-use rand::{TryCryptoRng, rngs::OsRng};
+use rand::TryCryptoRng;
+#[cfg(test)]
+use rand::rngs::OsRng;
 use thiserror::Error;
 
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -237,13 +239,13 @@ const CA_PROOF_LENGTH_OFFSET_V1: usize =
     4 + 2 + 2 + 2 + CA_CLAIM_FIELDS_V1 * CA_CLAIM_RECORD_BYTES_V1;
 const CA_PROOF_ENVELOPE_BYTES_V1: usize = CA_PROOF_LENGTH_OFFSET_V1 + 4;
 /// Exact typed-claim envelope bytes, excluding the inner aggregate proof.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) const ZK_X509_CA_ACCUMULATOR_CLAIM_ENVELOPE_BYTES_V1: usize = CA_PROOF_ENVELOPE_BYTES_V1;
 /// Exact dedicated compact-CA DEEP payload bytes.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) const ZK_X509_CA_ACCUMULATOR_DEEP_OPENING_BYTES_V1: usize = CA_DEEP_BYTES_V1;
 /// Exact maximum inner X5C2 bytes including its DEEP payload.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) const ZK_X509_CA_ACCUMULATOR_INNER_MAX_PROOF_BYTES_V1: usize =
     CA_INNER_MAXIMUM_PROOF_BYTES_V1;
 /// Exact hard ceiling for the dedicated compact-CA proof envelope.
@@ -292,6 +294,7 @@ const CA_DEEP_COMPOSITION_MIX_LABEL_V1: &[u8] =
     b"iroha:privacy:zk-x509:ca-accumulator:deep-composition-mix:v1";
 const CA_GRINDING_NONCE_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:ca-accumulator:grinding-nonce:v1";
+#[cfg(test)]
 const CA_BINDING_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:ca-accumulator:proof-binding:v1";
 
 const CA_AGGREGATE_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
@@ -637,8 +640,7 @@ fn map_transparent_proof_error_v1(
         TransparentStarkErrorV1::NonCanonicalField => {
             ZkX509CaAccumulatorProofErrorV1::NonCanonicalField
         }
-        TransparentStarkErrorV1::InvalidMerkleOpening
-        | TransparentStarkErrorV1::InvalidMerkleShape => {
+        TransparentStarkErrorV1::InvalidMerkleShape => {
             ZkX509CaAccumulatorProofErrorV1::TraceOpening
         }
         TransparentStarkErrorV1::FriDegree => ZkX509CaAccumulatorProofErrorV1::FriOpening,
@@ -1162,7 +1164,7 @@ pub(crate) fn ca_accumulator_stark_terminal_claims_v1(
 }
 
 /// Compile the exact typed binding handed to the outer X5S1 verifier.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn ca_accumulator_subproof_binding_v1(
     trace: &ZkX509CaAccumulatorTraceV1,
     schedule: &ZkX509ShaCallScheduleV1,
@@ -1178,7 +1180,7 @@ pub(crate) fn ca_accumulator_subproof_binding_v1(
 }
 
 /// Extract the algebra claims from a validated typed subproof binding.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn ca_accumulator_subproof_terminal_claims_v1(
     binding: ZkX509CaAccumulatorSubproofBindingV1,
 ) -> ZkX509CaAccumulatorStarkTerminalClaimsV1 {
@@ -3096,14 +3098,14 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
         aggregate::encode_proof_with_deep_v1(&proof, &deep, CA_AGGREGATE_PARAMETERS_V1, &layout)
             .map_err(map_aggregate_proof_error_v1)?;
     let encoded = encode_ca_proof_envelope_v1(claims, &inner)?;
-    verify_zk_x509_ca_accumulator_stark_v1(public, sha_schedule, credential_main_pre_aux, &encoded)
+    verify_ca_accumulator_and_binding_v1(public, sha_schedule, credential_main_pre_aux, &encoded)
         .map_err(|_| ZkX509CaAccumulatorProofErrorV1::ProverSelfCheckFailed)?;
     Ok(encoded)
 }
 
 /// Construct the canonical dedicated compact-CA proof with operating-system
 /// cryptographic entropy.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1(
     trace: &ZkX509CaAccumulatorTraceV1,
     sha_schedule: &ZkX509ShaCallScheduleV1,
@@ -3275,6 +3277,7 @@ fn verify_ca_accumulator_and_binding_v1(
 
 /// Verify the exact canonical compact-CA proof against verifier-owned public
 /// input and SHA schedule.
+#[cfg(test)]
 pub(crate) fn verify_zk_x509_ca_accumulator_stark_v1(
     public: ZkX509CaAccumulatorStarkPublicV1,
     sha_schedule: &ZkX509ShaCallScheduleV1,
@@ -3297,6 +3300,7 @@ pub(crate) fn ca_accumulator_subproof_binding_from_proof_v1(
 
 /// Verify then hash the canonical proof together with its exact public
 /// statement and verifier-owned schedule for the outer X5S1 envelope.
+#[cfg(test)]
 pub(crate) fn ca_accumulator_proof_binding_digest_v1(
     public: ZkX509CaAccumulatorStarkPublicV1,
     sha_schedule: &ZkX509ShaCallScheduleV1,

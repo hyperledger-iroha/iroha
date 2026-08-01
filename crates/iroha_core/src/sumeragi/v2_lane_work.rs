@@ -96,8 +96,8 @@ use crate::{
         aggregate_lane_drain_votes, autonomous_lane_payload_envelope,
         decode_autonomous_lane_payload_envelope, deterministic_lane_author,
         lane_drain_vote_recipients, lane_payload_availability_body,
-        validate_committed_lane_block_session, validate_lane_block_proposal, validate_lane_block_qc,
-        validate_lane_block_qc_aggregate,
+        validate_committed_lane_block_session, validate_lane_block_proposal,
+        validate_lane_block_qc, validate_lane_block_qc_aggregate,
     },
     lane_drain::LaneDrainSigningGuard,
     merge_sidecar::{
@@ -126,12 +126,12 @@ use crate::{
 };
 
 #[cfg(test)]
+use crate::lane_consensus::LaneAutonomousArtifactError;
+#[cfg(test)]
 use crate::merge_sidecar::{
     CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
     CertifiedMergeSidecarStreamEpochV1,
 };
-#[cfg(test)]
-use crate::lane_consensus::LaneAutonomousArtifactError;
 #[cfg(test)]
 use crate::native_amx::{
     MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_HARD, MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_HARD,
@@ -2538,11 +2538,26 @@ impl V2LaneWorkAdapter {
         // The locally selected FIFO batch crosses its independent Kura
         // durability boundary before it becomes visible to either the
         // candidate provider or the network.
+        let queue = self.lane_drain_queue.as_ref().ok_or_else(|| {
+            V2LaneWorkError::InvalidContext(
+                "autonomous Kura activation requires the installed live queue".to_owned(),
+            )
+        })?;
+        let activation_authorization = queue
+            .authorize_lane_reservation_kura_activation(
+                batch
+                    .slot
+                    .selection_authorization()
+                    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?,
+                &payload.reservation_keys,
+            )
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         self.kura
-            .persist_lane_executable_payload(
+            .persist_producer_lane_executable_payload(
                 &payload,
                 self.native_chain_id_hash(),
                 self.context.epoch,
+                activation_authorization,
             )
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         let local_peer = self.local_peer.clone();
@@ -5752,23 +5767,15 @@ impl V2LaneWorkAdapter {
         proposal: &LaneBlockProposalV1,
         height_context_id: wire::HeightContextId,
     ) -> Result<(), String> {
-        let availability = lane_payload_availability_body(
-            payload,
-            proposal,
-            payload.chain_id_hash,
-            payload.epoch,
-        )
-        .map_err(|error| format!("failed to derive autonomous READY body: {error}"))?;
+        let availability =
+            lane_payload_availability_body(payload, proposal, payload.chain_id_hash, payload.epoch)
+                .map_err(|error| format!("failed to derive autonomous READY body: {error}"))?;
         self.prune_lane_ready_authorizations();
         let key = Self::lane_ready_session_key(proposal);
         let local_can_sign = self.voting_enabled
             && self.local_peer.public_key().try_algorithm().ok() == Some(Algorithm::BlsNormal)
-            && proposal
-                .descriptor
-                .validator_set
-                .contains(&self.local_peer);
-        let authorization = if local_can_sign
-            && !self.lane_ready_authorizations.contains_key(&key)
+            && proposal.descriptor.validator_set.contains(&self.local_peer);
+        let authorization = if local_can_sign && !self.lane_ready_authorizations.contains_key(&key)
         {
             Some(
                 self.kura
@@ -5797,8 +5804,7 @@ impl V2LaneWorkAdapter {
         {
             if !self.lane_ready_authorizations.contains_key(&key) {
                 let authorization = authorization.ok_or_else(|| {
-                    "local autonomous READY vote lacks durable execution-input authority"
-                        .to_owned()
+                    "local autonomous READY vote lacks durable execution-input authority".to_owned()
                 })?;
                 if self.lane_ready_authorizations.len() >= self.limits.session_capacity.get() {
                     return Err(
@@ -9214,8 +9220,8 @@ impl V2LaneWorkAdapter {
                 .authorized_payload_availability_body_for(proposal)
             {
                 Some(availability) => {
-                    let historical = self
-                        .historical_autonomous_recovery_record_for_proposal(proposal);
+                    let historical =
+                        self.historical_autonomous_recovery_record_for_proposal(proposal);
                     if historical.is_none()
                         && !self.lane_route_active(
                             proposal.descriptor.lane_id,
@@ -25168,6 +25174,11 @@ pub(super) mod tests {
             reservations,
             envelope_byte_limit: 4 * 1024 * 1024,
         };
+        let ordered_keys = batch
+            .reservations
+            .iter()
+            .map(|reservation| *reservation.key())
+            .collect::<Vec<_>>();
         let live_before = queue.live_lane_reservations();
         let queued_before = queue.queued_len();
         let journal_len_before = std::fs::metadata(&journal_path)
@@ -25177,6 +25188,59 @@ pub(super) mod tests {
             journal_len_before > empty_journal_len,
             "the exact live reservation batch must be durable before direct release"
         );
+
+        let mut reversed_keys = ordered_keys.clone();
+        reversed_keys.reverse();
+        assert!(
+            queue
+                .authorize_lane_reservation_kura_activation(
+                    batch
+                        .slot
+                        .selection_authorization()
+                        .expect("rederive activation authority for reversed keys"),
+                    &reversed_keys,
+                )
+                .is_err(),
+            "Kura activation must reject the same complete group in non-FIFO order"
+        );
+        assert_eq!(queue.live_lane_reservations(), live_before);
+        assert_eq!(queue.queued_len(), queued_before);
+        assert_eq!(
+            std::fs::metadata(&journal_path)
+                .expect("stat journal after rejected Kura activation order")
+                .len(),
+            journal_len_before,
+            "rejected activation order must not mutate journal ownership"
+        );
+
+        let activation = queue
+            .authorize_lane_reservation_kura_activation(
+                batch
+                    .slot
+                    .selection_authorization()
+                    .expect("rederive exact Kura activation authority"),
+                &ordered_keys,
+            )
+            .expect("authorize the complete FIFO-ordered V4/V5 group");
+        let contested_hash = ordered_keys[0].signed_transaction_hash;
+        assert!(
+            matches!(
+                queue.release_lane_reservation(&ordered_keys[0]),
+                Err(crate::queue::LaneQueueReservationError::Conflict { hash })
+                    if hash == contested_hash
+            ),
+            "the move-only Kura authorization must fence release of every exact reservation"
+        );
+        assert_eq!(queue.live_lane_reservations(), live_before);
+        assert_eq!(queue.queued_len(), queued_before);
+        assert_eq!(
+            std::fs::metadata(&journal_path)
+                .expect("stat journal while Kura activation is fenced")
+                .len(),
+            journal_len_before,
+            "a conflicting release must not append while Kura owns the exact transition fence"
+        );
+        drop(activation);
 
         let mut mismatched_group = batch
             .pre_kura_direct_release_context()
@@ -25254,6 +25318,14 @@ pub(super) mod tests {
             install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
         let expected_entrypoints =
             enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 4);
+        let exact_slot = plan_autonomous_lane_reservation_slot(
+            adapter.state.as_ref(),
+            adapter.kura.as_ref(),
+            &adapter.context,
+            lane_id,
+            dataspace_id,
+        )
+        .expect("plan the exact producer Kura activation slot");
         let journal_len_before = std::fs::metadata(&journal_path)
             .expect("stat empty reservation journal")
             .len();
@@ -25319,6 +25391,50 @@ pub(super) mod tests {
                 > journal_len_before,
             "queue ownership must be appended durably before publication"
         );
+        let activation = queue
+            .authorize_lane_reservation_kura_activation(
+                exact_slot
+                    .selection_authorization()
+                    .expect("derive exact producer Kura activation authority"),
+                &payload.reservation_keys,
+            )
+            .expect("reauthorize the still-live exact producer reservation group");
+        let mut substituted_proposal = payload.origin_proposal.clone();
+        substituted_proposal
+            .descriptor
+            .qc_mode_tag
+            .push_str(":substituted");
+        substituted_proposal.descriptor.descriptor_hash =
+            substituted_proposal.descriptor.computed_descriptor_hash();
+        substituted_proposal.proposal_hash = substituted_proposal.computed_proposal_hash();
+        let substituted_payload = LaneExecutablePayloadV1::new_signed_with_reservations(
+            adapter.native_chain_id_hash(),
+            adapter.context.epoch,
+            substituted_proposal,
+            payload.entrypoints.clone(),
+            payload.reservation_keys.clone(),
+            payload.routing_plans.clone(),
+            payload.native_amx_receipts.clone(),
+            adapter.local_peer.clone(),
+            adapter.key_pair.private_key(),
+        )
+        .expect("construct an internally valid payload with a substituted slot identity");
+        let substitution_error = adapter
+            .kura
+            .persist_producer_lane_executable_payload(
+                &substituted_payload,
+                adapter.native_chain_id_hash(),
+                adapter.context.epoch,
+                activation,
+            )
+            .expect_err("Queue authority must reject a substituted proposal identity");
+        assert!(
+            substitution_error
+                .to_string()
+                .contains("Queue-fenced reservation group"),
+            "the rejection must come from the canonical Queue/Kura slot binding: {substitution_error}"
+        );
+        assert_eq!(queue.live_lane_reservations().len(), expected_count);
         assert_eq!(
             adapter
                 .kura
@@ -26010,8 +26126,7 @@ pub(super) mod tests {
             )
             .expect("exact durable input remints restart authority");
         let mut stale_incarnation = proposal.clone();
-        stale_incarnation.descriptor.lane_incarnation =
-            Hash::new(b"stale-ready-lane-incarnation");
+        stale_incarnation.descriptor.lane_incarnation = Hash::new(b"stale-ready-lane-incarnation");
         assert_eq!(
             LanePayloadAvailabilityVoteV1::new_signed_with_authorization(
                 authorization,

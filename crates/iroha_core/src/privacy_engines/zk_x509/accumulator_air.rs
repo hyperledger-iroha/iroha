@@ -266,6 +266,7 @@ impl ZkX509CaAccumulatorTraceV1 {
     }
 
     /// Fixed native row count, including 24 canonical inactive rows.
+    #[cfg(test)]
     pub(crate) const fn rows(&self) -> usize {
         ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1
     }

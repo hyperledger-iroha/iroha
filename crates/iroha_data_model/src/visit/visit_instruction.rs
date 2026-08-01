@@ -139,6 +139,14 @@ fn visit_core_box_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &Instruct
 }
 
 fn visit_privacy_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
+    visit_privacy_protocol_instruction(visitor, isi)
+        || visit_privacy_issuer_and_proof_instruction(visitor, isi)
+}
+
+fn visit_privacy_protocol_instruction<V: Visit + ?Sized>(
+    visitor: &mut V,
+    isi: &InstructionBox,
+) -> bool {
     if let Some(v) = isi
         .as_any()
         .downcast_ref::<crate::isi::privacy::RegisterPrivacyProtocolActivationV1>()
@@ -199,9 +207,19 @@ fn visit_privacy_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &Instructi
         .downcast_ref::<crate::isi::privacy::RevokePrivacyZkAcePolicyV1>()
     {
         visitor.visit_revoke_privacy_zk_ace_policy_v1(v);
-    } else if let Some(v) =
-        isi.as_any()
-            .downcast_ref::<crate::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1>()
+    } else {
+        return false;
+    }
+    true
+}
+
+fn visit_privacy_issuer_and_proof_instruction<V: Visit + ?Sized>(
+    visitor: &mut V,
+    isi: &InstructionBox,
+) -> bool {
+    if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1>()
     {
         visitor.visit_register_privacy_bootle_lantern_issuer_policy_v1(v);
     } else if let Some(v) =
@@ -948,7 +966,7 @@ mod tests {
                 })
                 .collect(),
         });
-        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
             .expect("canonical visitor degree-512 multiplication matrix")
     }
 

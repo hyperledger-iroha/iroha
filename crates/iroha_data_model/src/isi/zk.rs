@@ -410,6 +410,11 @@ pub enum ElectionShapeV1Error {
 }
 
 /// Validate a first-release election option count and return its allocation length.
+///
+/// # Errors
+///
+/// Returns [`ElectionShapeV1Error::NoOptions`] for zero options or
+/// [`ElectionShapeV1Error::TooManyOptions`] above the V1 cap.
 pub fn validate_election_options_v1(options: u32) -> Result<usize, ElectionShapeV1Error> {
     let options = options as usize;
     if options == 0 {
@@ -428,6 +433,11 @@ pub fn validate_election_options_v1(options: u32) -> Result<usize, ElectionShape
 }
 
 /// Validate that a tally contains exactly one counter per valid V1 election option.
+///
+/// # Errors
+///
+/// Returns an election-shape error when the option count is invalid or the
+/// tally length differs from the validated option count.
 pub fn validate_election_tally_v1(
     options: u32,
     tally_len: usize,

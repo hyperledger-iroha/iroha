@@ -6686,6 +6686,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     }
 
     /// Remove a repo agreement and keep derived indexes consistent.
+    #[cfg(test)]
     pub(crate) fn remove_repo_agreement_entry(
         &mut self,
         agreement_id: &RepoAgreementId,
@@ -16264,17 +16265,20 @@ mod custom_parameter_tests {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct SortedUniqueVec<T> {
     inner: Vec<T>,
 }
 
+#[cfg(test)]
 impl<T> Default for SortedUniqueVec<T> {
     fn default() -> Self {
         Self { inner: Vec::new() }
     }
 }
 
+#[cfg(test)]
 impl<T: Ord> SortedUniqueVec<T> {
     fn is_empty(&self) -> bool {
         self.inner.is_empty()
@@ -16300,6 +16304,7 @@ impl<T: Ord> SortedUniqueVec<T> {
     }
 }
 
+#[cfg(test)]
 impl<T> IntoIterator for SortedUniqueVec<T> {
     type Item = T;
     type IntoIter = std::vec::IntoIter<T>;
@@ -16309,6 +16314,7 @@ impl<T> IntoIterator for SortedUniqueVec<T> {
     }
 }
 
+#[cfg(test)]
 impl<'a, T> IntoIterator for &'a SortedUniqueVec<T> {
     type Item = &'a T;
     type IntoIter = std::slice::Iter<'a, T>;
@@ -16318,22 +16324,21 @@ impl<'a, T> IntoIterator for &'a SortedUniqueVec<T> {
     }
 }
 
-/// Detached, per-transaction delta suitable for parallel execution outside of
-/// a live `StateBlock` borrow. Initially supports only side-effect-free ISIs
-/// like `Log`. Future extensions will record map mutations and merge them back
-/// deterministically.
 /// Compact identifier assigned to a metadata key within a detached transaction.
+#[cfg(test)]
 type NameId = u32;
 
 /// Interns metadata key names for a single detached transaction delta so that
 /// downstream aggregation can compare inexpensive integer handles instead of
 /// cloning `Name` values repeatedly.
+#[cfg(test)]
 #[derive(Default, Debug, Clone)]
 struct NameIntern {
     entries: Vec<iroha_data_model::name::Name>,
     index: std::collections::BTreeMap<iroha_data_model::name::Name, NameId>,
 }
 
+#[cfg(test)]
 impl NameIntern {
     fn intern(&mut self, name: iroha_data_model::name::Name) -> NameId {
         if let Some(&id) = self.index.get(&name) {
@@ -16356,18 +16361,21 @@ impl NameIntern {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PermissionDeltaOp {
     Grant,
     Revoke,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RoleDeltaOp {
     Grant,
     Revoke,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 enum DetachedPermissionOp {
     AccountPermission {
@@ -16398,35 +16406,59 @@ pub(crate) struct DetachedStateTransactionDelta {
     asset_transfer_destination_accounts: Vec<iroha_data_model::account::AccountId>,
     asset_transfer_amounts: Vec<Quantity>,
     // Intern pool shared by metadata operations
+    #[cfg(test)]
     name_intern: NameIntern,
     // Account key-value deltas (SoA + interned keys)
+    #[cfg(test)]
     account_kv_set_accounts: Vec<iroha_data_model::account::AccountId>,
+    #[cfg(test)]
     account_kv_set_key_ids: Vec<NameId>,
+    #[cfg(test)]
     account_kv_set_vals: Vec<iroha_primitives::json::Json>,
+    #[cfg(test)]
     account_kv_del_accounts: Vec<iroha_data_model::account::AccountId>,
+    #[cfg(test)]
     account_kv_del_key_ids: Vec<NameId>,
     // Domain key-value deltas
+    #[cfg(test)]
     domain_kv_set_domains: Vec<iroha_data_model::domain::DomainId>,
+    #[cfg(test)]
     domain_kv_set_key_ids: Vec<NameId>,
+    #[cfg(test)]
     domain_kv_set_vals: Vec<iroha_primitives::json::Json>,
+    #[cfg(test)]
     domain_kv_del_domains: Vec<iroha_data_model::domain::DomainId>,
+    #[cfg(test)]
     domain_kv_del_key_ids: Vec<NameId>,
     // NFT deltas
+    #[cfg(test)]
     nft_create:
         std::collections::BTreeMap<iroha_data_model::nft::NftId, iroha_data_model::nft::Nft>,
+    #[cfg(test)]
     nft_delete: std::collections::BTreeSet<iroha_data_model::nft::NftId>,
+    #[cfg(test)]
     nft_kv_set_ids: Vec<iroha_data_model::nft::NftId>,
+    #[cfg(test)]
     nft_kv_set_key_ids: Vec<NameId>,
+    #[cfg(test)]
     nft_kv_set_vals: Vec<iroha_primitives::json::Json>,
+    #[cfg(test)]
     nft_kv_del_ids: Vec<iroha_data_model::nft::NftId>,
+    #[cfg(test)]
     nft_kv_del_key_ids: Vec<NameId>,
     // AssetDefinition metadata
+    #[cfg(test)]
     asset_def_kv_set_ids: Vec<iroha_data_model::asset::AssetDefinitionId>,
+    #[cfg(test)]
     asset_def_kv_set_key_ids: Vec<NameId>,
+    #[cfg(test)]
     asset_def_kv_set_vals: Vec<iroha_primitives::json::Json>,
+    #[cfg(test)]
     asset_def_kv_del_ids: Vec<iroha_data_model::asset::AssetDefinitionId>,
+    #[cfg(test)]
     asset_def_kv_del_key_ids: Vec<NameId>,
     // Account permissions and roles (maps for last-write checks)
+    #[cfg(test)]
     perm_ops: std::collections::BTreeMap<
         (
             iroha_data_model::account::AccountId,
@@ -16434,6 +16466,7 @@ pub(crate) struct DetachedStateTransactionDelta {
         ),
         PermissionDeltaOp,
     >,
+    #[cfg(test)]
     role_ops: std::collections::BTreeMap<
         (
             iroha_data_model::account::AccountId,
@@ -16442,6 +16475,7 @@ pub(crate) struct DetachedStateTransactionDelta {
         RoleDeltaOp,
     >,
     // Role permission changes
+    #[cfg(test)]
     role_perm_ops: std::collections::BTreeMap<
         (
             iroha_data_model::role::RoleId,
@@ -16450,13 +16484,18 @@ pub(crate) struct DetachedStateTransactionDelta {
         PermissionDeltaOp,
     >,
     // Ordered permission/role operations for deterministic replay.
+    #[cfg(test)]
     permission_ops: Vec<DetachedPermissionOp>,
     // Peer registrations
+    #[cfg(test)]
     peer_adds: SortedUniqueVec<iroha_data_model::peer::PeerId>,
+    #[cfg(test)]
     peer_removes: SortedUniqueVec<iroha_data_model::peer::PeerId>,
     // Parameter updates (applied in order)
+    #[cfg(test)]
     param_updates: Vec<iroha_data_model::parameter::Parameter>,
     // By‑call trigger executions to apply at merge time
+    #[cfg(test)]
     exec_by_call: Vec<iroha_data_model::events::execute_trigger::ExecuteTriggerEvent>,
 }
 
@@ -16474,6 +16513,7 @@ pub(crate) struct DetachedMergeContext {
     pub(crate) current_dataspace_id: Option<iroha_data_model::nexus::DataSpaceId>,
 }
 
+#[cfg(test)]
 fn gather_last_wins_keyed<E, V>(
     entities: &[E],
     key_ids: &[NameId],
@@ -16500,6 +16540,7 @@ where
     ordered
 }
 
+#[cfg(test)]
 fn gather_set_keyed<E: Ord + Clone>(entities: &[E], key_ids: &[NameId]) -> Vec<(E, NameId)> {
     debug_assert_eq!(entities.len(), key_ids.len());
     let mut ordered = Vec::with_capacity(entities.len());
@@ -16529,8 +16570,21 @@ impl DetachedStateTransactionDelta {
     )> {
         let transfer_only = self.asset_transfer_source_ids.len() == 1
             && self.asset_transfer_destination_accounts.len() == 1
-            && self.asset_transfer_amounts.len() == 1
-            && self.account_kv_set_accounts.is_empty()
+            && self.asset_transfer_amounts.len() == 1;
+        #[cfg(test)]
+        let transfer_only = transfer_only && self.extended_delta_is_empty();
+        transfer_only.then(|| {
+            (
+                self.asset_transfer_source_ids[0].clone(),
+                self.asset_transfer_destination_accounts[0].clone(),
+                self.asset_transfer_amounts[0].clone(),
+            )
+        })
+    }
+
+    #[cfg(test)]
+    fn extended_delta_is_empty(&self) -> bool {
+        self.account_kv_set_accounts.is_empty()
             && self.account_kv_set_key_ids.is_empty()
             && self.account_kv_set_vals.is_empty()
             && self.account_kv_del_accounts.is_empty()
@@ -16559,14 +16613,7 @@ impl DetachedStateTransactionDelta {
             && self.peer_adds.is_empty()
             && self.peer_removes.is_empty()
             && self.param_updates.is_empty()
-            && self.exec_by_call.is_empty();
-        transfer_only.then(|| {
-            (
-                self.asset_transfer_source_ids[0].clone(),
-                self.asset_transfer_destination_accounts[0].clone(),
-                self.asset_transfer_amounts[0].clone(),
-            )
-        })
+            && self.exec_by_call.is_empty()
     }
 
     /// Return true when this transfer can use the simple batch merge path.
@@ -16632,6 +16679,7 @@ impl DetachedStateTransactionDelta {
         self.asset_transfer_amounts.push(amount);
     }
     /// Record a key-value insertion/update on an account.
+    #[cfg(test)]
     pub(crate) fn set_account_kv(
         &mut self,
         id: iroha_data_model::account::AccountId,
@@ -16644,6 +16692,7 @@ impl DetachedStateTransactionDelta {
         self.account_kv_set_vals.push(val);
     }
     /// Record a key-value removal on an account.
+    #[cfg(test)]
     pub(crate) fn remove_account_kv(
         &mut self,
         id: iroha_data_model::account::AccountId,
@@ -16654,6 +16703,7 @@ impl DetachedStateTransactionDelta {
         self.account_kv_del_key_ids.push(key_id);
     }
     /// Record a key-value insertion/update on a domain.
+    #[cfg(test)]
     pub(crate) fn set_domain_kv(
         &mut self,
         id: iroha_data_model::domain::DomainId,
@@ -16666,10 +16716,12 @@ impl DetachedStateTransactionDelta {
         self.domain_kv_set_vals.push(val);
     }
     /// Record an NFT deletion.
+    #[cfg(test)]
     pub(crate) fn unregister_nft(&mut self, id: iroha_data_model::nft::NftId) {
         self.nft_delete.insert(id);
     }
     /// Record a key-value insertion/update on an asset definition.
+    #[cfg(test)]
     pub(crate) fn set_asset_def_kv(
         &mut self,
         id: iroha_data_model::asset::AssetDefinitionId,
@@ -16682,6 +16734,7 @@ impl DetachedStateTransactionDelta {
         self.asset_def_kv_set_vals.push(val);
     }
     /// Record a permission grant to an account.
+    #[cfg(test)]
     pub(crate) fn grant_permission(
         &mut self,
         account: iroha_data_model::account::AccountId,
@@ -16697,6 +16750,7 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a permission revoke from an account.
+    #[cfg(test)]
     pub(crate) fn revoke_permission(
         &mut self,
         account: iroha_data_model::account::AccountId,
@@ -16712,6 +16766,7 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a role grant to an account.
+    #[cfg(test)]
     pub(crate) fn grant_role(
         &mut self,
         account: iroha_data_model::account::AccountId,
@@ -16723,6 +16778,7 @@ impl DetachedStateTransactionDelta {
             .push(DetachedPermissionOp::RoleAssignment { account, role, op });
     }
     /// Record a role revoke from an account.
+    #[cfg(test)]
     pub(crate) fn revoke_role(
         &mut self,
         account: iroha_data_model::account::AccountId,
@@ -16734,6 +16790,7 @@ impl DetachedStateTransactionDelta {
             .push(DetachedPermissionOp::RoleAssignment { account, role, op });
     }
     /// Record a role-permission grant.
+    #[cfg(test)]
     pub(crate) fn grant_role_permission(
         &mut self,
         role: iroha_data_model::role::RoleId,
@@ -16749,6 +16806,7 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a role-permission revoke.
+    #[cfg(test)]
     pub(crate) fn revoke_role_permission(
         &mut self,
         role: iroha_data_model::role::RoleId,
@@ -16764,6 +16822,7 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a peer registration.
+    #[cfg(test)]
     pub(crate) fn register_peer(&mut self, id: iroha_data_model::peer::PeerId) {
         let _ = self.peer_removes.remove(&id);
         self.peer_adds.insert(id);
@@ -16788,11 +16847,13 @@ impl DetachedStateTransactionDelta {
             nft: nft_id.clone(),
         }
         .into();
+        #[cfg(test)]
         let direct_op = self
             .perm_ops
             .get(&(authority.clone(), target_perm.clone()))
             .copied();
 
+        #[cfg(test)]
         match direct_op {
             Some(PermissionDeltaOp::Grant) => return Ok(true),
             Some(PermissionDeltaOp::Revoke) => {}
@@ -16805,8 +16866,21 @@ impl DetachedStateTransactionDelta {
                 }
             }
         }
+        #[cfg(not(test))]
+        {
+            let permissions = world
+                .account_permissions_iter(authority)
+                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
+            if permissions.into_iter().any(|perm| perm == &target_perm) {
+                return Ok(true);
+            }
+        }
 
+        #[cfg(test)]
         let mut roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
+        #[cfg(not(test))]
+        let roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
+        #[cfg(test)]
         for ((acc, role), op) in &self.role_ops {
             if acc != authority {
                 continue;
@@ -16822,6 +16896,7 @@ impl DetachedStateTransactionDelta {
         }
 
         for role in roles {
+            #[cfg(test)]
             match self
                 .role_perm_ops
                 .get(&(role.clone(), target_perm.clone()))
@@ -16886,11 +16961,13 @@ impl DetachedStateTransactionDelta {
                 account: account_id.clone(),
             }
             .into();
+        #[cfg(test)]
         let direct_op = self
             .perm_ops
             .get(&(authority.clone(), target_perm.clone()))
             .copied();
 
+        #[cfg(test)]
         match direct_op {
             Some(PermissionDeltaOp::Grant) => return Ok(true),
             Some(PermissionDeltaOp::Revoke) => {}
@@ -16903,8 +16980,21 @@ impl DetachedStateTransactionDelta {
                 }
             }
         }
+        #[cfg(not(test))]
+        {
+            let permissions = world
+                .account_permissions_iter(authority)
+                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
+            if permissions.into_iter().any(|perm| perm == &target_perm) {
+                return Ok(true);
+            }
+        }
 
+        #[cfg(test)]
         let mut roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
+        #[cfg(not(test))]
+        let roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
+        #[cfg(test)]
         for ((acc, role), op) in &self.role_ops {
             if acc != authority {
                 continue;
@@ -16920,6 +17010,7 @@ impl DetachedStateTransactionDelta {
         }
 
         for role in roles {
+            #[cfg(test)]
             match self
                 .role_perm_ops
                 .get(&(role.clone(), target_perm.clone()))
@@ -16940,10 +17031,12 @@ impl DetachedStateTransactionDelta {
     }
 
     /// Record a parameter update to be applied at merge.
+    #[cfg(test)]
     pub(crate) fn set_parameter(&mut self, param: iroha_data_model::parameter::Parameter) {
         self.param_updates.push(param);
     }
     /// Record an `ExecuteTrigger` (by‑call) to be executed at merge.
+    #[cfg(test)]
     pub(crate) fn execute_trigger_by_call(
         &mut self,
         evt: iroha_data_model::events::execute_trigger::ExecuteTriggerEvent,
@@ -16956,6 +17049,7 @@ impl DetachedStateTransactionDelta {
     ///
     /// # Errors
     /// Returns a `ValidationFail` when applying an instruction fails validation or invariants.
+    #[cfg(test)]
     #[allow(clippy::too_many_lines)]
     pub(crate) fn merge_into(
         self,
@@ -17049,53 +17143,67 @@ impl DetachedStateTransactionDelta {
     ///
     /// # Errors
     /// Returns a `ValidationFail` when applying an instruction fails validation or invariants.
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn merge_into_with_context(
         self,
         state_block: &mut StateBlock<'_>,
         authority: &iroha_data_model::account::AccountId,
         context: DetachedMergeContext,
     ) -> TransactionResultInner {
-        // Parallel-apply relies on this merge path to mirror sequential semantics for
-        // supported ISIs. Tests exercise the same operations through both paths to
-        // guarantee identical validation and event emission; extend cautiously and keep
-        // the merge logic deterministic to avoid shared mutable state across workers.
-        use crate::smartcontracts::Execute as _;
-        use iroha_data_model::isi::{Grant, Revoke, SetParameter};
-        use iroha_data_model::{
-            events::data::prelude::{
-                AccountEvent, AssetDefinitionEvent, ConfigurationEvent, DomainEvent,
-                MetadataChanged, NftEvent, ParameterChanged, PeerEvent,
-            },
-            transaction::error::TransactionRejectionReason,
-        };
+        use iroha_data_model::transaction::error::TransactionRejectionReason;
 
-        if let Some((source_id, destination, amount)) = self.single_transfer_delta() {
-            let mut stx = state_block.transaction();
-            stx.tx_call_hash = context.tx_call_hash;
-            stx.current_tx_hash = context.current_tx_hash;
-            stx.current_lane_id = context.current_lane_id;
-            stx.current_dataspace_id = context.current_dataspace_id;
-            if let Some(dataspace_id) = context.current_dataspace_id {
-                stx.world.current_dataspace_id = Some(dataspace_id);
-            }
-            let trigger_sequence =
-                crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
-                    &mut stx,
-                    authority,
-                    source_id,
-                    destination,
-                    amount,
-                )
-                .map_err(ValidationFail::InstructionFailed)
-                .map_err(TransactionRejectionReason::Validation)
-                .and_then(|()| {
-                    let trigger_sequence = stx.execute_data_triggers_dfs(authority)?;
-                    stx.apply();
-                    Ok(trigger_sequence)
-                })?;
-            return Ok(trigger_sequence);
+        #[cfg(test)]
+        if !self.extended_delta_is_empty() {
+            return self.merge_test_only_into_with_context(state_block, authority, context);
         }
+
+        let mut stx = state_block.transaction();
+        stx.tx_call_hash = context.tx_call_hash;
+        stx.current_tx_hash = context.current_tx_hash;
+        stx.current_lane_id = context.current_lane_id;
+        stx.current_dataspace_id = context.current_dataspace_id;
+        if let Some(dataspace_id) = context.current_dataspace_id {
+            stx.world.current_dataspace_id = Some(dataspace_id);
+        }
+        for ((source_id, destination), amount) in self
+            .asset_transfer_source_ids
+            .iter()
+            .zip(self.asset_transfer_destination_accounts.iter())
+            .zip(self.asset_transfer_amounts.iter())
+        {
+            crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
+                &mut stx,
+                authority,
+                source_id.clone(),
+                destination.clone(),
+                amount.clone(),
+            )
+            .map_err(ValidationFail::InstructionFailed)
+            .map_err(TransactionRejectionReason::Validation)?;
+        }
+        let trigger_sequence = stx.execute_data_triggers_dfs(authority)?;
+        stx.apply();
+        Ok(trigger_sequence)
+    }
+
+    /// Merge the recorded test-only extended delta into the live block.
+    ///
+    /// # Errors
+    /// Returns a `ValidationFail` when applying an instruction fails validation or invariants.
+    #[cfg(test)]
+    #[allow(clippy::too_many_lines)]
+    fn merge_test_only_into_with_context(
+        self,
+        state_block: &mut StateBlock<'_>,
+        authority: &iroha_data_model::account::AccountId,
+        context: DetachedMergeContext,
+    ) -> TransactionResultInner {
+        use crate::smartcontracts::Execute as _;
+        use iroha_data_model::events::data::prelude::{
+            AccountEvent, AssetDefinitionEvent, ConfigurationEvent, DomainEvent, MetadataChanged,
+            NftEvent, ParameterChanged, PeerEvent,
+        };
+        use iroha_data_model::isi::{Grant, Revoke, SetParameter};
+        use iroha_data_model::transaction::error::TransactionRejectionReason;
 
         let mut stx = state_block.transaction();
         stx.tx_call_hash = context.tx_call_hash;
@@ -31184,6 +31292,7 @@ impl State {
             .collect()
     }
 
+    #[cfg(test)]
     fn lane_relay_committee_seed(
         &self,
         dataspace_id: DataSpaceId,

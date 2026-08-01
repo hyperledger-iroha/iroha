@@ -25,8 +25,8 @@
 //!
 //! 1. Production opens [`V2BodyStore`] first, validates its recovery catalog
 //!    against the durable ingress gate, constructs the adapter/runtime, then
-//!    calls [`V2EffectExecutor::open_with_body_store`]. Tests and isolated
-//!    callers may use [`V2EffectExecutor::open`] as the combined wrapper. At
+//!    calls [`V2EffectExecutor::open_with_body_store`]. Crate tests may use the
+//!    test-only combined `V2EffectExecutor::open` wrapper. At
 //!    height one, retain the already-authenticated staged genesis with
 //!    [`V2EffectExecutor::install_authenticated_genesis_body`] before
 //!    dispatching startup effects. Move the returned [`V2BodyStore`] to the
@@ -71,10 +71,12 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
-    path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
+
+#[cfg(test)]
+use std::path::Path;
 
 use super::v2_core::{
     CanonicalIdentityProjection, CheckedProductionTransition, EFFECTIVE_LOCK_TRACE_OWNER,
@@ -105,14 +107,16 @@ use iroha_data_model::{
 #[cfg(test)]
 use norito::codec::Encode as _;
 
+#[cfg(test)]
+use super::v2_body_store::BlockSignaturePolicy;
 use super::{
     FairV2IngressOwnershipEvidence,
     message::BlockMessage,
     output_guard::ConsensusOutputGuard,
     v2::{AdapterEffect, AdapterError, SignRequest},
     v2_body_store::{
-        BlockSignaturePolicy, BodyStoreCompletion, BodyValidationCompletion, DurableBodyReceipt,
-        V2BodyStore, ValidatedBodyReceipt,
+        BodyStoreCompletion, BodyValidationCompletion, DurableBodyReceipt, V2BodyStore,
+        ValidatedBodyReceipt,
     },
     v2_chunks::{V2ChunkError, encode_payload},
     v2_recovery::PendingKuraApply,
@@ -1315,11 +1319,10 @@ pub(crate) trait V2EffectServices {
     ) -> Result<(), Self::Error>;
     /// Retire the exact service owner after a certified response wins acquisition.
     ///
-    /// Implementations must validate the complete task before mutation. Both
-    /// [`CertifiedBodyFetchCompletionDisposition::Retryable`] and every
-    /// returned error leave the exact service owner unchanged. `Retryable` is
-    /// reserved for an explicitly transient handoff; a missing, conflicting,
-    /// or corrupt owner must return an error so the executor fails closed.
+    /// Implementations must validate the complete task before mutation. Every
+    /// returned error leaves the exact service owner unchanged. A transient
+    /// handoff must be resolved before this boundary; a missing, conflicting,
+    /// or corrupt owner returns an error so the executor fails closed.
     fn complete_certified_body_fetch(
         &mut self,
         task: &BodyFetchTask,
@@ -1414,8 +1417,8 @@ pub(crate) enum CompletionDisposition {
 pub(crate) enum CertifiedBodyFetchCompletionDisposition {
     /// The exact service owner was retired once.
     Completed,
-    /// A typed transient boundary rejected the handoff without changing the
-    /// exact service owner; only the identical response may retry it.
+    /// Test seam for a transient handoff which leaves the exact owner unchanged.
+    #[cfg(test)]
     Retryable,
 }
 
@@ -2958,6 +2961,7 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
 impl V2EffectExecutor<SerializedV2Runtime> {
     /// Open the exact-body store under an explicit signature-authority policy
     /// and take ownership of the serialized runtime.
+    #[cfg(test)]
     pub(crate) fn open(
         runtime: SerializedV2Runtime,
         body_store_root: impl AsRef<Path>,
@@ -5937,6 +5941,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         match services.complete_certified_body_fetch(&task) {
             Ok(CertifiedBodyFetchCompletionDisposition::Completed) => {}
+            #[cfg(test)]
             Ok(CertifiedBodyFetchCompletionDisposition::Retryable) => {
                 self.abort_fetch_completion(plan);
                 return Err(EffectTransportError::Backpressure);
@@ -21801,12 +21806,14 @@ mod tests {
         assert!(!executor.status().fail_closed);
 
         let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
-        conflicting.execution_commitment = wire::ExecutionCommitment::without_topups(
-            Hash::new(b"conflicting terminal parent state"),
-            Hash::new(b"conflicting terminal post state"),
-            Hash::new(b"conflicting terminal ordinary writes"),
-            Hash::new(b"conflicting terminal executed block"),
-        );
+        conflicting.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"conflicting terminal parent state"),
+                Hash::new(b"conflicting terminal post state"),
+                Hash::new(b"conflicting terminal ordinary writes"),
+                1,
+                Hash::new(b"conflicting terminal executed block"),
+            );
         executor.runtime.effect_owners.clear();
         assert!(matches!(
             executor.consume_effects(
@@ -21897,12 +21904,14 @@ mod tests {
         assert!(!executor.status().fail_closed);
 
         let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
-        conflicting.execution_commitment = wire::ExecutionCommitment::without_topups(
-            Hash::new(b"conflicting terminal parent state"),
-            Hash::new(b"conflicting terminal post state"),
-            Hash::new(b"conflicting terminal ordinary writes"),
-            Hash::new(b"conflicting terminal executed block"),
-        );
+        conflicting.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"conflicting terminal parent state"),
+                Hash::new(b"conflicting terminal post state"),
+                Hash::new(b"conflicting terminal ordinary writes"),
+                1,
+                Hash::new(b"conflicting terminal executed block"),
+            );
         executor.runtime.effect_owners.clear();
         assert!(matches!(
             executor.consume_effects(

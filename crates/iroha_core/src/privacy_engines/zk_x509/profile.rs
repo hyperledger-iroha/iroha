@@ -62,14 +62,14 @@ pub(crate) const ZK_X509_UNCOMPRESSED_P256_BYTES_V1: usize = 65;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 /// RFC 5280 client-authentication EKU OID.
 pub(crate) const ZK_X509_CLIENT_AUTHENTICATION_EKU_OID_V1: &str = "1.3.6.1.5.5.7.3.2";
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 /// Iroha document-signing EKU OID.
 ///
 /// The `2.25` UUID OID is UUIDv5(URL namespace,
 /// `https://hyperledger.github.io/iroha/eku/document-signing/v1`).
 pub(crate) const ZK_X509_DOCUMENT_SIGNING_EKU_OID_V1: &str =
     "2.25.27309815684091774780500832483404888315";
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 /// Iroha wallet-identity EKU OID.
 ///
 /// The `2.25` UUID OID is UUIDv5(URL namespace,

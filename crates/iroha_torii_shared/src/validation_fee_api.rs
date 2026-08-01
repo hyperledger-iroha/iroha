@@ -251,11 +251,14 @@ pub struct ValidationFeeVerifiedPlainElectorateSnapshotV1 {
 #[norito(deny_unknown_fields)]
 pub struct ValidationFeeVerifiedEnactmentWindowV1 {
     /// Inclusive referendum opening height.
-    pub opens_at_height: String,
+    #[norito(rename = "opens_at_height")]
+    pub opening: String,
     /// Inclusive referendum closing height.
-    pub closes_at_height: String,
+    #[norito(rename = "closes_at_height")]
+    pub closing: String,
     /// Height at which the approved proposal was enacted.
-    pub enacted_at_height: String,
+    #[norito(rename = "enacted_at_height")]
+    pub enactment: String,
 }
 
 /// Complete JSON-safe deterministic PLAIN referendum result.
@@ -406,9 +409,9 @@ fn verified_parliament_proposal(
                 .to_string(),
         },
         enactment_window: ValidationFeeVerifiedEnactmentWindowV1 {
-            opens_at_height: authorization.referendum_window.lower.to_string(),
-            closes_at_height: authorization.referendum_window.upper.to_string(),
-            enacted_at_height: authorization.enacted_at_height.to_string(),
+            opening: authorization.referendum_window.lower.to_string(),
+            closing: authorization.referendum_window.upper.to_string(),
+            enactment: authorization.enacted_at_height.to_string(),
         },
         finalization: ValidationFeeVerifiedFinalizationV1 {
             proposal_id,
@@ -1382,10 +1385,7 @@ mod tests {
             projected.plain_electorate_snapshot.captured_at_height,
             referendum_lower.to_string()
         );
-        assert_eq!(
-            projected.enactment_window.enacted_at_height,
-            u64::MAX.to_string()
-        );
+        assert_eq!(projected.enactment_window.enactment, u64::MAX.to_string());
         assert_eq!(projected.plain_electorate_rules, plain_electorate_rules);
 
         let json = norito::json::to_string(&projected).expect("serialize JSON-safe projection");
@@ -1486,9 +1486,9 @@ mod tests {
                 approval_gate_height: "0".to_owned(),
             },
             enactment_window: ValidationFeeVerifiedEnactmentWindowV1 {
-                opens_at_height: "1".to_owned(),
-                closes_at_height: "2".to_owned(),
-                enacted_at_height: "2".to_owned(),
+                opening: "1".to_owned(),
+                closing: "2".to_owned(),
+                enactment: "2".to_owned(),
             },
             finalization: ValidationFeeVerifiedFinalizationV1 {
                 proposal_id: "02".repeat(32),
@@ -1556,6 +1556,9 @@ mod tests {
             "plainElectorateSnapshot",
             "rosterRoot",
             "memberCount",
+            "opens_at_height",
+            "closes_at_height",
+            "enacted_at_height",
             "contractAddress",
             "batchSbdMinorUnits",
             "account_id",

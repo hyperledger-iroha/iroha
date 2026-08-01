@@ -35,10 +35,10 @@ pub(super) fn sample_preimage_from_seed(
 
     let mut basis = Zeroizing::new(vec![flr::FLR::ZERO; 4 * DEGREE]);
     compute_basis(
-        trapdoor.f.as_ref(),
-        trapdoor.g.as_ref(),
-        trapdoor.capital_f.as_ref(),
-        trapdoor.capital_g.as_ref(),
+        &**trapdoor.f,
+        &**trapdoor.g,
+        &**trapdoor.capital_f,
+        &**trapdoor.capital_g,
         &mut basis,
     );
     let mut work = Zeroizing::new(vec![flr::FLR::ZERO; 9 * DEGREE]);
@@ -140,8 +140,8 @@ pub(super) fn sample_preimage_from_seed(
         poly::iFFT(LOG_DEGREE, target_one);
     }
 
-    let mut first = Zeroizing::new(Box::new([0_i16; DEGREE]));
-    let mut second = Zeroizing::new(Box::new([0_i16; DEGREE]));
+    let mut first = Box::new(Zeroizing::new([0_i16; DEGREE]));
+    let mut second = Box::new(Zeroizing::new([0_i16; DEGREE]));
     let target_zero = &work[4 * DEGREE..5 * DEGREE];
     let target_one = &work[5 * DEGREE..6 * DEGREE];
     let mut norm_squared = 0_u64;
@@ -161,7 +161,7 @@ pub(super) fn sample_preimage_from_seed(
     if norm_squared > super::SIGNATURE_NORM_SQUARED_BOUND {
         return None;
     }
-    if !preimage_equation_holds(target, trapdoor.h.as_ref(), first.as_ref(), second.as_ref()) {
+    if !preimage_equation_holds(target, &**trapdoor.h, &**first, &**second) {
         return None;
     }
     Some(Preimage {
@@ -178,7 +178,7 @@ fn preimage_equation_holds(
     second: &[i16; DEGREE],
 ) -> bool {
     let modulus = i64::from(super::MODULUS);
-    let mut product = Zeroizing::new(Box::new([0_i64; DEGREE]));
+    let mut product = Box::new(Zeroizing::new([0_i64; DEGREE]));
     for (index, coefficient) in first.iter().copied().enumerate() {
         product[index] = i64::from(coefficient);
     }
@@ -231,10 +231,10 @@ pub(super) fn sampler_exhausts_with_zero_budget_for_test(
 ) -> bool {
     let mut basis = Zeroizing::new(vec![flr::FLR::ZERO; 4 * DEGREE]);
     compute_basis(
-        trapdoor.f.as_ref(),
-        trapdoor.g.as_ref(),
-        trapdoor.capital_f.as_ref(),
-        trapdoor.capital_g.as_ref(),
+        &**trapdoor.f,
+        &**trapdoor.g,
+        &**trapdoor.capital_f,
+        &**trapdoor.capital_g,
         &mut basis,
     );
     let mut sampler = sampler::Sampler::<comm::chacha::ChaCha20Prng>::new(LOG_DEGREE, seed, 0);

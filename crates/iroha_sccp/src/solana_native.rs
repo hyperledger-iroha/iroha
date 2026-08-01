@@ -438,7 +438,7 @@ pub fn canonical_sccp_solana_agave_anchor_bytes_v1(
     }
     let semantic_profile_hash =
         sccp_solana_agave_semantic_profile_hash_v1(anchor.semantic_profile)?;
-    let verifying_key_hash = sccp_groth16_bn254_verifying_key_hash_v1(anchor.verifying_key)?;
+    let verifying_key_hash = sccp_groth16_bn254_verifying_key_hash_v1(&anchor.verifying_key)?;
     if !hashes_are_nonzero_and_distinct(&[
         anchor.genesis_hash,
         anchor.checkpoint_bank_hash,
@@ -453,7 +453,7 @@ pub fn canonical_sccp_solana_agave_anchor_bytes_v1(
         return None;
     }
     let verifying_key_bytes =
-        canonical_sccp_groth16_bn254_verifying_key_bytes_v1(anchor.verifying_key)?;
+        canonical_sccp_groth16_bn254_verifying_key_bytes_v1(&anchor.verifying_key)?;
     let profile_bytes =
         canonical_sccp_solana_agave_semantic_profile_bytes_v1(anchor.semantic_profile)?;
     let mut out = Vec::with_capacity(76 + profile_bytes.len() + verifying_key_bytes.len());

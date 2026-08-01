@@ -38,8 +38,7 @@ use super::{
     },
     ring::ProofPolynomialV1,
     transcript::{
-        MatrixRoleV1, PresentationTranscriptV1, ProofMatrixV1, ProofTranscriptCoreV1,
-        TranscriptErrorV1,
+        MatrixRoleV1, ProofMatrixV1, ProofTranscriptCoreV1, TranscriptErrorV1,
         expand_proof_matrix_v1,
     },
 };
@@ -1225,10 +1224,10 @@ pub enum ToolboxErrorV1 {
 mod tests {
     use super::*;
     use crate::privacy_engines::bootle_lantern::transcript::{
-        MatrixSeedV1, PresentationChallengeBindingV1,
+        MatrixSeedV1, PresentationChallengeBindingV1, PresentationTranscriptV1,
     };
 
-    fn projection_test_transcript() -> PresentationTranscriptV1 {
+    fn projection_test_transcript() -> ProofTranscriptCoreV1 {
         let parameter_digest = [0x11; 32];
         PresentationTranscriptV1::new(
             PresentationChallengeBindingV1 {
@@ -1242,6 +1241,7 @@ mod tests {
             [0x77; 32],
         )
         .expect("fully bound projection transcript")
+        .proof_core()
     }
 
     #[test]

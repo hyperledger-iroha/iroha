@@ -213,9 +213,11 @@ impl MerkleWitness {
         let mut position = self.proof.leaf_index();
         let mut accumulator = lane_merkle_leaf_hash(&self.leaf);
         for (level, sibling) in self.proof.audit_path().iter().enumerate() {
-            let sibling = sibling.as_ref().ok_or(PrivacyError::MissingMerkleSibling {
-                level: u8::try_from(level).unwrap_or(u8::MAX),
-            })?;
+            let sibling = sibling
+                .as_ref()
+                .ok_or_else(|| PrivacyError::MissingMerkleSibling {
+                    level: u8::try_from(level).unwrap_or(u8::MAX),
+                })?;
             accumulator = if position & 1 == 0 {
                 lane_merkle_node_hash(&accumulator, sibling)
             } else {

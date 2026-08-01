@@ -4271,7 +4271,10 @@ mod tests {
     #[allow(dead_code)]
     #[derive(Clone, Debug, PartialEq, Eq, Encode)]
     enum LaneQueueReservationJournalFrameV5RetiredRemovalFixture {
-        Bootstrap { version: u16, format_digest: Hash },
+        Bootstrap {
+            version: u16,
+            format_digest: Hash,
+        },
         Snapshot {
             live: Vec<LaneQueueReservationRecordV5>,
             committed: Vec<LaneQueueReservationKeyV2>,

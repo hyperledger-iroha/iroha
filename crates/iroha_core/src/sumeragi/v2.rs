@@ -3122,6 +3122,7 @@ impl ServicedCandidateCapacityGeometry {
 // Standalone adapter fixtures are paired with the existing 1024-command and
 // 1024-effect test defaults. Production construction always supplies the
 // validated height configuration explicitly through the runner.
+#[cfg(test)]
 const DEFAULT_SERVICED_CANDIDATE_CAPACITY_GEOMETRY: ServicedCandidateCapacityGeometry =
     ServicedCandidateCapacityGeometry::new(MAX_DEFERRED_INPUTS, MAX_DEFERRED_INPUTS);
 
@@ -3152,6 +3153,7 @@ const fn candidate_lifecycle_capacity(
 /// dormant durable replay, and the disjoint timeout clock. Multiplying by the
 /// exact eleven-class reducer-event projection also covers a retained service
 /// marker while the same causal lifecycle remains active.
+#[cfg(test)]
 const fn serviced_candidate_capacity_with_geometry(
     roster_len: usize,
     geometry: ServicedCandidateCapacityGeometry,
@@ -3714,6 +3716,7 @@ impl SumeragiV2Adapter {
     /// Network ingress is never exposed before replay has completed.  The
     /// returned startup effects may re-sign an already durable intent or fetch
     /// and apply an already durable decision.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open(
         wal_path: impl Into<PathBuf>,
@@ -3773,6 +3776,7 @@ impl SumeragiV2Adapter {
     /// a `Running` successor handoff. It must publish a status snapshot after
     /// every remaining startup constructor succeeds, live clocks are armed,
     /// and authenticated ingress is open. All ordinary callers use [`Self::open`].
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_deferred_status(
         wal_path: impl Into<PathBuf>,
@@ -3822,6 +3826,7 @@ impl SumeragiV2Adapter {
         )
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn open_with_aggregator(
         wal_path: impl Into<PathBuf>,
@@ -3846,6 +3851,7 @@ impl SumeragiV2Adapter {
         )
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn open_with_aggregator_and_publication(
         wal_path: impl Into<PathBuf>,
@@ -8834,6 +8840,7 @@ impl SumeragiV2Adapter {
     /// `None` means no owner was serviceable. Production runtime code treats a
     /// `None` after observing [`Self::deferred_work_is_serviceable`] as a
     /// fail-closed source-fidelity violation.
+    #[cfg(test)]
     pub(crate) fn drain_deferred_with_evidence(
         &mut self,
     ) -> Result<Option<(Vec<AdapterEffect>, DeferredServiceEvidence)>, AdapterError> {
@@ -8849,6 +8856,7 @@ impl SumeragiV2Adapter {
     /// class rotation only within the resulting exact set, so a later
     /// Completion, Progress, or Normal occurrence cannot overtake a frozen
     /// causal owner merely because it occupies the cursor's next class.
+    #[cfg(test)]
     pub(crate) fn drain_deferred_with_evidence_for_ordinals(
         &mut self,
         eligible: &BTreeSet<u128>,

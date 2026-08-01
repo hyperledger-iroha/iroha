@@ -355,6 +355,11 @@ impl GovernanceDagCanonicalRequestV1 {
     ) -> Result<Self, &'static str> {
         let body_length = u64::try_from(body.len())
             .map_err(|_| "Governance DAG request body length exceeds u64")?;
+        if max_body_bytes == 0 || body_length > max_body_bytes {
+            return Err(
+                "Governance DAG request body commitment is noncanonical or exceeds the configured bound",
+            );
+        }
         let mut canonical_headers = selected_headers
             .into_iter()
             .map(|(name, value)| {
@@ -692,6 +697,7 @@ fn partition_governance_dag_http_headers_v1<'a>(
         .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::InvalidFraming)?;
     let mut selected = Vec::with_capacity(GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADERS_V1);
     let mut authentication = Vec::with_capacity(GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1.len());
+    let mut selected_header_bytes = 0_usize;
     let mut content_length = None;
     for (name, value) in headers {
         if governance_request_auth_is_forbidden_credential_header_v1(name) {
@@ -700,6 +706,17 @@ fn partition_governance_dag_http_headers_v1<'a>(
         if governance_request_auth_header_has_prefix_v1(name) {
             if authentication_headers == GovernanceDagAuthenticationHeaderDispositionV1::Reject {
                 return Err(GovernanceDagRequestAuthenticationErrorV1::ForbiddenHeader);
+            }
+            if authentication.len() == GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1.len() {
+                return match parse_governance_dag_request_authentication_headers_v1(
+                    authentication
+                        .iter()
+                        .copied()
+                        .chain(std::iter::once((name, value))),
+                ) {
+                    Ok(_) => Err(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader),
+                    Err(error) => Err(error),
+                };
             }
             authentication.push((name, value));
             continue;
@@ -722,6 +739,18 @@ fn partition_governance_dag_http_headers_v1<'a>(
             .binary_search(&name)
             .is_ok()
         {
+            if selected.len() == GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADERS_V1 {
+                return Err(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest);
+            }
+            selected_header_bytes = selected_header_bytes
+                .checked_add(name.len())
+                .and_then(|total| total.checked_add(value.len()))
+                .ok_or(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest)?;
+            if value.len() > GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADER_VALUE_BYTES_V1
+                || selected_header_bytes > GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADER_BYTES_V1
+            {
+                return Err(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest);
+            }
             selected.push((name, value));
             continue;
         }
@@ -12474,6 +12503,102 @@ mod tests {
         assert_eq!(
             runtime_dag_decode_allocation_limit(usize::MAX),
             GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1
+        );
+    }
+
+    #[test]
+    fn canonical_request_rejects_body_bound_before_consuming_headers() {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            GovernanceDagCanonicalRequestV1::try_from_http_parts(
+                GovernanceDagAuthenticationScope::Ipfs,
+                "POST",
+                "https://example.invalid/api/v0/add?pin=false",
+                std::iter::once_with(|| -> (&'static str, &'static [u8]) {
+                    panic!("oversized body must fail before headers are consumed")
+                }),
+                b"too-large",
+                1,
+            )
+        }));
+        let error = result
+            .expect("body-bound rejection must not poll the header iterator")
+            .expect_err("oversized body must fail closed");
+        assert_eq!(
+            error,
+            "Governance DAG request body commitment is noncanonical or exceeds the configured bound"
+        );
+    }
+
+    #[test]
+    fn request_partition_rejects_selected_header_count_before_vector_growth() {
+        let headers = std::iter::repeat_n(
+            ("accept", b"application/octet-stream".as_slice()),
+            GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADERS_V1 + 1,
+        )
+        .chain(std::iter::once_with(|| -> (&'static str, &'static [u8]) {
+            panic!("selected-header overflow must stop iterator consumption")
+        }));
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            partition_governance_dag_http_headers_v1(
+                headers,
+                b"",
+                GovernanceDagAuthenticationHeaderDispositionV1::Retain,
+            )
+        }));
+        assert_eq!(
+            result
+                .expect("selected-header overflow must not poll past its fixed bound")
+                .expect_err("selected-header overflow must fail closed"),
+            GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest
+        );
+    }
+
+    #[test]
+    fn request_partition_rejects_selected_header_budget_before_vector_growth() {
+        let oversized_value = vec![b'a'; GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADER_VALUE_BYTES_V1 + 1];
+        let headers =
+            std::iter::once(("accept", oversized_value.as_slice())).chain(std::iter::once_with(
+                || panic!("selected-header byte overflow must stop iterator consumption"),
+            ));
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            partition_governance_dag_http_headers_v1(
+                headers,
+                b"",
+                GovernanceDagAuthenticationHeaderDispositionV1::Retain,
+            )
+        }));
+        assert_eq!(
+            result
+                .expect("selected-header byte overflow must not poll past its fixed bound")
+                .expect_err("selected-header byte overflow must fail closed"),
+            GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest
+        );
+    }
+
+    #[test]
+    fn request_partition_rejects_authentication_header_count_before_vector_growth() {
+        let headers = std::iter::repeat_n(
+            (
+                GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1[0],
+                b"1".as_slice(),
+            ),
+            GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1.len() + 1,
+        )
+        .chain(std::iter::once_with(|| -> (&'static str, &'static [u8]) {
+            panic!("authentication-header overflow must stop iterator consumption")
+        }));
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            partition_governance_dag_http_headers_v1(
+                headers,
+                b"",
+                GovernanceDagAuthenticationHeaderDispositionV1::Retain,
+            )
+        }));
+        assert_eq!(
+            result
+                .expect("authentication-header overflow must not poll past its fixed bound")
+                .expect_err("authentication-header overflow must fail closed"),
+            GovernanceDagRequestAuthenticationErrorV1::DuplicateHeader
         );
     }
 

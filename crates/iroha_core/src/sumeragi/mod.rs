@@ -1124,6 +1124,7 @@ impl FairV2IngressLeaderWireToken {
     }
 
     /// Immutable first reservation ordinal.
+    #[cfg(test)]
     pub(crate) const fn admission_ordinal(&self) -> u64 {
         self.admission_ordinal
     }
@@ -4956,6 +4957,47 @@ impl FairV2Ingress {
             return Err("leader-wire terminal changed exact runtime ownership".to_owned());
         }
         gate.mark_producer_terminal(runtime, producer_terminal)?;
+        let record = state
+            .leader_wire_lifecycles
+            .get_mut(&token.slot)
+            .expect("validated leader-wire runtime record remains bound");
+        record.status = FairV2IngressLeaderWireStatus::Terminal;
+        record.ingress_predecessors.clear();
+        self.debug_assert_consistent(&state);
+        Ok(())
+    }
+
+    /// Publish a restart-stable terminal from independently durable body bytes.
+    pub(crate) fn mark_leader_wire_durable_body_terminal(
+        &self,
+        runtime: &serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt,
+        durable_body: &v2_body_store::DurableBodyReceipt,
+    ) -> Result<(), String> {
+        let token = runtime.token();
+        let mut state = self.state.lock();
+        let gate = state
+            .leader_wire_lifecycle_gate
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| {
+                "leader-wire body terminal crossed an unbound lifecycle gate".to_owned()
+            })?;
+        let record = state
+            .leader_wire_lifecycles
+            .get(&token.slot)
+            .ok_or_else(|| "leader-wire body terminal has no runtime record".to_owned())?;
+        if record.token != *token
+            || !matches!(
+                record.status,
+                FairV2IngressLeaderWireStatus::Runtime
+                    | FairV2IngressLeaderWireStatus::VolatileTerminal
+                    | FairV2IngressLeaderWireStatus::Terminal
+            )
+            || record.restored_runtime_owner != Some(runtime.owner())
+        {
+            return Err("leader-wire body terminal changed exact runtime ownership".to_owned());
+        }
+        gate.mark_durable_body_terminal(runtime, durable_body)?;
         let record = state
             .leader_wire_lifecycles
             .get_mut(&token.slot)

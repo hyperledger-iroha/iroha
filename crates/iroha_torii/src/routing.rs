@@ -48759,9 +48759,7 @@ mod cursor_mode_tests {
 
     use iroha_core::{
         kura::Kura,
-        query::snapshot::{
-            CursorMode, run_on_snapshot_with_mode_arc_and_start_budget,
-        },
+        query::snapshot::{CursorMode, run_on_snapshot_with_mode_arc_and_start_budget},
         query::store::LiveQueryStore,
         smartcontracts::isi::query::QueryLimits,
         state::{State, World},
@@ -48780,10 +48778,8 @@ mod cursor_mode_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let domains = (0..3).map(|index| {
-            Domain::new(
-                DomainId::try_new(format!("cursor{index}"), "world").expect("domain id"),
-            )
-            .build(authority)
+            Domain::new(DomainId::try_new(format!("cursor{index}"), "world").expect("domain id"))
+                .build(authority)
         });
         let world = World::with(
             domains,
@@ -48804,9 +48800,8 @@ mod cursor_mode_tests {
             },
             ..QueryParams::default()
         };
-        let payload = norito::codec::Encode::encode(
-            &iroha_data_model::query::domain::prelude::FindDomains,
-        );
+        let payload =
+            norito::codec::Encode::encode(&iroha_data_model::query::domain::prelude::FindDomains);
         let query_box: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<Domain>::new(
             CompoundPredicate::PASS,
             SelectorTuple::default(),

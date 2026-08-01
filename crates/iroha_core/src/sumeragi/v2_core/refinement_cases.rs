@@ -598,8 +598,7 @@ fn in_flight_first_release_advance_commit_cleanup_prefixes(
         let before = state;
         state.history.reservation_commit_forgotten_prefix = prefix;
         if prefix == state.queue.selected_count {
-            state.queue.reservation_state =
-                IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN;
+            state.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN;
         }
         state = checked_in_flight_first_release_step(
             IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT,
@@ -703,8 +702,7 @@ fn in_flight_first_release_composed_commit_path_is_exact_and_terminal() {
         let before = state;
         state.history.reservation_commit_forgotten_prefix = prefix;
         if prefix == state.queue.selected_count {
-            state.queue.reservation_state =
-                IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN;
+            state.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN;
         }
         state = checked_in_flight_first_release_step(
             IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT,
@@ -806,7 +804,9 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
 
     let mut skipped_commit = applied;
     skipped_commit.history.reservation_committed_prefix = 2;
-    assert!(production_in_flight_first_release_state_kernel(skipped_commit));
+    assert!(production_in_flight_first_release_state_kernel(
+        skipped_commit
+    ));
     assert!(
         check_production_in_flight_first_release_transition(
             ProductionInFlightFirstReleaseTransitionProjection {
@@ -839,7 +839,9 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
     let mut decreasing_commit = committed;
     decreasing_commit.history.reservation_committed_prefix = 3;
     decreasing_commit.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE;
-    assert!(production_in_flight_first_release_state_kernel(decreasing_commit));
+    assert!(production_in_flight_first_release_state_kernel(
+        decreasing_commit
+    ));
     assert!(
         check_production_in_flight_first_release_transition(
             ProductionInFlightFirstReleaseTransitionProjection {
@@ -855,7 +857,9 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
 
     let mut skipped_tombstone = committed;
     skipped_tombstone.history.queue_plan_tombstoned_prefix = 2;
-    assert!(production_in_flight_first_release_state_kernel(skipped_tombstone));
+    assert!(production_in_flight_first_release_state_kernel(
+        skipped_tombstone
+    ));
     assert!(
         check_production_in_flight_first_release_transition(
             ProductionInFlightFirstReleaseTransitionProjection {
@@ -888,7 +892,9 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
     let mut decreasing_tombstone = tombstoned;
     decreasing_tombstone.history.queue_plan_tombstoned_prefix = 3;
     decreasing_tombstone.queue.plan_state = IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED;
-    assert!(production_in_flight_first_release_state_kernel(decreasing_tombstone));
+    assert!(production_in_flight_first_release_state_kernel(
+        decreasing_tombstone
+    ));
     assert!(
         check_production_in_flight_first_release_transition(
             ProductionInFlightFirstReleaseTransitionProjection {
@@ -904,7 +910,9 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
 
     let mut skipped_forget = tombstoned;
     skipped_forget.history.reservation_commit_forgotten_prefix = 2;
-    assert!(production_in_flight_first_release_state_kernel(skipped_forget));
+    assert!(production_in_flight_first_release_state_kernel(
+        skipped_forget
+    ));
     assert!(
         check_production_in_flight_first_release_transition(
             ProductionInFlightFirstReleaseTransitionProjection {
@@ -936,9 +944,13 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
     }
 
     let mut decreasing_forget = forgotten;
-    decreasing_forget.history.reservation_commit_forgotten_prefix = 3;
+    decreasing_forget
+        .history
+        .reservation_commit_forgotten_prefix = 3;
     decreasing_forget.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED;
-    assert!(production_in_flight_first_release_state_kernel(decreasing_forget));
+    assert!(production_in_flight_first_release_state_kernel(
+        decreasing_forget
+    ));
     assert!(
         check_production_in_flight_first_release_transition(
             ProductionInFlightFirstReleaseTransitionProjection {
@@ -958,7 +970,9 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
         tombstone_before_commit
     ));
     let mut forget_before_tombstone = committed;
-    forget_before_tombstone.history.reservation_commit_forgotten_prefix = 1;
+    forget_before_tombstone
+        .history
+        .reservation_commit_forgotten_prefix = 1;
     assert!(!production_in_flight_first_release_state_kernel(
         forget_before_tombstone
     ));

@@ -26,7 +26,7 @@ pub use normal::NormalPublicKey as BlsNormalPublicKey;
 ///
 /// Pre-aggregated same-message verification has the same requirement and is
 /// deliberately not exposed for BLS-small. Pass the individual signatures and
-/// PoPs to [`crate::bls_small_verify_aggregate_same_message`] instead.
+/// `PoPs` to [`crate::bls_small_verify_aggregate_same_message`] instead.
 ///
 /// ```compile_fail
 /// use iroha_crypto::BlsSmall;

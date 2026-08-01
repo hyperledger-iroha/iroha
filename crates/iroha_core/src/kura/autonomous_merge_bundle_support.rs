@@ -81,6 +81,704 @@ pub(crate) struct LaneReadyAuthorization {
     height_context_id: HeightContextId,
 }
 
+/// Move-only authority for the first durable autonomous execution-input write.
+///
+/// The authority is minted from the exact repair-disabled executable payload
+/// and reconstructed input. It binds the canonical reservation group and one
+/// authenticated committee actor, then is consumed immediately before the
+/// indexed Kura sidecar append.
+#[must_use = "an autonomous execution-input authorization must be consumed by Kura"]
+struct AutonomousLaneExecutionInputPersistenceAuthorization {
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+    input: LaneBlockExecutionInputArtifact,
+}
+
+impl AutonomousLaneExecutionInputPersistenceAuthorization {
+    fn matches_input(&self, input: &LaneBlockExecutionInputArtifact) -> bool {
+        self.input == *input
+    }
+
+    fn consume_for_persistence(
+        self,
+        input: &LaneBlockExecutionInputArtifact,
+    ) -> Option<ProductionInFlightFirstReleaseTransitionProjection> {
+        self.matches_input(input).then_some(self.projection)
+    }
+}
+
+/// Move-only authority for the exact autonomous READY-QC Kura write.
+///
+/// Construction validates the certificate against the immutable executable
+/// payload and constructs the complete first-release `PersistReadyQc`
+/// projection. The Kura writer consumes this value against the same payload
+/// and certificate, checks the projection, and only then publishes the durable
+/// view state.
+#[must_use = "an autonomous READY-QC authorization must be consumed by Kura"]
+struct AutonomousLaneReadyQcPersistenceAuthorization {
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+    chain_id_hash: Hash,
+    epoch: u64,
+    executable_payload_hash: Hash,
+    origin_proposal_hash: Hash,
+    reservation_group: LaneQueueReservationGroupBindingV1,
+    certificate: DurableLanePayloadAvailabilityCertificateV1,
+}
+
+impl AutonomousLaneReadyQcPersistenceAuthorization {
+    fn consume_for_persistence(
+        self,
+        payload: &LaneExecutablePayloadV1,
+        certificate: &DurableLanePayloadAvailabilityCertificateV1,
+    ) -> Option<ProductionInFlightFirstReleaseTransitionProjection> {
+        let reservation_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+                .ok()?;
+        if self.chain_id_hash != payload.chain_id_hash
+            || self.epoch != payload.epoch
+            || self.executable_payload_hash != payload.payload_hash
+            || self.origin_proposal_hash != payload.origin_proposal.proposal_hash
+            || self.reservation_group != reservation_group
+            || self.certificate != *certificate
+        {
+            return None;
+        }
+        Some(self.projection)
+    }
+}
+
+/// Move-only authority for the first durable autonomous lane-Commit write.
+///
+/// Kura mints this value only from the exact repair-disabled merge source that
+/// joins the immutable executable payload, durable execution input, READY QC,
+/// and Prepare/Commit certificate. The certified-session writer matches the
+/// complete artifact again and consumes the checked `LaneCommit` projection
+/// before publishing either the latest frontier or the indexed certificate.
+#[must_use = "an autonomous lane-Commit authorization must be consumed by Kura"]
+struct AutonomousLaneCommitPersistenceAuthorization {
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+    certified: CertifiedLaneBlockArtifact,
+}
+
+impl AutonomousLaneCommitPersistenceAuthorization {
+    fn matches_artifact(&self, artifact: &CertifiedLaneBlockArtifact) -> bool {
+        self.certified == *artifact
+    }
+
+    fn consume_for_persistence(
+        self,
+        artifact: &CertifiedLaneBlockArtifact,
+    ) -> Option<ProductionInFlightFirstReleaseTransitionProjection> {
+        self.matches_artifact(artifact).then_some(self.projection)
+    }
+}
+
+/// Move-only authority for the first durable autonomous slot-retirement write.
+///
+/// The authority binds the exact authenticated payload, ordered reservation
+/// group, retirement identity, and view-state path to one accepted
+/// `PersistKuraRetirement` projection. Exact retries are storage stutters and
+/// do not manufacture a second transition authority.
+#[must_use = "an autonomous slot-retirement authorization must be consumed by Kura"]
+struct AutonomousLaneSlotRetirementPersistenceAuthorization {
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+    executable_payload_hash: Hash,
+    origin_proposal_hash: Hash,
+    reservation_group: LaneQueueReservationGroupBindingV1,
+    retirement: AutonomousLaneSlotRetirementV1,
+    view_state_path: PathBuf,
+}
+
+impl AutonomousLaneSlotRetirementPersistenceAuthorization {
+    fn consume_for_persistence(
+        self,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        view_state_path: &Path,
+    ) -> Option<ProductionInFlightFirstReleaseTransitionProjection> {
+        let reservation_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+                .ok()?;
+        if self.executable_payload_hash != payload.payload_hash
+            || self.origin_proposal_hash != payload.origin_proposal.proposal_hash
+            || self.reservation_group != reservation_group
+            || self.retirement != *retirement
+            || self.view_state_path.as_path() != view_state_path
+        {
+            return None;
+        }
+        Some(self.projection)
+    }
+}
+
+/// Move-only authority for one exact ordered claim-prefix replacement.
+///
+/// Claim recovery validates the whole on-disk group before constructing these
+/// values. Each value then binds one accepted abstract prefix advance to the
+/// exact path and replacement bytes consumed by the atomic Kura sink.
+#[must_use = "an autonomous claim-prefix authorization must be consumed by Kura"]
+struct AutonomousLaneEntrypointClaimTransitionAuthorization {
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+    path: PathBuf,
+    replacement: AutonomousLaneEntrypointClaimV3,
+}
+
+/// Move-only authority for Queue's exact ordered `PrepareRelease` append.
+///
+/// Kura constructs this value only after revalidating the durable retirement
+/// and the complete canonical `ReleasePending`/`Released` claim prefix. Queue
+/// consumes it against the byte-identical barrier immediately before its
+/// journal sink. `claims_fully_released` distinguishes a terminal retry after
+/// Queue has already forgotten the barrier from an impossible missing-barrier
+/// state while Kura still owns pending claims.
+#[must_use = "a Kura-authenticated release preparation must be consumed by Queue"]
+pub(crate) struct AutonomousLaneQueueReleasePreparationAuthorization {
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+    barrier: LaneQueueReservationReleaseBarrierV3,
+    claims_fully_released: bool,
+}
+
+impl AutonomousLaneQueueReleasePreparationAuthorization {
+    /// Consume this proof for the exact Queue barrier it authorizes.
+    pub(crate) fn consume_for_queue(
+        self,
+        barrier: &LaneQueueReservationReleaseBarrierV3,
+    ) -> Option<(ProductionInFlightFirstReleaseTransitionProjection, bool)> {
+        (self.barrier == *barrier).then_some((self.projection, self.claims_fully_released))
+    }
+}
+
+/// Move-only authority for Queue's remaining release-side mutations.
+///
+/// Kura mints this value only after every exact claim is durably `Released` or
+/// authenticatedly superseded. It carries separately checked projections for
+/// the durable completion append, volatile FIFO publication, and durable
+/// completion forget, keeping each authority adjacent to its physical sink.
+#[must_use = "a Kura-authenticated release finalization must be consumed by Queue"]
+pub(crate) struct AutonomousLaneQueueReleaseFinalizationAuthorization {
+    barrier: LaneQueueReservationReleaseBarrierV3,
+    complete_projection: ProductionInFlightFirstReleaseTransitionProjection,
+    restore_projection: ProductionInFlightFirstReleaseTransitionProjection,
+    forget_projection: ProductionInFlightFirstReleaseTransitionProjection,
+}
+
+impl AutonomousLaneQueueReleaseFinalizationAuthorization {
+    /// Consume this proof for the exact Queue barrier it authorizes.
+    pub(crate) fn consume_for_queue(
+        self,
+        barrier: &LaneQueueReservationReleaseBarrierV3,
+    ) -> Option<[ProductionInFlightFirstReleaseTransitionProjection; 3]> {
+        (self.barrier == *barrier).then_some([
+            self.complete_projection,
+            self.restore_projection,
+            self.forget_projection,
+        ])
+    }
+}
+
+/// Queue evidence accepted at Kura's `ReleasePending -> Released` boundary.
+enum AutonomousLaneQueueReleaseBarrierGate {
+    Authorized(DurableLaneQueueReleaseBarrierAuthorization),
+    #[cfg(test)]
+    DirectTest,
+}
+
+impl AutonomousLaneQueueReleaseBarrierGate {
+    fn consume_for_claim_transition(
+        self,
+        barrier: &LaneQueueReservationReleaseBarrierV3,
+    ) -> std::result::Result<bool, &'static str> {
+        match self {
+            Self::Authorized(authorization) => authorization
+                .consume_for_kura(barrier)
+                .ok_or("Queue release-barrier authority names another exact barrier"),
+            #[cfg(test)]
+            Self::DirectTest => Ok(false),
+        }
+    }
+}
+
+impl AutonomousLaneEntrypointClaimTransitionAuthorization {
+    fn consume_for_persistence(
+        self,
+        path: &Path,
+        replacement: &AutonomousLaneEntrypointClaimV3,
+    ) -> Option<ProductionInFlightFirstReleaseTransitionProjection> {
+        (self.path.as_path() == path && self.replacement == *replacement).then_some(self.projection)
+    }
+}
+
+/// Exact concrete facts used to project Kura's autonomous release protocol.
+#[derive(Clone, Copy)]
+struct AutonomousLaneReleaseProjectionContext {
+    validator_count: u8,
+    validator_mask: u128,
+    producer: u128,
+    actor: u128,
+    payload_owners: u128,
+    reservation_group: LaneQueueReservationGroupBindingV1,
+    retirement_hash: Hash,
+}
+
+impl AutonomousLaneReleaseProjectionContext {
+    fn from_payload(
+        kura: &Kura,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+    ) -> std::result::Result<Self, String> {
+        payload
+            .validate(payload.chain_id_hash, payload.epoch)
+            .map_err(|error| error.to_string())?;
+        if !retirement.matches_payload(payload) {
+            return Err("autonomous release retirement differs from its payload".to_owned());
+        }
+
+        let descriptor = &payload.origin_proposal.descriptor;
+        let validator_count = u8::try_from(descriptor.validator_set.len())
+            .map_err(|_| "autonomous release committee exceeds the refinement width".to_owned())?;
+        if validator_count == 0 || validator_count > 128 {
+            return Err(
+                "autonomous release committee is outside the 1..=128 refinement width".to_owned(),
+            );
+        }
+        let validator_mask = if validator_count == 128 {
+            u128::MAX
+        } else {
+            (1_u128 << validator_count) - 1
+        };
+        let producer_index = descriptor
+            .validator_set
+            .iter()
+            .position(|peer| peer == &payload.producer)
+            .ok_or_else(|| "autonomous release producer is absent from its committee".to_owned())?;
+        let producer = 1_u128
+            .checked_shl(u32::try_from(producer_index).map_err(|_| {
+                "autonomous release producer index exceeds the refinement width".to_owned()
+            })?)
+            .ok_or_else(|| {
+                "autonomous release producer index exceeds the refinement width".to_owned()
+            })?;
+
+        // The local committee member is the physical writer when available.
+        // A non-committee recovery node projects the producer-authenticated
+        // durable payload as the logical custody witness, matching the other
+        // autonomous Kura persistence boundaries.
+        let actor_peer = kura
+            .local_peer_id
+            .get()
+            .filter(|peer| descriptor.validator_set.contains(*peer))
+            .unwrap_or(&payload.producer);
+        let actor_index = descriptor
+            .validator_set
+            .iter()
+            .position(|peer| peer == actor_peer)
+            .ok_or_else(|| "autonomous release actor is absent from its committee".to_owned())?;
+        let actor = 1_u128
+            .checked_shl(u32::try_from(actor_index).map_err(|_| {
+                "autonomous release actor index exceeds the refinement width".to_owned()
+            })?)
+            .ok_or_else(|| {
+                "autonomous release actor index exceeds the refinement width".to_owned()
+            })?;
+        let reservation_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+                .map_err(|_| "autonomous release reservation group is not canonical".to_owned())?;
+        let selected_count = reservation_group.reservation_count;
+        let entrypoint_count = u64::try_from(payload.entrypoint_hashes.len())
+            .map_err(|_| "autonomous release entrypoint count exceeds u64".to_owned())?;
+        if selected_count != entrypoint_count
+            || !(1..=u64::try_from(iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS)
+                .unwrap_or(u64::MAX))
+                .contains(&selected_count)
+        {
+            return Err(
+                "autonomous release reservation count is outside the first-release bound"
+                    .to_owned(),
+            );
+        }
+        let payload_owners = producer | actor;
+        if payload_owners & !validator_mask != 0 {
+            return Err("autonomous release ownership exceeds its committee".to_owned());
+        }
+        let retirement_hash = retirement
+            .digest()
+            .map_err(|error| format!("cannot hash autonomous release retirement: {error:?}"))?;
+        Ok(Self {
+            validator_count,
+            validator_mask,
+            producer,
+            actor,
+            payload_owners,
+            reservation_group,
+            retirement_hash,
+        })
+    }
+
+    fn state(
+        self,
+        binding_a: CanonicalIdentityProjection,
+        reservation_state: u8,
+        kura_retired: bool,
+        pending_prefix: u64,
+        released_prefix: u64,
+    ) -> ProductionInFlightFirstReleaseStateProjection {
+        self.state_with_fifo(
+            binding_a,
+            reservation_state,
+            kura_retired,
+            pending_prefix,
+            released_prefix,
+            false,
+        )
+    }
+
+    fn state_with_fifo(
+        self,
+        binding_a: CanonicalIdentityProjection,
+        reservation_state: u8,
+        kura_retired: bool,
+        pending_prefix: u64,
+        released_prefix: u64,
+        fifo_restored: bool,
+    ) -> ProductionInFlightFirstReleaseStateProjection {
+        let decision = if kura_retired {
+            ProductionInFlightFirstReleaseDecisionProjection {
+                release_scope: binding_a,
+                release_owner: self.actor,
+                ..ProductionInFlightFirstReleaseDecisionProjection::default()
+            }
+        } else {
+            ProductionInFlightFirstReleaseDecisionProjection::default()
+        };
+        ProductionInFlightFirstReleaseStateProjection {
+            validator_count: self.validator_count,
+            producer: self.producer,
+            producer_selected_owner: self.producer,
+            replicated_carrier_owners: self.validator_mask & !self.producer,
+            payload_binding_a: self.payload_owners,
+            binding_a,
+            queue: ProductionInFlightFirstReleaseQueueProjection {
+                plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+                selected_count: self.reservation_group.reservation_count,
+                reservation_state,
+            },
+            carrier: ProductionInFlightFirstReleaseCarrierProjection {
+                kura_active: self.payload_owners,
+                execution_input_durable: 0,
+                ready_qc_durable: false,
+            },
+            session: ProductionInFlightFirstReleaseSessionProjection {
+                bodies: self.payload_owners,
+                ready_authorized: 0,
+                crashed: 0,
+                producer_alive: true,
+            },
+            history: ProductionInFlightFirstReleaseHistoryProjection {
+                ever_queue_plan_v4: true,
+                ever_reservation_v5: true,
+                pending_high_water: pending_prefix,
+                released_high_water: released_prefix,
+                ..ProductionInFlightFirstReleaseHistoryProjection::default()
+            },
+            decision,
+            release: ProductionInFlightFirstReleaseReleaseProjection {
+                kura_retired,
+                pending_prefix,
+                released_prefix,
+                fifo_restored,
+            },
+        }
+    }
+
+    fn retirement_authorization(
+        self,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        view_state_path: &Path,
+    ) -> std::result::Result<AutonomousLaneSlotRetirementPersistenceAuthorization, String> {
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(self.reservation_group);
+        let before = self.state(
+            binding_a,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            false,
+            0,
+            0,
+        );
+        let after = self.state(
+            binding_a,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            true,
+            0,
+            0,
+        );
+        let projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_KURA_RETIREMENT,
+            actor: self.actor,
+            target: 0,
+            before,
+            after,
+        };
+        if check_production_in_flight_first_release_transition(projection).is_none() {
+            return Err(
+                "autonomous slot retirement failed the composed first-release transition gate"
+                    .to_owned(),
+            );
+        }
+        Ok(AutonomousLaneSlotRetirementPersistenceAuthorization {
+            projection,
+            executable_payload_hash: payload.payload_hash,
+            origin_proposal_hash: payload.origin_proposal.proposal_hash,
+            reservation_group: self.reservation_group,
+            retirement: retirement.clone(),
+            view_state_path: view_state_path.to_path_buf(),
+        })
+    }
+
+    fn claim_transition_authorization(
+        self,
+        path: &Path,
+        replacement: &AutonomousLaneEntrypointClaimV3,
+        finalize_release: bool,
+        prefix_before: u64,
+    ) -> std::result::Result<AutonomousLaneEntrypointClaimTransitionAuthorization, String> {
+        let selected_count = self.reservation_group.reservation_count;
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(self.reservation_group);
+        if replacement.retirement_hash() != Some(self.retirement_hash) {
+            return Err("autonomous claim transition names another retirement".to_owned());
+        }
+        let (action, before, after) = if finalize_release {
+            if prefix_before >= selected_count
+                || !matches!(
+                    replacement.state,
+                    AutonomousLaneEntrypointClaimStateV3::Released(_)
+                )
+            {
+                return Err("invalid autonomous Released prefix transition".to_owned());
+            }
+            let before = self.state(
+                binding_a,
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED,
+                true,
+                selected_count,
+                prefix_before,
+            );
+            let after = self.state(
+                binding_a,
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED,
+                true,
+                selected_count,
+                prefix_before + 1,
+            );
+            (
+                IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED,
+                before,
+                after,
+            )
+        } else {
+            if prefix_before >= selected_count
+                || !matches!(
+                    replacement.state,
+                    AutonomousLaneEntrypointClaimStateV3::ReleasePending(_)
+                )
+            {
+                return Err("invalid autonomous ReleasePending prefix transition".to_owned());
+            }
+            let before = self.state(
+                binding_a,
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+                true,
+                prefix_before,
+                0,
+            );
+            let after = self.state(
+                binding_a,
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+                true,
+                prefix_before + 1,
+                0,
+            );
+            (
+                IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING,
+                before,
+                after,
+            )
+        };
+        let projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action,
+            actor: 0,
+            target: 0,
+            before,
+            after,
+        };
+        if check_production_in_flight_first_release_transition(projection).is_none() {
+            return Err(
+                "autonomous claim prefix failed the composed first-release transition gate"
+                    .to_owned(),
+            );
+        }
+        Ok(AutonomousLaneEntrypointClaimTransitionAuthorization {
+            projection,
+            path: path.to_path_buf(),
+            replacement: replacement.clone(),
+        })
+    }
+
+    fn queue_preparation_authorization(
+        self,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        barrier: &LaneQueueReservationReleaseBarrierV3,
+        claims_fully_released: bool,
+    ) -> std::result::Result<AutonomousLaneQueueReleasePreparationAuthorization, String> {
+        let expected_barrier = retirement.queue_release_barrier().map_err(|error| {
+            format!("cannot derive autonomous Queue release barrier: {error:?}")
+        })?;
+        let barrier_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(barrier.ordered_keys.iter())
+                .map_err(|_| {
+                    "autonomous Queue release barrier group is not canonical".to_owned()
+                })?;
+        if expected_barrier != *barrier || barrier_group != self.reservation_group {
+            return Err(
+                "autonomous Queue release barrier differs from its Kura retirement".to_owned(),
+            );
+        }
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(self.reservation_group);
+        let selected_count = self.reservation_group.reservation_count;
+        let before = self.state(
+            binding_a,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            true,
+            selected_count,
+            0,
+        );
+        let after = self.state(
+            binding_a,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED,
+            true,
+            selected_count,
+            0,
+        );
+        let projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_PREPARE_RESERVATION_RELEASE,
+            actor: 0,
+            target: 0,
+            before,
+            after,
+        };
+        let checked =
+            check_production_in_flight_first_release_transition(projection).ok_or_else(|| {
+                "autonomous Queue release preparation failed the composed transition gate"
+                    .to_owned()
+            })?;
+        if checked.into_projection() != projection {
+            return Err(
+                "checked autonomous Queue release-preparation projection changed".to_owned(),
+            );
+        }
+        Ok(AutonomousLaneQueueReleasePreparationAuthorization {
+            projection,
+            barrier: barrier.clone(),
+            claims_fully_released,
+        })
+    }
+
+    fn queue_finalization_authorization(
+        self,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        barrier: &LaneQueueReservationReleaseBarrierV3,
+    ) -> std::result::Result<AutonomousLaneQueueReleaseFinalizationAuthorization, String> {
+        let expected_barrier = retirement.queue_release_barrier().map_err(|error| {
+            format!("cannot derive autonomous Queue release barrier: {error:?}")
+        })?;
+        let barrier_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(barrier.ordered_keys.iter())
+                .map_err(|_| {
+                    "autonomous Queue release barrier group is not canonical".to_owned()
+                })?;
+        if expected_barrier != *barrier || barrier_group != self.reservation_group {
+            return Err(
+                "autonomous Queue release barrier differs from its Kura retirement".to_owned(),
+            );
+        }
+
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(self.reservation_group);
+        let selected_count = self.reservation_group.reservation_count;
+        let complete_before = self.state_with_fifo(
+            binding_a,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED,
+            true,
+            selected_count,
+            selected_count,
+            false,
+        );
+        let complete_after = self.state_with_fifo(
+            binding_a,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED,
+            true,
+            selected_count,
+            selected_count,
+            false,
+        );
+        let restore_after = self.state_with_fifo(
+            binding_a,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED,
+            true,
+            selected_count,
+            selected_count,
+            true,
+        );
+        let forget_after = self.state_with_fifo(
+            binding_a,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN,
+            true,
+            selected_count,
+            selected_count,
+            true,
+        );
+        let complete_projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE,
+            actor: 0,
+            target: 0,
+            before: complete_before,
+            after: complete_after,
+        };
+        let restore_projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO,
+            actor: 0,
+            target: 0,
+            before: complete_after,
+            after: restore_after,
+        };
+        let forget_projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE,
+            actor: 0,
+            target: 0,
+            before: restore_after,
+            after: forget_after,
+        };
+        if [complete_projection, restore_projection, forget_projection]
+            .into_iter()
+            .any(|projection| {
+                check_production_in_flight_first_release_transition(projection).is_none()
+            })
+        {
+            return Err(
+                "autonomous Queue release finalization failed the composed transition gate"
+                    .to_owned(),
+            );
+        }
+        Ok(AutonomousLaneQueueReleaseFinalizationAuthorization {
+            barrier: barrier.clone(),
+            complete_projection,
+            restore_projection,
+            forget_projection,
+        })
+    }
+}
+
 impl LaneReadyAuthorization {
     /// Return whether this one-shot authority names the exact READY signing
     /// request and still has a structurally complete durable-input binding.
@@ -220,6 +918,512 @@ impl LaneReadyAuthorization {
 }
 
 impl Kura {
+    /// Mint the exact one-shot `PersistKuraRetirement` authority consumed by
+    /// the first durable autonomous view-state tombstone write.
+    fn authorize_autonomous_lane_slot_retirement_persistence(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        view_state_path: &Path,
+    ) -> std::result::Result<AutonomousLaneSlotRetirementPersistenceAuthorization, String> {
+        AutonomousLaneReleaseProjectionContext::from_payload(self, payload, retirement)?
+            .retirement_authorization(payload, retirement, view_state_path)
+    }
+
+    /// Mint the one-shot `PersistExecutionInput` authority for an exact
+    /// autonomous payload/input pair.
+    fn authorize_autonomous_execution_input_persistence(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        input: &LaneBlockExecutionInputArtifact,
+    ) -> std::result::Result<AutonomousLaneExecutionInputPersistenceAuthorization, String> {
+        let chain_id_hash = input
+            .autonomous_chain_id_hash
+            .ok_or_else(|| "autonomous execution input lacks its chain identity".to_owned())?;
+        let epoch = input
+            .autonomous_epoch
+            .ok_or_else(|| "autonomous execution input lacks its epoch".to_owned())?;
+        let payload_hash = input.autonomous_payload_hash.ok_or_else(|| {
+            "autonomous execution input lacks its executable payload hash".to_owned()
+        })?;
+        payload
+            .validate(chain_id_hash, epoch)
+            .map_err(|error| error.to_string())?;
+        if payload.payload_hash != payload_hash {
+            return Err("autonomous execution input names another executable payload".to_owned());
+        }
+        let expected =
+            Self::autonomous_lane_block_execution_input_candidate(payload, chain_id_hash, epoch)
+                .map_err(|error| format!("{error:?}"))?;
+        if expected != *input {
+            return Err("autonomous execution input differs from its canonical payload".to_owned());
+        }
+
+        let descriptor = &payload.origin_proposal.descriptor;
+        let validator_count = u8::try_from(descriptor.validator_set.len()).map_err(|_| {
+            "autonomous execution-input committee exceeds the refinement width".to_owned()
+        })?;
+        if validator_count == 0 || validator_count > 128 {
+            return Err(
+                "autonomous execution-input committee is outside the 1..=128 refinement width"
+                    .to_owned(),
+            );
+        }
+        let validator_mask = if validator_count == 128 {
+            u128::MAX
+        } else {
+            (1_u128 << validator_count) - 1
+        };
+        let producer_index = descriptor
+            .validator_set
+            .iter()
+            .position(|peer| peer == &payload.producer)
+            .ok_or_else(|| {
+                "autonomous execution-input producer is absent from its committee".to_owned()
+            })?;
+        let producer = 1_u128
+            .checked_shl(u32::try_from(producer_index).map_err(|_| {
+                "autonomous execution-input producer exceeds the refinement width".to_owned()
+            })?)
+            .ok_or_else(|| {
+                "autonomous execution-input producer exceeds the refinement width".to_owned()
+            })?;
+        // The bound local identity is the exact physical writer when it is a
+        // member of the historical lane committee. Startup repair and
+        // non-committee carrier recovery use the producer-authenticated
+        // durable payload as their logical custody witness.
+        let actor_peer = self
+            .local_peer_id
+            .get()
+            .filter(|peer| descriptor.validator_set.contains(*peer))
+            .unwrap_or(&payload.producer);
+        let actor_index = descriptor
+            .validator_set
+            .iter()
+            .position(|peer| peer == actor_peer)
+            .ok_or_else(|| {
+                "autonomous execution-input actor is absent from its committee".to_owned()
+            })?;
+        let actor = 1_u128
+            .checked_shl(u32::try_from(actor_index).map_err(|_| {
+                "autonomous execution-input actor exceeds the refinement width".to_owned()
+            })?)
+            .ok_or_else(|| {
+                "autonomous execution-input actor exceeds the refinement width".to_owned()
+            })?;
+        let reservation_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+                .map_err(|_| {
+                    "autonomous execution-input reservation group is not canonical".to_owned()
+                })?;
+        let selected_count = reservation_group.reservation_count;
+        if !(1..=u64::try_from(iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS)
+            .unwrap_or(u64::MAX))
+            .contains(&selected_count)
+        {
+            return Err(
+                "autonomous execution-input reservation count is outside the first-release bound"
+                    .to_owned(),
+            );
+        }
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(reservation_group);
+        let payload_owners = producer | actor;
+        if payload_owners & !validator_mask != 0 {
+            return Err("autonomous execution-input ownership exceeds its committee".to_owned());
+        }
+        let before = ProductionInFlightFirstReleaseStateProjection {
+            validator_count,
+            producer,
+            producer_selected_owner: producer,
+            replicated_carrier_owners: validator_mask & !producer,
+            payload_binding_a: payload_owners,
+            binding_a,
+            queue: ProductionInFlightFirstReleaseQueueProjection {
+                plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+                selected_count,
+                reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            },
+            carrier: ProductionInFlightFirstReleaseCarrierProjection {
+                kura_active: payload_owners,
+                execution_input_durable: 0,
+                ready_qc_durable: false,
+            },
+            session: ProductionInFlightFirstReleaseSessionProjection {
+                bodies: payload_owners,
+                ready_authorized: 0,
+                crashed: 0,
+                producer_alive: true,
+            },
+            history: ProductionInFlightFirstReleaseHistoryProjection {
+                ever_queue_plan_v4: true,
+                ever_reservation_v5: true,
+                ..ProductionInFlightFirstReleaseHistoryProjection::default()
+            },
+            decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+            release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+        };
+        let mut after = before;
+        after.carrier.execution_input_durable = actor;
+        after.history.ever_execution_input_durable = actor;
+        let projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT,
+            actor,
+            target: 0,
+            before,
+            after,
+        };
+        Ok(AutonomousLaneExecutionInputPersistenceAuthorization {
+            projection,
+            input: input.clone(),
+        })
+    }
+
+    /// Validate one exact autonomous READY certificate and mint the move-only
+    /// composed-transition authority consumed by its Kura persistence sink.
+    fn authorize_lane_payload_availability_certificate_persistence(
+        payload: &LaneExecutablePayloadV1,
+        certificate: &DurableLanePayloadAvailabilityCertificateV1,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> std::result::Result<AutonomousLaneReadyQcPersistenceAuthorization, String> {
+        crate::lane_consensus::validate_lane_payload_availability_certificate(
+            certificate,
+            payload,
+            expected_chain_id_hash,
+            expected_epoch,
+        )
+        .map_err(|error| error.to_string())?;
+
+        let descriptor = &payload.origin_proposal.descriptor;
+        let validator_count = u8::try_from(descriptor.validator_set.len())
+            .map_err(|_| "autonomous READY committee exceeds the refinement width".to_owned())?;
+        if validator_count == 0 || validator_count > 128 {
+            return Err(
+                "autonomous READY committee is outside the 1..=128 refinement width".to_owned(),
+            );
+        }
+        let validator_mask = if validator_count == 128 {
+            u128::MAX
+        } else {
+            (1_u128 << validator_count) - 1
+        };
+        let producer_index = descriptor
+            .validator_set
+            .iter()
+            .position(|peer| peer == &payload.producer)
+            .ok_or_else(|| {
+                "autonomous payload producer is absent from its READY committee".to_owned()
+            })?;
+        let producer = 1_u128
+            .checked_shl(
+                u32::try_from(producer_index).map_err(|_| {
+                    "autonomous producer index exceeds the refinement width".to_owned()
+                })?,
+            )
+            .ok_or_else(|| "autonomous producer index exceeds the refinement width".to_owned())?;
+        let availability_qc = certificate
+            .certificate
+            .payload_availability_qc
+            .as_ref()
+            .ok_or_else(|| "autonomous PrepareQC lacks its READY certificate".to_owned())?;
+        if availability_qc.validator_set != descriptor.validator_set {
+            return Err("autonomous READY committee differs from its proposal".to_owned());
+        }
+        if availability_qc.signers_bitmap.len() != descriptor.validator_set.len().div_ceil(8) {
+            return Err("autonomous READY bitmap has a noncanonical length".to_owned());
+        }
+        let mut ready_signers = 0_u128;
+        for (byte_index, byte) in availability_qc.signers_bitmap.iter().copied().enumerate() {
+            for bit_index in 0..8_usize {
+                if byte & (1_u8 << bit_index) == 0 {
+                    continue;
+                }
+                let index = byte_index
+                    .checked_mul(8)
+                    .and_then(|base| base.checked_add(bit_index))
+                    .ok_or_else(|| "autonomous READY bitmap index overflows".to_owned())?;
+                if index >= descriptor.validator_set.len() {
+                    return Err("autonomous READY bitmap selects a padding bit".to_owned());
+                }
+                ready_signers |= 1_u128
+                    .checked_shl(u32::try_from(index).map_err(|_| {
+                        "autonomous READY signer exceeds the refinement width".to_owned()
+                    })?)
+                    .ok_or_else(|| {
+                        "autonomous READY signer exceeds the refinement width".to_owned()
+                    })?;
+            }
+        }
+        let reservation_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+                .map_err(|_| "autonomous READY reservation group is not canonical".to_owned())?;
+        let selected_count = reservation_group.reservation_count;
+        if !(1..=u64::try_from(iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS)
+            .unwrap_or(u64::MAX))
+            .contains(&selected_count)
+        {
+            return Err(
+                "autonomous READY reservation count is outside the first-release bound".to_owned(),
+            );
+        }
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(reservation_group);
+        let payload_owners = ready_signers | producer;
+        if payload_owners & !validator_mask != 0 {
+            return Err("autonomous READY ownership exceeds its committee".to_owned());
+        }
+        let before = ProductionInFlightFirstReleaseStateProjection {
+            validator_count,
+            producer,
+            producer_selected_owner: producer,
+            replicated_carrier_owners: validator_mask & !producer,
+            payload_binding_a: payload_owners,
+            binding_a,
+            queue: ProductionInFlightFirstReleaseQueueProjection {
+                plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+                selected_count,
+                reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            },
+            carrier: ProductionInFlightFirstReleaseCarrierProjection {
+                kura_active: payload_owners,
+                execution_input_durable: ready_signers,
+                ready_qc_durable: false,
+            },
+            session: ProductionInFlightFirstReleaseSessionProjection {
+                bodies: payload_owners,
+                ready_authorized: ready_signers,
+                crashed: 0,
+                producer_alive: true,
+            },
+            history: ProductionInFlightFirstReleaseHistoryProjection {
+                ever_queue_plan_v4: true,
+                ever_reservation_v5: true,
+                ever_execution_input_durable: ready_signers,
+                ever_ready_authorized: ready_signers,
+                ready_signed: ready_signers,
+                ever_ready_qc_durable: false,
+                ..ProductionInFlightFirstReleaseHistoryProjection::default()
+            },
+            decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+            release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+        };
+        let mut after = before;
+        after.carrier.ready_qc_durable = true;
+        after.history.ever_ready_qc_durable = true;
+        let projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC,
+            actor: 0,
+            target: 0,
+            before,
+            after,
+        };
+        Ok(AutonomousLaneReadyQcPersistenceAuthorization {
+            projection,
+            chain_id_hash: payload.chain_id_hash,
+            epoch: payload.epoch,
+            executable_payload_hash: payload.payload_hash,
+            origin_proposal_hash: payload.origin_proposal.proposal_hash,
+            reservation_group,
+            certificate: certificate.clone(),
+        })
+    }
+
+    /// Mint the exact one-shot `LaneCommit` authority for a certified
+    /// autonomous source immediately before its first durable certificate
+    /// publication.
+    fn authorize_autonomous_lane_commit_persistence(
+        source: &DurableAutonomousLaneMergeSource,
+        artifact: &CertifiedLaneBlockArtifact,
+    ) -> std::result::Result<AutonomousLaneCommitPersistenceAuthorization, String> {
+        if source.bundle.certified != *artifact {
+            return Err(
+                "autonomous lane-Commit source differs from the certified artifact".to_owned(),
+            );
+        }
+        let availability_qc = artifact
+            .prepare_qc
+            .payload_availability_qc
+            .as_ref()
+            .ok_or_else(|| {
+                "autonomous lane-Commit artifact lacks its READY certificate".to_owned()
+            })?;
+        let chain_id_hash = availability_qc.body.chain_id_hash;
+        let epoch = availability_qc.body.epoch;
+        Self::validate_autonomous_lane_merge_bundle(&source.bundle, chain_id_hash, epoch)
+            .map_err(str::to_owned)?;
+        let canonical_source_bundle = source
+            .bundle
+            .encode_framed()
+            .map_err(|error| error.to_string())?;
+        if source.source_bundle != canonical_source_bundle
+            || source.bundle_hash
+                != source
+                    .bundle
+                    .bundle_hash()
+                    .map_err(|error| error.to_string())?
+        {
+            return Err(
+                "autonomous lane-Commit source bytes or bundle hash are not canonical".to_owned(),
+            );
+        }
+        let expected_input = Self::autonomous_lane_block_execution_input_candidate(
+            source.bundle.executable_payload(),
+            chain_id_hash,
+            epoch,
+        )
+        .map_err(|error| format!("{error:?}"))?;
+        if source.input != expected_input {
+            return Err(
+                "autonomous lane-Commit input differs from its executable payload".to_owned(),
+            );
+        }
+
+        let descriptor = &artifact.proposal.descriptor;
+        let validator_count = u8::try_from(descriptor.validator_set.len()).map_err(|_| {
+            "autonomous lane-Commit committee exceeds the refinement width".to_owned()
+        })?;
+        if validator_count == 0 || validator_count > 128 {
+            return Err(
+                "autonomous lane-Commit committee is outside the 1..=128 refinement width"
+                    .to_owned(),
+            );
+        }
+        let validator_mask = if validator_count == 128 {
+            u128::MAX
+        } else {
+            (1_u128 << validator_count) - 1
+        };
+        let producer_index = descriptor
+            .validator_set
+            .iter()
+            .position(|peer| peer == &source.bundle.executable_payload().producer)
+            .ok_or_else(|| {
+                "autonomous lane-Commit producer is absent from its committee".to_owned()
+            })?;
+        let producer = 1_u128
+            .checked_shl(u32::try_from(producer_index).map_err(|_| {
+                "autonomous lane-Commit producer index exceeds the refinement width".to_owned()
+            })?)
+            .ok_or_else(|| {
+                "autonomous lane-Commit producer index exceeds the refinement width".to_owned()
+            })?;
+        let bitmap_mask = |bitmap: &[u8]| {
+            if bitmap.len() != descriptor.validator_set.len().div_ceil(8) {
+                return Err("autonomous lane-Commit bitmap has a noncanonical length".to_owned());
+            }
+            let mut mask = 0_u128;
+            for (byte_index, byte) in bitmap.iter().copied().enumerate() {
+                for bit_index in 0..8_usize {
+                    if byte & (1_u8 << bit_index) == 0 {
+                        continue;
+                    }
+                    let index = byte_index
+                        .checked_mul(8)
+                        .and_then(|base| base.checked_add(bit_index))
+                        .ok_or_else(|| {
+                            "autonomous lane-Commit bitmap index overflows".to_owned()
+                        })?;
+                    if index >= descriptor.validator_set.len() {
+                        return Err(
+                            "autonomous lane-Commit bitmap selects a padding bit".to_owned()
+                        );
+                    }
+                    mask |= 1_u128
+                        .checked_shl(u32::try_from(index).map_err(|_| {
+                            "autonomous lane-Commit signer exceeds the refinement width".to_owned()
+                        })?)
+                        .ok_or_else(|| {
+                            "autonomous lane-Commit signer exceeds the refinement width".to_owned()
+                        })?;
+                }
+            }
+            Ok(mask)
+        };
+        let ready_signers = bitmap_mask(&availability_qc.signers_bitmap)?;
+        let commit_signers = bitmap_mask(&artifact.commit_qc.signers_bitmap)?;
+        let lane_commit_candidates = ready_signers & commit_signers;
+        if lane_commit_candidates == 0 {
+            return Err(
+                "autonomous READY and Commit QCs have no common authenticated signer".to_owned(),
+            );
+        }
+        let lane_commit_actor = 1_u128
+            .checked_shl(lane_commit_candidates.trailing_zeros())
+            .ok_or_else(|| {
+                "autonomous lane-Commit signer exceeds the refinement width".to_owned()
+            })?;
+        let reservation_group = lane_queue_reservation_group_binding_from_ordered_keys(
+            source.bundle.executable_payload().reservation_keys.iter(),
+        )
+        .map_err(|_| "autonomous lane-Commit reservation group is not canonical".to_owned())?;
+        let selected_count = reservation_group.reservation_count;
+        if !(1..=u64::try_from(iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS)
+            .unwrap_or(u64::MAX))
+            .contains(&selected_count)
+        {
+            return Err(
+                "autonomous lane-Commit reservation count is outside the first-release bound"
+                    .to_owned(),
+            );
+        }
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(reservation_group);
+        let payload_owners = ready_signers | producer;
+        if payload_owners & !validator_mask != 0 {
+            return Err("autonomous lane-Commit ownership exceeds its committee".to_owned());
+        }
+        let before = ProductionInFlightFirstReleaseStateProjection {
+            validator_count,
+            producer,
+            producer_selected_owner: producer,
+            replicated_carrier_owners: validator_mask & !producer,
+            payload_binding_a: payload_owners,
+            binding_a,
+            queue: ProductionInFlightFirstReleaseQueueProjection {
+                plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+                selected_count,
+                reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            },
+            carrier: ProductionInFlightFirstReleaseCarrierProjection {
+                kura_active: payload_owners,
+                execution_input_durable: ready_signers,
+                ready_qc_durable: true,
+            },
+            session: ProductionInFlightFirstReleaseSessionProjection {
+                bodies: payload_owners,
+                ready_authorized: ready_signers,
+                crashed: 0,
+                producer_alive: true,
+            },
+            history: ProductionInFlightFirstReleaseHistoryProjection {
+                ever_queue_plan_v4: true,
+                ever_reservation_v5: true,
+                ever_execution_input_durable: ready_signers,
+                ever_ready_authorized: ready_signers,
+                ready_signed: ready_signers,
+                ever_ready_qc_durable: true,
+                ..ProductionInFlightFirstReleaseHistoryProjection::default()
+            },
+            decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+            release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+        };
+        let mut after = before;
+        after.decision.lane_commit_scope = binding_a;
+        after.decision.lane_commit_owner = lane_commit_actor;
+        let projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT,
+            actor: lane_commit_actor,
+            target: 0,
+            before,
+            after,
+        };
+        Ok(AutonomousLaneCommitPersistenceAuthorization {
+            projection,
+            certified: artifact.clone(),
+        })
+    }
+
     fn autonomous_lane_merge_bundle_paths_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,

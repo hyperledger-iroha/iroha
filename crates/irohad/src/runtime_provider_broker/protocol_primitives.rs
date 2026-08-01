@@ -98,6 +98,12 @@ pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1: u16 = 108;
 pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1: u16 = 109;
 pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1: u16 = 110;
 pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1: u16 = 111;
+pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1: u16 = 112;
+pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1: u16 = 113;
+pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1: u16 = 114;
+pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1: u16 = 115;
+pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1: u16 = 116;
+pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1: u16 = 117;
 // A real payload byte avoids relying on zero-sized archive reconstruction;
 // the authenticated slot and operation provide the request-domain binding.
 pub(super) const CHECKPOINT_LOAD_REQUEST_VERSION_V1: u8 = 1;
@@ -303,9 +309,23 @@ pub(super) struct ProviderBindingWireV1 {
     pub(super) evidence_viewer_receipt_signer_public_key: Option<[u8; 32]>,
     pub(super) evidence_viewer_transparency_publisher_public_key: Option<[u8; 32]>,
     pub(super) evidence_viewer_checkpoint_max_bytes: Option<u64>,
+    pub(super) moderation_checkpoint_max_bytes: Option<u64>,
+    pub(super) moderation_checkpoint_attestation_public_key: Option<[u8; 32]>,
     pub(super) evidence_viewer_archive_id: Option<[u8; 32]>,
     pub(super) evidence_viewer_archive_public_key: Option<[u8; 32]>,
     pub(super) evidence_viewer_archive_max_bytes: Option<u64>,
+    pub(super) moderation_panel_notification_archive_binding:
+        Option<ModerationPanelNotificationArchiveBindingWireV1>,
+}
+
+/// Exact public identity and resource bound for moderation receipt archives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub(super) struct ModerationPanelNotificationArchiveBindingWireV1 {
+    pub(super) archive_id: [u8; 32],
+    pub(super) bootstrap_public_key: [u8; 32],
+    pub(super) public_key: [u8; 32],
+    pub(super) max_bytes: u64,
+    pub(super) max_records: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]

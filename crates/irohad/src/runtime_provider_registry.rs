@@ -144,6 +144,8 @@ pub enum IrohaRuntimeProviderSlotV1 {
     EvidenceViewerTransparencyPublisher = 53,
     /// Stream-token quota, sealed-sequence, and ordered callback-outbox owner.
     StreamTokenGatewayAdmission = 54,
+    /// Authenticated immutable moderation panel-notification receipt archive.
+    ModerationPanelNotificationArchive = 55,
 }
 
 impl IrohaRuntimeProviderSlotV1 {
@@ -189,9 +191,15 @@ pub struct IrohaRuntimeProviderBindingV1 {
     evidence_viewer_transparency_publisher_public_key: Option<[u8; 32]>,
     evidence_viewer_checkpoint_max_bytes: Option<u64>,
     moderation_checkpoint_max_bytes: Option<u64>,
+    moderation_checkpoint_attestation_public_key: Option<[u8; 32]>,
     evidence_viewer_archive_id: Option<[u8; 32]>,
     evidence_viewer_archive_public_key: Option<[u8; 32]>,
     evidence_viewer_archive_max_bytes: Option<u64>,
+    moderation_panel_notification_archive_id: Option<[u8; 32]>,
+    moderation_panel_notification_archive_bootstrap_public_key: Option<[u8; 32]>,
+    moderation_panel_notification_archive_public_key: Option<[u8; 32]>,
+    moderation_panel_notification_archive_max_bytes: Option<u64>,
+    moderation_panel_notification_archive_max_records: Option<u64>,
     governance_dag_publisher_peer_id: Option<Vec<u8>>,
     governance_dag_publisher_public_key: Option<[u8; 32]>,
     governance_request_auth_public_key: Option<[u8; 32]>,
@@ -299,9 +307,15 @@ impl IrohaRuntimeProviderBindingV1 {
             evidence_viewer_transparency_publisher_public_key: None,
             evidence_viewer_checkpoint_max_bytes: None,
             moderation_checkpoint_max_bytes: None,
+            moderation_checkpoint_attestation_public_key: None,
             evidence_viewer_archive_id: None,
             evidence_viewer_archive_public_key: None,
             evidence_viewer_archive_max_bytes: None,
+            moderation_panel_notification_archive_id: None,
+            moderation_panel_notification_archive_bootstrap_public_key: None,
+            moderation_panel_notification_archive_public_key: None,
+            moderation_panel_notification_archive_max_bytes: None,
+            moderation_panel_notification_archive_max_records: None,
             governance_dag_publisher_peer_id: None,
             governance_dag_publisher_public_key: None,
             governance_request_auth_public_key: None,
@@ -418,7 +432,16 @@ impl IrohaRuntimeProviderBindingV1 {
         moderation: &iroha_config::parameters::actual::SorafsModerationOrchestrator,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
         let slot = IrohaRuntimeProviderSlotV1::ModerationCheckpointStore;
-        if moderation.checkpoint_max_bytes.0 == 0 {
+        if moderation.checkpoint_max_bytes.0 == 0
+            || moderation.checkpoint_max_bytes.0
+                > sorafs_node::moderation_orchestrator::
+                    MODERATION_ORCHESTRATOR_CHECKPOINT_MAX_BYTES_V1
+            || moderation.checkpoint_store_attestation_public_key == [0; 32]
+            || iroha_crypto::ed25519_parse_public_key(
+                &moderation.checkpoint_store_attestation_public_key,
+            )
+            .is_err()
+        {
             return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
         }
         let mut projected = Self::try_new(
@@ -428,6 +451,54 @@ impl IrohaRuntimeProviderBindingV1 {
             Some(moderation.checkpoint_store_policy_digest),
         )?;
         projected.moderation_checkpoint_max_bytes = Some(moderation.checkpoint_max_bytes.0);
+        projected.moderation_checkpoint_attestation_public_key =
+            Some(moderation.checkpoint_store_attestation_public_key);
+        Ok(projected)
+    }
+
+    fn try_new_moderation_panel_notification_archive(
+        moderation: &iroha_config::parameters::actual::SorafsModerationOrchestrator,
+    ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
+        let slot = IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive;
+        if moderation.panel_notification_archive_id == [0; 32]
+            || moderation.panel_notification_archive_bootstrap_public_key == [0; 32]
+            || moderation.panel_notification_archive_public_key == [0; 32]
+            || moderation.panel_notification_archive_max_bytes.0 == 0
+            || moderation.max_handoffs == 0
+            || moderation.max_handoffs
+                > sorafs_node::moderation_orchestrator::
+                    MODERATION_PANEL_NOTIFICATION_ARCHIVE_MAX_RECORDS_V1
+            || iroha_crypto::PublicKey::from_bytes(
+                iroha_crypto::Algorithm::Ed25519,
+                &moderation.panel_notification_archive_public_key,
+            )
+            .is_err()
+            || iroha_crypto::PublicKey::from_bytes(
+                iroha_crypto::Algorithm::Ed25519,
+                &moderation.panel_notification_archive_bootstrap_public_key,
+            )
+            .is_err()
+        {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
+        }
+        let mut projected = Self::try_new(
+            slot,
+            moderation.panel_notification_archive_handle.clone(),
+            Some(moderation.panel_notification_archive_revision),
+            Some(moderation.panel_notification_archive_policy_digest),
+        )?;
+        projected.moderation_panel_notification_archive_id =
+            Some(moderation.panel_notification_archive_id);
+        projected.moderation_panel_notification_archive_bootstrap_public_key =
+            Some(moderation.panel_notification_archive_bootstrap_public_key);
+        projected.moderation_panel_notification_archive_public_key =
+            Some(moderation.panel_notification_archive_public_key);
+        projected.moderation_panel_notification_archive_max_bytes =
+            Some(moderation.panel_notification_archive_max_bytes.0);
+        projected.moderation_panel_notification_archive_max_records = Some(
+            u64::try_from(moderation.max_handoffs)
+                .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?,
+        );
         Ok(projected)
     }
 
@@ -1120,6 +1191,11 @@ impl IrohaRuntimeProviderBindingV1 {
         self.moderation_checkpoint_max_bytes
     }
 
+    /// Return the exact Ed25519 key authenticating terminal-set source attestations.
+    pub(crate) const fn moderation_checkpoint_attestation_public_key(&self) -> Option<[u8; 32]> {
+        self.moderation_checkpoint_attestation_public_key
+    }
+
     /// Return the exact non-secret evidence-viewer archive namespace.
     #[must_use]
     pub const fn evidence_viewer_archive_id(&self) -> Option<[u8; 32]> {
@@ -1135,6 +1211,36 @@ impl IrohaRuntimeProviderBindingV1 {
     /// Return the exact canonical compaction-artifact byte bound.
     pub(crate) const fn evidence_viewer_archive_max_bytes(&self) -> Option<u64> {
         self.evidence_viewer_archive_max_bytes
+    }
+
+    /// Return the exact non-secret moderation receipt archive namespace.
+    #[must_use]
+    pub const fn moderation_panel_notification_archive_id(&self) -> Option<[u8; 32]> {
+        self.moderation_panel_notification_archive_id
+    }
+
+    /// Return the bootstrap Ed25519 signer anchoring the moderation archive epoch log.
+    #[must_use]
+    pub const fn moderation_panel_notification_archive_bootstrap_public_key(
+        &self,
+    ) -> Option<[u8; 32]> {
+        self.moderation_panel_notification_archive_bootstrap_public_key
+    }
+
+    /// Return the exact Ed25519 moderation receipt archive verification key.
+    #[must_use]
+    pub const fn moderation_panel_notification_archive_public_key(&self) -> Option<[u8; 32]> {
+        self.moderation_panel_notification_archive_public_key
+    }
+
+    /// Return the exact canonical moderation receipt archive byte bound.
+    pub(crate) const fn moderation_panel_notification_archive_max_bytes(&self) -> Option<u64> {
+        self.moderation_panel_notification_archive_max_bytes
+    }
+
+    /// Return the exact terminal-record bound for one moderation receipt archive artifact.
+    pub(crate) const fn moderation_panel_notification_archive_max_records(&self) -> Option<u64> {
+        self.moderation_panel_notification_archive_max_records
     }
 
     /// Return the exact Ed25519 key verifying Governance request-auth envelopes.
@@ -1362,6 +1468,58 @@ impl IrohaRuntimeProviderBindingsV1 {
                 )
                 .expect("test binding must be production-shaped"),
             ],
+        }
+    }
+
+    /// Construct the exact three-provider moderation notification-archive test catalog.
+    #[cfg(test)]
+    pub(crate) fn qualified_moderation_panel_notification_archive_for_test(
+        fixture: &sorafs_node::moderation_orchestrator::
+            ModerationPanelNotificationArchiveBrokerFixtureV1,
+        publication_handle: impl Into<String>,
+        publication_revision: u64,
+        publication_policy_digest: [u8; 32],
+    ) -> Self {
+        let mut checkpoint = IrohaRuntimeProviderBindingV1::try_new(
+            IrohaRuntimeProviderSlotV1::ModerationCheckpointStore,
+            fixture.checkpoint_handle.clone(),
+            Some(fixture.checkpoint_qualification.revision()),
+            Some(fixture.checkpoint_qualification.policy_digest()),
+        )
+        .expect("fixture checkpoint binding must be production-shaped");
+        checkpoint.moderation_checkpoint_max_bytes = Some(fixture.checkpoint_max_bytes);
+        checkpoint.moderation_checkpoint_attestation_public_key =
+            Some(fixture.checkpoint_attestation_public_key);
+
+        let mut archive = IrohaRuntimeProviderBindingV1::try_new(
+            IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive,
+            fixture.archive_handle.clone(),
+            Some(fixture.archive_qualification.revision()),
+            Some(fixture.archive_qualification.policy_digest()),
+        )
+        .expect("fixture archive binding must be production-shaped");
+        archive.moderation_panel_notification_archive_id = Some(fixture.archive_id);
+        archive.moderation_panel_notification_archive_bootstrap_public_key =
+            Some(fixture.archive_public_key);
+        archive.moderation_panel_notification_archive_public_key = Some(fixture.archive_public_key);
+        archive.moderation_panel_notification_archive_max_bytes = Some(fixture.archive_max_bytes);
+        archive.moderation_panel_notification_archive_max_records = Some(
+            u64::try_from(fixture.expectation().max_records)
+                .expect("fixture archive record bound must fit u64"),
+        );
+
+        let publication = IrohaRuntimeProviderBindingV1::try_new(
+            IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff,
+            publication_handle,
+            Some(publication_revision),
+            Some(publication_policy_digest),
+        )
+        .expect("fixture publication binding must be production-shaped");
+        let mut bindings = vec![publication, checkpoint, archive];
+        bindings.sort_unstable_by_key(|binding| binding.slot);
+        Self {
+            chain_id: fixture.chain_id.as_str().to_owned(),
+            bindings,
         }
     }
 
@@ -1596,6 +1754,7 @@ pub(crate) fn resolve_runtime_deps_from_bindings(
     qualify_reputation_retention_dependency(bindings, &dependencies)?;
     qualify_por_replay_archive_dependency(bindings, &dependencies)?;
     qualify_evidence_viewer_archive_dependency(bindings, &dependencies)?;
+    qualify_moderation_panel_notification_archive_dependency(bindings, &dependencies)?;
     qualify_evidence_viewer_transparency_publisher_dependency(bindings, &dependencies)?;
     Ok(dependencies)
 }
@@ -1656,12 +1815,20 @@ fn qualify_moderation_checkpoint_dependency(
             revision,
             policy_digest,
         );
+    let expected_attestation_public_key = expected
+        .moderation_checkpoint_attestation_public_key()
+        .ok_or(
+        IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()),
+    )?;
     sorafs_node::moderation_orchestrator::qualify_moderation_runtime_provider_v1(
         expected.handle(),
         qualification,
         store.as_ref(),
     )
     .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
+    if store.attestation_public_key() != expected_attestation_public_key {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+    }
     let latest = store.load_latest().map_err(|error| match error {
         sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1::Unavailable => {
             IrohaRuntimeProviderRegistryErrorV1::Unavailable
@@ -1691,7 +1858,11 @@ fn qualify_moderation_checkpoint_dependency(
         qualification,
         store.as_ref(),
     )
-    .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+    .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)?;
+    if store.attestation_public_key() != expected_attestation_public_key {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+    }
+    Ok(())
 }
 
 fn qualify_soracloud_runtime_signer(
@@ -2636,6 +2807,77 @@ fn qualify_evidence_viewer_archive_dependency(
     Ok(())
 }
 
+fn qualify_moderation_panel_notification_archive_dependency(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    dependencies: &IrohaRuntimeDeps,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    let Some(expected) = bindings.iter().find(|binding| {
+        binding.slot() == IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+    }) else {
+        return Ok(());
+    };
+    let archive = dependencies
+        .sorafs_moderation_panel_notification_archive
+        .as_ref()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
+    if !is_production_runtime_handle(archive.handle()) {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected);
+    }
+    let expected_revision =
+        expected
+            .revision()
+            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                expected.slot(),
+            ))?;
+    let expected_policy_digest =
+        expected
+            .policy_digest()
+            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                expected.slot(),
+            ))?;
+    let expected_archive_id = expected.moderation_panel_notification_archive_id().ok_or(
+        IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()),
+    )?;
+    let expected_public_key = expected
+        .moderation_panel_notification_archive_public_key()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+            expected.slot(),
+        ))?;
+    let observe = || {
+        let qualification = archive.qualification().map_err(|error| match error {
+            sorafs_node::moderation_orchestrator::ModerationRuntimeProviderReadinessErrorV1::Unavailable => {
+                IrohaRuntimeProviderRegistryErrorV1::Unavailable
+            }
+            sorafs_node::moderation_orchestrator::ModerationRuntimeProviderReadinessErrorV1::Rejected => {
+                IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked
+            }
+        })?;
+        if archive.handle() != expected.handle()
+            || qualification.revision() != expected_revision
+            || qualification.policy_digest() != expected_policy_digest
+        {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+        }
+        Ok(qualification)
+    };
+    let observe_identity = || {
+        let qualification = observe()?;
+        let identity = (archive.archive_id(), archive.signing_public_key());
+        if observe()? != qualification {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+        }
+        Ok((qualification, identity))
+    };
+    let (first_qualification, first_identity) = observe_identity()?;
+    if first_identity != (expected_archive_id, expected_public_key) {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+    }
+    if observe_identity()? != (first_qualification, first_identity) {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+    }
+    Ok(())
+}
+
 fn qualify_evidence_viewer_transparency_publisher_dependency(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &IrohaRuntimeDeps,
@@ -3050,6 +3292,7 @@ mod tests {
             Slot::ModerationCheckpointStore,
             Slot::EvidenceViewerTransparencyPublisher,
             Slot::StreamTokenGatewayAdmission,
+            Slot::ModerationPanelNotificationArchive,
         ];
         for (index, slot) in slots.into_iter().enumerate() {
             assert_eq!(
@@ -4619,6 +4862,11 @@ mod tests {
                 checkpoint_store_handle: "sealed://sorafs/moderation/checkpoint-primary".to_owned(),
                 checkpoint_store_revision: 7,
                 checkpoint_store_policy_digest: [0xC7; 32],
+                checkpoint_store_attestation_public_key: [
+                    0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3,
+                    0xc9, 0x64, 0x07, 0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25,
+                    0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a,
+                ],
                 maintenance_authority: iroha_data_model::account::AccountId::new(
                     maintenance_key.public_key().clone(),
                 ),
@@ -4638,6 +4886,24 @@ mod tests {
                 panel_notification_handle: "queue://sorafs/moderation/notification-primary".to_owned(),
                 panel_notification_revision: 11,
                 panel_notification_policy_digest: [0xCB; 32],
+                panel_notification_archive_handle:
+                    "object-lock://sorafs/moderation/notification-receipts-primary".to_owned(),
+                panel_notification_archive_revision: 12,
+                panel_notification_archive_policy_digest: [0xCC; 32],
+                panel_notification_archive_id: [0xCD; 32],
+                panel_notification_archive_bootstrap_public_key: [
+                    0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3,
+                    0xc9, 0x64, 0x07, 0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25,
+                    0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a,
+                ],
+                panel_notification_archive_public_key: [
+                    0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3,
+                    0xc9, 0x64, 0x07, 0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25,
+                    0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a,
+                ],
+                panel_notification_archive_predecessor_revocation_generation: None,
+                panel_notification_archive_predecessor_authorization_signature: None,
+                panel_notification_archive_new_key_possession_signature: None,
                 max_cases: 128,
                 max_events: 512,
                 max_outbox_entries: 128,
@@ -4645,6 +4911,7 @@ mod tests {
                 max_handoffs: 128,
                 max_submit_attempts: 4,
                 checkpoint_max_bytes: Bytes(4 * 1024 * 1024),
+                panel_notification_archive_max_bytes: Bytes(5 * 1024 * 1024),
                 worker_interval: Duration::from_secs(1),
                 maintenance_batch_limit: 64,
             },
@@ -4663,6 +4930,73 @@ mod tests {
                 != iroha_torii::sorafs::moderation_runtime::
                     TORII_MODERATION_STRICT_INGRESS_HANDLE_V1
         }));
+        let checkpoint = bindings
+            .iter()
+            .find(|binding| binding.slot() == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore)
+            .expect("project moderation checkpoint binding");
+        assert_eq!(
+            checkpoint.moderation_checkpoint_max_bytes(),
+            Some(4 * 1024 * 1024)
+        );
+        assert_eq!(
+            checkpoint.moderation_checkpoint_attestation_public_key(),
+            Some([
+                0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64,
+                0x07, 0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68,
+                0xf7, 0x07, 0x51, 0x1a,
+            ])
+        );
+        let archive = bindings
+            .iter()
+            .find(|binding| {
+                binding.slot() == IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+            })
+            .expect("project moderation archive binding");
+        assert_eq!(
+            archive.moderation_panel_notification_archive_id(),
+            Some([0xCD; 32])
+        );
+        assert_eq!(
+            archive.moderation_panel_notification_archive_bootstrap_public_key(),
+            archive.moderation_panel_notification_archive_public_key()
+        );
+        assert_eq!(
+            archive.moderation_panel_notification_archive_max_bytes(),
+            Some(5 * 1024 * 1024)
+        );
+        assert_eq!(
+            archive.moderation_panel_notification_archive_max_records(),
+            Some(128)
+        );
+    }
+
+    #[test]
+    fn moderation_archive_projection_rejects_missing_source_and_archive_identities() {
+        for mutation in 0..5 {
+            let mut config = default_runtime_config();
+            configure_moderation_runtime(&mut config);
+            let moderation = config
+                .torii
+                .sorafs_storage
+                .moderation_orchestrator
+                .as_mut()
+                .expect("configured moderation runtime");
+            match mutation {
+                0 => moderation.checkpoint_store_attestation_public_key = [0; 32],
+                1 => moderation.panel_notification_archive_id = [0; 32],
+                2 => moderation.panel_notification_archive_bootstrap_public_key = [0; 32],
+                3 => moderation.panel_notification_archive_public_key = [0; 32],
+                4 => moderation.max_handoffs = 0,
+                _ => unreachable!(),
+            }
+            assert!(matches!(
+                IrohaRuntimeProviderBindingsV1::try_from_config(&config),
+                Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                    IrohaRuntimeProviderSlotV1::ModerationCheckpointStore
+                        | IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                ))
+            ));
+        }
     }
 
     #[test]

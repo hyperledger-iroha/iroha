@@ -4618,14 +4618,7 @@ impl SumeragiAutonomousLaneExecution {
         )
     }
 
-    /// Validate bounded counters, paired carrier identity, and stage geometry.
-    ///
-    /// # Errors
-    ///
-    /// Returns a stable reason when identity fields are zero, carrier fields
-    /// are incomplete, counters exceed protocol bounds, or durable stage and
-    /// wait-state evidence disagree.
-    pub fn validate(&self) -> Result<(), &'static str> {
+    fn validate_identity_and_counts(&self) -> Result<(), &'static str> {
         let nonzero = |hash: &[u8]| hash.iter().any(|byte| *byte != 0);
         if self.lane_block_height == 0
             || self.proposal_height == 0
@@ -4671,6 +4664,19 @@ impl SumeragiAutonomousLaneExecution {
         {
             return Err("autonomous lane execution counters are malformed");
         }
+        Ok(())
+    }
+
+    /// Validate bounded counters, paired carrier identity, and stage geometry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable reason when identity fields are zero, carrier fields
+    /// are incomplete, counters exceed protocol bounds, or durable stage and
+    /// wait-state evidence disagree.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        self.validate_identity_and_counts()?;
+        let nonzero = |hash: &[u8]| hash.iter().any(|byte| *byte != 0);
         for hash in [self.executable_payload_hash, self.source_bundle_hash] {
             if hash.is_some_and(|hash| !nonzero(hash.as_ref())) {
                 return Err("autonomous lane execution evidence hash must be non-zero");

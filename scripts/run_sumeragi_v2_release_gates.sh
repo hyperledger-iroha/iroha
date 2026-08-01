@@ -2029,7 +2029,9 @@ required_multilane_core_focus_tests=(
   sumeragi::v2_apply::tests::live_merge_publication_persists_application_receipt_before_retry
   sumeragi::v2_apply::tests::committed_merge_reservation_is_finalized_exactly_once
   sumeragi::v2_apply::tests::startup_reconciliation_consumes_replayed_committed_merge_reservation
+  sumeragi::v2_apply::tests::autonomous_release_rejects_missing_queue_owner_while_kura_claims_are_pending
   sumeragi::v2_apply::tests::autonomous_reservation_cross_store_crash_matrix_preserves_fifo_exactly_once
+  queue::tests::forgotten_release_requires_exact_fifo_membership_and_relative_order
   kura::tests::terminal_frontier_compaction_retains_every_later_pending_slot
   kura::tests::terminal_frontier_compaction_fails_before_replacing_malformed_pending_slot
   kura::tests::terminal_auxiliary_cleanup_resumes_after_each_mutation_budget
@@ -2364,7 +2366,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=397
+readonly expected_multilane_focus_test_count=399
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}

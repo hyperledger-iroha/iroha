@@ -1023,6 +1023,7 @@ impl QueuePlanJournal {
     /// Returns malformed-target, duplicate, absent, mismatched, snapshot, capacity, compaction,
     /// append, or synchronization errors. Any ambiguous append or synchronization boundary
     /// poisons this open journal.
+    #[cfg(test)]
     pub fn remove_many_exact_atomic_strict_durable(
         &mut self,
         removals: &[(HashOf<TransactionEntrypoint>, Hash, Hash)],
@@ -1032,14 +1033,13 @@ impl QueuePlanJournal {
 
     /// Atomically and durably tombstone a bounded batch that must be wholly live.
     ///
-    /// Unlike [`Self::remove_many_exact_atomic_strict_durable`], this startup-publication form
-    /// rejects an exactly retained tombstone before append. Success therefore proves that every
-    /// requested live claim participated in the one durable `RemoveBatch`; the caller has no
-    /// post-durability outcome vector to interpret.
+    /// This startup-publication form rejects an exactly retained tombstone before append. Success
+    /// therefore proves that every requested live claim participated in the one durable
+    /// `RemoveBatch`; the caller has no post-durability outcome vector to interpret.
     ///
     /// # Errors
-    /// Returns the same errors as [`Self::remove_many_exact_atomic_strict_durable`], and rejects
-    /// any target that is already absent before writing.
+    /// Returns malformed-target, duplicate, absent, mismatched, snapshot, capacity, compaction,
+    /// append, or synchronization errors, and rejects any target already absent before writing.
     pub fn remove_all_live_exact_atomic_strict_durable(
         &mut self,
         removals: &[(HashOf<TransactionEntrypoint>, Hash, Hash)],
@@ -1213,6 +1213,7 @@ impl QueuePlanJournal {
     /// Returns malformed-key, duplicate, absent, mismatched, ABA, snapshot, capacity, compaction,
     /// append, or synchronization errors. Any ambiguous append or synchronization boundary
     /// poisons this open journal.
+    #[cfg(test)]
     pub fn remove_exact_global_admission_bindings_strict_durable(
         &mut self,
         keys: &[LaneQueueReservationKeyV2],
@@ -1432,6 +1433,7 @@ impl QueuePlanJournal {
     /// # Errors
     /// Returns file or parent-directory synchronization errors. Any failure poisons this open
     /// journal because the caller cannot prove which boundary reached stable storage.
+    #[cfg(test)]
     pub fn sync_all_with_parent(&mut self) -> io::Result<()> {
         self.ensure_healthy()?;
         if let Err(error) = self.sync_all_raw(SyncPhase::General) {

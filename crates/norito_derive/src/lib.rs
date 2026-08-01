@@ -388,7 +388,7 @@ fn validate_data_field_attrs(data: &Data) -> syn::Result<()> {
             Ok(())
         }
         Data::Union(data) => Err(syn::Error::new_spanned(
-            &data.union_token,
+            data.union_token,
             "Norito derives do not support unions",
         )),
     }

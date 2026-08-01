@@ -459,7 +459,9 @@ pub(crate) struct ZkX509ShaWordStarkBaseV1 {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509ShaWordCapacityBaseSourceV1 {
     message_len: usize,
+    #[cfg(test)]
     maximum_message_len: usize,
+    #[cfg(test)]
     exact_length: bool,
     active_blocks: usize,
     maximum_blocks: usize,
@@ -1461,7 +1463,9 @@ pub(crate) fn build_sha_word_capacity_base_source_v1(
 
     Ok(ZkX509ShaWordCapacityBaseSourceV1 {
         message_len: message.len(),
+        #[cfg(test)]
         maximum_message_len,
+        #[cfg(test)]
         exact_length,
         active_blocks,
         maximum_blocks,

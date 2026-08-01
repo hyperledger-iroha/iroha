@@ -6393,7 +6393,7 @@ mod tests {
                 })
                 .collect(),
         });
-        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
             .expect("canonical degree-512 multiplication matrix")
     }
 

@@ -441,6 +441,9 @@ fn collect_moderation_viewer_bindings(
     if let Some(runtime) = storage.moderation_orchestrator.as_ref() {
         validate_moderation_strict_ingress_binding(runtime)?;
         bindings.push(IrohaRuntimeProviderBindingV1::try_new_moderation_checkpoint_store(runtime)?);
+        bindings.push(
+            IrohaRuntimeProviderBindingV1::try_new_moderation_panel_notification_archive(runtime)?,
+        );
         for (slot, handle, revision, policy_digest) in [
             (
                 IrohaRuntimeProviderSlotV1::ModerationTransactionSigner,
@@ -519,7 +522,9 @@ fn validate_moderation_strict_ingress_binding(
         | Error::UnavailableOrStale
         | Error::InvalidQualification
         | Error::QualificationMismatch
-        | Error::IdentityOrPolicyChanged => IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked,
+        | Error::IdentityOrPolicyChanged
+        | Error::ArchiveIdentityChanged
+        | Error::ArchivePublicKeyChanged => IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked,
     })
 }
 

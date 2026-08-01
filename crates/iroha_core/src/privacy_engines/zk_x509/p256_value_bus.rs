@@ -228,6 +228,7 @@ pub(crate) enum P256ValueAccessKindV1 {
 }
 
 /// Verifier-regenerated address for one logical bus row.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256ValueBusFixedAccessV1 {
     /// Canonical product-identity padding.
@@ -278,6 +279,7 @@ pub(crate) struct P256ValueBusSegmentV1 {
 }
 
 /// Product endpoint.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256ValueBusEndpointV1 {
     /// Arithmetic and assertion accesses in fixed execution order.
@@ -312,6 +314,7 @@ pub(crate) struct P256ValueBusTraceV1 {
 /// regenerated when a committed base row is requested, so the retained
 /// private material is the addressed field cell and nothing challenge
 /// dependent can exist before X5B1.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256ValueBusBaseCellV1 {
     /// Verifier-owned address and access direction.
@@ -322,6 +325,7 @@ pub(crate) struct P256ValueBusBaseCellV1 {
 }
 
 /// One challenge-independent execution or writer-first endpoint.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct P256ValueBusBaseEndpointTraceV1 {
     /// Execution or sorted endpoint identity.
@@ -330,6 +334,7 @@ pub(crate) struct P256ValueBusBaseEndpointTraceV1 {
     pub(crate) rows: Vec<P256ValueBusBaseCellV1>,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ValueBusBaseEndpointTraceV1 {
     /// Exact number of complete logical segments.
     pub(crate) fn segment_count_v1(&self) -> Result<usize, P256ValueBusErrorV1> {
@@ -601,12 +606,14 @@ impl P256ValueBusChallengesV1 {
 pub(crate) enum P256ValueBusErrorV1 {
     /// A post-base operation was attempted before binding or a one-shot phase
     /// transition was reused.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 value-bus phase transition is invalid")]
     Phase,
     /// IDs, writers, access order, moduli, or segment shapes are invalid.
     #[error("zk-X509 P-256 value-bus topology is invalid")]
     Topology,
     /// An execution access is not the corresponding arithmetic/input limb.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 value-bus source binding is invalid")]
     Source,
     /// A limb, bit decomposition, or field encoding is not canonical.
@@ -616,18 +623,23 @@ pub(crate) enum P256ValueBusErrorV1 {
     #[error("zk-X509 P-256 value-bus challenges are invalid")]
     Challenge,
     /// A product transition or segment boundary is invalid.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 value-bus product constraint is invalid")]
     Constraint,
     /// A sorted read differs from its unique writer.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 value-bus sorted adjacency is invalid")]
     Adjacency,
     /// An explicit same-modulus equality is false.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 value equality is invalid")]
     Equality,
     /// A scalar/base Boolean bridge is non-Boolean or unequal.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 Boolean bridge is invalid")]
     BooleanBridge,
     /// Execution and sorted terminal products differ.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 value-bus terminal products differ")]
     Terminal,
     /// Length or allocation arithmetic exceeded a fixed bound.
@@ -696,6 +708,7 @@ pub(crate) fn build_zk_x509_p256_value_bus_trace_v1(
 /// producing arithmetic operation.  This accessor regenerates that address
 /// and rejects any fixed-row, endpoint, segment, range, or provenance
 /// mismatch; it never searches for a proof-supplied address.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_value_bus_writer_location_v1(
     initial_value_count: usize,
     id: P256ValueIdV1,
@@ -784,6 +797,7 @@ pub(crate) fn p256_value_bus_writer_limb_cell_v1(
 /// The address is regenerated from the verifier-owned SSA topology. The
 /// endpoint is never searched and no challenged product column participates,
 /// so external-binding base construction can finish before X5B1.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_value_bus_base_writer_limb_cell_v1(
     endpoint: &P256ValueBusBaseEndpointTraceV1,
     initial_value_count: usize,
@@ -861,6 +875,7 @@ pub(crate) fn p256_value_bus_execution_source_cell_v1(
 ///
 /// Cross-writer products consume this projection after X5B1; they never
 /// depend on a value-bus trace that already contains challenged products.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_value_bus_base_execution_source_cell_v1(
     endpoint: &P256ValueBusBaseEndpointTraceV1,
     ordinal: usize,
@@ -1497,6 +1512,7 @@ fn build_base_endpoint_v1(
     Ok(P256ValueBusBaseEndpointTraceV1 { endpoint, rows })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_base_cell_v1(cell: P256ValueBusBaseCellV1) -> Result<(), P256ValueBusErrorV1> {
     if F::canonical(cell.value.0).is_none()
         || cell.value.0 > u64::from(u16::MAX)
@@ -2251,7 +2267,7 @@ impl P256ValueBusStarkFixedProviderV1 {
     }
 
     /// One verifier-preprocessed cell without retaining a fixed-row matrix.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    #[cfg(test)]
     pub(crate) fn fixed_cell_v1(
         &self,
         index: usize,
@@ -2264,7 +2280,7 @@ impl P256ValueBusStarkFixedProviderV1 {
     }
 
     /// Regenerate one complete verifier-preprocessed native column.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    #[cfg(test)]
     pub(crate) fn fill_fixed_column_v1(
         &self,
         column: usize,
@@ -2737,6 +2753,7 @@ impl P256ValueBusBaseSourceV1 {
 
     /// One verifier-owned fixed row. No witness value is accepted by this
     /// path.
+    #[cfg(test)]
     pub(crate) fn fixed_row_v1(
         &self,
         endpoint: P256ValueBusStarkEndpointV1,
@@ -2946,6 +2963,7 @@ impl P256ValueBusBoundSourceV1 {
 
     /// Verifier-owned fixed execution row retained across the phase
     /// transition.
+    #[cfg(test)]
     pub(crate) fn execution_fixed_row_v1(
         &self,
         row: usize,

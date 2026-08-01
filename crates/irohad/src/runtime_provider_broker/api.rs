@@ -181,6 +181,12 @@ impl StockRuntimeProviderBrokerRegistryV1 {
     }
 }
 
+const fn stock_runtime_provider_slot_is_supported(slot: IrohaRuntimeProviderSlotV1) -> bool {
+    let wire_id = slot.wire_id();
+    wire_id >= IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id()
+        && wire_id <= IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id()
+}
+
 impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
     fn resolve(
         &self,
@@ -190,67 +196,13 @@ impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
             return Ok(IrohaRuntimeDeps::default());
         }
 
-        // Every currently defined V1 slot is enumerated explicitly. Unknown
-        // or future roles remain deliberately fail-closed until their bounded
-        // protocol surface is reviewed and added here.
-        if bindings.iter().any(|binding| {
-            !matches!(
-                binding.slot(),
-                IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper
-                    | IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider
-                    | IrohaRuntimeProviderSlotV1::PrivacyReleaseAnchor
-                    | IrohaRuntimeProviderSlotV1::TransparencyLeaderLease
-                    | IrohaRuntimeProviderSlotV1::FencedPrivacyPublisher
-                    | IrohaRuntimeProviderSlotV1::FencedPrivacyHeadReader
-                    | IrohaRuntimeProviderSlotV1::GovernanceDagSigner
-                    | IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator
-                    | IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator
-                    | IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore
-                    | IrohaRuntimeProviderSlotV1::StreamTokenSigner
-                    | IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint
-                    | IrohaRuntimeProviderSlotV1::ProofOutcomeTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::RepairTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::ReserveTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::OrderbookTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::ModerationTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::ModerationSettlementHandoff
-                    | IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff
-                    | IrohaRuntimeProviderSlotV1::ModerationPanelNotification
-                    | IrohaRuntimeProviderSlotV1::ModerationCheckpointStore
-                    | IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource
-                    | IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver
-                    | IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner
-                    | IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore
-                    | IrohaRuntimeProviderSlotV1::ProviderIngestRetentionAuthority
-                    | IrohaRuntimeProviderSlotV1::ReputationFinalizedArchiveRetentionAuthority
-                    | IrohaRuntimeProviderSlotV1::PopCredentialProviderRegistry
-                    | IrohaRuntimeProviderSlotV1::PotrGatewaySigner
-                    | IrohaRuntimeProviderSlotV1::PotrProviderSigner
-                    | IrohaRuntimeProviderSlotV1::GatewayAcmeClient
-                    | IrohaRuntimeProviderSlotV1::GatewayComplianceFeedTransport
-                    | IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter
-                    | IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint
-                    | IrohaRuntimeProviderSlotV1::ReputationThresholdSigner
-                    | IrohaRuntimeProviderSlotV1::ReputationGovernanceDag
-                    | IrohaRuntimeProviderSlotV1::BillingFinalizedQuery
-                    | IrohaRuntimeProviderSlotV1::BillingJournalVerifier
-                    | IrohaRuntimeProviderSlotV1::BillingStatementSigner
-                    | IrohaRuntimeProviderSlotV1::BillingStatementPublisher
-                    | IrohaRuntimeProviderSlotV1::BillingAcknowledgementAuthority
-                    | IrohaRuntimeProviderSlotV1::BillingEpochWitnessStore
-                    | IrohaRuntimeProviderSlotV1::PorFinalizedReplayArchive
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerGrantAuthority
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerReceiptSigner
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerErasure
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher
-                    | IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner
-                    | IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider
-            )
-        }) {
+        // The frozen V1 wire ids are a contiguous, exhaustively tested
+        // whitelist. A future role outside that closed interval fails until
+        // this registry and its bounded protocol surface are extended.
+        if bindings
+            .iter()
+            .any(|binding| !stock_runtime_provider_slot_is_supported(binding.slot()))
+        {
             return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
         }
 
@@ -347,6 +299,74 @@ mod governance_service_registry_tests {
     use sorafs_node::GovernanceDagServiceRuntimeProviderRegistryErrorV1 as ServiceError;
 
     #[test]
+    fn stock_registry_whitelists_every_frozen_v1_slot() {
+        use IrohaRuntimeProviderSlotV1 as Slot;
+
+        let slots = [
+            Slot::ModerationQuarantineKeyWrapper,
+            Slot::PrivacyCyclePrfProvider,
+            Slot::PrivacyReleaseAnchor,
+            Slot::TransparencyLeaderLease,
+            Slot::FencedPrivacyPublisher,
+            Slot::FencedPrivacyHeadReader,
+            Slot::GovernanceDagSigner,
+            Slot::GovernanceDagIpfsAuthenticator,
+            Slot::GovernanceDagHeadAuthenticator,
+            Slot::GovernanceDagCheckpointStore,
+            Slot::StreamTokenSigner,
+            Slot::AppealFinanceTransactionSigner,
+            Slot::AppealFinanceCheckpoint,
+            Slot::ProofOutcomeTransactionSigner,
+            Slot::RepairTransactionSigner,
+            Slot::ReserveTransactionSigner,
+            Slot::OrderbookTransactionSigner,
+            Slot::ModerationTransactionSigner,
+            Slot::ModerationSettlementHandoff,
+            Slot::ModerationPublicationHandoff,
+            Slot::ModerationPanelNotification,
+            Slot::EvidenceViewerWebAuthn,
+            Slot::EvidenceViewerGrantAuthority,
+            Slot::EvidenceViewerReceiptSigner,
+            Slot::EvidenceViewerErasure,
+            Slot::EvidenceViewerCheckpointStore,
+            Slot::PopCredentialProviderRegistry,
+            Slot::PotrGatewaySigner,
+            Slot::PotrProviderSigner,
+            Slot::GatewayAcmeClient,
+            Slot::GatewayComplianceFeedTransport,
+            Slot::ReputationJournalTransactionSubmitter,
+            Slot::ReputationThresholdSigner,
+            Slot::ReputationGovernanceDag,
+            Slot::BillingFinalizedQuery,
+            Slot::BillingJournalVerifier,
+            Slot::BillingStatementSigner,
+            Slot::BillingStatementPublisher,
+            Slot::BillingAcknowledgementAuthority,
+            Slot::BillingEpochWitnessStore,
+            Slot::ProviderIngestAuthenticatedSource,
+            Slot::ProviderIngestCompletionSignerResolver,
+            Slot::ProviderIngestCompletionSigner,
+            Slot::ProviderIngestCheckpointStore,
+            Slot::ProviderIngestRetentionAuthority,
+            Slot::PorFinalizedReplayArchive,
+            Slot::EvidenceViewerCompactionArchive,
+            Slot::ReputationFinalizedArchiveRetentionAuthority,
+            Slot::SoracloudRuntimeMutationSigner,
+            Slot::ReputationJournalCheckpoint,
+            Slot::SoracloudHfInferenceCredentialProvider,
+            Slot::ModerationCheckpointStore,
+            Slot::EvidenceViewerTransparencyPublisher,
+            Slot::StreamTokenGatewayAdmission,
+            Slot::ModerationPanelNotificationArchive,
+        ];
+        assert_eq!(slots.len(), 55);
+        for (index, slot) in slots.into_iter().enumerate() {
+            assert_eq!(usize::from(slot.wire_id()), index + 1);
+            assert!(stock_runtime_provider_slot_is_supported(slot));
+        }
+    }
+
+    #[test]
     fn registry_errors_map_to_payload_free_service_categories() {
         for error in [
             IrohaRuntimeProviderRegistryErrorV1::Unavailable,
@@ -441,6 +461,12 @@ pub struct RuntimeProviderBrokerBackendsV1 {
     >,
     pub(super) moderation_checkpoint_store:
         Option<Arc<dyn sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1>>,
+    pub(super) moderation_panel_notification_archive: Option<
+        Arc<
+            dyn sorafs_node::moderation_orchestrator::
+                ModerationPanelNotificationArchiveV1,
+        >,
+    >,
     pub(super) provider_ingest_authenticated_source: Option<
         Arc<
             dyn crate::sorafs_provider_ingest_runtime::
@@ -631,6 +657,10 @@ impl fmt::Debug for RuntimeProviderBrokerBackendsV1 {
                 &self.moderation_checkpoint_store.is_some(),
             )
             .field(
+                "moderation_panel_notification_archive",
+                &self.moderation_panel_notification_archive.is_some(),
+            )
+            .field(
                 "provider_ingest_authenticated_source",
                 &self.provider_ingest_authenticated_source.is_some(),
             )
@@ -778,6 +808,7 @@ impl RuntimeProviderBrokerBackendsV1 {
             moderation_publication_handoff: None,
             moderation_panel_notification: None,
             moderation_checkpoint_store: None,
+            moderation_panel_notification_archive: None,
             provider_ingest_authenticated_source: None,
             provider_ingest_signer_resolver: None,
             provider_ingest_checkpoint_store: None,
@@ -1358,6 +1389,18 @@ impl RuntimeProviderBrokerBackendsV1 {
         archive: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveV1>,
     ) -> Self {
         self.evidence_viewer_compaction_archive = Some(archive);
+        self
+    }
+
+    /// Attach the deployment-owned immutable moderation notification archive.
+    #[must_use]
+    pub fn with_moderation_panel_notification_archive(
+        mut self,
+        archive: Arc<
+            dyn sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveV1,
+        >,
+    ) -> Self {
+        self.moderation_panel_notification_archive = Some(archive);
         self
     }
 

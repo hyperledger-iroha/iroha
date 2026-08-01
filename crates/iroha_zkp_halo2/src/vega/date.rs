@@ -184,7 +184,7 @@ pub(super) fn enforce_rfc3339_not_before(
     let earlier_code = rfc3339_seconds_code(earlier);
     let later_value = scalar_to_u64(builder.evaluate(&later_code))?;
     let earlier_value = scalar_to_u64(builder.evaluate(&earlier_code))?;
-    let slack = later_value.checked_sub(earlier_value).unwrap_or(0);
+    let slack = later_value.saturating_sub(earlier_value);
     let (_, slack_lc) = allocate_unsigned(builder, slack, RFC3339_TIMESTAMP_ORDER_SLACK_BITS_V1)?;
     builder.enforce_equal(later_code, earlier_code.plus(&slack_lc))
 }

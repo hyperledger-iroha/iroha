@@ -1171,13 +1171,13 @@ impl ZkX509MainCompositionPhaseV1<'_> {
 ///
 /// The layout is cloned only after every dimension and closed provider
 /// discriminator is validated, preventing later caller mutation.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(super) struct MainTraceProviderSetV1<'a> {
     layout: AggregateProofLayoutV1,
     groups: Vec<MainTraceGroupProviderV1<'a>>,
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 impl<'a> MainTraceProviderSetV1<'a> {
     pub(super) fn new_v1(
         layout: &AggregateProofLayoutV1,

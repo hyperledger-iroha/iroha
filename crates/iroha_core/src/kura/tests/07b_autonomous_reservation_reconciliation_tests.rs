@@ -1,4 +1,148 @@
     #[test]
+    fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) = two_reservation_autonomous_lane_payload_for_kura(
+            lane.lane_id,
+            lane.dataspace_id,
+            1,
+            &signer,
+        );
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist two-reservation payload");
+        let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
+        let retirement_hash = retirement.digest().expect("retirement digest");
+        kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
+            .expect("persist exact retirement and pending prefix");
+
+        let paths = payload
+            .entrypoint_hashes
+            .iter()
+            .map(|entrypoint_hash| {
+                Kura::autonomous_lane_entrypoint_claim_path(
+                    temp_dir.path(),
+                    &chain_id_hash,
+                    entrypoint_hash,
+                )
+            })
+            .collect::<Vec<_>>();
+        let encode_claim = |claim: &AutonomousLaneEntrypointClaimV3| {
+            norito::to_bytes(claim).expect("encode adversarial claim")
+        };
+        let pending = payload
+            .entrypoint_hashes
+            .iter()
+            .map(|entrypoint_hash| {
+                AutonomousLaneEntrypointClaimV3::release_pending_for_payload(
+                    &payload,
+                    *entrypoint_hash,
+                    retirement_hash,
+                )
+            })
+            .collect::<Vec<_>>();
+        let released = payload
+            .entrypoint_hashes
+            .iter()
+            .map(|entrypoint_hash| {
+                AutonomousLaneEntrypointClaimV3::released_for_payload(
+                    &payload,
+                    *entrypoint_hash,
+                    retirement_hash,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        // Pending*/Active* is the only crash-reachable prepare ordering. An
+        // Active/ReleasePending inversion must fail before the first claim is
+        // normalized, leaving the entire adversarial group byte-identical.
+        let active_first = AutonomousLaneEntrypointClaimV3::new(
+            &payload,
+            payload.entrypoint_hashes[0],
+        );
+        fs::write(&paths[0], encode_claim(&active_first)).expect("write inverted active claim");
+        let before_prepare = paths
+            .iter()
+            .map(|path| fs::read(path).expect("read claim before rejected prepare"))
+            .collect::<Vec<_>>();
+        assert!(
+            kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
+                .is_err(),
+            "an Active/ReleasePending inversion must fail closed",
+        );
+        assert_eq!(
+            paths
+                .iter()
+                .map(|path| fs::read(path).expect("read claim after rejected prepare"))
+                .collect::<Vec<_>>(),
+            before_prepare,
+            "prepare rejection must occur before any claim or temp mutation",
+        );
+
+        fs::write(&paths[0], encode_claim(&pending[0])).expect("restore pending first claim");
+        fs::write(&paths[1], encode_claim(&released[1])).expect("write released suffix");
+        let barrier = retirement
+            .queue_release_barrier()
+            .expect("exact Queue release barrier");
+        let before_finalize = paths
+            .iter()
+            .map(|path| fs::read(path).expect("read claim before rejected finalize"))
+            .collect::<Vec<_>>();
+        assert!(
+            kura.finalize_autonomous_lane_slot_release(
+                &retirement,
+                &barrier,
+                chain_id_hash,
+                epoch,
+            )
+            .is_err(),
+            "a ReleasePending/Released inversion must fail closed",
+        );
+        assert_eq!(
+            paths
+                .iter()
+                .map(|path| fs::read(path).expect("read claim after rejected finalize"))
+                .collect::<Vec<_>>(),
+            before_finalize,
+            "finalize rejection must occur before any claim or temp mutation",
+        );
+
+        // Released*/ReleasePending* is the exact crash prefix produced by the
+        // finalizer. It must resume deterministically and remain idempotent
+        // after reopening Kura.
+        fs::write(&paths[0], encode_claim(&released[0])).expect("write released prefix");
+        fs::write(&paths[1], encode_claim(&pending[1])).expect("restore pending suffix");
+        kura.finalize_autonomous_lane_slot_release(
+            &retirement,
+            &barrier,
+            chain_id_hash,
+            epoch,
+        )
+        .expect("resume canonical Released prefix");
+        for (path, expected) in paths.iter().zip(&released) {
+            assert_eq!(
+                Kura::decode_autonomous_lane_entrypoint_claim(path).expect("released claim"),
+                *expected,
+            );
+        }
+
+        drop(kura);
+        let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+        reopened
+            .finalize_autonomous_lane_slot_release(
+                &retirement,
+                &barrier,
+                chain_id_hash,
+                epoch,
+            )
+            .expect("exact Released prefix retry is a storage stutter");
+    }
+
+    #[test]
     fn strict_reservation_batch_reads_historical_attempt_instead_of_later_latest() {
         let temp_dir = TempDir::new().expect("temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);

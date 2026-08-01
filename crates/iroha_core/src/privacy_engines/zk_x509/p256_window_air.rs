@@ -285,6 +285,7 @@ pub(crate) enum P256WindowAirErrorV1 {
     #[error("zk-X509 P-256 window constraint failed")]
     Constraint,
     /// A bounded fixed-trace allocation failed.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 window allocation failed")]
     Allocation,
 }

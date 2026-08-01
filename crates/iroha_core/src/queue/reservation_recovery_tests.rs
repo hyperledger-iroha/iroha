@@ -1575,6 +1575,11 @@ fn globally_bound_reservation_survives_expiry_until_canonical_commit() {
         .release_lane_reservation(&key)
         .expect("release expired reservation");
     assert_eq!(
+        queue.queued_len(),
+        1,
+        "release must restore the globally certified owner to ordinary FIFO even after TTL expiry"
+    );
+    assert_eq!(
         queue.cull_expired_entries(time_source.get_unix_time()),
         0,
         "TTL expiry cannot erase an exact globally certified owner after lane release"

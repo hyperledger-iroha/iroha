@@ -300,7 +300,7 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
         verifier_address: [0x31; 20],
         verifier_code_hash: [0x41; 32],
         verifying_key,
-        verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(verifying_key)
+        verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(&verifying_key)
             .expect("exact SCCP test verification key is curve-valid"),
         outbound_proof_policy: outbound_policy(),
         route_address: [0x51; 20],

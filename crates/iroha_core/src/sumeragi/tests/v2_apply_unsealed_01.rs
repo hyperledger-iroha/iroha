@@ -1976,9 +1976,39 @@
                                 payload.epoch,
                             )
                             .expect("persist Kura retirement before Queue barrier");
-                        queue
-                            .prepare_lane_reservation_release_barrier(&barrier)
-                            .expect("persist Queue prepared barrier");
+                        let mut substituted_barrier = barrier.clone();
+                        substituted_barrier.ordered_keys.swap(0, 1);
+                        let substituted_authorization = fixture
+                            .kura
+                            .authorize_autonomous_lane_queue_release_preparation(
+                                &retirement,
+                                payload.chain_id_hash,
+                                payload.epoch,
+                            )
+                            .expect("authorize the exact Queue barrier before substitution");
+                        assert!(matches!(
+                            queue.prepare_lane_reservation_release_barrier_with_authorization(
+                                &substituted_barrier,
+                                substituted_authorization,
+                            ),
+                            Err(LaneQueueReservationError::InvalidIdentity(_))
+                        ));
+                        assert!(queue.lane_reservation_release_barriers().is_empty());
+                        assert_eq!(queue.live_lane_reservations().len(), 3);
+                        let preparation_authorization = fixture
+                            .kura
+                            .authorize_autonomous_lane_queue_release_preparation(
+                                &retirement,
+                                payload.chain_id_hash,
+                                payload.epoch,
+                            )
+                            .expect("authorize exact Queue prepared barrier");
+                        let _durable_queue_barrier = queue
+                            .prepare_lane_reservation_release_barrier_with_authorization(
+                                &barrier,
+                                preparation_authorization,
+                            )
+                            .expect("persist authorized Queue prepared barrier");
                     }
                     "kura_released" => {
                         fixture
@@ -1989,18 +2019,64 @@
                                 payload.epoch,
                             )
                             .expect("persist Kura retirement before released claims");
-                        queue
-                            .prepare_lane_reservation_release_barrier(&barrier)
-                            .expect("persist Queue barrier before Kura Released");
-                        fixture
+                        let preparation_authorization = fixture
                             .kura
-                            .finalize_autonomous_lane_slot_release(
+                            .authorize_autonomous_lane_queue_release_preparation(
+                                &retirement,
+                                payload.chain_id_hash,
+                                payload.epoch,
+                            )
+                            .expect("authorize Queue barrier before Kura Released");
+                        let durable_queue_barrier = queue
+                            .prepare_lane_reservation_release_barrier_with_authorization(
+                                &barrier,
+                                preparation_authorization,
+                            )
+                            .expect("persist authorized Queue barrier before Kura Released");
+                        let mut substituted_barrier = barrier.clone();
+                        substituted_barrier.ordered_keys.swap(0, 1);
+                        assert!(
+                            fixture
+                                .kura
+                                .finalize_autonomous_lane_slot_release_with_authorization(
+                                    &retirement,
+                                    &substituted_barrier,
+                                    payload.chain_id_hash,
+                                    payload.epoch,
+                                    durable_queue_barrier,
+                                )
+                                .is_err(),
+                            "Queue proof must not authorize a substituted barrier"
+                        );
+                        assert_eq!(
+                            queue.lane_reservation_release_barriers(),
+                            vec![barrier.clone()]
+                        );
+                        assert_eq!(queue.live_lane_reservations().len(), 3);
+                        let retry_preparation_authorization = fixture
+                            .kura
+                            .authorize_autonomous_lane_queue_release_preparation(
+                                &retirement,
+                                payload.chain_id_hash,
+                                payload.epoch,
+                            )
+                            .expect("reauthorize the exact prepared Queue barrier");
+                        let durable_queue_barrier = queue
+                            .prepare_lane_reservation_release_barrier_with_authorization(
+                                &barrier,
+                                retry_preparation_authorization,
+                            )
+                            .expect("reopen the exact prepared Queue barrier");
+                        let _queue_finalization_authorization = fixture
+                            .kura
+                            .finalize_autonomous_lane_slot_release_with_authorization(
                                 &retirement,
                                 &barrier,
                                 payload.chain_id_hash,
                                 payload.epoch,
+                                durable_queue_barrier,
                             )
-                            .expect("persist Kura Released boundary");
+                            .expect("persist authorized Kura Released boundary");
                     }
                     "queue_completion_forgotten" => {
                         assert_eq!(
@@ -2249,6 +2325,114 @@
                     "{boundary}: restart/release must neither lose nor duplicate ownership"
                 );
             }
+        }
+    );
+
+    v2_apply_test!(
+        autonomous_release_rejects_missing_queue_owner_while_kura_claims_are_pending,
+        {
+            let fixture = ApplyFixture::new();
+            let producer = KeyPair::try_from_seed(vec![0xB8; 32], Algorithm::BlsNormal)
+                .expect("derive missing-Queue-owner producer");
+            let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
+            let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+            let journal_dir =
+                tempfile::tempdir().expect("missing-Queue-owner reservation journals");
+            queue
+                .install_plan_journal(
+                    journal_dir.path().join("queue-plans.norito"),
+                    1024 * 1024,
+                    true,
+                )
+                .expect("install missing-Queue-owner queue-plan journal");
+            queue
+                .install_lane_reservation_journal(
+                    journal_dir.path().join("lane-reservations.norito"),
+                    1024 * 1024,
+                )
+                .expect("install missing-Queue-owner reservation journal");
+            let (payload, expected_fifo) =
+                reserve_autonomous_crash_batch(&fixture, &queue, &producer);
+            let descriptor = &payload.origin_proposal.descriptor;
+            let lane_config = RuntimeLaneConfig::default();
+            fixture
+                .kura
+                .install_lane_incarnation_marker_for_test(
+                    lane_config.primary(),
+                    descriptor.lane_incarnation,
+                    0,
+                )
+                .expect("install missing-Queue-owner lane marker");
+            fixture
+                .kura
+                .persist_lane_executable_payload(&payload, payload.chain_id_hash, payload.epoch)
+                .expect("persist missing-Queue-owner payload");
+            let mut global_body_store = fixture.reopen_body_store();
+            fixture
+                .execute(&mut global_body_store)
+                .expect("finalize global body which omitted the losing payload");
+            let retirement = crate::kura::AutonomousLaneSlotRetirementV1::from_payload(&payload);
+            let barrier = retirement
+                .queue_release_barrier()
+                .expect("build missing-Queue-owner release barrier");
+            fixture
+                .kura
+                .persist_autonomous_lane_slot_retirement(
+                    &retirement,
+                    payload.chain_id_hash,
+                    payload.epoch,
+                )
+                .expect("persist missing-Queue-owner ReleasePending boundary");
+
+            assert_eq!(
+                queue
+                    .release_lane_reservations_in_order(&barrier.ordered_keys)
+                    .expect("construct adversarial missing Queue owner"),
+                barrier.ordered_keys.len()
+            );
+            assert!(queue.live_lane_reservations().is_empty());
+            assert!(queue.lane_reservation_release_barriers().is_empty());
+            assert_eq!(queue.queued_len(), expected_fifo.len());
+
+            let authorization = fixture
+                .kura
+                .authorize_autonomous_lane_queue_release_preparation(
+                    &retirement,
+                    payload.chain_id_hash,
+                    payload.epoch,
+                )
+                .expect("authenticate the still-pending Kura claims");
+            let failure = match queue
+                .prepare_lane_reservation_release_barrier_with_authorization(
+                    &barrier,
+                    authorization,
+                ) {
+                Ok(_) => panic!("pending Kura claims must reject absent Queue ownership"),
+                Err(failure) => failure,
+            };
+            assert!(matches!(
+                failure,
+                LaneQueueReservationError::InvalidIdentity(ref message)
+                    if message.contains("missing Queue release ownership")
+            ));
+            assert!(queue.live_lane_reservations().is_empty());
+            assert!(queue.lane_reservation_release_barriers().is_empty());
+            assert_eq!(queue.queued_len(), expected_fifo.len());
+
+            let mut observed_fifo = Vec::new();
+            queue.get_transactions_for_block_with_state(
+                fixture.state.as_ref(),
+                NonZeroUsize::new(expected_fifo.len()).expect("non-empty adversarial FIFO"),
+                &mut observed_fifo,
+            );
+            assert_eq!(
+                observed_fifo
+                    .iter()
+                    .map(|transaction| transaction.as_ref().hash())
+                    .collect::<Vec<_>>(),
+                expected_fifo,
+                "failed cross-store authorization must not reorder ordinary FIFO ownership"
+            );
         }
     );
 

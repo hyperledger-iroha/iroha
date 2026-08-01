@@ -459,6 +459,12 @@ impl SignedBlock {
     }
 
     /// Replace durable independent-batch outcomes captured while executing this block.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when transaction results are absent, result counts do
+    /// not match the transaction Merkle leaves, or an outcome names an unknown
+    /// or duplicate transaction entrypoint.
     #[cfg(feature = "transparent_api")]
     pub fn set_batch_transfer_outcomes(
         &mut self,

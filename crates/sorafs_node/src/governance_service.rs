@@ -90,6 +90,31 @@ const RUNTIME_INDEX_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const CHECKPOINT_VERSION_V1: u8 = 1;
 const PUBLISH_INTENT_VERSION_V1: u8 = 1;
 const REQUEST_AUTH_REPLAY_STATE_VERSION_V1: u8 = 1;
+const BLOCK_PREFIX_ARCHIVE_VERSION_V1: u8 = 1;
+const BLOCK_PREFIX_ARCHIVE_MAX_ENTRIES_V1: usize = 1024;
+// A one-entry archive must be able to carry every canonical V1 block plus its
+// exact published mapping, predecessor commitment, provider lineage, and
+// Norito framing. The transport allowance additionally covers the canonical
+// multipart wrapper. Both additions are checked below so the production
+// request contract cannot silently wrap on a narrow host.
+const BLOCK_PREFIX_ARCHIVE_CANONICAL_OVERHEAD_BYTES_V1: usize = 1024 * 1024;
+const BLOCK_PREFIX_ARCHIVE_MULTIPART_OVERHEAD_BYTES_V1: usize = 64 * 1024;
+const BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1: usize =
+    match GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1
+        .checked_add(BLOCK_PREFIX_ARCHIVE_CANONICAL_OVERHEAD_BYTES_V1)
+    {
+        Some(limit) => limit,
+        None => panic!("Governance DAG block-prefix archive byte ceiling overflow"),
+    };
+const BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1: usize =
+    match BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1
+        .checked_add(BLOCK_PREFIX_ARCHIVE_MULTIPART_OVERHEAD_BYTES_V1)
+    {
+        Some(limit) => limit,
+        None => panic!("Governance DAG block-prefix archive request ceiling overflow"),
+    };
+const BLOCK_PREFIX_ARCHIVE_CANONICAL_URL_MAX_BYTES_V1: usize = 4096;
+const BLOCK_PREFIX_ARCHIVE_PAYLOAD_KIND_MAX_BYTES_V1: usize = 128;
 const RUNTIME_INDEX_SCHEMA: &str = "sorafs.governance_dag.runtime_signed_index.v1";
 const MIRROR_INDEX_SCHEMA: &str = "sorafs.governance_dag.mirror.v1";
 const MIRROR_INDEX_FILE: &str = "mirror-index.json";
@@ -766,6 +791,102 @@ struct PublishedBlockV1 {
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+struct BlockPrefixArchivePublicationV1 {
+    canonical_url: String,
+    issued_at_unix_secs: u64,
+    expires_at_unix_secs: u64,
+    nonce: [u8; 32],
+    request_digest: [u8; 32],
+    public_key: [u8; 32],
+    signature: [u8; 64],
+}
+
+impl BlockPrefixArchivePublicationV1 {
+    fn from_envelope(
+        envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
+        descriptor: &GovernanceDagCanonicalRequestV1,
+    ) -> Result<Self, GovernanceDagServiceError> {
+        if envelope.scope() != GovernanceDagAuthenticationScope::Ipfs {
+            return Err(GovernanceDagServiceError::State(
+                "block-prefix archive publication used the wrong authentication scope".to_owned(),
+            ));
+        }
+        Ok(Self {
+            canonical_url: descriptor.canonical_url().to_owned(),
+            issued_at_unix_secs: envelope.issued_at_unix_secs(),
+            expires_at_unix_secs: envelope.expires_at_unix_secs(),
+            nonce: envelope.nonce(),
+            request_digest: envelope.request_digest(),
+            public_key: envelope.public_key(),
+            signature: envelope.signature(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+struct BlockPrefixArchiveHeadV1 {
+    generation: u64,
+    digest: [u8; 32],
+    ipfs_cid: String,
+    archived_block_count: u64,
+    last_block_cid: Vec<u8>,
+    last_node_cid: Vec<u8>,
+    predecessor_checkpoint_revision: [u8; 32],
+    predecessor_checkpoint_digest: [u8; 32],
+    predecessor_block_count: u64,
+    predecessor_head_block_cid: Vec<u8>,
+    publication: Option<BlockPrefixArchivePublicationV1>,
+}
+
+impl BlockPrefixArchiveHeadV1 {
+    fn empty() -> Self {
+        Self {
+            generation: 0,
+            digest: [0; 32],
+            ipfs_cid: String::new(),
+            archived_block_count: 0,
+            last_block_cid: Vec::new(),
+            last_node_cid: Vec::new(),
+            predecessor_checkpoint_revision: [0; 32],
+            predecessor_checkpoint_digest: [0; 32],
+            predecessor_block_count: 0,
+            predecessor_head_block_cid: Vec::new(),
+            publication: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+struct SignedBlockPrefixArchiveEntryV1 {
+    published: PublishedBlockV1,
+    signed_block_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+struct SignedBlockPrefixArchiveV1 {
+    version: u8,
+    archive_generation: u64,
+    predecessor: BlockPrefixArchiveHeadV1,
+    predecessor_checkpoint_revision: [u8; 32],
+    predecessor_checkpoint_digest: [u8; 32],
+    predecessor_block_count: u64,
+    predecessor_head_block_cid: Vec<u8>,
+    target_checkpoint_generation: u64,
+    target_head_block_cid: Vec<u8>,
+    target_block_count: u64,
+    target_source_index_blake3: [u8; 32],
+    ipfs_authenticator_handle: String,
+    ipfs_authenticator_revision: u64,
+    ipfs_authenticator_policy_digest: [u8; 32],
+    ipfs_authenticator_public_key: [u8; 32],
+    checkpoint_store_handle: String,
+    checkpoint_store_revision: u64,
+    checkpoint_store_policy_digest: [u8; 32],
+    archived_block_count: u64,
+    blocks: Vec<SignedBlockPrefixArchiveEntryV1>,
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct CheckpointBodyV1 {
     version: u8,
     generation: u64,
@@ -777,6 +898,7 @@ struct CheckpointBodyV1 {
     source_index_blake3: [u8; 32],
     mirror_blake3: [u8; 32],
     published_at_unix: u64,
+    archive_head: BlockPrefixArchiveHeadV1,
     mirror_blocks: Vec<PublishedBlockV1>,
 }
 
@@ -803,8 +925,28 @@ struct PublishIntentBodyV1 {
     target_source_index_blake3: [u8; 32],
     previous_public_head_blake3: Option<[u8; 32]>,
     created_at_unix: u64,
+    archive_head: BlockPrefixArchiveHeadV1,
     blocks: Vec<IntentBlockV1>,
     head_ipfs_cid: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CheckpointCommitmentV1 {
+    revision: [u8; 32],
+    digest: [u8; 32],
+    block_count: u64,
+    head_block_cid: Vec<u8>,
+}
+
+impl CheckpointCommitmentV1 {
+    fn empty() -> Self {
+        Self {
+            revision: [0; 32],
+            digest: [0; 32],
+            block_count: 0,
+            head_block_cid: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
@@ -1387,15 +1529,16 @@ impl Service {
                 "sorafs.storage.governance_dag_service.enabled must be true".to_owned(),
             ));
         }
-        let canonical_block_max = u64::try_from(GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1)
+        let archive_request_max = u64::try_from(BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1)
             .map_err(|_| {
                 GovernanceDagServiceError::Config(
-                    "canonical Governance DAG block ceiling exceeds host limits".to_owned(),
+                    "canonical Governance DAG block-prefix archive request ceiling exceeds host limits"
+                        .to_owned(),
                 )
             })?;
-        if service.max_request_bytes.0 < canonical_block_max {
+        if service.max_request_bytes.0 < archive_request_max {
             return Err(GovernanceDagServiceError::Config(format!(
-                "max_request_bytes must be at least the canonical Governance DAG block ceiling of {canonical_block_max} bytes"
+                "max_request_bytes must be at least the canonical single-entry Governance DAG block-prefix archive request ceiling of {archive_request_max} bytes"
             )));
         }
         let listen_addr = service.listen_addr.parse::<SocketAddr>().map_err(|_| {
@@ -2569,6 +2712,49 @@ fn save_checkpoint(
     )
 }
 
+fn checkpoint_commitment(
+    checkpoint: Option<&CheckpointBodyV1>,
+    revision: Option<[u8; 32]>,
+) -> Result<CheckpointCommitmentV1, GovernanceDagServiceError> {
+    match (checkpoint, revision) {
+        (None, None) => Ok(CheckpointCommitmentV1::empty()),
+        (Some(checkpoint), Some(revision)) => {
+            validate_checkpoint_body(checkpoint)?;
+            if revision == [0; 32] {
+                return Err(GovernanceDagServiceError::State(
+                    "checkpoint commitment revision is zero".to_owned(),
+                ));
+            }
+            let bytes = norito::to_bytes(checkpoint).map_err(|err| {
+                GovernanceDagServiceError::State(format!(
+                    "checkpoint commitment encode failed: {err}"
+                ))
+            })?;
+            let digest = blake3_array(&bytes);
+            let sealed = GovernanceDagSealedStateRecord::new(
+                GovernanceDagSealedStateSlot::Checkpoint,
+                checkpoint.generation,
+                bytes,
+            );
+            if sealed.revision != revision {
+                return Err(GovernanceDagServiceError::State(
+                    "checkpoint commitment revision does not bind the exact canonical body"
+                        .to_owned(),
+                ));
+            }
+            Ok(CheckpointCommitmentV1 {
+                revision,
+                digest,
+                block_count: checkpoint.block_count,
+                head_block_cid: checkpoint.head_block_cid.clone(),
+            })
+        }
+        _ => Err(GovernanceDagServiceError::State(
+            "checkpoint body and sealed revision presence disagree".to_owned(),
+        )),
+    }
+}
+
 fn validate_checkpoint_body(body: &CheckpointBodyV1) -> Result<(), GovernanceDagServiceError> {
     if body.version != CHECKPOINT_VERSION_V1
         || body.generation == 0
@@ -2583,11 +2769,12 @@ fn validate_checkpoint_body(body: &CheckpointBodyV1) -> Result<(), GovernanceDag
             "checkpoint fields violate first-release bounds".to_owned(),
         ));
     }
+    validate_block_prefix_archive_head(&body.archive_head)?;
     let mut previous = None;
     let mut seen = BTreeSet::new();
     for block in &body.mirror_blocks {
         validate_published_block(block)?;
-        if previous.is_some_and(|value| block.sequence != value + 1)
+        if previous.is_some_and(|value: u64| value.checked_add(1) != Some(block.sequence))
             || !seen.insert(block.governance_block_cid.clone())
         {
             return Err(GovernanceDagServiceError::State(
@@ -2595,6 +2782,20 @@ fn validate_checkpoint_body(body: &CheckpointBodyV1) -> Result<(), GovernanceDag
             ));
         }
         previous = Some(block.sequence);
+    }
+    if body
+        .mirror_blocks
+        .first()
+        .is_none_or(|block| block.sequence != body.archive_head.archived_block_count)
+        || body
+            .mirror_blocks
+            .last()
+            .and_then(|block| block.sequence.checked_add(1))
+            != Some(body.block_count)
+    {
+        return Err(GovernanceDagServiceError::State(
+            "checkpoint mirror and archive do not cover one exact block prefix".to_owned(),
+        ));
     }
     if body
         .mirror_blocks
@@ -2612,12 +2813,288 @@ fn validate_published_block(block: &PublishedBlockV1) -> Result<(), GovernanceDa
     if block.governance_block_cid.len() != 32
         || block.governance_node_cid.len() != 32
         || block.payload_kind.is_empty()
+        || block.payload_kind.len() > BLOCK_PREFIX_ARCHIVE_PAYLOAD_KIND_MAX_BYTES_V1
         || block.encoded_len == 0
         || !is_canonical_cid_v1(&block.ipfs_cid)
     {
         return Err(GovernanceDagServiceError::State(
             "published block fields violate first-release bounds".to_owned(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_block_prefix_archive_publication_fields(
+    publication: &BlockPrefixArchivePublicationV1,
+) -> Result<(), GovernanceDagServiceError> {
+    let lifetime = publication
+        .expires_at_unix_secs
+        .checked_sub(publication.issued_at_unix_secs)
+        .ok_or_else(|| {
+            GovernanceDagServiceError::State(
+                "block-prefix archive publication timing is inverted".to_owned(),
+            )
+        })?;
+    if publication.issued_at_unix_secs == 0
+        || publication.canonical_url.is_empty()
+        || publication.canonical_url.len() > BLOCK_PREFIX_ARCHIVE_CANONICAL_URL_MAX_BYTES_V1
+        || Url::parse(&publication.canonical_url).is_err()
+        || lifetime == 0
+        || lifetime > GOVERNANCE_DAG_REQUEST_AUTH_MAX_ENVELOPE_LIFETIME_SECS_V1
+        || publication.nonce.iter().all(|byte| *byte == 0)
+        || publication.request_digest.iter().all(|byte| *byte == 0)
+        || publication.public_key.iter().all(|byte| *byte == 0)
+        || publication.signature.iter().all(|byte| *byte == 0)
+        || PublicKey::from_bytes(Algorithm::Ed25519, &publication.public_key).is_err()
+    {
+        return Err(GovernanceDagServiceError::State(
+            "block-prefix archive publication attestation is malformed".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_block_prefix_archive_head(
+    head: &BlockPrefixArchiveHeadV1,
+) -> Result<(), GovernanceDagServiceError> {
+    if head.generation == 0 {
+        if head.digest != [0; 32]
+            || !head.ipfs_cid.is_empty()
+            || head.archived_block_count != 0
+            || !head.last_block_cid.is_empty()
+            || !head.last_node_cid.is_empty()
+            || head.predecessor_checkpoint_revision != [0; 32]
+            || head.predecessor_checkpoint_digest != [0; 32]
+            || head.predecessor_block_count != 0
+            || !head.predecessor_head_block_cid.is_empty()
+            || head.publication.is_some()
+        {
+            return Err(GovernanceDagServiceError::State(
+                "empty block-prefix archive head is noncanonical".to_owned(),
+            ));
+        }
+        return Ok(());
+    }
+    let predecessor_commitment_invalid = if head.predecessor_head_block_cid.is_empty() {
+        head.predecessor_checkpoint_revision != [0; 32]
+            || head.predecessor_checkpoint_digest != [0; 32]
+            || head.predecessor_block_count != 0
+    } else {
+        head.predecessor_head_block_cid.len() != 32
+            || head.predecessor_checkpoint_revision == [0; 32]
+            || head.predecessor_checkpoint_digest == [0; 32]
+            || head.predecessor_block_count == 0
+    };
+    if head.digest == [0; 32]
+        || !is_canonical_cid_v1(&head.ipfs_cid)
+        || head.archived_block_count == 0
+        || head.generation > head.archived_block_count
+        || head.last_block_cid.len() != 32
+        || head.last_node_cid.len() != 32
+        || predecessor_commitment_invalid
+    {
+        return Err(GovernanceDagServiceError::State(
+            "block-prefix archive head violates first-release bounds".to_owned(),
+        ));
+    }
+    validate_block_prefix_archive_publication_fields(head.publication.as_ref().ok_or_else(
+        || {
+            GovernanceDagServiceError::State(
+                "block-prefix archive head has no authenticated publication".to_owned(),
+            )
+        },
+    )?)
+}
+
+fn block_prefix_archive_decode_limits(max_bytes: usize) -> DecodeLimits {
+    DecodeLimits::new(
+        SOURCE_ENTRY_HARD_CAP,
+        max_bytes,
+        CANONICAL_DECODE_MAX_TOTAL_ELEMENTS,
+        max_bytes.saturating_mul(CANONICAL_DECODE_ALLOCATION_MULTIPLIER),
+        128,
+    )
+}
+
+fn decode_signed_block_prefix_archive(
+    bytes: &[u8],
+    max_bytes: u64,
+) -> Result<SignedBlockPrefixArchiveV1, GovernanceDagServiceError> {
+    let max_bytes = usize::try_from(
+        max_bytes
+            .min(u64::try_from(BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1).unwrap_or(u64::MAX)),
+    )
+    .unwrap_or(usize::MAX);
+    if bytes.is_empty() || bytes.len() > max_bytes {
+        return Err(GovernanceDagServiceError::State(
+            "signed block-prefix archive exceeds its canonical byte bound".to_owned(),
+        ));
+    }
+    let archive: SignedBlockPrefixArchiveV1 =
+        norito::decode_from_bytes_with_limits(bytes, block_prefix_archive_decode_limits(max_bytes))
+            .map_err(|err| {
+                GovernanceDagServiceError::State(format!(
+                    "signed block-prefix archive decode failed: {err}"
+                ))
+            })?;
+    if norito::to_bytes(&archive)
+        .map_err(|err| GovernanceDagServiceError::State(err.to_string()))?
+        != bytes
+    {
+        return Err(GovernanceDagServiceError::State(
+            "signed block-prefix archive encoding is not canonical".to_owned(),
+        ));
+    }
+    validate_signed_block_prefix_archive(&archive)?;
+    Ok(archive)
+}
+
+fn validate_signed_block_prefix_archive(
+    archive: &SignedBlockPrefixArchiveV1,
+) -> Result<(), GovernanceDagServiceError> {
+    validate_block_prefix_archive_head(&archive.predecessor)?;
+    let expected_generation = archive
+        .predecessor
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| {
+            GovernanceDagServiceError::State(
+                "block-prefix archive generation is exhausted".to_owned(),
+            )
+        })?;
+    let initial_checkpoint = archive.predecessor_head_block_cid.is_empty();
+    let ipfs_qualification = GovernanceDagRuntimeProviderQualificationV1::new(
+        archive.ipfs_authenticator_revision,
+        archive.ipfs_authenticator_policy_digest,
+    );
+    let store_qualification = GovernanceDagRuntimeProviderQualificationV1::new(
+        archive.checkpoint_store_revision,
+        archive.checkpoint_store_policy_digest,
+    );
+    let predecessor_commitment_invalid = if initial_checkpoint {
+        archive.predecessor_checkpoint_revision != [0; 32]
+            || archive.predecessor_checkpoint_digest != [0; 32]
+            || archive.predecessor_block_count != 0
+    } else {
+        archive.predecessor_head_block_cid.len() != 32
+            || archive.predecessor_checkpoint_revision == [0; 32]
+            || archive.predecessor_checkpoint_digest == [0; 32]
+            || archive.predecessor_block_count == 0
+    };
+    if archive.version != BLOCK_PREFIX_ARCHIVE_VERSION_V1
+        || archive.archive_generation != expected_generation
+        || archive.target_checkpoint_generation == 0
+        || archive.target_head_block_cid.len() != 32
+        || archive.target_block_count == 0
+        || archive.blocks.is_empty()
+        || archive.blocks.len() > BLOCK_PREFIX_ARCHIVE_MAX_ENTRIES_V1
+        || archive.archived_block_count == 0
+        || predecessor_commitment_invalid
+        || validate_production_runtime_handle(&archive.ipfs_authenticator_handle).is_err()
+        || !ipfs_qualification.is_valid()
+        || PublicKey::from_bytes(Algorithm::Ed25519, &archive.ipfs_authenticator_public_key)
+            .is_err()
+        || validate_production_runtime_handle(&archive.checkpoint_store_handle).is_err()
+        || !store_qualification.is_valid()
+    {
+        return Err(GovernanceDagServiceError::State(
+            "signed block-prefix archive fields violate first-release bounds".to_owned(),
+        ));
+    }
+    let block_count = u64::try_from(archive.blocks.len()).map_err(|_| {
+        GovernanceDagServiceError::State(
+            "signed block-prefix archive entry count exceeds u64".to_owned(),
+        )
+    })?;
+    let expected_first = archive
+        .archived_block_count
+        .checked_sub(block_count)
+        .ok_or_else(|| {
+            GovernanceDagServiceError::State(
+                "signed block-prefix archive count underflows its entries".to_owned(),
+            )
+        })?;
+    if expected_first != archive.predecessor.archived_block_count
+        || archive.target_block_count < archive.archived_block_count
+        || archive.target_block_count < archive.predecessor_block_count
+    {
+        return Err(GovernanceDagServiceError::State(
+            "signed block-prefix archive is not the exact predecessor successor".to_owned(),
+        ));
+    }
+    let mut previous_block: Option<GovernanceDagBlockV1> = None;
+    for (position, entry) in archive.blocks.iter().enumerate() {
+        validate_published_block(&entry.published)?;
+        let expected_sequence = expected_first
+            .checked_add(u64::try_from(position).map_err(|_| {
+                GovernanceDagServiceError::State(
+                    "signed block-prefix archive position exceeds u64".to_owned(),
+                )
+            })?)
+            .ok_or_else(|| {
+                GovernanceDagServiceError::State(
+                    "signed block-prefix archive sequence is exhausted".to_owned(),
+                )
+            })?;
+        if entry.published.sequence != expected_sequence
+            || entry.signed_block_bytes.is_empty()
+            || entry.signed_block_bytes.len() > GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1
+            || entry.published.encoded_len
+                != u64::try_from(entry.signed_block_bytes.len()).unwrap_or(u64::MAX)
+            || entry.published.encoded_blake3 != blake3_array(&entry.signed_block_bytes)
+            || entry.published.ipfs_cid != canonical_raw_sha256_cid(&entry.signed_block_bytes)
+        {
+            return Err(GovernanceDagServiceError::State(
+                "signed block-prefix archive entry metadata is inconsistent".to_owned(),
+            ));
+        }
+        let block: GovernanceDagBlockV1 = norito::decode_from_bytes_with_limits(
+            &entry.signed_block_bytes,
+            block_prefix_archive_decode_limits(GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1),
+        )
+        .map_err(|err| {
+            GovernanceDagServiceError::State(format!(
+                "signed block-prefix archive block decode failed: {err}"
+            ))
+        })?;
+        if block
+            .canonical_bytes()
+            .map_err(|err| GovernanceDagServiceError::State(err.to_string()))?
+            != entry.signed_block_bytes
+            || block.validate().is_err()
+            || block.sequence != entry.published.sequence
+            || block.block_cid != entry.published.governance_block_cid
+            || block.node.node_cid != entry.published.governance_node_cid
+            || crate::governance::runtime_dag_payload_kind(&block.node.payload)
+                != entry.published.payload_kind
+            || block.timestamp != entry.published.timestamp
+        {
+            return Err(GovernanceDagServiceError::State(
+                "signed block-prefix archive contains a substituted block".to_owned(),
+            ));
+        }
+        let predecessor_parent_invalid = if archive.predecessor.archived_block_count == 0 {
+            block.prev_block_cid.is_some() || block.node.prev_cid.is_some()
+        } else {
+            block.prev_block_cid.as_deref() != Some(archive.predecessor.last_block_cid.as_slice())
+                || block.node.prev_cid.as_deref()
+                    != Some(archive.predecessor.last_node_cid.as_slice())
+        };
+        if position == 0 && predecessor_parent_invalid {
+            return Err(GovernanceDagServiceError::State(
+                "signed block-prefix archive does not extend its exact predecessor block"
+                    .to_owned(),
+            ));
+        }
+        if let Some(previous) = &previous_block
+            && (block.prev_block_cid.as_deref() != Some(previous.block_cid.as_slice())
+                || block.node.prev_cid.as_deref() != Some(previous.node.node_cid.as_slice()))
+        {
+            return Err(GovernanceDagServiceError::State(
+                "signed block-prefix archive contains a fork or gap".to_owned(),
+            ));
+        }
+        previous_block = Some(block);
     }
     Ok(())
 }
@@ -2923,12 +3400,19 @@ fn validate_publish_intent(body: &PublishIntentBodyV1) -> Result<(), GovernanceD
             "publish intent fields violate first-release bounds".to_owned(),
         ));
     }
+    validate_block_prefix_archive_head(&body.archive_head)?;
+    if body.archive_head.archived_block_count > body.target_block_count {
+        return Err(GovernanceDagServiceError::State(
+            "publish intent archive is ahead of its target chain".to_owned(),
+        ));
+    }
     let mut previous = None;
     let mut seen = BTreeSet::new();
     for block in &body.blocks {
         if block.governance_block_cid.len() != 32
             || block.governance_node_cid.len() != 32
             || block.payload_kind.is_empty()
+            || block.payload_kind.len() > BLOCK_PREFIX_ARCHIVE_PAYLOAD_KIND_MAX_BYTES_V1
             || block.encoded_len == 0
             || block
                 .ipfs_cid
@@ -3718,6 +4202,23 @@ impl PinnedEndpoint {
         request: RequestBuilder,
         failure: &'static str,
     ) -> Result<reqwest::Response, GovernanceDagServiceError> {
+        self.execute_with_authentication(request, failure)
+            .await
+            .map(|(response, _envelope, _descriptor)| response)
+    }
+
+    async fn execute_with_authentication(
+        &self,
+        request: RequestBuilder,
+        failure: &'static str,
+    ) -> Result<
+        (
+            reqwest::Response,
+            GovernanceDagRequestAuthenticationEnvelopeV1,
+            GovernanceDagCanonicalRequestV1,
+        ),
+        GovernanceDagServiceError,
+    > {
         // Build exactly once after the caller has attached its final byte body
         // and conditional headers. The runtime adapter receives only the
         // bounded data-only descriptor and cannot mutate HTTP state.
@@ -3738,7 +4239,9 @@ impl PinnedEndpoint {
         // flight. Discard the response unless the same qualified identity is
         // still active after execution.
         self.authenticator.assert_identity()?;
-        response.map_err(|_| GovernanceDagServiceError::Network(failure.to_owned()))
+        response
+            .map(|response| (response, envelope, descriptor))
+            .map_err(|_| GovernanceDagServiceError::Network(failure.to_owned()))
     }
 
     fn ipfs_url(
@@ -4081,6 +4584,18 @@ async fn ipfs_add_verified(
     max_request_bytes: u64,
     max_response_bytes: u64,
 ) -> Result<String, GovernanceDagServiceError> {
+    ipfs_add_verified_with_publication(endpoint, name, bytes, max_request_bytes, max_response_bytes)
+        .await
+        .map(|(cid, _publication)| cid)
+}
+
+async fn ipfs_add_verified_with_publication(
+    endpoint: &PinnedEndpoint,
+    name: &str,
+    bytes: &[u8],
+    max_request_bytes: u64,
+    max_response_bytes: u64,
+) -> Result<(String, BlockPrefixArchivePublicationV1), GovernanceDagServiceError> {
     if bytes.is_empty() || bytes.len() as u64 > max_request_bytes {
         return Err(GovernanceDagServiceError::Network(
             "local IPFS object violates the configured request bound".to_owned(),
@@ -4105,7 +4620,9 @@ async fn ipfs_add_verified(
             format!("multipart/form-data; boundary={boundary}"),
         )
         .body(body);
-    let response = endpoint.execute(request, "IPFS add request failed").await?;
+    let (response, envelope, descriptor) = endpoint
+        .execute_with_authentication(request, "IPFS add request failed")
+        .await?;
     if !response.status().is_success() {
         let status = response.status();
         let _ = read_bounded_response(response, max_response_bytes).await;
@@ -4132,7 +4649,10 @@ async fn ipfs_add_verified(
             "IPFS readback bytes do not match the published object".to_owned(),
         ));
     }
-    Ok(cid)
+    Ok((
+        cid,
+        BlockPrefixArchivePublicationV1::from_envelope(&envelope, &descriptor)?,
+    ))
 }
 
 fn canonical_ipfs_multipart_body(
@@ -4190,6 +4710,186 @@ fn canonical_ipfs_multipart_body(
     body.extend_from_slice(bytes);
     body.extend_from_slice(epilogue.as_bytes());
     Ok((boundary, body))
+}
+
+fn block_prefix_archive_lengths_fit(
+    canonical_bytes: usize,
+    multipart_bytes: usize,
+    configured_request_bytes: u64,
+) -> bool {
+    canonical_bytes != 0
+        && canonical_bytes <= BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1
+        && multipart_bytes <= BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1
+        && u64::try_from(multipart_bytes)
+            .is_ok_and(|multipart| multipart <= configured_request_bytes)
+}
+
+fn block_prefix_archive_filename(
+    archive: &SignedBlockPrefixArchiveV1,
+) -> Result<String, GovernanceDagServiceError> {
+    let first = archive
+        .blocks
+        .first()
+        .ok_or_else(|| {
+            GovernanceDagServiceError::State(
+                "signed block-prefix archive has no first entry".to_owned(),
+            )
+        })?
+        .published
+        .sequence;
+    let last = archive
+        .blocks
+        .last()
+        .ok_or_else(|| {
+            GovernanceDagServiceError::State(
+                "signed block-prefix archive has no last entry".to_owned(),
+            )
+        })?
+        .published
+        .sequence;
+    Ok(format!(
+        "governance-dag-prefix-{:020}-{first:020}-{last:020}.to",
+        archive.archive_generation
+    ))
+}
+
+#[cfg(test)]
+fn block_prefix_archive_add_descriptor(
+    endpoint: &PinnedEndpoint,
+    archive: &SignedBlockPrefixArchiveV1,
+    archive_bytes: &[u8],
+) -> Result<GovernanceDagCanonicalRequestV1, GovernanceDagServiceError> {
+    let url = endpoint.ipfs_url(
+        "api/v0/add",
+        &[
+            ("pin", "false"),
+            ("cid-version", "1"),
+            ("hash", "sha2-256"),
+            ("raw-leaves", "true"),
+            ("wrap-with-directory", "false"),
+            ("quieter", "true"),
+        ],
+    )?;
+    block_prefix_archive_add_descriptor_for_url(
+        url.as_str(),
+        archive,
+        archive_bytes,
+        endpoint.max_request_bytes,
+    )
+}
+
+fn block_prefix_archive_add_descriptor_for_url(
+    canonical_url: &str,
+    archive: &SignedBlockPrefixArchiveV1,
+    archive_bytes: &[u8],
+    max_body_bytes: u64,
+) -> Result<GovernanceDagCanonicalRequestV1, GovernanceDagServiceError> {
+    let filename = block_prefix_archive_filename(archive)?;
+    let (boundary, body) = canonical_ipfs_multipart_body(&filename, archive_bytes)?;
+    if !block_prefix_archive_lengths_fit(archive_bytes.len(), body.len(), max_body_bytes) {
+        return Err(GovernanceDagServiceError::State(
+            "signed block-prefix archive exceeds its canonical or request byte ceiling".to_owned(),
+        ));
+    }
+    let content_type = format!("multipart/form-data; boundary={boundary}");
+    GovernanceDagCanonicalRequestV1::try_from_http_parts(
+        GovernanceDagAuthenticationScope::Ipfs,
+        Method::POST.as_str(),
+        canonical_url,
+        [
+            (header::ACCEPT_ENCODING.as_str(), b"identity".as_slice()),
+            (header::CONTENT_TYPE.as_str(), content_type.as_bytes()),
+        ],
+        &body,
+        max_body_bytes,
+    )
+    .map_err(|_| {
+        GovernanceDagServiceError::State(
+            "signed block-prefix archive add descriptor is noncanonical".to_owned(),
+        )
+    })
+}
+
+fn verify_block_prefix_archive_publication(
+    archive: &SignedBlockPrefixArchiveV1,
+    archive_bytes: &[u8],
+    head: &BlockPrefixArchiveHeadV1,
+) -> Result<(), GovernanceDagServiceError> {
+    // Freshness and one-use replay are enforced when the add request executes.
+    // Durable replay verifies the original bounded interval and signature but
+    // deliberately does not require that historical attestation to remain
+    // unexpired.
+    validate_block_prefix_archive_head(head)?;
+    let publication = head.publication.as_ref().ok_or_else(|| {
+        GovernanceDagServiceError::State(
+            "signed block-prefix archive publication is missing".to_owned(),
+        )
+    })?;
+    let last = archive.blocks.last().ok_or_else(|| {
+        GovernanceDagServiceError::State(
+            "signed block-prefix archive publication has no last block".to_owned(),
+        )
+    })?;
+    if head.generation != archive.archive_generation
+        || head.digest != blake3_array(archive_bytes)
+        || head.archived_block_count != archive.archived_block_count
+        || head.last_block_cid != last.published.governance_block_cid
+        || head.last_node_cid != last.published.governance_node_cid
+        || head.predecessor_checkpoint_revision != archive.predecessor_checkpoint_revision
+        || head.predecessor_checkpoint_digest != archive.predecessor_checkpoint_digest
+        || head.predecessor_block_count != archive.predecessor_block_count
+        || head.predecessor_head_block_cid != archive.predecessor_head_block_cid
+        || publication.public_key != archive.ipfs_authenticator_public_key
+    {
+        return Err(GovernanceDagServiceError::State(
+            "signed block-prefix archive provider or head binding is substituted".to_owned(),
+        ));
+    }
+    let descriptor = block_prefix_archive_add_descriptor_for_url(
+        &publication.canonical_url,
+        archive,
+        archive_bytes,
+        u64::try_from(BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1).unwrap_or(u64::MAX),
+    )?;
+    if publication.request_digest != descriptor.request_digest()
+        || publication
+            .expires_at_unix_secs
+            .checked_sub(publication.issued_at_unix_secs)
+            .is_none_or(|lifetime| {
+                lifetime == 0
+                    || lifetime > GOVERNANCE_DAG_REQUEST_AUTH_MAX_ENVELOPE_LIFETIME_SECS_V1
+            })
+    {
+        return Err(GovernanceDagServiceError::State(
+            "signed block-prefix archive publication descriptor diverged".to_owned(),
+        ));
+    }
+    let public_key =
+        PublicKey::from_bytes(Algorithm::Ed25519, &publication.public_key).map_err(|_| {
+            GovernanceDagServiceError::State(
+                "signed block-prefix archive publication key is malformed".to_owned(),
+            )
+        })?;
+    let signature =
+        iroha_crypto::ed25519_parse_signature(&publication.signature).map_err(|_| {
+            GovernanceDagServiceError::State(
+                "signed block-prefix archive publication signature is malformed".to_owned(),
+            )
+        })?;
+    let signing_payload = GovernanceDagRequestAuthenticationEnvelopeV1::signing_payload(
+        &descriptor,
+        publication.issued_at_unix_secs,
+        publication.expires_at_unix_secs,
+        publication.nonce,
+        publication.public_key,
+    );
+    signature
+        .verify(&public_key, &signing_payload)
+        .map_err(|_| {
+            GovernanceDagServiceError::State(
+                "signed block-prefix archive publication signature is invalid".to_owned(),
+            )
+        })
 }
 
 async fn ipfs_pin(
@@ -4590,13 +5290,36 @@ impl Service {
         self.refresh_durable_state()?;
         let source = load_committed_source_snapshot(&self.config, &self.checkpoint_store)?;
         validate_checkpoint_against_source(self.checkpoint.as_ref(), &source)?;
+        if let Some(checkpoint) = &self.checkpoint {
+            self.verify_block_prefix_archive_head(
+                &checkpoint.archive_head,
+                checkpoint.generation,
+                None,
+                &source,
+            )
+            .await?;
+        }
         if let Some(intent) = &self.intent {
             validate_intent_against_source(
                 intent,
                 self.checkpoint.as_ref(),
+                self.checkpoint_revision,
                 &source,
                 &self.config,
             )?;
+            if self
+                .checkpoint
+                .as_ref()
+                .is_none_or(|checkpoint| checkpoint.archive_head != intent.archive_head)
+            {
+                self.verify_block_prefix_archive_head(
+                    &intent.archive_head,
+                    intent.generation,
+                    Some(intent.generation),
+                    &source,
+                )
+                .await?;
+            }
         }
 
         // Initial reconciliation must not publish. It establishes that the
@@ -4696,6 +5419,287 @@ impl Service {
         }
     }
 
+    async fn verify_block_prefix_archive_head(
+        &self,
+        expected: &BlockPrefixArchiveHeadV1,
+        maximum_target_generation: u64,
+        required_target_generation: Option<u64>,
+        source: &SourceSnapshot,
+    ) -> Result<(), GovernanceDagServiceError> {
+        validate_block_prefix_archive_head(expected)?;
+        if expected.generation == 0 {
+            return Ok(());
+        }
+        let archive_max_bytes =
+            u64::try_from(BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1).unwrap_or(u64::MAX);
+        self.checkpoint_store.assert_identity()?;
+        self.ipfs.authenticator.assert_identity()?;
+
+        // Fetch by the sealed content address before checking local pin state.
+        // A newly promoted Kubo replica can therefore recover the authenticated
+        // tail instead of failing solely because its local pinset is cold.
+        let bytes = ipfs_cat(
+            &self.ipfs,
+            &expected.ipfs_cid,
+            archive_max_bytes,
+            archive_max_bytes,
+        )
+        .await?;
+        if blake3_array(&bytes) != expected.digest
+            || validate_ipfs_cid_for_bytes(&expected.ipfs_cid, &bytes).is_err()
+        {
+            return Err(GovernanceDagServiceError::State(
+                "block-prefix archive readback digest or content address diverged".to_owned(),
+            ));
+        }
+        let archive = decode_signed_block_prefix_archive(&bytes, archive_max_bytes)?;
+        verify_block_prefix_archive_publication(&archive, &bytes, expected)?;
+        validate_block_prefix_archive_against_source(&archive, source)?;
+        if archive.target_checkpoint_generation > maximum_target_generation
+            || required_target_generation
+                .is_some_and(|required| archive.target_checkpoint_generation != required)
+        {
+            return Err(GovernanceDagServiceError::State(
+                "block-prefix archive target generation is ahead of durable state".to_owned(),
+            ));
+        }
+
+        ipfs_pin(
+            &self.ipfs,
+            &expected.ipfs_cid,
+            self.config.max_response_bytes,
+        )
+        .await?;
+        ipfs_verify_pin(
+            &self.ipfs,
+            &expected.ipfs_cid,
+            self.config.max_response_bytes,
+        )
+        .await?;
+        let pinned = ipfs_cat(
+            &self.ipfs,
+            &expected.ipfs_cid,
+            u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            archive_max_bytes,
+        )
+        .await?;
+        if pinned != bytes {
+            return Err(GovernanceDagServiceError::State(
+                "block-prefix archive changed after recovery pinning".to_owned(),
+            ));
+        }
+        self.ipfs.authenticator.assert_identity()?;
+        self.checkpoint_store.assert_identity()?;
+        Ok(())
+    }
+
+    async fn archive_would_be_pruned_prefix(
+        &mut self,
+        intent: &mut PublishIntentBodyV1,
+        source: &SourceSnapshot,
+        retained_blocks: &[PublishedBlockV1],
+    ) -> Result<BlockPrefixArchiveHeadV1, GovernanceDagServiceError> {
+        let retained_start = retained_blocks
+            .first()
+            .ok_or_else(|| {
+                GovernanceDagServiceError::State(
+                    "mirror retention produced an empty suffix".to_owned(),
+                )
+            })?
+            .sequence;
+        let mut predecessor = intent.archive_head.clone();
+        validate_block_prefix_archive_head(&predecessor)?;
+        if retained_start < predecessor.archived_block_count {
+            return Err(GovernanceDagServiceError::State(
+                "mirror retention would replay an archived block prefix".to_owned(),
+            ));
+        }
+        if retained_start == predecessor.archived_block_count {
+            return Ok(predecessor);
+        }
+        let by_sequence = published_blocks_by_sequence(self.checkpoint.as_ref(), intent)?;
+        let predecessor_checkpoint =
+            checkpoint_commitment(self.checkpoint.as_ref(), self.checkpoint_revision)?;
+        let archive_max_bytes =
+            u64::try_from(BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1).unwrap_or(u64::MAX);
+        let archive_max_bytes_usize = usize::try_from(archive_max_bytes).unwrap_or(usize::MAX);
+        let archive_max_entries =
+            u64::try_from(BLOCK_PREFIX_ARCHIVE_MAX_ENTRIES_V1).unwrap_or(u64::MAX);
+        let mut start = predecessor.archived_block_count;
+        while start < retained_start {
+            let mut end = start;
+            let mut estimated_bytes = 16 * 1024_usize;
+            while end < retained_start && end.saturating_sub(start) < archive_max_entries {
+                let position = usize::try_from(end).map_err(|_| {
+                    GovernanceDagServiceError::State(
+                        "block-prefix archive sequence exceeds host limits".to_owned(),
+                    )
+                })?;
+                let source_block = source.blocks.get(position).ok_or_else(|| {
+                    GovernanceDagServiceError::State(
+                        "block-prefix archive source range is incomplete".to_owned(),
+                    )
+                })?;
+                let published = by_sequence.get(&end).ok_or_else(|| {
+                    GovernanceDagServiceError::State(
+                        "would-be-pruned block has no authenticated IPFS mapping".to_owned(),
+                    )
+                })?;
+                let next = estimated_bytes
+                    .checked_add(estimated_block_prefix_archive_entry_bytes(
+                        source_block,
+                        published,
+                    )?)
+                    .ok_or_else(|| {
+                        GovernanceDagServiceError::State(
+                            "block-prefix archive size estimate overflowed".to_owned(),
+                        )
+                    })?;
+                if next > archive_max_bytes_usize && end != start {
+                    break;
+                }
+                estimated_bytes = next;
+                end = end.checked_add(1).ok_or_else(|| {
+                    GovernanceDagServiceError::State(
+                        "block-prefix archive sequence is exhausted".to_owned(),
+                    )
+                })?;
+            }
+            if end == start {
+                end = start.checked_add(1).ok_or_else(|| {
+                    GovernanceDagServiceError::State(
+                        "block-prefix archive sequence is exhausted".to_owned(),
+                    )
+                })?;
+            }
+
+            let (archive, archive_bytes, filename) = loop {
+                let blocks = block_prefix_archive_entries(source, &by_sequence, start, end)?;
+                let archive = SignedBlockPrefixArchiveV1 {
+                    version: BLOCK_PREFIX_ARCHIVE_VERSION_V1,
+                    archive_generation: predecessor.generation.checked_add(1).ok_or_else(|| {
+                        GovernanceDagServiceError::State(
+                            "block-prefix archive generation is exhausted".to_owned(),
+                        )
+                    })?,
+                    predecessor: predecessor.clone(),
+                    predecessor_checkpoint_revision: predecessor_checkpoint.revision,
+                    predecessor_checkpoint_digest: predecessor_checkpoint.digest,
+                    predecessor_block_count: predecessor_checkpoint.block_count,
+                    predecessor_head_block_cid: predecessor_checkpoint.head_block_cid.clone(),
+                    target_checkpoint_generation: intent.generation,
+                    target_head_block_cid: intent.target_head_block_cid.clone(),
+                    target_block_count: intent.target_block_count,
+                    target_source_index_blake3: intent.target_source_index_blake3,
+                    ipfs_authenticator_handle: self.ipfs.authenticator.handle.clone(),
+                    ipfs_authenticator_revision: self.ipfs.authenticator.qualification.revision,
+                    ipfs_authenticator_policy_digest: self
+                        .ipfs
+                        .authenticator
+                        .qualification
+                        .policy_digest,
+                    ipfs_authenticator_public_key: self
+                        .ipfs
+                        .authenticator
+                        .verification_policy
+                        .public_key(),
+                    checkpoint_store_handle: self.checkpoint_store.handle.clone(),
+                    checkpoint_store_revision: self.checkpoint_store.qualification.revision,
+                    checkpoint_store_policy_digest: self
+                        .checkpoint_store
+                        .qualification
+                        .policy_digest,
+                    archived_block_count: end,
+                    blocks,
+                };
+                validate_signed_block_prefix_archive(&archive)?;
+                validate_block_prefix_archive_against_source(&archive, source)?;
+                let archive_bytes = norito::to_bytes(&archive).map_err(|err| {
+                    GovernanceDagServiceError::State(format!(
+                        "signed block-prefix archive encode failed: {err}"
+                    ))
+                })?;
+                let filename = block_prefix_archive_filename(&archive)?;
+                let (_, multipart) = canonical_ipfs_multipart_body(&filename, &archive_bytes)?;
+                if block_prefix_archive_lengths_fit(
+                    archive_bytes.len(),
+                    multipart.len(),
+                    self.config.max_request_bytes,
+                ) {
+                    break (archive, archive_bytes, filename);
+                }
+                if end == start.saturating_add(1) {
+                    return Err(GovernanceDagServiceError::State(
+                        "one signed block-prefix archive entry exceeds the configured request bound"
+                            .to_owned(),
+                    ));
+                }
+                end = end.saturating_sub(1);
+            };
+
+            self.checkpoint_store.assert_identity()?;
+            self.ipfs.authenticator.assert_identity()?;
+            let (ipfs_cid, publication) = ipfs_add_verified_with_publication(
+                &self.ipfs,
+                &filename,
+                &archive_bytes,
+                self.config.max_request_bytes,
+                self.config.max_response_bytes,
+            )
+            .await?;
+            let readback = ipfs_cat(
+                &self.ipfs,
+                &ipfs_cid,
+                u64::try_from(archive_bytes.len()).unwrap_or(u64::MAX),
+                archive_max_bytes,
+            )
+            .await?;
+            if readback != archive_bytes
+                || decode_signed_block_prefix_archive(&readback, archive_max_bytes)? != archive
+            {
+                return Err(GovernanceDagServiceError::State(
+                    "signed block-prefix archive exact readback diverged".to_owned(),
+                ));
+            }
+            let last = archive.blocks.last().ok_or_else(|| {
+                GovernanceDagServiceError::State(
+                    "validated signed block-prefix archive lost its last block".to_owned(),
+                )
+            })?;
+            let next = BlockPrefixArchiveHeadV1 {
+                generation: archive.archive_generation,
+                digest: blake3_array(&archive_bytes),
+                ipfs_cid,
+                archived_block_count: archive.archived_block_count,
+                last_block_cid: last.published.governance_block_cid.clone(),
+                last_node_cid: last.published.governance_node_cid.clone(),
+                predecessor_checkpoint_revision: archive.predecessor_checkpoint_revision,
+                predecessor_checkpoint_digest: archive.predecessor_checkpoint_digest,
+                predecessor_block_count: archive.predecessor_block_count,
+                predecessor_head_block_cid: archive.predecessor_head_block_cid.clone(),
+                publication: Some(publication),
+            };
+            verify_block_prefix_archive_publication(&archive, &archive_bytes, &next)?;
+            self.ipfs.authenticator.assert_identity()?;
+            self.checkpoint_store.assert_identity()?;
+            intent.archive_head = next.clone();
+            self.intent_revision = Some(save_publish_intent(
+                &self.checkpoint_store,
+                self.intent_revision,
+                intent,
+            )?);
+            self.intent_generation_floor = intent.generation;
+            predecessor = next;
+            start = end;
+        }
+        if predecessor.archived_block_count != retained_start {
+            return Err(GovernanceDagServiceError::State(
+                "signed block-prefix archives did not cover the exact pruned prefix".to_owned(),
+            ));
+        }
+        Ok(predecessor)
+    }
+
     async fn reconcile_once(&mut self) -> Result<(), GovernanceDagServiceError> {
         self.state_lock.verify().map_err(|error| {
             GovernanceDagServiceError::Filesystem(format!(
@@ -4707,13 +5711,36 @@ impl Service {
         let source = load_committed_source_snapshot(&self.config, &self.checkpoint_store)?;
         self.config.revalidate_state_root()?;
         validate_checkpoint_against_source(self.checkpoint.as_ref(), &source)?;
+        if let Some(checkpoint) = &self.checkpoint {
+            self.verify_block_prefix_archive_head(
+                &checkpoint.archive_head,
+                checkpoint.generation,
+                None,
+                &source,
+            )
+            .await?;
+        }
         if let Some(intent) = &self.intent {
             validate_intent_against_source(
                 intent,
                 self.checkpoint.as_ref(),
+                self.checkpoint_revision,
                 &source,
                 &self.config,
             )?;
+            if self
+                .checkpoint
+                .as_ref()
+                .is_none_or(|checkpoint| checkpoint.archive_head != intent.archive_head)
+            {
+                self.verify_block_prefix_archive_head(
+                    &intent.archive_head,
+                    intent.generation,
+                    Some(intent.generation),
+                    &source,
+                )
+                .await?;
+            }
         }
 
         if let Some(checkpoint) = &self.checkpoint
@@ -4790,6 +5817,12 @@ impl Service {
                 target_source_index_blake3: source.index_blake3,
                 previous_public_head_blake3,
                 created_at_unix: current_unix_timestamp_seconds(),
+                archive_head: self
+                    .checkpoint
+                    .as_ref()
+                    .map_or_else(BlockPrefixArchiveHeadV1::empty, |checkpoint| {
+                        checkpoint.archive_head.clone()
+                    }),
                 blocks,
                 head_ipfs_cid: None,
             };
@@ -4921,10 +5954,14 @@ impl Service {
             self.config.mirror_max_entries,
             self.config.mirror_max_bytes,
         )?;
+        let archive_head = self
+            .archive_would_be_pruned_prefix(&mut intent, &source, &published_blocks)
+            .await?;
         let published_at = current_unix_timestamp_seconds();
         let mirror = mirror_index_value(
             &source,
             &published_blocks,
+            &archive_head,
             intent.generation,
             &head_ipfs_cid,
             &public_token,
@@ -4935,6 +5972,8 @@ impl Service {
                 GovernanceDagServiceError::State(format!("mirror JSON encode failed: {err}"))
             })?
             .into_bytes();
+        self.checkpoint_store.assert_identity()?;
+        self.ipfs.authenticator.assert_identity()?;
         self.config.revalidate_state_root()?;
         write_rooted_atomic_secret(
             &self.config.state_root_guard,
@@ -4953,6 +5992,7 @@ impl Service {
             source_index_blake3: intent.target_source_index_blake3,
             mirror_blake3: blake3_array(&mirror_bytes),
             published_at_unix: published_at,
+            archive_head,
             mirror_blocks: published_blocks,
         };
         self.checkpoint_revision = Some(save_checkpoint(
@@ -5121,6 +6161,7 @@ fn validate_checkpoint_against_source(
 fn validate_intent_against_source(
     intent: &PublishIntentBodyV1,
     checkpoint: Option<&CheckpointBodyV1>,
+    checkpoint_revision: Option<[u8; 32]>,
     source: &SourceSnapshot,
     config: &RuntimeConfig,
 ) -> Result<(), GovernanceDagServiceError> {
@@ -5173,6 +6214,53 @@ fn validate_intent_against_source(
             "publish intent generation is not monotonic".to_owned(),
         ));
     }
+    if checkpoint.is_some_and(|checkpoint| {
+        checkpoint.generation == intent.generation
+            && checkpoint.head_block_cid == intent.target_head_block_cid
+    }) {
+        if checkpoint.is_none_or(|checkpoint| checkpoint.archive_head != intent.archive_head) {
+            return Err(GovernanceDagServiceError::State(
+                "completed checkpoint and retained publish intent disagree on archive progress"
+                    .to_owned(),
+            ));
+        }
+    } else {
+        let base_archive = checkpoint.map_or_else(BlockPrefixArchiveHeadV1::empty, |checkpoint| {
+            checkpoint.archive_head.clone()
+        });
+        if intent.archive_head.generation < base_archive.generation
+            || intent.archive_head.archived_block_count < base_archive.archived_block_count
+        {
+            return Err(GovernanceDagServiceError::State(
+                "publish intent rolled block-prefix archive progress back".to_owned(),
+            ));
+        }
+        if intent.archive_head.generation == base_archive.generation {
+            if intent.archive_head != base_archive {
+                return Err(GovernanceDagServiceError::State(
+                    "publish intent substituted its predecessor archive head".to_owned(),
+                ));
+            }
+        } else {
+            if intent.archive_head.archived_block_count <= base_archive.archived_block_count {
+                return Err(GovernanceDagServiceError::State(
+                    "publish intent advanced archive generation without advancing coverage"
+                        .to_owned(),
+                ));
+            }
+            let commitment = checkpoint_commitment(checkpoint, checkpoint_revision)?;
+            if intent.archive_head.predecessor_checkpoint_revision != commitment.revision
+                || intent.archive_head.predecessor_checkpoint_digest != commitment.digest
+                || intent.archive_head.predecessor_block_count != commitment.block_count
+                || intent.archive_head.predecessor_head_block_cid != commitment.head_block_cid
+            {
+                return Err(GovernanceDagServiceError::State(
+                    "publish intent archive does not bind its exact predecessor checkpoint"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
     for block in &intent.blocks {
         let position = usize::try_from(block.sequence).map_err(|_| {
             GovernanceDagServiceError::State("intent sequence exceeds host limits".to_owned())
@@ -5223,10 +6311,22 @@ fn merge_published_blocks(
     max_entries: usize,
     max_bytes: u64,
 ) -> Result<Vec<PublishedBlockV1>, GovernanceDagServiceError> {
+    let by_sequence = published_blocks_by_sequence(checkpoint, intent)?;
+    select_mirror_suffix(&by_sequence, source, max_entries, max_bytes)
+}
+
+fn published_blocks_by_sequence(
+    checkpoint: Option<&CheckpointBodyV1>,
+    intent: &PublishIntentBodyV1,
+) -> Result<BTreeMap<u64, PublishedBlockV1>, GovernanceDagServiceError> {
     let mut by_sequence = BTreeMap::<u64, PublishedBlockV1>::new();
     if let Some(checkpoint) = checkpoint {
         for block in &checkpoint.mirror_blocks {
-            by_sequence.insert(block.sequence, block.clone());
+            if by_sequence.insert(block.sequence, block.clone()).is_some() {
+                return Err(GovernanceDagServiceError::State(
+                    "checkpoint mirror contains an equivocal sequence".to_owned(),
+                ));
+            }
         }
     }
     for block in &intent.blocks {
@@ -5235,7 +6335,7 @@ fn merge_published_blocks(
                 "intent block was not pinned before checkpointing".to_owned(),
             )
         })?;
-        by_sequence.insert(
+        let published = (
             block.sequence,
             PublishedBlockV1 {
                 sequence: block.sequence,
@@ -5248,7 +6348,23 @@ fn merge_published_blocks(
                 ipfs_cid,
             },
         );
+        if let Some(previous) = by_sequence.insert(published.0, published.1.clone())
+            && previous != published.1
+        {
+            return Err(GovernanceDagServiceError::State(
+                "publish intent equivocates with the checkpoint mirror".to_owned(),
+            ));
+        }
     }
+    Ok(by_sequence)
+}
+
+fn select_mirror_suffix(
+    by_sequence: &BTreeMap<u64, PublishedBlockV1>,
+    source: &SourceSnapshot,
+    max_entries: usize,
+    max_bytes: u64,
+) -> Result<Vec<PublishedBlockV1>, GovernanceDagServiceError> {
     if max_entries == 0 || max_bytes == 0 {
         return Err(GovernanceDagServiceError::State(
             "mirror retention bounds must be non-zero".to_owned(),
@@ -5290,9 +6406,132 @@ fn merge_published_blocks(
         .collect()
 }
 
+fn validate_block_prefix_archive_against_source(
+    archive: &SignedBlockPrefixArchiveV1,
+    source: &SourceSnapshot,
+) -> Result<(), GovernanceDagServiceError> {
+    let target_count = usize::try_from(archive.target_block_count).map_err(|_| {
+        GovernanceDagServiceError::State(
+            "block-prefix archive target count exceeds host limits".to_owned(),
+        )
+    })?;
+    let target = target_count
+        .checked_sub(1)
+        .and_then(|position| source.blocks.get(position))
+        .ok_or_else(|| {
+            GovernanceDagServiceError::Conflict(
+                "block-prefix archive target is outside the verified source".to_owned(),
+            )
+        })?;
+    let predecessor_matches = if archive.predecessor_block_count == 0 {
+        archive.predecessor_head_block_cid.is_empty()
+    } else {
+        usize::try_from(archive.predecessor_block_count)
+            .ok()
+            .and_then(|count| count.checked_sub(1))
+            .and_then(|position| source.blocks.get(position))
+            .is_some_and(|block| {
+                block.block.block_cid.as_slice() == archive.predecessor_head_block_cid.as_slice()
+            })
+    };
+    if target.block.block_cid != archive.target_head_block_cid
+        || (target_count == source.blocks.len()
+            && archive.target_source_index_blake3 != source.index_blake3)
+        || !predecessor_matches
+    {
+        return Err(GovernanceDagServiceError::Conflict(
+            "block-prefix archive head or source binding diverged".to_owned(),
+        ));
+    }
+    for entry in &archive.blocks {
+        let position = usize::try_from(entry.published.sequence).map_err(|_| {
+            GovernanceDagServiceError::State(
+                "block-prefix archive sequence exceeds host limits".to_owned(),
+            )
+        })?;
+        let source_block = source.blocks.get(position).ok_or_else(|| {
+            GovernanceDagServiceError::Conflict(
+                "block-prefix archive points outside the verified source".to_owned(),
+            )
+        })?;
+        if source_block.bytes != entry.signed_block_bytes
+            || source_block.block.block_cid != entry.published.governance_block_cid
+            || source_block.block.node.node_cid != entry.published.governance_node_cid
+            || source_block.payload_kind != entry.published.payload_kind
+            || source_block.block.timestamp != entry.published.timestamp
+            || source_block.encoded_blake3 != entry.published.encoded_blake3
+            || u64::try_from(source_block.bytes.len()).unwrap_or(u64::MAX)
+                != entry.published.encoded_len
+        {
+            return Err(GovernanceDagServiceError::Conflict(
+                "block-prefix archive no longer matches the verified source".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn block_prefix_archive_entries(
+    source: &SourceSnapshot,
+    by_sequence: &BTreeMap<u64, PublishedBlockV1>,
+    start_sequence: u64,
+    end_sequence: u64,
+) -> Result<Vec<SignedBlockPrefixArchiveEntryV1>, GovernanceDagServiceError> {
+    let count = end_sequence.checked_sub(start_sequence).ok_or_else(|| {
+        GovernanceDagServiceError::State("block-prefix archive range is inverted".to_owned())
+    })?;
+    if count == 0 || count > u64::try_from(BLOCK_PREFIX_ARCHIVE_MAX_ENTRIES_V1).unwrap_or(u64::MAX)
+    {
+        return Err(GovernanceDagServiceError::State(
+            "block-prefix archive range violates its entry bound".to_owned(),
+        ));
+    }
+    (start_sequence..end_sequence)
+        .map(|sequence| {
+            let position = usize::try_from(sequence).map_err(|_| {
+                GovernanceDagServiceError::State(
+                    "block-prefix archive sequence exceeds host limits".to_owned(),
+                )
+            })?;
+            let source_block = source.blocks.get(position).ok_or_else(|| {
+                GovernanceDagServiceError::State(
+                    "block-prefix archive source range is incomplete".to_owned(),
+                )
+            })?;
+            let published = by_sequence.get(&sequence).cloned().ok_or_else(|| {
+                GovernanceDagServiceError::State(
+                    "would-be-pruned block has no authenticated IPFS mapping".to_owned(),
+                )
+            })?;
+            Ok(SignedBlockPrefixArchiveEntryV1 {
+                published,
+                signed_block_bytes: source_block.bytes.clone(),
+            })
+        })
+        .collect()
+}
+
+fn estimated_block_prefix_archive_entry_bytes(
+    source_block: &SourceBlock,
+    published: &PublishedBlockV1,
+) -> Result<usize, GovernanceDagServiceError> {
+    source_block
+        .bytes
+        .len()
+        .checked_add(published.payload_kind.len())
+        .and_then(|size| size.checked_add(published.ipfs_cid.len()))
+        .and_then(|size| size.checked_add(1024))
+        .ok_or_else(|| {
+            GovernanceDagServiceError::State(
+                "block-prefix archive size estimate overflowed".to_owned(),
+            )
+        })
+}
+
 fn mirror_index_value(
     source: &SourceSnapshot,
     blocks: &[PublishedBlockV1],
+    archive_head: &BlockPrefixArchiveHeadV1,
     generation: u64,
     head_ipfs_cid: &str,
     public_token: &str,
@@ -5357,11 +6596,34 @@ fn mirror_index_value(
         "blake3".into(),
         JsonValue::from(hex::encode(blake3_array(&source.head_bytes))),
     );
+    validate_block_prefix_archive_head(archive_head)?;
+    let mut archive = JsonMap::new();
+    archive.insert(
+        "generation".into(),
+        JsonValue::from(archive_head.generation),
+    );
+    archive.insert(
+        "archived_block_count".into(),
+        JsonValue::from(archive_head.archived_block_count),
+    );
+    archive.insert(
+        "blake3".into(),
+        (archive_head.generation != 0)
+            .then(|| JsonValue::from(hex::encode(archive_head.digest)))
+            .unwrap_or(JsonValue::Null),
+    );
+    archive.insert(
+        "ipfs_cid".into(),
+        (archive_head.generation != 0)
+            .then(|| JsonValue::from(archive_head.ipfs_cid.clone()))
+            .unwrap_or(JsonValue::Null),
+    );
     let mut root = JsonMap::new();
     root.insert("schema".into(), JsonValue::from(MIRROR_INDEX_SCHEMA));
     root.insert("generation".into(), JsonValue::from(generation));
     root.insert("generated_at".into(), JsonValue::from(published_at));
     root.insert("head".into(), JsonValue::Object(head));
+    root.insert("archive".into(), JsonValue::Object(archive));
     root.insert(
         "block_count".into(),
         JsonValue::from(source.head.block_count),
@@ -5400,8 +6662,36 @@ fn verify_mirror_file(
         GovernanceDagServiceError::State(format!("mirror index JSON is invalid: {err}"))
     })?;
     let expected_head_cid = hex::encode(&checkpoint.head_block_cid);
+    let expected_archive_digest = hex::encode(checkpoint.archive_head.digest);
+    let archive = value.get("archive");
+    let archive_identity_matches = archive
+        .and_then(|archive| archive.get("generation"))
+        .and_then(JsonValue::as_u64)
+        == Some(checkpoint.archive_head.generation)
+        && archive
+            .and_then(|archive| archive.get("archived_block_count"))
+            .and_then(JsonValue::as_u64)
+            == Some(checkpoint.archive_head.archived_block_count)
+        && if checkpoint.archive_head.generation == 0 {
+            archive
+                .and_then(|archive| archive.get("blake3"))
+                .is_some_and(JsonValue::is_null)
+                && archive
+                    .and_then(|archive| archive.get("ipfs_cid"))
+                    .is_some_and(JsonValue::is_null)
+        } else {
+            archive
+                .and_then(|archive| archive.get("blake3"))
+                .and_then(JsonValue::as_str)
+                == Some(expected_archive_digest.as_str())
+                && archive
+                    .and_then(|archive| archive.get("ipfs_cid"))
+                    .and_then(JsonValue::as_str)
+                    == Some(checkpoint.archive_head.ipfs_cid.as_str())
+        };
     if value.get("schema").and_then(JsonValue::as_str) != Some(MIRROR_INDEX_SCHEMA)
         || value.get("generation").and_then(JsonValue::as_u64) != Some(checkpoint.generation)
+        || !archive_identity_matches
         || value
             .get("head")
             .and_then(|head| head.get("head_block_cid_hex"))
@@ -5446,6 +6736,7 @@ fn verify_or_recover_mirror_file(
     let mirror = mirror_index_value(
         source,
         &checkpoint.mirror_blocks,
+        &checkpoint.archive_head,
         checkpoint.generation,
         &checkpoint.head_ipfs_cid,
         &checkpoint.public_head_token,
@@ -5807,6 +7098,26 @@ async fn checkpoint_handler(State(state): State<ApiState>, headers: HeaderMap) -
         JsonValue::from(hex::encode(checkpoint.mirror_blake3)),
     );
     value.insert(
+        "archive_generation".into(),
+        JsonValue::from(checkpoint.archive_head.generation),
+    );
+    value.insert(
+        "archived_block_count".into(),
+        JsonValue::from(checkpoint.archive_head.archived_block_count),
+    );
+    value.insert(
+        "archive_blake3_hex".into(),
+        (checkpoint.archive_head.generation != 0)
+            .then(|| JsonValue::from(hex::encode(checkpoint.archive_head.digest)))
+            .unwrap_or(JsonValue::Null),
+    );
+    value.insert(
+        "archive_ipfs_cid".into(),
+        (checkpoint.archive_head.generation != 0)
+            .then(|| JsonValue::from(checkpoint.archive_head.ipfs_cid.clone()))
+            .unwrap_or(JsonValue::Null),
+    );
+    value.insert(
         "published_at_unix".into(),
         JsonValue::from(checkpoint.published_at_unix),
     );
@@ -5904,14 +7215,48 @@ mod tests {
     use tokio::{sync::Mutex, task::JoinHandle};
     use tower::ServiceExt as _;
     #[test]
-    fn service_default_request_bound_matches_canonical_governance_block_ceiling() {
+    fn service_default_request_bound_covers_single_entry_archive_ceiling() {
         let service = SorafsGovernanceDagService::default();
         assert_eq!(
             service.max_request_bytes.0,
-            u64::try_from(GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1)
-                .expect("canonical block ceiling fits u64")
+            u64::try_from(BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1)
+                .expect("single-entry archive request ceiling fits u64")
+        );
+        assert!(
+            BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1 > GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1,
+            "archive publication has an explicit wrapper allowance"
         );
         assert!(CANONICAL_DECODE_MAX_TOTAL_ELEMENTS > MAX_REPUTATION_TRUST_EDGES);
+    }
+
+    #[test]
+    fn maximum_admitted_block_has_exact_archive_and_request_boundary() {
+        let request_ceiling = u64::try_from(BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1)
+            .expect("archive request ceiling fits u64");
+        assert_eq!(
+            BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1
+                - GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1,
+            BLOCK_PREFIX_ARCHIVE_CANONICAL_OVERHEAD_BYTES_V1,
+        );
+        assert_eq!(
+            BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1 - BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1,
+            BLOCK_PREFIX_ARCHIVE_MULTIPART_OVERHEAD_BYTES_V1,
+        );
+        assert!(block_prefix_archive_lengths_fit(
+            BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1,
+            BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1,
+            request_ceiling,
+        ));
+        assert!(!block_prefix_archive_lengths_fit(
+            BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1 + 1,
+            BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1,
+            request_ceiling,
+        ));
+        assert!(!block_prefix_archive_lengths_fit(
+            BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1,
+            BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1 + 1,
+            request_ceiling,
+        ));
     }
     // Keep one target-gated assertion for every ABI branch. Overlapping branches
     // fail with duplicate definitions; missing branches fail to resolve the flag.
@@ -6825,6 +8170,10 @@ mod tests {
                 allow_insecure_http: true,
                 allow_private_ipfs_endpoint: true,
                 allow_private_head_endpoint: true,
+                max_request_bytes: iroha_config::base::util::Bytes(
+                    u64::try_from(BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1)
+                        .expect("archive request ceiling fits u64"),
+                ),
                 listen_addr: "127.0.0.1:0".to_owned(),
                 ..SorafsGovernanceDagService::default()
             },
@@ -7466,6 +8815,7 @@ mod tests {
             source_index_blake3: source.index_blake3,
             mirror_blake3: [0x55; 32],
             published_at_unix: source.head.generated_at,
+            archive_head: BlockPrefixArchiveHeadV1::empty(),
             mirror_blocks,
         }
     }
@@ -7481,6 +8831,7 @@ mod tests {
             target_source_index_blake3: source.index_blake3,
             previous_public_head_blake3: None,
             created_at_unix: source.head.generated_at,
+            archive_head: BlockPrefixArchiveHeadV1::empty(),
             blocks: source
                 .blocks
                 .iter()
@@ -7497,6 +8848,131 @@ mod tests {
                 .collect(),
             head_ipfs_cid: Some(TEST_CID_HEAD.to_owned()),
         }
+    }
+
+    fn block_prefix_archive_test_endpoint() -> PinnedEndpoint {
+        PinnedEndpoint {
+            url: Url::parse("http://127.0.0.1:1/").expect("parse test archive endpoint"),
+            client: Client::builder()
+                .no_proxy()
+                .redirect(Policy::none())
+                .build()
+                .expect("build test archive client"),
+            authentication_scope: GovernanceDagAuthenticationScope::Ipfs,
+            authenticator: test_authenticator(
+                TEST_IPFS_AUTH_HANDLE,
+                GovernanceDagAuthenticationScope::Ipfs,
+            ),
+            max_request_bytes: 1024 * 1024,
+        }
+    }
+
+    fn signed_block_prefix_archive_fixture(
+        source: &SourceSnapshot,
+        start: u64,
+        end: u64,
+        predecessor: BlockPrefixArchiveHeadV1,
+        endpoint: &PinnedEndpoint,
+    ) -> (
+        SignedBlockPrefixArchiveV1,
+        Vec<u8>,
+        BlockPrefixArchiveHeadV1,
+    ) {
+        signed_block_prefix_archive_fixture_with_checkpoint(
+            source,
+            start,
+            end,
+            predecessor,
+            CheckpointCommitmentV1::empty(),
+            1,
+            endpoint,
+        )
+    }
+
+    fn signed_block_prefix_archive_fixture_with_checkpoint(
+        source: &SourceSnapshot,
+        start: u64,
+        end: u64,
+        predecessor: BlockPrefixArchiveHeadV1,
+        checkpoint: CheckpointCommitmentV1,
+        target_generation: u64,
+        endpoint: &PinnedEndpoint,
+    ) -> (
+        SignedBlockPrefixArchiveV1,
+        Vec<u8>,
+        BlockPrefixArchiveHeadV1,
+    ) {
+        let mut intent = intent_from_source(source);
+        intent.generation = target_generation;
+        for (intent_block, source_block) in intent.blocks.iter_mut().zip(&source.blocks) {
+            intent_block.ipfs_cid = Some(canonical_raw_sha256_cid(&source_block.bytes));
+        }
+        let by_sequence = published_blocks_by_sequence(None, &intent)
+            .expect("construct published-block fixture map");
+        let archive = SignedBlockPrefixArchiveV1 {
+            version: BLOCK_PREFIX_ARCHIVE_VERSION_V1,
+            archive_generation: predecessor.generation + 1,
+            predecessor,
+            predecessor_checkpoint_revision: checkpoint.revision,
+            predecessor_checkpoint_digest: checkpoint.digest,
+            predecessor_block_count: checkpoint.block_count,
+            predecessor_head_block_cid: checkpoint.head_block_cid,
+            target_checkpoint_generation: intent.generation,
+            target_head_block_cid: intent.target_head_block_cid,
+            target_block_count: intent.target_block_count,
+            target_source_index_blake3: intent.target_source_index_blake3,
+            ipfs_authenticator_handle: endpoint.authenticator.handle.clone(),
+            ipfs_authenticator_revision: endpoint.authenticator.qualification.revision,
+            ipfs_authenticator_policy_digest: endpoint.authenticator.qualification.policy_digest,
+            ipfs_authenticator_public_key: endpoint.authenticator.verification_policy.public_key(),
+            checkpoint_store_handle: TEST_CHECKPOINT_STORE_HANDLE.to_owned(),
+            checkpoint_store_revision: TEST_STORE_QUALIFICATION.revision,
+            checkpoint_store_policy_digest: TEST_STORE_QUALIFICATION.policy_digest,
+            archived_block_count: end,
+            blocks: block_prefix_archive_entries(source, &by_sequence, start, end)
+                .expect("construct exact archive entries"),
+        };
+        validate_signed_block_prefix_archive(&archive).expect("validate archive fixture");
+        validate_block_prefix_archive_against_source(&archive, source)
+            .expect("bind archive fixture to source");
+        let bytes = norito::to_bytes(&archive).expect("encode archive fixture");
+        let descriptor = block_prefix_archive_add_descriptor(endpoint, &archive, &bytes)
+            .expect("build archive add descriptor");
+        let envelope = endpoint
+            .authenticator
+            .authenticate(&descriptor)
+            .expect("authenticate archive add descriptor");
+        let head = BlockPrefixArchiveHeadV1 {
+            generation: archive.archive_generation,
+            digest: blake3_array(&bytes),
+            ipfs_cid: canonical_raw_sha256_cid(&bytes),
+            archived_block_count: archive.archived_block_count,
+            last_block_cid: archive
+                .blocks
+                .last()
+                .expect("archive fixture has a last block")
+                .published
+                .governance_block_cid
+                .clone(),
+            last_node_cid: archive
+                .blocks
+                .last()
+                .expect("archive fixture has a last block")
+                .published
+                .governance_node_cid
+                .clone(),
+            predecessor_checkpoint_revision: archive.predecessor_checkpoint_revision,
+            predecessor_checkpoint_digest: archive.predecessor_checkpoint_digest,
+            predecessor_block_count: archive.predecessor_block_count,
+            predecessor_head_block_cid: archive.predecessor_head_block_cid.clone(),
+            publication: Some(
+                BlockPrefixArchivePublicationV1::from_envelope(&envelope, &descriptor)
+                    .expect("convert archive publication"),
+            ),
+        };
+        verify_block_prefix_archive_publication(&archive, &bytes, &head)
+            .expect("verify archive publication fixture");
+        (archive, bytes, head)
     }
 
     fn secure_temp_dir() -> TempDir {
@@ -7852,6 +9328,7 @@ poll_interval_secs = 1
 connect_timeout_ms = 5000
 request_timeout_ms = 20000
 dns_timeout_ms = 5000
+max_request_bytes = {}
 max_head_age_secs = 3600
 max_future_skew_secs = 60
 allow_insecure_http = true
@@ -7870,6 +9347,7 @@ listen_addr = "127.0.0.1:0"
             hex::encode(test_request_auth_public_key(TEST_IPFS_AUTH_HANDLE)),
             "82".repeat(32),
             hex::encode(&source.head.head_signature.public_key),
+            BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1,
         );
         let config_path = state_dir
             .parent()
@@ -8656,7 +10134,7 @@ listen_addr = "127.0.0.1:0"
         let root = secure_temp_dir();
         let config = test_runtime_config(&source, root.path());
         assert!(
-            validate_intent_against_source(&intent, None, &source, &config)
+            validate_intent_against_source(&intent, None, None, &source, &config)
                 .expect_err("current publish intent must bind the exact source index")
                 .to_string()
                 .contains("source-index digest")
@@ -9115,6 +10593,308 @@ enabled = false
             .expect("byte cap retains the newest fitting suffix");
         assert_eq!(byte_limited.len(), 1);
         assert!(merge_published_blocks(None, &intent, &source, 3, latest - 1).is_err());
+    }
+
+    #[test]
+    fn signed_block_prefix_archive_structurally_covers_pruned_prefix() {
+        let source = signed_source(5, 0x74, 1_800_000_000);
+        let intent = intent_from_source(&source);
+        let retained_bytes = source.blocks[3..]
+            .iter()
+            .map(|block| u64::try_from(block.bytes.len()).expect("block length fits u64"))
+            .sum();
+        let retained = merge_published_blocks(None, &intent, &source, 2, retained_bytes)
+            .expect("plan bounded mirror suffix");
+        assert_eq!(
+            retained
+                .iter()
+                .map(|block| block.sequence)
+                .collect::<Vec<_>>(),
+            vec![3, 4]
+        );
+
+        let endpoint = block_prefix_archive_test_endpoint();
+        let (archive, bytes, archive_head) = signed_block_prefix_archive_fixture(
+            &source,
+            0,
+            retained[0].sequence,
+            BlockPrefixArchiveHeadV1::empty(),
+            &endpoint,
+        );
+        assert_eq!(
+            archive
+                .blocks
+                .iter()
+                .map(|entry| entry.published.sequence)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        assert_eq!(
+            decode_signed_block_prefix_archive(&bytes, 1024 * 1024)
+                .expect("decode exact archived prefix"),
+            archive
+        );
+
+        let mut checkpoint = checkpoint_from_source(&source);
+        checkpoint.mirror_blocks = retained.clone();
+        assert!(
+            validate_checkpoint_body(&checkpoint).is_err(),
+            "the suffix cannot commit before its exact archive head"
+        );
+        checkpoint.archive_head = archive_head;
+        validate_checkpoint_body(&checkpoint)
+            .expect("archive head and retained suffix cover one exact prefix");
+    }
+
+    #[test]
+    fn signed_block_prefix_archive_rejects_corruption_rollback_and_equivocation() {
+        let source = signed_source(4, 0x75, 1_800_000_000);
+        let endpoint = block_prefix_archive_test_endpoint();
+        let (_first, first_bytes, first_head) = signed_block_prefix_archive_fixture(
+            &source,
+            0,
+            2,
+            BlockPrefixArchiveHeadV1::empty(),
+            &endpoint,
+        );
+        let (second, second_bytes, second_head) =
+            signed_block_prefix_archive_fixture(&source, 2, 3, first_head.clone(), &endpoint);
+        verify_block_prefix_archive_publication(&second, &second_bytes, &second_head)
+            .expect("successor publication extends the signed predecessor");
+        assert!(
+            verify_block_prefix_archive_publication(&second, &second_bytes, &first_head,).is_err(),
+            "an older authenticated head must not satisfy successor readback"
+        );
+
+        let mut corrupt = first_bytes;
+        let position = corrupt.len() / 2;
+        corrupt[position] ^= 0x80;
+        assert!(
+            decode_signed_block_prefix_archive(&corrupt, 1024 * 1024).is_err(),
+            "corrupt canonical archive bytes must fail closed"
+        );
+
+        let mut equivocal = second.clone();
+        equivocal.target_head_block_cid[0] ^= 0x40;
+        let equivocal_bytes = norito::to_bytes(&equivocal).expect("encode equivocal archive");
+        assert!(
+            verify_block_prefix_archive_publication(&equivocal, &equivocal_bytes, &second_head,)
+                .is_err(),
+            "the predecessor-bound publication signature must reject equivocation"
+        );
+
+        let mut substituted_provider = second.clone();
+        substituted_provider.ipfs_authenticator_revision += 1;
+        assert!(
+            verify_block_prefix_archive_publication(
+                &substituted_provider,
+                &norito::to_bytes(&substituted_provider)
+                    .expect("encode provider-substituted archive"),
+                &second_head,
+            )
+            .is_err(),
+            "an archive cannot substitute its qualified HSM provider"
+        );
+        let mut substituted_mapping = second.clone();
+        substituted_mapping.blocks[0].published.ipfs_cid =
+            canonical_raw_sha256_cid(b"substituted-block-bytes");
+        assert!(
+            validate_signed_block_prefix_archive(&substituted_mapping).is_err(),
+            "every archived IPFS mapping is recomputed from the exact signed block bytes"
+        );
+        let mut test_marked_provider = second;
+        test_marked_provider.ipfs_authenticator_handle =
+            "test://governance/archive-signer".to_owned();
+        assert!(
+            validate_signed_block_prefix_archive(&test_marked_provider).is_err(),
+            "test-marked archive providers fail canonical validation"
+        );
+    }
+
+    #[test]
+    fn archive_publication_attestation_survives_endpoint_and_provider_rotation() {
+        let source = signed_source(2, 0x78, 1_800_000_000);
+        let primary = block_prefix_archive_test_endpoint();
+        let (archive, bytes, head) = signed_block_prefix_archive_fixture(
+            &source,
+            0,
+            1,
+            BlockPrefixArchiveHeadV1::empty(),
+            &primary,
+        );
+        let mut secondary = block_prefix_archive_test_endpoint();
+        secondary.url =
+            Url::parse("http://127.0.0.1:2/").expect("parse secondary archive endpoint");
+        secondary.authenticator = test_authenticator(
+            "pkcs11:governance-dag:archive-failover-hsm",
+            GovernanceDagAuthenticationScope::Ipfs,
+        );
+        assert_ne!(
+            head.publication
+                .as_ref()
+                .expect("archive publication exists")
+                .canonical_url,
+            block_prefix_archive_add_descriptor(&secondary, &archive, &bytes)
+                .expect("build secondary descriptor")
+                .canonical_url(),
+        );
+        verify_block_prefix_archive_publication(&archive, &bytes, &head)
+            .expect("historical publication is self-contained after endpoint failover");
+    }
+
+    #[test]
+    fn archive_progress_is_sealed_before_suffix_checkpoint() {
+        let source = signed_source(4, 0x79, 1_800_000_000);
+        let endpoint = block_prefix_archive_test_endpoint();
+        let (_archive, _bytes, archive_head) = signed_block_prefix_archive_fixture(
+            &source,
+            0,
+            2,
+            BlockPrefixArchiveHeadV1::empty(),
+            &endpoint,
+        );
+        let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        let store = test_checkpoint_store(provider);
+        let mut intent = intent_from_source(&source);
+        let initial_revision =
+            save_publish_intent(&store, None, &intent).expect("seal initial publish intent");
+
+        intent.archive_head = archive_head;
+        let progress_revision = save_publish_intent(&store, Some(initial_revision), &intent)
+            .expect("seal verified archive progress");
+        let (loaded, loaded_revision) =
+            load_publish_intent(&store).expect("reload crash-resumable archive progress");
+        assert_eq!(loaded, Some(intent.clone()));
+        assert_eq!(loaded_revision, Some(progress_revision));
+        assert!(
+            save_publish_intent(&store, Some(initial_revision), &intent).is_err(),
+            "a stale replica cannot overwrite sealed archive progress"
+        );
+    }
+
+    #[test]
+    fn archive_predecessor_commitment_binds_exact_checkpoint_body_and_revision() {
+        let predecessor_source = signed_source(2, 0x7a, 1_800_000_000);
+        let source = signed_source(4, 0x7a, 1_800_000_000);
+        let checkpoint = checkpoint_from_source(&predecessor_source);
+        let bytes = norito::to_bytes(&checkpoint).expect("encode predecessor checkpoint");
+        let record = GovernanceDagSealedStateRecord::new(
+            GovernanceDagSealedStateSlot::Checkpoint,
+            checkpoint.generation,
+            bytes.clone(),
+        );
+        let commitment = checkpoint_commitment(Some(&checkpoint), Some(record.revision))
+            .expect("bind exact sealed predecessor checkpoint");
+        assert_eq!(commitment.digest, blake3_array(&bytes));
+        assert_eq!(commitment.block_count, checkpoint.block_count);
+        assert_eq!(commitment.head_block_cid, checkpoint.head_block_cid);
+
+        let mut substituted_revision = record.revision;
+        substituted_revision[0] ^= 0x80;
+        assert!(
+            checkpoint_commitment(Some(&checkpoint), Some(substituted_revision)).is_err(),
+            "a predecessor revision cannot be detached from its canonical checkpoint body"
+        );
+
+        let endpoint = block_prefix_archive_test_endpoint();
+        let (archive, _archive_bytes, _archive_head) =
+            signed_block_prefix_archive_fixture_with_checkpoint(
+                &source,
+                0,
+                2,
+                BlockPrefixArchiveHeadV1::empty(),
+                commitment,
+                checkpoint.generation + 1,
+                &endpoint,
+            );
+        let mut wrong_position = archive;
+        wrong_position.predecessor_block_count -= 1;
+        assert!(
+            validate_block_prefix_archive_against_source(&wrong_position, &source).is_err(),
+            "the predecessor head must occupy its exact committed source position"
+        );
+    }
+
+    #[test]
+    fn archive_readback_validation_precedes_checkpoint_construction() {
+        let source = signed_source(4, 0x76, 1_800_000_000);
+        let intent = intent_from_source(&source);
+        let retained_bytes = source.blocks[2..]
+            .iter()
+            .map(|block| u64::try_from(block.bytes.len()).expect("block length fits u64"))
+            .sum();
+        let retained = merge_published_blocks(None, &intent, &source, 2, retained_bytes)
+            .expect("plan retained suffix");
+        let endpoint = block_prefix_archive_test_endpoint();
+        let (archive, archive_bytes, archive_head) = signed_block_prefix_archive_fixture(
+            &source,
+            0,
+            retained[0].sequence,
+            BlockPrefixArchiveHeadV1::empty(),
+            &endpoint,
+        );
+        let checkpoint_before_crash = checkpoint_from_source(&source);
+
+        let truncated_readback = &archive_bytes[..archive_bytes.len() - 1];
+        assert!(decode_signed_block_prefix_archive(truncated_readback, 1024 * 1024).is_err());
+        assert_eq!(checkpoint_before_crash.mirror_blocks.len(), 4);
+        assert_eq!(
+            checkpoint_before_crash.archive_head,
+            BlockPrefixArchiveHeadV1::empty(),
+            "a crash before exact readback cannot expose a truncated mirror checkpoint"
+        );
+
+        assert_eq!(
+            decode_signed_block_prefix_archive(&archive_bytes, 1024 * 1024)
+                .expect("restart authenticates the complete staged archive"),
+            archive
+        );
+        verify_block_prefix_archive_publication(&archive, &archive_bytes, &archive_head)
+            .expect("restart verifies the exact archive publication");
+        let mut committed = checkpoint_before_crash;
+        committed.archive_head = archive_head;
+        committed.mirror_blocks = retained;
+        validate_checkpoint_body(&committed)
+            .expect("only verified archive readback permits suffix checkpointing");
+    }
+
+    #[test]
+    fn signed_block_prefix_archive_checkpoint_cas_fences_replicas_and_replay() {
+        let source = signed_source(4, 0x77, 1_800_000_000);
+        let intent = intent_from_source(&source);
+        let retained_bytes = source.blocks[2..]
+            .iter()
+            .map(|block| u64::try_from(block.bytes.len()).expect("block length fits u64"))
+            .sum();
+        let retained = merge_published_blocks(None, &intent, &source, 2, retained_bytes)
+            .expect("plan retained suffix");
+        let endpoint = block_prefix_archive_test_endpoint();
+        let (_archive, _bytes, archive_head) = signed_block_prefix_archive_fixture(
+            &source,
+            0,
+            retained[0].sequence,
+            BlockPrefixArchiveHeadV1::empty(),
+            &endpoint,
+        );
+        let mut checkpoint = checkpoint_from_source(&source);
+        checkpoint.archive_head = archive_head;
+        checkpoint.mirror_blocks = retained;
+        let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        let store = OpaqueCheckpointStore::try_new(
+            TEST_CHECKPOINT_STORE_HANDLE,
+            TEST_STORE_QUALIFICATION,
+            provider,
+        )
+        .expect("bind replica-fencing store");
+        save_checkpoint(&store, None, &checkpoint).expect("first replica commits archive head");
+        assert!(
+            save_checkpoint(&store, None, &checkpoint).is_err(),
+            "a concurrent replica cannot reuse the predecessor revision"
+        );
+        assert!(
+            save_checkpoint(&store, None, &checkpoint).is_err(),
+            "replaying the same archive checkpoint remains fenced"
+        );
     }
 
     #[test]
@@ -12401,6 +14181,7 @@ enabled = false
         let mirror = mirror_index_value(
             &source,
             &checkpoint.mirror_blocks,
+            &checkpoint.archive_head,
             checkpoint.generation,
             &checkpoint.head_ipfs_cid,
             &checkpoint.public_head_token,

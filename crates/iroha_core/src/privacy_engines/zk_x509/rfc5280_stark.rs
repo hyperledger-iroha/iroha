@@ -2562,7 +2562,7 @@ fn endpoint_role_code_v1(role: ZkX509IoSegmentRoleV1) -> Result<u64, ZkX509Rfc52
         ZkX509IoSegmentRoleV1::CaAccumulator => Ok(4),
         ZkX509IoSegmentRoleV1::Projection => Ok(6),
         ZkX509IoSegmentRoleV1::PublicInput => Ok(7),
-        #[cfg(any(test, feature = "privacy-release-evidence"))]
+        #[cfg(test)]
         ZkX509IoSegmentRoleV1::CrlCommitment => Err(ZkX509Rfc5280StarkErrorV1::Output),
     }
 }

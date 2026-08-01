@@ -790,6 +790,70 @@
         let source = kura
             .durable_autonomous_lane_merge_source(lane_id, 1, chain_id_hash, epoch)
             .expect("read complete durable autonomous source");
+        let exact_input_authorization = kura
+            .authorize_autonomous_execution_input_persistence(
+                source.bundle.executable_payload(),
+                &source.input,
+            )
+            .expect("authorize the exact autonomous execution input");
+        assert!(exact_input_authorization.matches_input(&source.input));
+        let exact_input_projection = exact_input_authorization
+            .consume_for_persistence(&source.input)
+            .expect("consume the exact autonomous execution-input authorization");
+        assert_eq!(
+            exact_input_projection.action,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT,
+        );
+        assert!(
+            check_production_in_flight_first_release_transition(exact_input_projection)
+                .is_some_and(|checked| checked.into_projection() == exact_input_projection),
+            "the exact durable payload must produce a valid execution-input projection",
+        );
+        let substituted_input_authorization = kura
+            .authorize_autonomous_execution_input_persistence(
+                source.bundle.executable_payload(),
+                &source.input,
+            )
+            .expect("authorize the execution input before substitution");
+        let mut substituted_input = source.input.clone();
+        substituted_input.entrypoint_hashes[0] = Hash::new(b"substituted execution input");
+        assert!(
+            substituted_input_authorization
+                .consume_for_persistence(&substituted_input)
+                .is_none(),
+            "a substituted execution input must not consume exact persistence authority",
+        );
+        let exact_authorization = Kura::authorize_autonomous_lane_commit_persistence(
+            &source,
+            &source.bundle.certified,
+        )
+        .expect("authorize the exact autonomous lane Commit");
+        assert!(exact_authorization.matches_artifact(&source.bundle.certified));
+        let exact_projection = exact_authorization
+            .consume_for_persistence(&source.bundle.certified)
+            .expect("consume the exact autonomous lane-Commit authorization");
+        assert_eq!(
+            exact_projection.action,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT,
+        );
+        assert!(
+            check_production_in_flight_first_release_transition(exact_projection)
+                .is_some_and(|checked| checked.into_projection() == exact_projection),
+            "the exact durable source must produce a valid LaneCommit projection",
+        );
+        let substituted_authorization = Kura::authorize_autonomous_lane_commit_persistence(
+            &source,
+            &source.bundle.certified,
+        )
+        .expect("authorize before substitution");
+        let mut substituted_artifact = source.bundle.certified.clone();
+        substituted_artifact.signer_pops.clear();
+        assert!(
+            substituted_authorization
+                .consume_for_persistence(&substituted_artifact)
+                .is_none(),
+            "a substituted certified artifact must not consume exact lane-Commit authority",
+        );
         assert_eq!(source.bundle.certified.proposal, payload.origin_proposal);
         assert_eq!(source.input, LaneBlockExecutionInputArtifact::new(recovered));
         assert_eq!(

@@ -39,11 +39,11 @@ pub(crate) const BOOTLE_LANTERN_FALCON512_IMPLEMENTATION_PROVENANCE_V1: &[u8] = 
 
 /// A generated Falcon-512 NTRU trapdoor and its public multiplier.
 pub(super) struct Trapdoor {
-    pub(super) f: Zeroizing<Box<[i8; DEGREE]>>,
-    pub(super) g: Zeroizing<Box<[i8; DEGREE]>>,
-    pub(super) capital_f: Zeroizing<Box<[i8; DEGREE]>>,
-    pub(super) capital_g: Zeroizing<Box<[i8; DEGREE]>>,
-    pub(super) h: Zeroizing<Box<[u16; DEGREE]>>,
+    pub(super) f: Box<Zeroizing<[i8; DEGREE]>>,
+    pub(super) g: Box<Zeroizing<[i8; DEGREE]>>,
+    pub(super) capital_f: Box<Zeroizing<[i8; DEGREE]>>,
+    pub(super) capital_g: Box<Zeroizing<[i8; DEGREE]>>,
+    pub(super) h: Box<Zeroizing<[u16; DEGREE]>>,
 }
 
 impl core::fmt::Debug for Trapdoor {
@@ -70,15 +70,12 @@ impl Drop for Trapdoor {
 
 /// One short preimage `s1 + h*s2 = target (mod q)`.
 pub(super) struct Preimage {
-    pub(super) first: Zeroizing<Box<[i16; DEGREE]>>,
-    pub(super) second: Zeroizing<Box<[i16; DEGREE]>>,
+    pub(super) first: Box<Zeroizing<[i16; DEGREE]>>,
+    pub(super) second: Box<Zeroizing<[i16; DEGREE]>>,
     pub(super) norm_squared: u32,
 }
 
-pub(super) fn generate_from_seed(
-    seed: &[u8; 32],
-    max_candidates: u32,
-) -> Option<Trapdoor> {
+pub(super) fn generate_from_seed(seed: &[u8; 32], max_candidates: u32) -> Option<Trapdoor> {
     kgen::generate_from_seed(seed, max_candidates)
 }
 
@@ -111,10 +108,10 @@ mod tests {
         .expect("pinned Falcon-512 keygen candidate");
         let mut encoded = Zeroizing::new(Vec::with_capacity(4 * DEGREE));
         for polynomial in [
-            trapdoor.f.as_ref(),
-            trapdoor.g.as_ref(),
-            trapdoor.capital_f.as_ref(),
-            trapdoor.capital_g.as_ref(),
+            &**trapdoor.f,
+            &**trapdoor.g,
+            &**trapdoor.capital_f,
+            &**trapdoor.capital_g,
         ] {
             encoded.extend(polynomial.iter().map(|coefficient| *coefficient as u8));
         }

@@ -49576,6 +49576,12 @@ pub struct ToriiRuntimeDeps {
     sorafs_moderation_panel_notification:
         Option<Arc<dyn sorafs::moderation_runtime::ModerationDurablePanelNotificationBoundaryV1>>,
     #[cfg(feature = "app_api")]
+    sorafs_moderation_panel_notification_archive: Option<
+        Arc<
+            dyn sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveV1,
+        >,
+    >,
+    #[cfg(feature = "app_api")]
     sorafs_moderation_checkpoint_store:
         Option<Arc<dyn sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1>>,
     #[cfg(feature = "app_api")]
@@ -49676,6 +49682,8 @@ impl ToriiRuntimeDeps {
             sorafs_moderation_publication_handoff: None,
             #[cfg(feature = "app_api")]
             sorafs_moderation_panel_notification: None,
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_panel_notification_archive: None,
             #[cfg(feature = "app_api")]
             sorafs_moderation_checkpoint_store: None,
             #[cfg(feature = "app_api")]
@@ -49918,6 +49926,19 @@ impl ToriiRuntimeDeps {
         boundary: Arc<dyn sorafs::moderation_runtime::ModerationDurablePanelNotificationBoundaryV1>,
     ) -> Self {
         self.sorafs_moderation_panel_notification = Some(boundary);
+        self
+    }
+
+    /// Attach the immutable authenticated archive for moderation notification receipts.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_moderation_panel_notification_archive(
+        mut self,
+        archive: Arc<
+            dyn sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveV1,
+        >,
+    ) -> Self {
+        self.sorafs_moderation_panel_notification_archive = Some(archive);
         self
     }
 
@@ -54416,6 +54437,10 @@ impl Torii {
         let shared_sorafs_moderation_panel_notification =
             runtime_deps.sorafs_moderation_panel_notification.clone();
         #[cfg(feature = "app_api")]
+        let shared_sorafs_moderation_panel_notification_archive = runtime_deps
+            .sorafs_moderation_panel_notification_archive
+            .clone();
+        #[cfg(feature = "app_api")]
         let shared_sorafs_moderation_checkpoint_store =
             runtime_deps.sorafs_moderation_checkpoint_store.clone();
         #[cfg(feature = "app_api")]
@@ -55183,15 +55208,17 @@ impl Torii {
             shared_sorafs_moderation_settlement_handoff,
             shared_sorafs_moderation_publication_handoff,
             shared_sorafs_moderation_panel_notification,
+            shared_sorafs_moderation_panel_notification_archive,
             shared_sorafs_moderation_checkpoint_store,
         ) {
-            (None, None, None, None, None, None) => (None, None),
+            (None, None, None, None, None, None, None) => (None, None),
             (
                 Some(config),
                 Some(transaction_signer),
                 Some(settlement_handoff),
                 Some(publication_handoff),
                 Some(panel_notification),
+                Some(panel_notification_archive),
                 Some(checkpoint_store),
             ) => {
                 let runtime = (|| {
@@ -55229,10 +55256,17 @@ impl Torii {
                             config.checkpoint_store_revision,
                             config.checkpoint_store_policy_digest,
                         );
+                    let panel_notification_archive_qualification =
+                        ModerationRuntimeProviderQualificationV1::new(
+                            config.panel_notification_archive_revision,
+                            config.panel_notification_archive_policy_digest,
+                        );
                     let orchestrator_config = ModerationOrchestratorConfigV1 {
                         checkpoint_path: config.checkpoint_path.clone(),
                         checkpoint_store_handle: config.checkpoint_store_handle.clone(),
                         expected_checkpoint_store_qualification: checkpoint_store_qualification,
+                        checkpoint_store_attestation_public_key: config
+                            .checkpoint_store_attestation_public_key,
                         max_cases: config.max_cases,
                         max_events: config.max_events,
                         max_outbox_entries: config.max_outbox_entries,
@@ -55240,6 +55274,9 @@ impl Torii {
                         max_handoffs: config.max_handoffs,
                         max_submit_attempts: config.max_submit_attempts,
                         checkpoint_max_bytes: config.checkpoint_max_bytes.0,
+                        panel_notification_archive_max_bytes: config
+                            .panel_notification_archive_max_bytes
+                            .0,
                         transaction_signer_handle: config.transaction_signer_handle.clone(),
                         expected_transaction_signer_qualification: transaction_signer_qualification,
                         strict_ingress_handle: config.strict_ingress_handle.clone(),
@@ -55251,6 +55288,22 @@ impl Torii {
                             publication_handoff_qualification,
                         panel_notification_handle: config.panel_notification_handle.clone(),
                         expected_panel_notification_qualification: panel_notification_qualification,
+                        panel_notification_archive_handle: config
+                            .panel_notification_archive_handle
+                            .clone(),
+                        expected_panel_notification_archive_qualification:
+                            panel_notification_archive_qualification,
+                        panel_notification_archive_id: config.panel_notification_archive_id,
+                        panel_notification_archive_bootstrap_public_key: config
+                            .panel_notification_archive_bootstrap_public_key,
+                        panel_notification_archive_public_key: config
+                            .panel_notification_archive_public_key,
+                        panel_notification_archive_predecessor_revocation_generation: config
+                            .panel_notification_archive_predecessor_revocation_generation,
+                        panel_notification_archive_predecessor_authorization_signature: config
+                            .panel_notification_archive_predecessor_authorization_signature,
+                        panel_notification_archive_new_key_possession_signature: config
+                            .panel_notification_archive_new_key_possession_signature,
                     };
                     let adapter_chain_id = Arc::new(chain_id.clone());
                     let fee_quoter =
@@ -55320,6 +55373,7 @@ impl Torii {
                         settlement_sink,
                         publication_sink,
                         panel_notification_sink,
+                        panel_notification_archive,
                     };
                     let orchestrator =
                         sorafs_node::moderation_orchestrator::ModerationOrchestratorV1::open(
@@ -55341,8 +55395,8 @@ impl Torii {
                     Err(()) => (None, Some("initialization_failed")),
                 }
             }
-            (Some(_), _, _, _, _, _) => (None, Some("missing_runtime_dependencies")),
-            (None, _, _, _, _, _) => (None, Some("unexpected_runtime_dependencies")),
+            (Some(_), _, _, _, _, _, _) => (None, Some("missing_runtime_dependencies")),
+            (None, _, _, _, _, _, _) => (None, Some("unexpected_runtime_dependencies")),
         };
         #[cfg(feature = "app_api")]
         let sorafs_pop_credentials = match (

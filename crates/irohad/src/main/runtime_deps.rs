@@ -60,6 +60,11 @@ pub struct IrohaRuntimeDeps {
             dyn iroha_torii::sorafs::moderation_runtime::ModerationDurablePanelNotificationBoundaryV1,
         >,
     >,
+    sorafs_moderation_panel_notification_archive: Option<
+        Arc<
+            dyn sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveV1,
+        >,
+    >,
     sorafs_moderation_checkpoint_store:
         Option<Arc<dyn sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1>>,
     sorafs_evidence_viewer_webauthn:
@@ -162,6 +167,7 @@ impl IrohaRuntimeDeps {
             && self.sorafs_moderation_settlement_handoff.is_none()
             && self.sorafs_moderation_publication_handoff.is_none()
             && self.sorafs_moderation_panel_notification.is_none()
+            && self.sorafs_moderation_panel_notification_archive.is_none()
             && self.sorafs_moderation_checkpoint_store.is_none()
             && self.sorafs_evidence_viewer_webauthn.is_none()
             && self.sorafs_evidence_viewer_grants.is_none()
@@ -490,6 +496,18 @@ impl IrohaRuntimeDeps {
         >,
     ) -> Self {
         self.sorafs_moderation_panel_notification = Some(boundary);
+        self
+    }
+
+    /// Attach the immutable authenticated moderation notification-receipt archive.
+    #[must_use]
+    pub fn with_sorafs_moderation_panel_notification_archive(
+        mut self,
+        archive: Arc<
+            dyn sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveV1,
+        >,
+    ) -> Self {
+        self.sorafs_moderation_panel_notification_archive = Some(archive);
         self
     }
 

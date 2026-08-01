@@ -1041,9 +1041,32 @@ mod protocol {
                     .evidence_viewer_transparency_publisher_public_key(),
                 evidence_viewer_checkpoint_max_bytes: binding
                     .evidence_viewer_checkpoint_max_bytes(),
+                moderation_checkpoint_max_bytes: binding.moderation_checkpoint_max_bytes(),
+                moderation_checkpoint_attestation_public_key: binding
+                    .moderation_checkpoint_attestation_public_key(),
                 evidence_viewer_archive_id: binding.evidence_viewer_archive_id(),
                 evidence_viewer_archive_public_key: binding.evidence_viewer_archive_public_key(),
                 evidence_viewer_archive_max_bytes: binding.evidence_viewer_archive_max_bytes(),
+                moderation_panel_notification_archive_binding: binding
+                    .moderation_panel_notification_archive_id()
+                    .zip(binding.moderation_panel_notification_archive_bootstrap_public_key())
+                    .zip(binding.moderation_panel_notification_archive_public_key())
+                    .zip(binding.moderation_panel_notification_archive_max_bytes())
+                    .zip(binding.moderation_panel_notification_archive_max_records())
+                    .map(
+                        |(
+                            (((archive_id, bootstrap_public_key), public_key), max_bytes),
+                            max_records,
+                        )| {
+                            ModerationPanelNotificationArchiveBindingWireV1 {
+                                archive_id,
+                                bootstrap_public_key,
+                                public_key,
+                                max_bytes,
+                                max_records,
+                            }
+                        },
+                    ),
             })
         }
 
@@ -1422,6 +1445,8 @@ mod protocol {
             || binding.slot == IrohaRuntimeProviderSlotV1::ModerationPanelNotification.wire_id();
         let moderation_checkpoint =
             binding.slot == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id();
+        let moderation_panel_notification_archive = binding.slot
+            == IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id();
         let moderation_quarantine =
             binding.slot == IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id();
         let provider_ingest_resolver = binding.slot
@@ -1458,12 +1483,43 @@ mod protocol {
             || binding.evidence_viewer_archive_id.is_some()
             || binding.evidence_viewer_archive_public_key.is_some()
             || binding.evidence_viewer_archive_max_bytes.is_some();
+        let has_moderation_archive_metadata = binding
+            .moderation_panel_notification_archive_binding
+            .is_some();
+        let has_moderation_checkpoint_metadata = binding
+            .moderation_checkpoint_attestation_public_key
+            .is_some()
+            || binding.moderation_checkpoint_max_bytes.is_some();
         let has_provider_ingest_metadata = binding.provider_ingest_signer_binding.is_some()
             || binding.provider_ingest_source_limits.is_some()
             || binding.provider_ingest_checkpoint_max_bytes.is_some()
             || binding
                 .provider_ingest_max_signed_transaction_bytes
                 .is_some();
+        // Slot 55 is a hard-cut protocol: its dedicated identity must be
+        // present exactly on that slot and can never alias evidence-viewer
+        // archive metadata on slot 47 (or any other provider role).
+        if moderation_panel_notification_archive != has_moderation_archive_metadata {
+            return Err(BrokerError::BindingMismatch);
+        }
+        if moderation_checkpoint != has_moderation_checkpoint_metadata {
+            return Err(BrokerError::BindingMismatch);
+        }
+        if moderation_checkpoint
+            && (binding
+                .moderation_checkpoint_attestation_public_key
+                .is_none_or(|key| iroha_crypto::ed25519_parse_public_key(&key).is_err())
+                || binding
+                    .moderation_checkpoint_max_bytes
+                    .is_none_or(|max_bytes| {
+                        max_bytes == 0
+                        || max_bytes
+                            > sorafs_node::moderation_orchestrator::
+                                MODERATION_ORCHESTRATOR_CHECKPOINT_MAX_BYTES_V1
+                    }))
+        {
+            return Err(BrokerError::BindingMismatch);
+        }
         if reputation_checkpoint
             && binding.revision
                 != Some(
@@ -1571,6 +1627,36 @@ mod protocol {
             && has_provider_ingest_metadata
         {
             return Err(BrokerError::BindingMismatch);
+        }
+        if moderation_panel_notification_archive {
+            let archive = binding
+                .moderation_panel_notification_archive_binding
+                .ok_or(BrokerError::BindingMismatch)?;
+            if archive.archive_id == [0; 32]
+                || archive.bootstrap_public_key == [0; 32]
+                || iroha_crypto::ed25519_parse_public_key(&archive.bootstrap_public_key).is_err()
+                || archive.public_key == [0; 32]
+                || iroha_crypto::ed25519_parse_public_key(&archive.public_key).is_err()
+                || archive.max_bytes == 0
+                || archive.max_bytes
+                    > u64::try_from(MAX_BROKER_EVIDENCE_VIEWER_BULK_BYTES_V1)
+                        .map_err(|_| BrokerError::Protocol)?
+                || archive.max_records == 0
+                || archive.max_records
+                    > u64::try_from(
+                        sorafs_node::moderation_orchestrator::
+                            MODERATION_PANEL_NOTIFICATION_ARCHIVE_MAX_RECORDS_V1,
+                    )
+                    .map_err(|_| BrokerError::Protocol)?
+                || has_evidence_metadata
+                || has_provider_ingest_metadata
+                || binding.native_signer_binding.is_some()
+                || binding.governance_request_auth_public_key.is_some()
+                || binding.governance_request_auth_max_body_bytes.is_some()
+            {
+                return Err(BrokerError::BindingMismatch);
+            }
+            return Ok(());
         }
         if moderation_quarantine
             || moderation_transaction_signer
@@ -1864,6 +1950,9 @@ mod protocol {
         evidence_viewer_receipt_signer_public_key: Option<[u8; 32]>,
         evidence_viewer_archive_id: Option<[u8; 32]>,
         evidence_viewer_archive_public_key: Option<[u8; 32]>,
+        moderation_checkpoint_attestation_public_key: Option<[u8; 32]>,
+        moderation_panel_notification_archive_binding:
+            Option<ModerationPanelNotificationArchiveBindingWireV1>,
         metadata_digest: [u8; 32],
     }
 
@@ -4047,6 +4136,212 @@ mod protocol {
         }
     }
 
+    const MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1: u16 = 1;
+
+    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
+    struct ModerationPanelNotificationArchiveQualifyRequestWireV1 {
+        version: u16,
+        slot: u16,
+        chain_id: String,
+    }
+
+    impl fmt::Debug for ModerationPanelNotificationArchiveQualifyRequestWireV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("ModerationPanelNotificationArchiveQualifyRequestWireV1")
+                .field("version", &self.version)
+                .field("slot", &self.slot)
+                .finish_non_exhaustive()
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+    struct ModerationPanelNotificationArchiveQualificationWireV1 {
+        version: u16,
+        slot: u16,
+        revision: u64,
+        policy_digest: [u8; 32],
+        archive_id: [u8; 32],
+        public_key: [u8; 32],
+    }
+
+    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
+    struct ModerationPanelNotificationArchiveInstallRequestWireV1 {
+        version: u16,
+        slot: u16,
+        chain_id: String,
+        operation_id: [u8; 32],
+        receipt_message: [u8; 32],
+        canonical_artifact: Vec<u8>,
+    }
+
+    impl fmt::Debug for ModerationPanelNotificationArchiveInstallRequestWireV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("ModerationPanelNotificationArchiveInstallRequestWireV1")
+                .field("version", &self.version)
+                .field("slot", &self.slot)
+                .field("canonical_artifact_len", &self.canonical_artifact.len())
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl Drop for ModerationPanelNotificationArchiveInstallRequestWireV1 {
+        fn drop(&mut self) {
+            self.operation_id.fill(0);
+            self.receipt_message.fill(0);
+            self.canonical_artifact.fill(0);
+            let _ = std::hint::black_box((
+                &self.operation_id,
+                &self.receipt_message,
+                &self.canonical_artifact,
+            ));
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+    struct ModerationPanelNotificationArchiveInstallResultWireV1 {
+        version: u16,
+        slot: u16,
+        signature: [u8; 64],
+    }
+
+    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
+    struct ModerationPanelNotificationArchiveReadRequestWireV1 {
+        version: u16,
+        slot: u16,
+        chain_id: String,
+        operation_id: [u8; 32],
+    }
+
+    impl fmt::Debug for ModerationPanelNotificationArchiveReadRequestWireV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("ModerationPanelNotificationArchiveReadRequestWireV1")
+                .field("version", &self.version)
+                .field("slot", &self.slot)
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl Drop for ModerationPanelNotificationArchiveReadRequestWireV1 {
+        fn drop(&mut self) {
+            self.operation_id.fill(0);
+            let _ = std::hint::black_box(&self.operation_id);
+        }
+    }
+
+    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
+    struct ModerationPanelNotificationArchiveReadbackWireV1 {
+        version: u16,
+        slot: u16,
+        canonical_artifact: Vec<u8>,
+        signature: [u8; 64],
+    }
+
+    impl fmt::Debug for ModerationPanelNotificationArchiveReadbackWireV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("ModerationPanelNotificationArchiveReadbackWireV1")
+                .field("version", &self.version)
+                .field("slot", &self.slot)
+                .field("canonical_artifact_len", &self.canonical_artifact.len())
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl Drop for ModerationPanelNotificationArchiveReadbackWireV1 {
+        fn drop(&mut self) {
+            self.canonical_artifact.fill(0);
+            let _ = std::hint::black_box(&self.canonical_artifact);
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+    struct ModerationPanelNotificationSourceAttestRequestWireV1 {
+        version: u16,
+        slot: u16,
+        chain_id: String,
+        statement:
+            sorafs_node::moderation_orchestrator::ModerationPanelNotificationSourceAttestationV1,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+    struct ModerationPanelNotificationSourceAttestResultWireV1 {
+        version: u16,
+        slot: u16,
+        statement_digest: [u8; 32],
+        signature: [u8; 64],
+    }
+
+    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
+    struct ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
+        version: u16,
+        slot: u16,
+        chain_id: String,
+        head: sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1,
+        canonical_head: Vec<u8>,
+    }
+
+    impl fmt::Debug for ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("ModerationPanelNotificationArchiveHeadPublishRequestWireV1")
+                .field("version", &self.version)
+                .field("slot", &self.slot)
+                .field("generation", &self.head.generation)
+                .field("canonical_head_len", &self.canonical_head.len())
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl Drop for ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
+        fn drop(&mut self) {
+            self.canonical_head.fill(0);
+            let _ = std::hint::black_box(&self.canonical_head);
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+    struct ModerationPanelNotificationArchiveHeadPublishResultWireV1 {
+        version: u16,
+        slot: u16,
+        operation_id: [u8; 32],
+        head_digest: [u8; 32],
+        chain_commitment: [u8; 32],
+        outcome: u8,
+    }
+
+    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
+    struct ModerationPanelNotificationArchiveHeadReadResultWireV1 {
+        version: u16,
+        slot: u16,
+        canonical_head: Option<Vec<u8>>,
+    }
+
+    impl fmt::Debug for ModerationPanelNotificationArchiveHeadReadResultWireV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("ModerationPanelNotificationArchiveHeadReadResultWireV1")
+                .field("version", &self.version)
+                .field("slot", &self.slot)
+                .field(
+                    "canonical_head_len",
+                    &self.canonical_head.as_ref().map_or(0, Vec::len),
+                )
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl Drop for ModerationPanelNotificationArchiveHeadReadResultWireV1 {
+        fn drop(&mut self) {
+            if let Some(bytes) = self.canonical_head.as_mut() {
+                bytes.fill(0);
+                let _ = std::hint::black_box(bytes);
+            }
+        }
+    }
+
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationQuarantineWrapDekRequestWireV1 {
         context_digest: [u8; 32],
@@ -5930,6 +6225,10 @@ mod protocol {
         evidence_viewer_receipt_signer_public_key: &Option<[u8; 32]>,
         evidence_viewer_archive_id: &Option<[u8; 32]>,
         evidence_viewer_archive_public_key: &Option<[u8; 32]>,
+        moderation_checkpoint_attestation_public_key: &Option<[u8; 32]>,
+        moderation_panel_notification_archive_binding: &Option<
+            ModerationPanelNotificationArchiveBindingWireV1,
+        >,
     ) -> Result<[u8; 32], BrokerError> {
         let bytes = encode_canonical(
             &(
@@ -5941,6 +6240,8 @@ mod protocol {
                 *evidence_viewer_receipt_signer_public_key,
                 *evidence_viewer_archive_id,
                 *evidence_viewer_archive_public_key,
+                *moderation_checkpoint_attestation_public_key,
+                *moderation_panel_notification_archive_binding,
             ),
             MAX_HANDSHAKE_FRAME_BYTES_V1,
         )?;
@@ -6070,6 +6371,8 @@ mod protocol {
             &observed.evidence_viewer_receipt_signer_public_key,
             &observed.evidence_viewer_archive_id,
             &observed.evidence_viewer_archive_public_key,
+            &observed.moderation_checkpoint_attestation_public_key,
+            &observed.moderation_panel_notification_archive_binding,
         )? != observed.metadata_digest
         {
             return Err(BrokerError::Protocol);
@@ -6089,6 +6392,24 @@ mod protocol {
             && (observed.evidence_viewer_receipt_signer_public_key.is_some()
                 || observed.evidence_viewer_archive_id.is_some()
                 || observed.evidence_viewer_archive_public_key.is_some())
+        {
+            return Err(BrokerError::BindingMismatch);
+        }
+        let moderation_archive_slot = requested.slot
+            == IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id();
+        if moderation_archive_slot
+            != observed
+                .moderation_panel_notification_archive_binding
+                .is_some()
+        {
+            return Err(BrokerError::BindingMismatch);
+        }
+        let moderation_checkpoint_slot =
+            requested.slot == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id();
+        if moderation_checkpoint_slot
+            != observed
+                .moderation_checkpoint_attestation_public_key
+                .is_some()
         {
             return Err(BrokerError::BindingMismatch);
         }
@@ -6355,14 +6676,8 @@ mod protocol {
                     return Err(BrokerError::BindingMismatch);
                 }
             }
-            slot if slot == IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn.wire_id()
-                || slot == IrohaRuntimeProviderSlotV1::EvidenceViewerGrantAuthority.wire_id()
-                || slot == IrohaRuntimeProviderSlotV1::EvidenceViewerErasure.wire_id()
-                || slot == IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore.wire_id()
-                || slot
-                    == IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher
-                        .wire_id()
-                || slot == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id() =>
+            slot if slot
+                == IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id() =>
             {
                 if observed.signer_metadata.is_some()
                     || observed.moderation_quarantine_active_key_id.is_some()
@@ -6371,6 +6686,41 @@ mod protocol {
                     || observed.evidence_viewer_receipt_signer_public_key.is_some()
                     || observed.evidence_viewer_archive_id.is_some()
                     || observed.evidence_viewer_archive_public_key.is_some()
+                    || observed.moderation_panel_notification_archive_binding
+                        != requested.moderation_panel_notification_archive_binding
+                {
+                    return Err(BrokerError::BindingMismatch);
+                }
+            }
+            slot if slot == IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn.wire_id()
+                || slot == IrohaRuntimeProviderSlotV1::EvidenceViewerGrantAuthority.wire_id()
+                || slot == IrohaRuntimeProviderSlotV1::EvidenceViewerErasure.wire_id()
+                || slot == IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore.wire_id()
+                || slot
+                    == IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher
+                        .wire_id() =>
+            {
+                if observed.signer_metadata.is_some()
+                    || observed.moderation_quarantine_active_key_id.is_some()
+                    || observed.provider_ingest_signer_binding.is_some()
+                    || !observed.provider_ingest_source_provider_ids.is_empty()
+                    || observed.evidence_viewer_receipt_signer_public_key.is_some()
+                    || observed.evidence_viewer_archive_id.is_some()
+                    || observed.evidence_viewer_archive_public_key.is_some()
+                {
+                    return Err(BrokerError::BindingMismatch);
+                }
+            }
+            slot if slot == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id() => {
+                if observed.signer_metadata.is_some()
+                    || observed.moderation_quarantine_active_key_id.is_some()
+                    || observed.provider_ingest_signer_binding.is_some()
+                    || !observed.provider_ingest_source_provider_ids.is_empty()
+                    || observed.evidence_viewer_receipt_signer_public_key.is_some()
+                    || observed.evidence_viewer_archive_id.is_some()
+                    || observed.evidence_viewer_archive_public_key.is_some()
+                    || observed.moderation_checkpoint_attestation_public_key
+                        != requested.moderation_checkpoint_attestation_public_key
                 {
                     return Err(BrokerError::BindingMismatch);
                 }
@@ -6665,7 +7015,7 @@ mod protocol {
         if handoff.kind != expected_kind
             || handoff.handoff_id == [0; 32]
             || handoff.outcome_digest == [0; 32]
-            || handoff.finalized_cursor.height == 0
+            || handoff.finalized_cursor.block_height == 0
             || handoff.finalized_cursor.block_hash == [0; 32]
             || !iroha_data_model::sorafs::moderation_ledger::is_canonical_moderation_identifier_v1(
                 &handoff.case_id,
@@ -6699,6 +7049,187 @@ mod protocol {
             canonical_handoff: request.canonical_handoff.clone(),
         };
         validate_moderation_handoff_request(&wire, slot)?;
+        Ok(wire)
+    }
+
+    fn validate_moderation_panel_notification_archive_head_publish_request(
+        wire: &ModerationPanelNotificationArchiveHeadPublishRequestWireV1,
+        session_chain_id: &str,
+    ) -> Result<
+        iroha_torii::sorafs::moderation_runtime::ModerationDurableArchiveHeadPublicationRequestV1,
+        BrokerError,
+    > {
+        let publication_slot = IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id();
+        if wire.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+            || wire.slot != publication_slot
+            || wire.chain_id != session_chain_id
+            || wire.chain_id.parse::<iroha_data_model::ChainId>().is_err()
+            || wire.head.chain_id != wire.chain_id
+            || wire.canonical_head.is_empty()
+            || wire.canonical_head.len() > MAX_MODERATION_HANDOFF_CANONICAL_BYTES_V1
+            || wire
+                .head
+                .verify(
+                    &wire.head.archive_handle,
+                    sorafs_node::moderation_orchestrator::
+                        ModerationRuntimeProviderQualificationV1::new(
+                            wire.head.archive_revision,
+                            wire.head.archive_policy_digest,
+                        ),
+                    wire.head.archive_id,
+                    wire.head.archive_public_key,
+                )
+                .is_err()
+        {
+            return Err(BrokerError::Rejected);
+        }
+        let canonical_head = norito::to_bytes(&wire.head).map_err(|_| BrokerError::Rejected)?;
+        if canonical_head != wire.canonical_head {
+            return Err(BrokerError::Rejected);
+        }
+        Ok(
+            iroha_torii::sorafs::moderation_runtime::
+                ModerationDurableArchiveHeadPublicationRequestV1 {
+                    head: wire.head.clone(),
+                    canonical_head,
+                },
+        )
+    }
+
+    fn validate_moderation_panel_notification_archive_head_at_broker_boundary(
+        canonical_head: &[u8],
+        chain_id: &str,
+        catalog: &[ProviderBindingWireV1],
+    ) -> Result<
+        (
+            sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1,
+            sorafs_node::moderation_orchestrator::
+                ModerationPanelNotificationArchiveBrokerValidationV1,
+        ),
+        BrokerError,
+    >{
+        let chain_id = chain_id
+            .parse::<iroha_data_model::ChainId>()
+            .map_err(|_| BrokerError::BindingMismatch)?;
+        let archive_binding = catalog
+            .iter()
+            .find(|binding| {
+                binding.slot
+                    == IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id()
+            })
+            .ok_or(BrokerError::BindingMismatch)?;
+        let archive = archive_binding
+            .moderation_panel_notification_archive_binding
+            .ok_or(BrokerError::BindingMismatch)?;
+        let checkpoint_binding = catalog
+            .iter()
+            .find(|binding| {
+                binding.slot == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id()
+            })
+            .ok_or(BrokerError::BindingMismatch)?;
+        let expectation = sorafs_node::moderation_orchestrator::
+            ModerationPanelNotificationArchiveBrokerExpectationV1 {
+                chain_id: &chain_id,
+                archive_handle: &archive_binding.handle,
+                archive_qualification: sorafs_node::moderation_orchestrator::
+                    ModerationRuntimeProviderQualificationV1::new(
+                archive_binding
+                    .revision
+                    .ok_or(BrokerError::BindingMismatch)?,
+                archive_binding
+                    .policy_digest
+                    .ok_or(BrokerError::BindingMismatch)?,
+                    ),
+                archive_id: archive.archive_id,
+                archive_bootstrap_public_key: archive.bootstrap_public_key,
+                archive_public_key: archive.public_key,
+                checkpoint_handle: &checkpoint_binding.handle,
+                checkpoint_qualification: sorafs_node::moderation_orchestrator::
+                    ModerationRuntimeProviderQualificationV1::new(
+                        checkpoint_binding
+                            .revision
+                            .ok_or(BrokerError::BindingMismatch)?,
+                        checkpoint_binding
+                            .policy_digest
+                            .ok_or(BrokerError::BindingMismatch)?,
+                    ),
+                checkpoint_attestation_public_key: checkpoint_binding
+                    .moderation_checkpoint_attestation_public_key
+                    .ok_or(BrokerError::BindingMismatch)?,
+                checkpoint_max_bytes: checkpoint_binding
+                    .moderation_checkpoint_max_bytes
+                    .ok_or(BrokerError::BindingMismatch)?,
+                archive_max_bytes: archive.max_bytes,
+                max_records: usize::try_from(archive.max_records)
+                    .map_err(|_| BrokerError::BindingMismatch)?,
+            };
+        sorafs_node::moderation_orchestrator::
+            validate_moderation_panel_notification_archive_head_for_broker_v1(
+                canonical_head,
+                &expectation,
+            )
+            .map_err(|_| BrokerError::Rejected)
+    }
+
+    fn validate_moderation_panel_notification_archive_public_head_readback_at_broker_boundary(
+        canonical_head: &[u8],
+        chain_id: &str,
+    ) -> Result<
+        sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1,
+        BrokerError,
+    > {
+        if canonical_head.is_empty()
+            || canonical_head.len() > MAX_MODERATION_HANDOFF_CANONICAL_BYTES_V1
+        {
+            return Err(BrokerError::Rejected);
+        }
+        let head = decode_canonical::<
+            sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1,
+        >(canonical_head, MAX_MODERATION_HANDOFF_CANONICAL_BYTES_V1)?;
+        if head.chain_id != chain_id
+            || norito::to_bytes(&head).map_err(|_| BrokerError::Rejected)?.as_slice()
+                != canonical_head
+            || head
+                .verify(
+                    &head.archive_handle,
+                    sorafs_node::moderation_orchestrator::
+                        ModerationRuntimeProviderQualificationV1::new(
+                            head.archive_revision,
+                            head.archive_policy_digest,
+                        ),
+                    head.archive_id,
+                    head.archive_public_key,
+                )
+                .is_err()
+        {
+            return Err(BrokerError::Rejected);
+        }
+        Ok(head)
+    }
+
+    fn moderation_panel_notification_archive_head_publish_request_to_wire(
+        request: &iroha_torii::sorafs::moderation_runtime::
+            ModerationDurableArchiveHeadPublicationRequestV1,
+        chain_id: &str,
+        catalog: &[ProviderBindingWireV1],
+    ) -> Result<ModerationPanelNotificationArchiveHeadPublishRequestWireV1, BrokerError> {
+        let wire = ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
+            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+            slot: IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id(),
+            chain_id: chain_id.to_owned(),
+            head: request.head.clone(),
+            canonical_head: request.canonical_head.clone(),
+        };
+        validate_moderation_panel_notification_archive_head_publish_request(&wire, chain_id)?;
+        let (validated_head, _) =
+            validate_moderation_panel_notification_archive_head_at_broker_boundary(
+                &wire.canonical_head,
+                chain_id,
+                catalog,
+            )?;
+        if validated_head != wire.head {
+            return Err(BrokerError::Rejected);
+        }
         Ok(wire)
     }
 
@@ -8170,6 +8701,8 @@ mod protocol {
             | OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1
             | OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1
             | OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1
+            | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1
+            | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1
             | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1
             | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1 => {
                 EVIDENCE_BULK_DECODE_POLICY_V1
@@ -8212,6 +8745,10 @@ mod protocol {
             | OPERATION_SEALED_DELETE_V1 => MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1,
             OPERATION_POTR_SIGN_V1 => MAX_POTR_FRAME_BYTES_V1,
             OPERATION_MODERATION_HANDOFF_DELIVER_ONCE_V1 => MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
+            OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1
+            | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1 => {
+                MAX_MODERATION_HANDOFF_FRAME_BYTES_V1
+            }
             OPERATION_MODERATION_PANEL_NOTIFICATION_DELIVER_ONCE_V1 => {
                 MAX_MODERATION_PANEL_NOTIFICATION_FRAME_BYTES_V1
             }
@@ -8258,7 +8795,11 @@ mod protocol {
             OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1 => {
                 MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1
             }
-            OPERATION_QUALIFY_V1 => MAX_BROKER_UNARY_FRAME_BYTES_V1,
+            OPERATION_QUALIFY_V1
+            | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1
+            | OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1 => {
+                MAX_BROKER_UNARY_FRAME_BYTES_V1
+            }
             OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1
             | OPERATION_MODERATION_QUARANTINE_UNWRAP_DEK_V1 => {
                 MAX_MODERATION_QUARANTINE_FRAME_BYTES_V1
@@ -8276,6 +8817,8 @@ mod protocol {
             | OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1
             | OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1
             | OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1
+            | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1
+            | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1
             | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1
             | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1 => {
                 MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
@@ -8349,6 +8892,8 @@ mod protocol {
             | OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1
             | OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1
             | OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1
+            | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1
+            | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1
             | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1
             | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1 => {
                 MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
@@ -8486,6 +9031,12 @@ mod protocol {
                 | OPERATION_TRANSPARENCY_LEADER_LEASE_RELEASE_V1
                 | OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1
                 | OPERATION_FENCED_PRIVACY_READ_HEAD_WITH_ANCESTRY_V1
+                | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1
+                | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1
+                | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1
+                | OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1
+                | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1
+                | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1
         )
     }
 
@@ -8873,12 +9424,15 @@ mod protocol {
         Ok(())
     }
 
-    fn moderation_checkpoint_record_limit() -> usize {
-        usize::try_from(
-            sorafs_node::moderation_orchestrator::MODERATION_ORCHESTRATOR_CHECKPOINT_MAX_BYTES_V1,
-        )
-        .unwrap_or(usize::MAX)
-        .saturating_add(16 * 1024)
+    fn moderation_checkpoint_record_limit(
+        binding: &ProviderBindingWireV1,
+    ) -> Result<usize, BrokerError> {
+        let max_bytes = binding
+            .moderation_checkpoint_max_bytes
+            .ok_or(BrokerError::BindingMismatch)?;
+        usize::try_from(max_bytes)
+            .map(|max_bytes| max_bytes.saturating_add(16 * 1024))
+            .map_err(|_| BrokerError::BindingMismatch)
     }
 
     fn decode_moderation_checkpoint_record(
@@ -8888,7 +9442,7 @@ mod protocol {
     {
         let record = decode_canonical::<
             sorafs_node::moderation_orchestrator::ModerationCheckpointStoreRecordV1,
-        >(bytes, moderation_checkpoint_record_limit())?;
+        >(bytes, moderation_checkpoint_record_limit(binding)?)?;
         let qualification =
             sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1::new(
                 binding.revision.ok_or(BrokerError::BindingMismatch)?,
@@ -8897,7 +9451,9 @@ mod protocol {
         if !record.has_valid_provider_envelope(
             &binding.handle,
             qualification,
-            sorafs_node::moderation_orchestrator::MODERATION_ORCHESTRATOR_CHECKPOINT_MAX_BYTES_V1,
+            binding
+                .moderation_checkpoint_max_bytes
+                .ok_or(BrokerError::BindingMismatch)?,
         ) {
             return Err(BrokerError::Rejected);
         }
@@ -8948,6 +9504,197 @@ mod protocol {
                 BrokerError::Ambiguous
             }
         }
+    }
+
+    fn moderation_panel_notification_archive_backend_error(
+        error: sorafs_node::moderation_orchestrator::
+            ModerationPanelNotificationArchiveExternalErrorV1,
+    ) -> BrokerError {
+        match error {
+            sorafs_node::moderation_orchestrator::
+                ModerationPanelNotificationArchiveExternalErrorV1::Unavailable => {
+                    BrokerError::Unavailable
+                }
+            sorafs_node::moderation_orchestrator::
+                ModerationPanelNotificationArchiveExternalErrorV1::Ambiguous => {
+                    BrokerError::Ambiguous
+                }
+            sorafs_node::moderation_orchestrator::
+                ModerationPanelNotificationArchiveExternalErrorV1::Rejected => {
+                    BrokerError::Rejected
+                }
+        }
+    }
+
+    fn validate_moderation_panel_notification_archive_artifact_at_broker_boundary(
+        canonical_artifact: &[u8],
+        chain_id: &str,
+        archive_binding: &ProviderBindingWireV1,
+        catalog: &[ProviderBindingWireV1],
+    ) -> Result<
+        sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveBrokerValidationV1,
+        BrokerError,
+    > {
+        let chain_id = chain_id
+            .parse::<iroha_data_model::ChainId>()
+            .map_err(|_| BrokerError::BindingMismatch)?;
+        let checkpoint_binding = catalog
+            .iter()
+            .find(|binding| {
+                binding.slot == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id()
+            })
+            .ok_or(BrokerError::BindingMismatch)?;
+        let archive = archive_binding
+            .moderation_panel_notification_archive_binding
+            .ok_or(BrokerError::BindingMismatch)?;
+        let archive_qualification =
+            sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1::new(
+                archive_binding
+                    .revision
+                    .ok_or(BrokerError::BindingMismatch)?,
+                archive_binding
+                    .policy_digest
+                    .ok_or(BrokerError::BindingMismatch)?,
+            );
+        let checkpoint_qualification =
+            sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1::new(
+                checkpoint_binding
+                    .revision
+                    .ok_or(BrokerError::BindingMismatch)?,
+                checkpoint_binding
+                    .policy_digest
+                    .ok_or(BrokerError::BindingMismatch)?,
+            );
+        let max_records =
+            usize::try_from(archive.max_records).map_err(|_| BrokerError::BindingMismatch)?;
+        let expectation = sorafs_node::moderation_orchestrator::
+            ModerationPanelNotificationArchiveBrokerExpectationV1 {
+                chain_id: &chain_id,
+                archive_handle: &archive_binding.handle,
+                archive_qualification,
+                archive_id: archive.archive_id,
+                archive_bootstrap_public_key: archive.bootstrap_public_key,
+                archive_public_key: archive.public_key,
+                checkpoint_handle: &checkpoint_binding.handle,
+                checkpoint_qualification,
+                checkpoint_attestation_public_key: checkpoint_binding
+                    .moderation_checkpoint_attestation_public_key
+                    .ok_or(BrokerError::BindingMismatch)?,
+                checkpoint_max_bytes: checkpoint_binding
+                    .moderation_checkpoint_max_bytes
+                    .ok_or(BrokerError::BindingMismatch)?,
+                archive_max_bytes: archive.max_bytes,
+                max_records,
+            };
+        sorafs_node::moderation_orchestrator::
+            validate_moderation_panel_notification_archive_artifact_for_broker_v1(
+                canonical_artifact,
+                &expectation,
+            )
+            .map_err(|_| BrokerError::Rejected)
+    }
+
+    fn validate_moderation_panel_notification_archive_readback_at_broker_boundary(
+        canonical_artifact: &[u8],
+        chain_id: &str,
+        archive_binding: &ProviderBindingWireV1,
+        catalog: &[ProviderBindingWireV1],
+    ) -> Result<
+        sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveBrokerValidationV1,
+        BrokerError,
+    > {
+        let chain_id = chain_id
+            .parse::<iroha_data_model::ChainId>()
+            .map_err(|_| BrokerError::BindingMismatch)?;
+        let checkpoint_binding = catalog
+            .iter()
+            .find(|binding| {
+                binding.slot == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id()
+            })
+            .ok_or(BrokerError::BindingMismatch)?;
+        let archive = archive_binding
+            .moderation_panel_notification_archive_binding
+            .ok_or(BrokerError::BindingMismatch)?;
+        let archive_qualification =
+            sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1::new(
+                archive_binding
+                    .revision
+                    .ok_or(BrokerError::BindingMismatch)?,
+                archive_binding
+                    .policy_digest
+                    .ok_or(BrokerError::BindingMismatch)?,
+            );
+        let checkpoint_qualification =
+            sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1::new(
+                checkpoint_binding
+                    .revision
+                    .ok_or(BrokerError::BindingMismatch)?,
+                checkpoint_binding
+                    .policy_digest
+                    .ok_or(BrokerError::BindingMismatch)?,
+            );
+        let max_records =
+            usize::try_from(archive.max_records).map_err(|_| BrokerError::BindingMismatch)?;
+        let expectation = sorafs_node::moderation_orchestrator::
+            ModerationPanelNotificationArchiveBrokerExpectationV1 {
+                chain_id: &chain_id,
+                archive_handle: &archive_binding.handle,
+                archive_qualification,
+                archive_id: archive.archive_id,
+                archive_bootstrap_public_key: archive.bootstrap_public_key,
+                archive_public_key: archive.public_key,
+                checkpoint_handle: &checkpoint_binding.handle,
+                checkpoint_qualification,
+                checkpoint_attestation_public_key: checkpoint_binding
+                    .moderation_checkpoint_attestation_public_key
+                    .ok_or(BrokerError::BindingMismatch)?,
+                checkpoint_max_bytes: checkpoint_binding
+                    .moderation_checkpoint_max_bytes
+                    .ok_or(BrokerError::BindingMismatch)?,
+                archive_max_bytes: archive.max_bytes,
+                max_records,
+            };
+        sorafs_node::moderation_orchestrator::
+            validate_moderation_panel_notification_archive_readback_for_broker_v1(
+                canonical_artifact,
+                &expectation,
+            )
+            .map_err(|_| BrokerError::Rejected)
+    }
+
+    fn validate_moderation_panel_notification_source_attestation_at_broker_boundary(
+        statement: &sorafs_node::moderation_orchestrator::
+            ModerationPanelNotificationSourceAttestationV1,
+        chain_id: &str,
+        binding: &ProviderBindingWireV1,
+        current_record: &sorafs_node::moderation_orchestrator::ModerationCheckpointStoreRecordV1,
+    ) -> Result<[u8; 32], BrokerError> {
+        let chain_id = chain_id
+            .parse::<iroha_data_model::ChainId>()
+            .map_err(|_| BrokerError::BindingMismatch)?;
+        let qualification =
+            sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1::new(
+                binding.revision.ok_or(BrokerError::BindingMismatch)?,
+                binding.policy_digest.ok_or(BrokerError::BindingMismatch)?,
+            );
+        let canonical_record =
+            encode_canonical(current_record, moderation_checkpoint_record_limit(binding)?)?;
+        let validated_record = decode_moderation_checkpoint_record(&canonical_record, binding)?;
+        if &validated_record != current_record {
+            return Err(BrokerError::Rejected);
+        }
+        sorafs_node::moderation_orchestrator::
+            validate_moderation_panel_notification_source_attestation_for_broker_v1(
+                statement,
+                &chain_id,
+                &binding.handle,
+                qualification,
+                binding
+                    .moderation_checkpoint_attestation_public_key
+                    .ok_or(BrokerError::BindingMismatch)?,
+                current_record,
+            )
+            .map_err(|_| BrokerError::Rejected)
     }
 
     fn verify_evidence_viewer_ed25519_signature(
@@ -9229,6 +9976,10 @@ mod protocol {
                     | OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1
                     | OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1
                     | OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1
+                    | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1
+                    | OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1
+                    | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1
+                    | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1
                     | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1
                     | OPERATION_GATEWAY_ACME_ORDER_CERTIFICATE_V1
                     | OPERATION_POP_RUNTIME_RESOLVE_V1
@@ -9401,6 +10152,76 @@ mod protocol {
                     )?;
                     validate_moderation_handoff_request(&handoff, request.binding.slot)
                         .map_err(|_| BrokerError::Protocol)?;
+                }
+                OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1 => {
+                    let publish = decode_canonical::<
+                        ModerationPanelNotificationArchiveHeadPublishRequestWireV1,
+                    >(
+                        &request.payload, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1
+                    )?;
+                    validate_moderation_panel_notification_archive_head_publish_request(
+                        &publish,
+                        &publish.chain_id,
+                    )
+                    .map_err(|_| BrokerError::Protocol)?;
+                    let outcome =
+                        decode_canonical::<
+                            ModerationPanelNotificationArchiveHeadPublishResultWireV1,
+                        >(result, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1)?;
+                    if outcome.version
+                        != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+                        || outcome.slot
+                            != IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id()
+                        || outcome.operation_id != publish.head.operation_id
+                        || outcome.head_digest != publish.head.head_digest
+                        || outcome.chain_commitment != publish.head.chain_commitment
+                        || !matches!(outcome.outcome, 1 | 2)
+                    {
+                        return Err(BrokerError::Protocol);
+                    }
+                }
+                OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1 => {
+                    decode_canonical::<()>(
+                        &request.payload,
+                        MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
+                    )?;
+                    let readback = decode_canonical::<
+                        ModerationPanelNotificationArchiveHeadReadResultWireV1,
+                    >(
+                        result, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1
+                    )?;
+                    if readback.version
+                        != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+                        || readback.slot
+                            != IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id()
+                    {
+                        return Err(BrokerError::Protocol);
+                    }
+                    if let Some(canonical_head) = readback.canonical_head.as_ref() {
+                        let head = decode_canonical::<
+                            sorafs_node::moderation_orchestrator::
+                                ModerationPanelNotificationArchiveHeadV1,
+                        >(canonical_head, MAX_MODERATION_HANDOFF_CANONICAL_BYTES_V1)?;
+                        if norito::to_bytes(&head)
+                            .map_err(|_| BrokerError::Protocol)?
+                            .as_slice()
+                            != canonical_head.as_slice()
+                            || head
+                                .verify(
+                                    &head.archive_handle,
+                                    sorafs_node::moderation_orchestrator::
+                                        ModerationRuntimeProviderQualificationV1::new(
+                                            head.archive_revision,
+                                            head.archive_policy_digest,
+                                        ),
+                                    head.archive_id,
+                                    head.archive_public_key,
+                                )
+                                .is_err()
+                        {
+                            return Err(BrokerError::Protocol);
+                        }
+                    }
                 }
                 OPERATION_MODERATION_PANEL_NOTIFICATION_DELIVER_ONCE_V1 => {
                     let notification =
@@ -10411,6 +11232,106 @@ mod protocol {
                         }
                     }
                 }
+                OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1 => {
+                    let qualification = decode_canonical::<
+                        ModerationPanelNotificationArchiveQualificationWireV1,
+                    >(
+                        result, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1
+                    )?;
+                    let exact = request
+                        .binding
+                        .moderation_panel_notification_archive_binding
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    if qualification.version
+                        != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+                        || qualification.slot
+                            != IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                                .wire_id()
+                        || Some(qualification.revision) != request.binding.revision
+                        || Some(qualification.policy_digest) != request.binding.policy_digest
+                        || qualification.archive_id != exact.archive_id
+                        || qualification.public_key != exact.public_key
+                    {
+                        return Err(BrokerError::Protocol);
+                    }
+                }
+                OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1 => {
+                    let signed = decode_canonical::<
+                        ModerationPanelNotificationArchiveInstallResultWireV1,
+                    >(
+                        result, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1
+                    )?;
+                    let install = decode_canonical::<
+                        ModerationPanelNotificationArchiveInstallRequestWireV1,
+                    >(
+                        &request.payload, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
+                    )?;
+                    let exact = request
+                        .binding
+                        .moderation_panel_notification_archive_binding
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    if signed.version
+                        != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+                        || signed.slot
+                            != IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                                .wire_id()
+                    {
+                        return Err(BrokerError::Protocol);
+                    }
+                    verify_evidence_viewer_ed25519_signature(
+                        exact.public_key,
+                        signed.signature,
+                        &install.receipt_message,
+                    )
+                    .map_err(|_| BrokerError::Protocol)?;
+                }
+                OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1 => {
+                    let readback = decode_canonical::<
+                        Option<ModerationPanelNotificationArchiveReadbackWireV1>,
+                    >(
+                        result, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
+                    )?;
+                    if let Some(readback) = readback {
+                        let exact = request
+                            .binding
+                            .moderation_panel_notification_archive_binding
+                            .ok_or(BrokerError::BindingMismatch)?;
+                        let max_bytes =
+                            usize::try_from(exact.max_bytes).map_err(|_| BrokerError::Protocol)?;
+                        if readback.version
+                            != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+                            || readback.slot
+                                != IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                                    .wire_id()
+                            || readback.canonical_artifact.is_empty()
+                            || readback.canonical_artifact.len() > max_bytes
+                            || readback.signature == [0; 64]
+                        {
+                            return Err(BrokerError::Protocol);
+                        }
+                    }
+                }
+                OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1 => {
+                    let signed = decode_canonical::<
+                        ModerationPanelNotificationSourceAttestResultWireV1,
+                    >(
+                        result, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1
+                    )?;
+                    let attest = decode_canonical::<
+                        ModerationPanelNotificationSourceAttestRequestWireV1,
+                    >(
+                        &request.payload, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1
+                    )?;
+                    if signed.version
+                        != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+                        || signed.slot
+                            != IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id()
+                        || signed.statement_digest == [0; 32]
+                        || attest.statement.verify(signed.signature).is_err()
+                    {
+                        return Err(BrokerError::Protocol);
+                    }
+                }
                 OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1 => {
                     let head = decode_canonical::<
                         Option<
@@ -10864,6 +11785,8 @@ mod protocol {
             let mut evidence_viewer_receipt_signer_public_key = None;
             let mut evidence_viewer_archive_id = None;
             let mut evidence_viewer_archive_public_key = None;
+            let mut moderation_checkpoint_attestation_public_key = None;
+            let mut moderation_panel_notification_archive_binding = None;
             match binding.slot {
                 slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id() => {
                     let signer = backends
@@ -11971,6 +12894,51 @@ mod protocol {
                         .as_ref()
                         .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
                     qualify_moderation_runtime_backend(binding, store.as_ref())?;
+                    let public_key = store.attestation_public_key();
+                    if Some(public_key) != binding.moderation_checkpoint_attestation_public_key
+                        || iroha_crypto::ed25519_parse_public_key(&public_key).is_err()
+                    {
+                        return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
+                    }
+                    moderation_checkpoint_attestation_public_key = Some(public_key);
+                }
+                slot if slot
+                    == IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id() =>
+                {
+                    let archive = backends
+                        .moderation_panel_notification_archive
+                        .as_ref()
+                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let qualification = archive
+                        .qualification()
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    let archive_id = archive.archive_id();
+                    let public_key = archive.signing_public_key();
+                    let expected = binding
+                        .moderation_panel_notification_archive_binding
+                        .ok_or(RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    if archive.handle() != binding.handle
+                        || !qualification_matches(
+                            binding,
+                            qualification.revision(),
+                            qualification.policy_digest(),
+                        )
+                        || archive_id != expected.archive_id
+                        || public_key != expected.public_key
+                    {
+                        return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
+                    }
+                    let requalification = archive
+                        .qualification()
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    if archive.handle() != binding.handle
+                        || requalification != qualification
+                        || archive.archive_id() != archive_id
+                        || archive.signing_public_key() != public_key
+                    {
+                        return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
+                    }
+                    moderation_panel_notification_archive_binding = Some(expected);
                 }
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive.wire_id() =>
@@ -12052,6 +13020,8 @@ mod protocol {
                 &evidence_viewer_receipt_signer_public_key,
                 &evidence_viewer_archive_id,
                 &evidence_viewer_archive_public_key,
+                &moderation_checkpoint_attestation_public_key,
+                &moderation_panel_notification_archive_binding,
             )
             .map_err(server_error)?;
             let observation = ProviderObservationWireV1 {
@@ -12064,6 +13034,8 @@ mod protocol {
                 evidence_viewer_receipt_signer_public_key,
                 evidence_viewer_archive_id,
                 evidence_viewer_archive_public_key,
+                moderation_checkpoint_attestation_public_key,
+                moderation_panel_notification_archive_binding,
                 metadata_digest,
             };
             validate_observation(binding, &observation).map_err(server_error)?;
@@ -12226,6 +13198,8 @@ mod protocol {
                         == backends.evidence_viewer_checkpoint_store.is_some()
                     && requested(IrohaRuntimeProviderSlotV1::ModerationCheckpointStore)
                         == backends.moderation_checkpoint_store.is_some()
+                    && requested(IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive)
+                        == backends.moderation_panel_notification_archive.is_some()
                     && requested(IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive)
                         == backends.evidence_viewer_compaction_archive.is_some()
                     && requested(IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher)
@@ -12917,6 +13891,8 @@ mod protocol {
                 IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore.wire_id();
             let moderation_checkpoint_slot =
                 IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id();
+            let moderation_panel_notification_archive_slot =
+                IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id();
             let evidence_archive_slot =
                 IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive.wire_id();
             let evidence_transparency_publisher_slot =
@@ -12927,6 +13903,60 @@ mod protocol {
                 IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id();
 
             let result = match (request.binding.slot, request.operation) {
+                (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1)
+                    if slot == moderation_panel_notification_archive_slot =>
+                {
+                    let qualify = decode_canonical::<
+                        ModerationPanelNotificationArchiveQualifyRequestWireV1,
+                    >(
+                        &request.payload, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1
+                    )?;
+                    validate_moderation_panel_notification_archive_wire_scope(
+                        qualify.version,
+                        qualify.slot,
+                        &qualify.chain_id,
+                        Some(&state.chain_id),
+                    )?;
+                    let archive = state
+                        .backends
+                        .moderation_panel_notification_archive
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    let qualification = archive
+                        .qualification()
+                        .map_err(|_| BrokerError::StaleOrRevoked)?;
+                    let exact = request
+                        .binding
+                        .moderation_panel_notification_archive_binding
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    if archive.handle() != request.binding.handle
+                        || qualification.revision()
+                            != request
+                                .binding
+                                .revision
+                                .ok_or(BrokerError::BindingMismatch)?
+                        || qualification.policy_digest()
+                            != request
+                                .binding
+                                .policy_digest
+                                .ok_or(BrokerError::BindingMismatch)?
+                        || archive.archive_id() != exact.archive_id
+                        || archive.signing_public_key() != exact.public_key
+                    {
+                        return Err(BrokerError::BindingMismatch);
+                    }
+                    encode_canonical(
+                        &ModerationPanelNotificationArchiveQualificationWireV1 {
+                            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                            slot,
+                            revision: qualification.revision(),
+                            policy_digest: qualification.policy_digest(),
+                            archive_id: exact.archive_id,
+                            public_key: exact.public_key,
+                        },
+                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                    )
+                }
                 (slot, OPERATION_QUALIFY_V1) if slot == moderation_quarantine_slot => {
                     let qualification = state
                         .backends
@@ -15639,6 +16669,135 @@ mod protocol {
                     encode_canonical(&outcome, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1)
                         .map_err(|_| BrokerError::Ambiguous)
                 }
+                (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1)
+                    if slot == moderation_publication_handoff_slot =>
+                {
+                    let wire = decode_canonical::<
+                        ModerationPanelNotificationArchiveHeadPublishRequestWireV1,
+                    >(
+                        &request.payload, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1
+                    )?;
+                    let publication =
+                        validate_moderation_panel_notification_archive_head_publish_request(
+                            &wire,
+                            &state.chain_id,
+                        )?;
+                    let (validated_head, validated) =
+                        validate_moderation_panel_notification_archive_head_at_broker_boundary(
+                            &publication.canonical_head,
+                            &state.chain_id,
+                            &state.catalog,
+                        )?;
+                    if validated_head != publication.head {
+                        return Err(BrokerError::Rejected);
+                    }
+                    let outcome = state
+                        .backends
+                        .moderation_publication_handoff
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?
+                        .publish_archive_head_once(&publication)
+                        .map_err(|error| {
+                            match error {
+                            iroha_torii::sorafs::moderation_runtime::
+                                ModerationDurableHandoffFailureV1::NotDelivered => {
+                                BrokerError::Unavailable
+                            }
+                            iroha_torii::sorafs::moderation_runtime::
+                                ModerationDurableHandoffFailureV1::Ambiguous => {
+                                BrokerError::Ambiguous
+                            }
+                            iroha_torii::sorafs::moderation_runtime::
+                                ModerationDurableHandoffFailureV1::Permanent => {
+                                BrokerError::Rejected
+                            }
+                        }
+                        })?;
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )
+                    .map_err(|_| BrokerError::Ambiguous)?;
+                    encode_canonical(
+                        &ModerationPanelNotificationArchiveHeadPublishResultWireV1 {
+                            version:
+                                MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                            slot,
+                            operation_id: validated.operation_id,
+                            head_digest: validated.head_digest,
+                            chain_commitment: validated.chain_commitment,
+                            outcome: match outcome {
+                                iroha_torii::sorafs::moderation_runtime::
+                                    ModerationDurableHandoffOutcomeV1::Delivered => 1,
+                                iroha_torii::sorafs::moderation_runtime::
+                                    ModerationDurableHandoffOutcomeV1::AlreadyDelivered => 2,
+                            },
+                        },
+                        MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
+                    )
+                    .map_err(|_| BrokerError::Ambiguous)
+                }
+                (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1)
+                    if slot == moderation_publication_handoff_slot =>
+                {
+                    decode_canonical::<()>(
+                        &request.payload,
+                        MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
+                    )?;
+                    let head = state
+                        .backends
+                        .moderation_publication_handoff
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?
+                        .read_published_archive_head()
+                        .map_err(|error| {
+                            match error {
+                            iroha_torii::sorafs::moderation_runtime::
+                                ModerationDurableHandoffFailureV1::NotDelivered => {
+                                    BrokerError::Unavailable
+                                }
+                            iroha_torii::sorafs::moderation_runtime::
+                                ModerationDurableHandoffFailureV1::Ambiguous => {
+                                    BrokerError::Ambiguous
+                                }
+                            iroha_torii::sorafs::moderation_runtime::
+                                ModerationDurableHandoffFailureV1::Permanent => {
+                                    BrokerError::Rejected
+                                }
+                        }
+                        })?;
+                    let canonical_head = head
+                        .as_ref()
+                        .map(norito::to_bytes)
+                        .transpose()
+                        .map_err(|_| BrokerError::Rejected)?;
+                    if let (Some(head), Some(canonical_head)) =
+                        (head.as_ref(), canonical_head.as_ref())
+                    {
+                        let validated_head =
+                            validate_moderation_panel_notification_archive_public_head_readback_at_broker_boundary(
+                                canonical_head,
+                                &state.chain_id,
+                            )?;
+                        if &validated_head != head {
+                            return Err(BrokerError::Rejected);
+                        }
+                    }
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )?;
+                    encode_canonical(
+                        &ModerationPanelNotificationArchiveHeadReadResultWireV1 {
+                            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                            slot,
+                            canonical_head,
+                        },
+                        MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
+                    )
+                }
                 (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_DELIVER_ONCE_V1)
                     if slot == moderation_panel_notification_slot =>
                 {
@@ -16877,8 +18036,10 @@ mod protocol {
                         .map_err(moderation_checkpoint_backend_error)?;
                     let record = record
                         .map(|record| {
-                            let bytes =
-                                encode_canonical(&record, moderation_checkpoint_record_limit())?;
+                            let bytes = encode_canonical(
+                                &record,
+                                moderation_checkpoint_record_limit(&request.binding)?,
+                            )?;
                             decode_moderation_checkpoint_record(&bytes, &request.binding)?;
                             Ok(bytes)
                         })
@@ -16911,8 +18072,10 @@ mod protocol {
                         .load_latest()
                         .map_err(moderation_checkpoint_backend_error)?;
                     if let Some(current) = current.as_ref() {
-                        let bytes =
-                            encode_canonical(current, moderation_checkpoint_record_limit())?;
+                        let bytes = encode_canonical(
+                            current,
+                            moderation_checkpoint_record_limit(&request.binding)?,
+                        )?;
                         decode_moderation_checkpoint_record(&bytes, &request.binding)
                             .map_err(|_| BrokerError::Protocol)?;
                     }
@@ -16948,6 +18111,59 @@ mod protocol {
                     )
                     .map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&(), MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
+                }
+                (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1)
+                    if slot == moderation_checkpoint_slot =>
+                {
+                    let attest = decode_canonical::<
+                        ModerationPanelNotificationSourceAttestRequestWireV1,
+                    >(
+                        &request.payload, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1
+                    )?;
+                    validate_moderation_panel_notification_source_attest_wire_scope(
+                        attest.version,
+                        attest.slot,
+                        &attest.chain_id,
+                        Some(&state.chain_id),
+                    )?;
+                    let store = state
+                        .backends
+                        .moderation_checkpoint_store
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    let current_record = store
+                        .load_latest()
+                        .map_err(moderation_checkpoint_backend_error)?
+                        .ok_or(BrokerError::Rejected)?;
+                    let statement_digest =
+                        validate_moderation_panel_notification_source_attestation_at_broker_boundary(
+                            &attest.statement,
+                            &state.chain_id,
+                            &request.binding,
+                            &current_record,
+                        )?;
+                    let signature = store
+                        .attest_terminal_set(&attest.statement)
+                        .map_err(moderation_checkpoint_backend_error)?;
+                    attest
+                        .statement
+                        .verify(signature)
+                        .map_err(|_| BrokerError::Ambiguous)?;
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )
+                    .map_err(|_| BrokerError::Ambiguous)?;
+                    encode_canonical(
+                        &ModerationPanelNotificationSourceAttestResultWireV1 {
+                            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                            slot,
+                            statement_digest,
+                            signature,
+                        },
+                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                    )
                 }
                 (slot, OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1)
                     if slot == evidence_archive_slot =>
@@ -17042,6 +18258,157 @@ mod protocol {
                                 return Err(BrokerError::Rejected);
                             }
                             Ok(EvidenceViewerArchiveReadbackWireV1 {
+                                canonical_artifact: readback.canonical_artifact,
+                                signature: readback.signature,
+                            })
+                        })
+                        .transpose()?;
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )?;
+                    encode_canonical(&readback, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1)
+                }
+                (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1)
+                    if slot == moderation_panel_notification_archive_slot =>
+                {
+                    let install = decode_canonical::<
+                        ModerationPanelNotificationArchiveInstallRequestWireV1,
+                    >(
+                        &request.payload, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
+                    )?;
+                    validate_moderation_panel_notification_archive_wire_scope(
+                        install.version,
+                        install.slot,
+                        &install.chain_id,
+                        Some(&state.chain_id),
+                    )?;
+                    let validated =
+                        validate_moderation_panel_notification_archive_artifact_at_broker_boundary(
+                            &install.canonical_artifact,
+                            &state.chain_id,
+                            &request.binding,
+                            &state.catalog,
+                        )?;
+                    if install.operation_id != validated.operation_id
+                        || install.receipt_message != validated.receipt_message
+                    {
+                        return Err(BrokerError::Rejected);
+                    }
+                    let archive = state
+                        .backends
+                        .moderation_panel_notification_archive
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    let signature = archive
+                        .install(
+                            validated.operation_id,
+                            validated.receipt_message,
+                            &install.canonical_artifact,
+                        )
+                        .map_err(moderation_panel_notification_archive_backend_error)?;
+                    let public_key = request
+                        .binding
+                        .moderation_panel_notification_archive_binding
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    verify_evidence_viewer_ed25519_signature(
+                        public_key.public_key,
+                        signature,
+                        &validated.receipt_message,
+                    )?;
+                    let readback = archive
+                        .read(validated.operation_id)
+                        .map_err(|_| BrokerError::Ambiguous)?
+                        .ok_or(BrokerError::Ambiguous)?;
+                    if readback.canonical_artifact != install.canonical_artifact
+                        || readback.signature != signature
+                    {
+                        return Err(BrokerError::Ambiguous);
+                    }
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )
+                    .map_err(|_| BrokerError::Ambiguous)?;
+                    encode_canonical(
+                        &ModerationPanelNotificationArchiveInstallResultWireV1 {
+                            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                            slot,
+                            signature,
+                        },
+                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                    )
+                }
+                (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1)
+                    if slot == moderation_panel_notification_archive_slot =>
+                {
+                    let read = decode_canonical::<
+                        ModerationPanelNotificationArchiveReadRequestWireV1,
+                    >(
+                        &request.payload, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1
+                    )?;
+                    validate_moderation_panel_notification_archive_wire_scope(
+                        read.version,
+                        read.slot,
+                        &read.chain_id,
+                        Some(&state.chain_id),
+                    )?;
+                    let max_bytes = usize::try_from(
+                        request
+                            .binding
+                            .moderation_panel_notification_archive_binding
+                            .ok_or(BrokerError::BindingMismatch)?
+                            .max_bytes,
+                    )
+                    .map_err(|_| BrokerError::Rejected)?;
+                    let readback = state
+                        .backends
+                        .moderation_panel_notification_archive
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?
+                        .read(read.operation_id)
+                        .map_err(|error| {
+                            match error {
+                            sorafs_node::moderation_orchestrator::
+                                ModerationPanelNotificationArchiveExternalErrorV1::Unavailable
+                            | sorafs_node::moderation_orchestrator::
+                                ModerationPanelNotificationArchiveExternalErrorV1::Ambiguous => {
+                                BrokerError::Unavailable
+                            }
+                            sorafs_node::moderation_orchestrator::
+                                ModerationPanelNotificationArchiveExternalErrorV1::Rejected => {
+                                BrokerError::Rejected
+                            }
+                        }
+                        })?
+                        .map(|readback| {
+                            if readback.canonical_artifact.is_empty()
+                                || readback.canonical_artifact.len() > max_bytes
+                                || readback.signature == [0; 64]
+                            {
+                                return Err(BrokerError::Rejected);
+                            }
+                            let validated =
+                                validate_moderation_panel_notification_archive_readback_at_broker_boundary(
+                                    &readback.canonical_artifact,
+                                    &state.chain_id,
+                                    &request.binding,
+                                    &state.catalog,
+                                )?;
+                            if validated.operation_id != read.operation_id {
+                                return Err(BrokerError::Rejected);
+                            }
+                            verify_evidence_viewer_ed25519_signature(
+                                validated.archive_public_key,
+                                readback.signature,
+                                &validated.receipt_message,
+                            )?;
+                            Ok(ModerationPanelNotificationArchiveReadbackWireV1 {
+                                version:
+                                    MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                                slot,
                                 canonical_artifact: readback.canonical_artifact,
                                 signature: readback.signature,
                             })
@@ -22161,6 +23528,145 @@ mod protocol {
                 }
                 Ok(outcome)
             }
+
+            fn publish_archive_head_once(
+                &self,
+                request: &iroha_torii::sorafs::moderation_runtime::
+                    ModerationDurableArchiveHeadPublicationRequestV1,
+            ) -> Result<
+                iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffOutcomeV1,
+                iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffFailureV1,
+            > {
+                if self.provider.binding.slot
+                    != IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id()
+                {
+                    return Err(iroha_torii::sorafs::moderation_runtime::
+                        ModerationDurableHandoffFailureV1::Permanent);
+                }
+                let wire = moderation_panel_notification_archive_head_publish_request_to_wire(
+                    request,
+                    &self.provider.session.chain_id,
+                    &self.provider.session.requested_catalog,
+                )
+                .map_err(moderation_handoff_error)?;
+                self.provider
+                    .live_qualification()
+                    .map_err(moderation_handoff_error)?;
+                let payload = encode_canonical(&wire, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1)
+                    .map_err(moderation_handoff_error)?;
+                let result = self
+                    .provider
+                    .session
+                    .call(
+                        &self.provider.binding,
+                        self.provider.metadata_digest,
+                        OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1,
+                        payload,
+                        true,
+                    )
+                    .map_err(moderation_handoff_error)?;
+                let outcome = decode_scrubbed_canonical::<
+                    ModerationPanelNotificationArchiveHeadPublishResultWireV1,
+                >(&result, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1)
+                .map_err(|_| {
+                    self.provider.session.poison();
+                    iroha_torii::sorafs::moderation_runtime::
+                        ModerationDurableHandoffFailureV1::Ambiguous
+                })?;
+                if outcome.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+                    || outcome.slot
+                        != IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id()
+                    || outcome.operation_id != request.head.operation_id
+                    || outcome.head_digest != request.head.head_digest
+                    || outcome.chain_commitment != request.head.chain_commitment
+                    || !matches!(outcome.outcome, 1 | 2)
+                {
+                    self.provider.session.poison();
+                    return Err(iroha_torii::sorafs::moderation_runtime::
+                        ModerationDurableHandoffFailureV1::Ambiguous);
+                }
+                if self.provider.live_qualification().is_err() {
+                    self.provider.session.poison();
+                    return Err(iroha_torii::sorafs::moderation_runtime::
+                        ModerationDurableHandoffFailureV1::Ambiguous);
+                }
+                Ok(match outcome.outcome {
+                    1 => iroha_torii::sorafs::moderation_runtime::
+                        ModerationDurableHandoffOutcomeV1::Delivered,
+                    2 => iroha_torii::sorafs::moderation_runtime::
+                        ModerationDurableHandoffOutcomeV1::AlreadyDelivered,
+                    _ => unreachable!("validated publication outcome"),
+                })
+            }
+
+            fn read_published_archive_head(
+                &self,
+            ) -> Result<
+                Option<
+                    sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1,
+                >,
+                iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffFailureV1,
+            > {
+                if self.provider.binding.slot
+                    != IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id()
+                {
+                    return Err(iroha_torii::sorafs::moderation_runtime::
+                        ModerationDurableHandoffFailureV1::Permanent);
+                }
+                self.provider
+                    .live_qualification()
+                    .map_err(moderation_handoff_error)?;
+                let payload = encode_canonical(&(), MAX_MODERATION_HANDOFF_FRAME_BYTES_V1)
+                    .map_err(moderation_handoff_error)?;
+                let result = self
+                    .provider
+                    .session
+                    .call(
+                        &self.provider.binding,
+                        self.provider.metadata_digest,
+                        OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1,
+                        payload,
+                        false,
+                    )
+                    .map_err(moderation_handoff_error)?;
+                let readback = decode_scrubbed_canonical::<
+                    ModerationPanelNotificationArchiveHeadReadResultWireV1,
+                >(&result, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1)
+                .map_err(|_| {
+                    self.provider.session.poison();
+                    iroha_torii::sorafs::moderation_runtime::
+                        ModerationDurableHandoffFailureV1::Permanent
+                })?;
+                if readback.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+                    || readback.slot
+                        != IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id()
+                {
+                    self.provider.session.poison();
+                    return Err(iroha_torii::sorafs::moderation_runtime::
+                        ModerationDurableHandoffFailureV1::Permanent);
+                }
+                let head = readback
+                    .canonical_head
+                    .as_deref()
+                    .map(|canonical_head| {
+                        validate_moderation_panel_notification_archive_public_head_readback_at_broker_boundary(
+                            canonical_head,
+                            &self.provider.session.chain_id,
+                        )
+                    })
+                    .transpose()
+                    .map_err(|_| {
+                        self.provider.session.poison();
+                        iroha_torii::sorafs::moderation_runtime::
+                            ModerationDurableHandoffFailureV1::Permanent
+                    })?;
+                if self.provider.live_qualification().is_err() {
+                    self.provider.session.poison();
+                    return Err(iroha_torii::sorafs::moderation_runtime::
+                        ModerationDurableHandoffFailureV1::Ambiguous);
+                }
+                Ok(head)
+            }
         }
 
         #[derive(Clone)]
@@ -23857,6 +25363,24 @@ mod protocol {
             }
         }
 
+        fn moderation_panel_notification_archive_error(
+            error: BrokerError,
+        ) -> sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveExternalErrorV1
+        {
+            match error {
+                BrokerError::Ambiguous => sorafs_node::moderation_orchestrator::
+                    ModerationPanelNotificationArchiveExternalErrorV1::Ambiguous,
+                BrokerError::Unavailable => sorafs_node::moderation_orchestrator::
+                    ModerationPanelNotificationArchiveExternalErrorV1::Unavailable,
+                BrokerError::Rejected
+                | BrokerError::Conflict
+                | BrokerError::StaleOrRevoked
+                | BrokerError::Protocol
+                | BrokerError::BindingMismatch => sorafs_node::moderation_orchestrator::
+                    ModerationPanelNotificationArchiveExternalErrorV1::Rejected,
+            }
+        }
+
         #[derive(Clone, Debug)]
         struct ModerationCheckpointBrokerStore {
             provider: EvidenceViewerBrokerProvider,
@@ -23906,6 +25430,13 @@ mod protocol {
         impl sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1
             for ModerationCheckpointBrokerStore
         {
+            fn attestation_public_key(&self) -> [u8; 32] {
+                self.provider
+                    .binding
+                    .moderation_checkpoint_attestation_public_key
+                    .unwrap_or([0; 32])
+            }
+
             fn load_latest(
                 &self,
             ) -> Result<
@@ -23944,8 +25475,10 @@ mod protocol {
                 (),
                 sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1,
             > {
-                let next_record = encode_canonical(next, moderation_checkpoint_record_limit())
+                let record_limit = moderation_checkpoint_record_limit(&self.provider.binding)
                     .map_err(moderation_checkpoint_error)?;
+                let next_record =
+                    encode_canonical(next, record_limit).map_err(moderation_checkpoint_error)?;
                 let result = self
                     .provider
                     .call_sensitive(
@@ -23961,6 +25494,308 @@ mod protocol {
                 self.provider
                     .decode_sensitive::<()>(&result, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
                     .map_err(moderation_checkpoint_error)
+            }
+
+            fn attest_terminal_set(
+                &self,
+                statement: &sorafs_node::moderation_orchestrator::
+                    ModerationPanelNotificationSourceAttestationV1,
+            ) -> Result<
+                [u8; 64],
+                sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1,
+            > {
+                if statement.chain_id != self.provider.session.chain_id
+                    || statement.attestor_slot
+                        != IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id()
+                    || statement.attestor_handle != self.provider.binding.handle
+                    || Some(statement.attestor_revision) != self.provider.binding.revision
+                    || Some(statement.attestor_policy_digest) != self.provider.binding.policy_digest
+                    || Some(statement.attestor_public_key)
+                        != self
+                            .provider
+                            .binding
+                            .moderation_checkpoint_attestation_public_key
+                {
+                    return Err(sorafs_node::moderation_orchestrator::
+                        ModerationCheckpointStoreExternalErrorV1::Rejected);
+                }
+                let result = self
+                    .provider
+                    .call_sensitive(
+                        OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1,
+                        &ModerationPanelNotificationSourceAttestRequestWireV1 {
+                            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                            slot: IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id(),
+                            chain_id: self.provider.session.chain_id.clone(),
+                            statement: statement.clone(),
+                        },
+                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                        true,
+                    )
+                    .map_err(moderation_checkpoint_error)?;
+                let signed = self
+                    .provider
+                    .decode_sensitive::<ModerationPanelNotificationSourceAttestResultWireV1>(
+                        &result,
+                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                    )
+                    .map_err(moderation_checkpoint_error)?;
+                if signed.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+                    || signed.slot
+                        != IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id()
+                    || signed.statement_digest == [0; 32]
+                    || statement.verify(signed.signature).is_err()
+                {
+                    self.provider.session.poison();
+                    return Err(sorafs_node::moderation_orchestrator::
+                        ModerationCheckpointStoreExternalErrorV1::Rejected);
+                }
+                Ok(signed.signature)
+            }
+        }
+
+        #[derive(Clone, Debug)]
+        struct ModerationPanelNotificationBrokerArchive {
+            provider: EvidenceViewerBrokerProvider,
+            archive_id: [u8; 32],
+            public_key: [u8; 32],
+        }
+
+        impl ModerationPanelNotificationBrokerArchive {
+            fn live_qualification(
+                &self,
+            ) -> Result<
+                sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1,
+                BrokerError,
+            > {
+                let result = self.provider.call_sensitive(
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1,
+                    &ModerationPanelNotificationArchiveQualifyRequestWireV1 {
+                        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                        slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                            .wire_id(),
+                        chain_id: self.provider.session.chain_id.clone(),
+                    },
+                    MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                    false,
+                )?;
+                let observed = self
+                    .provider
+                    .decode_sensitive::<ModerationPanelNotificationArchiveQualificationWireV1>(
+                    &result,
+                    MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                )?;
+                let expected_revision = self
+                    .provider
+                    .binding
+                    .revision
+                    .ok_or(BrokerError::BindingMismatch)?;
+                let expected_policy_digest = self
+                    .provider
+                    .binding
+                    .policy_digest
+                    .ok_or(BrokerError::BindingMismatch)?;
+                if observed.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+                    || observed.slot
+                        != IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id()
+                    || observed.revision != expected_revision
+                    || observed.policy_digest != expected_policy_digest
+                    || observed.archive_id != self.archive_id
+                    || observed.public_key != self.public_key
+                {
+                    self.provider.session.poison();
+                    return Err(BrokerError::StaleOrRevoked);
+                }
+                Ok(sorafs_node::moderation_orchestrator::
+                    ModerationRuntimeProviderQualificationV1::new(
+                        expected_revision,
+                        expected_policy_digest,
+                    ))
+            }
+        }
+
+        impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
+            for ModerationPanelNotificationBrokerArchive
+        {
+            fn handle(&self) -> &str {
+                self.provider.handle()
+            }
+
+            fn qualification(
+                &self,
+            ) -> Result<
+                sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1,
+                sorafs_node::moderation_orchestrator::ModerationRuntimeProviderReadinessErrorV1,
+            > {
+                self.live_qualification().map_err(|error| {
+                    match error {
+                        BrokerError::Unavailable | BrokerError::Ambiguous => {
+                            sorafs_node::moderation_orchestrator::
+                                ModerationRuntimeProviderReadinessErrorV1::Unavailable
+                        }
+                        BrokerError::Rejected
+                        | BrokerError::Conflict
+                        | BrokerError::StaleOrRevoked
+                        | BrokerError::Protocol
+                        | BrokerError::BindingMismatch => {
+                            sorafs_node::moderation_orchestrator::
+                                ModerationRuntimeProviderReadinessErrorV1::Rejected
+                        }
+                    }
+                })
+            }
+        }
+
+        impl sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveV1
+            for ModerationPanelNotificationBrokerArchive
+        {
+            fn archive_id(&self) -> [u8; 32] {
+                self.archive_id
+            }
+
+            fn signing_public_key(&self) -> [u8; 32] {
+                self.public_key
+            }
+
+            fn install(
+                &self,
+                operation_id: [u8; 32],
+                receipt_message: [u8; 32],
+                canonical_artifact: &[u8],
+            ) -> Result<
+                [u8; 64],
+                sorafs_node::moderation_orchestrator::
+                    ModerationPanelNotificationArchiveExternalErrorV1,
+            >{
+                let validated =
+                    validate_moderation_panel_notification_archive_artifact_at_broker_boundary(
+                        canonical_artifact,
+                        &self.provider.session.chain_id,
+                        &self.provider.binding,
+                        &self.provider.session.requested_catalog,
+                    )
+                    .map_err(moderation_panel_notification_archive_error)?;
+                if operation_id != validated.operation_id
+                    || receipt_message != validated.receipt_message
+                {
+                    return Err(sorafs_node::moderation_orchestrator::
+                        ModerationPanelNotificationArchiveExternalErrorV1::Rejected);
+                }
+                let result = self
+                    .provider
+                    .call_sensitive(
+                        OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1,
+                        &ModerationPanelNotificationArchiveInstallRequestWireV1 {
+                            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                            slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                                .wire_id(),
+                            chain_id: self.provider.session.chain_id.clone(),
+                            operation_id,
+                            receipt_message,
+                            canonical_artifact: canonical_artifact.to_vec(),
+                        },
+                        MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+                        true,
+                    )
+                    .map_err(moderation_panel_notification_archive_error)?;
+                let signed = self
+                    .provider
+                    .decode_sensitive::<ModerationPanelNotificationArchiveInstallResultWireV1>(
+                        &result,
+                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                    )
+                    .map_err(moderation_panel_notification_archive_error)?;
+                if signed.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+                    || signed.slot
+                        != IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id()
+                {
+                    self.provider.session.poison();
+                    return Err(sorafs_node::moderation_orchestrator::
+                        ModerationPanelNotificationArchiveExternalErrorV1::Rejected);
+                }
+                verify_evidence_viewer_ed25519_signature(
+                    self.public_key,
+                    signed.signature,
+                    &validated.receipt_message,
+                )
+                .map_err(moderation_panel_notification_archive_error)?;
+                Ok(signed.signature)
+            }
+
+            fn read(
+                &self,
+                operation_id: [u8; 32],
+            ) -> Result<
+                Option<
+                    sorafs_node::moderation_orchestrator::
+                        ModerationPanelNotificationArchiveReadbackV1,
+                >,
+                sorafs_node::moderation_orchestrator::
+                    ModerationPanelNotificationArchiveExternalErrorV1,
+            >{
+                let result = self
+                    .provider
+                    .call_sensitive(
+                        OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1,
+                        &ModerationPanelNotificationArchiveReadRequestWireV1 {
+                            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                            slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                                .wire_id(),
+                            chain_id: self.provider.session.chain_id.clone(),
+                            operation_id,
+                        },
+                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                        false,
+                    )
+                    .map_err(moderation_panel_notification_archive_error)?;
+                let readback = self
+                    .provider
+                    .decode_sensitive::<Option<ModerationPanelNotificationArchiveReadbackWireV1>>(
+                        &result,
+                        MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+                    )
+                    .map_err(moderation_panel_notification_archive_error)?;
+                readback
+                    .map(|mut readback| {
+                        if readback.version
+                            != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+                            || readback.slot
+                                != IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                                    .wire_id()
+                        {
+                            self.provider.session.poison();
+                            return Err(sorafs_node::moderation_orchestrator::
+                                ModerationPanelNotificationArchiveExternalErrorV1::Rejected);
+                        }
+                        let validated =
+                            validate_moderation_panel_notification_archive_readback_at_broker_boundary(
+                                &readback.canonical_artifact,
+                                &self.provider.session.chain_id,
+                                &self.provider.binding,
+                                &self.provider.session.requested_catalog,
+                            )
+                            .map_err(moderation_panel_notification_archive_error)?;
+                        if validated.operation_id != operation_id
+                            || verify_evidence_viewer_ed25519_signature(
+                                validated.archive_public_key,
+                                readback.signature,
+                                &validated.receipt_message,
+                            )
+                            .is_err()
+                        {
+                            self.provider.session.poison();
+                            return Err(sorafs_node::moderation_orchestrator::
+                                ModerationPanelNotificationArchiveExternalErrorV1::Rejected);
+                        }
+                        Ok(sorafs_node::moderation_orchestrator::
+                            ModerationPanelNotificationArchiveReadbackV1 {
+                                canonical_artifact: std::mem::take(
+                                    &mut readback.canonical_artifact,
+                                ),
+                                signature: readback.signature,
+                            })
+                    })
+                    .transpose()
             }
         }
 
@@ -28180,6 +30015,28 @@ mod protocol {
                             dependencies.with_sorafs_moderation_checkpoint_store(store);
                     }
                     slot if slot
+                        == IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                            .wire_id() =>
+                    {
+                        let archive_binding = observation
+                            .moderation_panel_notification_archive_binding
+                            .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
+                        let archive = Arc::new(ModerationPanelNotificationBrokerArchive {
+                            provider: EvidenceViewerBrokerProvider {
+                                session: Arc::clone(&session),
+                                binding: binding.clone(),
+                                metadata_digest: observation.metadata_digest,
+                            },
+                            archive_id: archive_binding.archive_id,
+                            public_key: archive_binding.public_key,
+                        });
+                        sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1::
+                            qualification(archive.as_ref())
+                            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)?;
+                        dependencies = dependencies
+                            .with_sorafs_moderation_panel_notification_archive(archive);
+                    }
+                    slot if slot
                         == IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive
                             .wire_id() =>
                     {
@@ -30493,6 +32350,264 @@ mod protocol {
             }
 
             #[derive(Debug)]
+            struct ServerTestModerationCheckpointStore {
+                handle: String,
+                qualification: sorafs_node::moderation_orchestrator::
+                    ModerationRuntimeProviderQualificationV1,
+                attestation_public_key: [u8; 32],
+                attestation_signing_seed: [u8; 32],
+                current: Mutex<
+                    Option<
+                        sorafs_node::moderation_orchestrator::
+                            ModerationCheckpointStoreRecordV1,
+                    >,
+                >,
+                expected_statement: sorafs_node::moderation_orchestrator::
+                    ModerationPanelNotificationSourceAttestationV1,
+                expected_statement_digest: [u8; 32],
+                attest_calls: AtomicU64,
+            }
+
+            impl ServerTestModerationCheckpointStore {
+                fn from_fixture(
+                    fixture: &sorafs_node::moderation_orchestrator::
+                        ModerationPanelNotificationArchiveBrokerFixtureV1,
+                ) -> Self {
+                    Self {
+                        handle: fixture.checkpoint_handle.clone(),
+                        qualification: fixture.checkpoint_qualification,
+                        attestation_public_key: fixture.checkpoint_attestation_public_key,
+                        attestation_signing_seed: fixture.checkpoint_attestation_signing_seed,
+                        current: Mutex::new(Some(fixture.current_checkpoint_record.clone())),
+                        expected_statement: fixture.source_attestation.clone(),
+                        expected_statement_digest: fixture.validation.source_attestation_digest,
+                        attest_calls: AtomicU64::new(0),
+                    }
+                }
+            }
+
+            impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
+                for ServerTestModerationCheckpointStore
+            {
+                fn handle(&self) -> &str {
+                    &self.handle
+                }
+
+                fn qualification(
+                    &self,
+                ) -> Result<
+                    sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1,
+                    sorafs_node::moderation_orchestrator::ModerationRuntimeProviderReadinessErrorV1,
+                > {
+                    Ok(self.qualification)
+                }
+            }
+
+            impl sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1
+                for ServerTestModerationCheckpointStore
+            {
+                fn attestation_public_key(&self) -> [u8; 32] {
+                    self.attestation_public_key
+                }
+
+                fn load_latest(
+                    &self,
+                ) -> Result<
+                    Option<sorafs_node::moderation_orchestrator::ModerationCheckpointStoreRecordV1>,
+                    sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1,
+                > {
+                    Ok(self
+                        .current
+                        .lock()
+                        .expect("moderation checkpoint fixture lock")
+                        .clone())
+                }
+
+                fn compare_and_swap_latest(
+                    &self,
+                    expected_revision: Option<[u8; 32]>,
+                    next: &sorafs_node::moderation_orchestrator::ModerationCheckpointStoreRecordV1,
+                ) -> Result<
+                    (),
+                    sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1,
+                > {
+                    let mut current = self
+                        .current
+                        .lock()
+                        .expect("moderation checkpoint fixture lock");
+                    if current.as_ref().map(|record| record.revision) != expected_revision {
+                        return Err(
+                            sorafs_node::moderation_orchestrator::
+                                ModerationCheckpointStoreExternalErrorV1::Rejected,
+                        );
+                    }
+                    *current = Some(next.clone());
+                    Ok(())
+                }
+
+                fn attest_terminal_set(
+                    &self,
+                    statement: &sorafs_node::moderation_orchestrator::
+                        ModerationPanelNotificationSourceAttestationV1,
+                ) -> Result<
+                    [u8; 64],
+                    sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1,
+                > {
+                    self.attest_calls.fetch_add(1, Ordering::AcqRel);
+                    if statement != &self.expected_statement {
+                        return Err(
+                            sorafs_node::moderation_orchestrator::
+                                ModerationCheckpointStoreExternalErrorV1::Rejected,
+                        );
+                    }
+                    let keypair = iroha_crypto::KeyPair::try_from_seed(
+                        self.attestation_signing_seed.to_vec(),
+                        iroha_crypto::Algorithm::Ed25519,
+                    )
+                    .map_err(|_| {
+                        sorafs_node::moderation_orchestrator::
+                            ModerationCheckpointStoreExternalErrorV1::Rejected
+                    })?;
+                    keypair
+                        .sign(&self.expected_statement_digest)
+                        .to_bytes()
+                        .as_slice()
+                        .try_into()
+                        .map_err(|_| {
+                            sorafs_node::moderation_orchestrator::
+                                ModerationCheckpointStoreExternalErrorV1::Rejected
+                        })
+                }
+            }
+
+            #[derive(Debug)]
+            struct ServerTestModerationPanelNotificationArchive {
+                handle: String,
+                qualification: sorafs_node::moderation_orchestrator::
+                    ModerationRuntimeProviderQualificationV1,
+                archive_id: [u8; 32],
+                public_key: [u8; 32],
+                expected_operation_id: [u8; 32],
+                expected_receipt_message: [u8; 32],
+                expected_artifact: Vec<u8>,
+                expected_signature: [u8; 64],
+                installed: Mutex<
+                    Option<
+                        sorafs_node::moderation_orchestrator::
+                            ModerationPanelNotificationArchiveReadbackV1,
+                    >,
+                >,
+                install_calls: AtomicU64,
+            }
+
+            impl ServerTestModerationPanelNotificationArchive {
+                fn from_fixture(
+                    fixture: &sorafs_node::moderation_orchestrator::
+                        ModerationPanelNotificationArchiveBrokerFixtureV1,
+                ) -> Self {
+                    Self {
+                        handle: fixture.archive_handle.clone(),
+                        qualification: fixture.archive_qualification,
+                        archive_id: fixture.archive_id,
+                        public_key: fixture.archive_public_key,
+                        expected_operation_id: fixture.validation.operation_id,
+                        expected_receipt_message: fixture.validation.receipt_message,
+                        expected_artifact: fixture.canonical_artifact.clone(),
+                        expected_signature: fixture.archive_signature,
+                        installed: Mutex::new(None),
+                        install_calls: AtomicU64::new(0),
+                    }
+                }
+            }
+
+            impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
+                for ServerTestModerationPanelNotificationArchive
+            {
+                fn handle(&self) -> &str {
+                    &self.handle
+                }
+
+                fn qualification(
+                    &self,
+                ) -> Result<
+                    sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1,
+                    sorafs_node::moderation_orchestrator::ModerationRuntimeProviderReadinessErrorV1,
+                > {
+                    Ok(self.qualification)
+                }
+            }
+
+            impl sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveV1
+                for ServerTestModerationPanelNotificationArchive
+            {
+                fn archive_id(&self) -> [u8; 32] {
+                    self.archive_id
+                }
+
+                fn signing_public_key(&self) -> [u8; 32] {
+                    self.public_key
+                }
+
+                fn install(
+                    &self,
+                    operation_id: [u8; 32],
+                    receipt_message: [u8; 32],
+                    canonical_artifact: &[u8],
+                ) -> Result<
+                    [u8; 64],
+                    sorafs_node::moderation_orchestrator::
+                        ModerationPanelNotificationArchiveExternalErrorV1,
+                >{
+                    self.install_calls.fetch_add(1, Ordering::AcqRel);
+                    if operation_id != self.expected_operation_id
+                        || receipt_message != self.expected_receipt_message
+                        || canonical_artifact != self.expected_artifact.as_slice()
+                    {
+                        return Err(
+                            sorafs_node::moderation_orchestrator::
+                                ModerationPanelNotificationArchiveExternalErrorV1::Rejected,
+                        );
+                    }
+                    let mut installed = self
+                        .installed
+                        .lock()
+                        .expect("moderation archive fixture lock");
+                    if installed.is_some() {
+                        return Ok(self.expected_signature);
+                    }
+                    *installed = Some(
+                        sorafs_node::moderation_orchestrator::
+                            ModerationPanelNotificationArchiveReadbackV1 {
+                                canonical_artifact: canonical_artifact.to_vec(),
+                                signature: self.expected_signature,
+                            },
+                    );
+                    Ok(self.expected_signature)
+                }
+
+                fn read(
+                    &self,
+                    operation_id: [u8; 32],
+                ) -> Result<
+                    Option<
+                        sorafs_node::moderation_orchestrator::
+                            ModerationPanelNotificationArchiveReadbackV1,
+                    >,
+                    sorafs_node::moderation_orchestrator::
+                        ModerationPanelNotificationArchiveExternalErrorV1,
+                >{
+                    if operation_id != self.expected_operation_id {
+                        return Ok(None);
+                    }
+                    Ok(self
+                        .installed
+                        .lock()
+                        .expect("moderation archive fixture lock")
+                        .clone())
+                }
+            }
+
+            #[derive(Debug)]
             struct ServerTestModerationHandoffBoundary {
                 handle: String,
                 kind: sorafs_node::moderation_orchestrator::ModerationTerminalHandoffKindV1,
@@ -30501,6 +32616,12 @@ mod protocol {
                 delivery_calls: AtomicU64,
                 delivered: AtomicBool,
                 retained: Mutex<Vec<([u8; 32], Vec<u8>)>>,
+                published_heads: Mutex<
+                    Vec<
+                        sorafs_node::moderation_orchestrator::
+                            ModerationPanelNotificationArchiveHeadV1,
+                    >,
+                >,
             }
 
             impl ServerTestModerationHandoffBoundary {
@@ -30525,6 +32646,7 @@ mod protocol {
                         delivery_calls: AtomicU64::new(0),
                         delivered: AtomicBool::new(false),
                         retained: Mutex::new(Vec::new()),
+                        published_heads: Mutex::new(Vec::new()),
                     }
                 }
 
@@ -30627,6 +32749,109 @@ mod protocol {
                     ));
                     self.delivered.store(true, Ordering::Release);
                     Ok(Outcome::Delivered)
+                }
+
+                fn publish_archive_head_once(
+                    &self,
+                    request: &iroha_torii::sorafs::moderation_runtime::
+                        ModerationDurableArchiveHeadPublicationRequestV1,
+                ) -> Result<
+                    iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffOutcomeV1,
+                    iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffFailureV1,
+                > {
+                    use iroha_torii::sorafs::moderation_runtime::{
+                        ModerationDurableHandoffFailureV1 as Failure,
+                        ModerationDurableHandoffOutcomeV1 as Outcome,
+                    };
+
+                    self.delivery_calls.fetch_add(1, Ordering::Relaxed);
+                    match self.mode {
+                        ServerTestModerationDeliveryMode::NotDelivered => {
+                            return Err(Failure::NotDelivered);
+                        }
+                        ServerTestModerationDeliveryMode::Ambiguous => {
+                            return Err(Failure::Ambiguous);
+                        }
+                        ServerTestModerationDeliveryMode::Permanent => {
+                            return Err(Failure::Permanent);
+                        }
+                        ServerTestModerationDeliveryMode::Exact
+                        | ServerTestModerationDeliveryMode::DriftAfterDelivery
+                        | ServerTestModerationDeliveryMode::DriftOnSecondQualification
+                        | ServerTestModerationDeliveryMode::InvalidReceipt => {}
+                    }
+                    if self.kind
+                        != sorafs_node::moderation_orchestrator::
+                            ModerationTerminalHandoffKindV1::Publication
+                        || norito::to_bytes(&request.head).ok().as_deref()
+                            != Some(request.canonical_head.as_slice())
+                        || request
+                            .head
+                            .verify(
+                                &request.head.archive_handle,
+                                sorafs_node::moderation_orchestrator::
+                                    ModerationRuntimeProviderQualificationV1::new(
+                                        request.head.archive_revision,
+                                        request.head.archive_policy_digest,
+                                    ),
+                                request.head.archive_id,
+                                request.head.archive_public_key,
+                            )
+                            .is_err()
+                    {
+                        return Err(Failure::Permanent);
+                    }
+                    let mut heads = self
+                        .published_heads
+                        .lock()
+                        .expect("published archive-head retention lock");
+                    if let Some(existing) = heads
+                        .iter()
+                        .find(|head| head.operation_id == request.head.operation_id)
+                    {
+                        return if existing == &request.head {
+                            Ok(Outcome::AlreadyDelivered)
+                        } else {
+                            Err(Failure::Permanent)
+                        };
+                    }
+                    let monotonic = heads
+                        .last()
+                        .map_or(request.head.generation == 1, |previous| {
+                            previous.generation.checked_add(1) == Some(request.head.generation)
+                                && request.head.predecessor_head_digest
+                                    == Some(previous.head_digest)
+                                && request.head.predecessor_operation_id
+                                    == Some(previous.operation_id)
+                                && request.head.predecessor_chain_commitment
+                                    == Some(previous.chain_commitment)
+                                && request.head.source_checkpoint_generation
+                                    > previous.source_checkpoint_generation
+                                && request.head.chain_id == previous.chain_id
+                        });
+                    if !monotonic {
+                        return Err(Failure::Permanent);
+                    }
+                    heads.push(request.head.clone());
+                    self.delivered.store(true, Ordering::Release);
+                    Ok(Outcome::Delivered)
+                }
+
+                fn read_published_archive_head(
+                    &self,
+                ) -> Result<
+                    Option<
+                        sorafs_node::moderation_orchestrator::
+                            ModerationPanelNotificationArchiveHeadV1,
+                    >,
+                    iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffFailureV1,
+                >{
+                    Ok(self
+                        .published_heads
+                        .lock()
+                        .expect("published archive-head retention lock")
+                        .last()
+                        .cloned())
                 }
             }
 
@@ -31628,10 +33853,29 @@ mod protocol {
                     case_id: "case-1".to_owned(),
                     round_id: "round-1".to_owned(),
                     outcome_digest: [0x32; 32],
+                    outcome_finalized_at_unix_ms: 7,
                     finalized_cursor:
-                        sorafs_node::moderation_orchestrator::ModerationFinalizedCursorV1 {
-                            height: 7,
+                        sorafs_node::moderation_orchestrator::ModerationFinalizedEventCursorV1 {
+                            sequence: 1,
+                            block_height: 7,
                             block_hash: [0x44; 32],
+                            event_index: 0,
+                        },
+                    source_event_witness:
+                        sorafs_node::moderation_orchestrator::ModerationFinalizedEventV1 {
+                            sequence: 1,
+                            block_height: 7,
+                            block_hash: [0x44; 32],
+                            event_index: 0,
+                            event: iroha_data_model::events::data::sorafs::
+                                SorafsModerationLedgerEvent::new(
+                                    iroha_data_model::events::data::sorafs::
+                                        SorafsModerationLedgerEventKind::CaseFinalized,
+                                    Some("case-1".to_owned()),
+                                    Some("round-1".to_owned()),
+                                    account(42),
+                                    7,
+                                ),
                         },
                 };
                 let canonical_handoff =
@@ -33009,9 +35253,12 @@ mod protocol {
                     evidence_viewer_receipt_signer_public_key: None,
                     evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
+                    moderation_checkpoint_max_bytes: None,
+                    moderation_checkpoint_attestation_public_key: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
                     evidence_viewer_archive_max_bytes: None,
+                    moderation_panel_notification_archive_binding: None,
                 }
             }
 
@@ -33438,9 +35685,12 @@ mod protocol {
                     evidence_viewer_receipt_signer_public_key: None,
                     evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
+                    moderation_checkpoint_max_bytes: None,
+                    moderation_checkpoint_attestation_public_key: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
                     evidence_viewer_archive_max_bytes: None,
+                    moderation_panel_notification_archive_binding: None,
                 }
             }
 
@@ -33474,9 +35724,12 @@ mod protocol {
                     evidence_viewer_receipt_signer_public_key: None,
                     evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
+                    moderation_checkpoint_max_bytes: None,
+                    moderation_checkpoint_attestation_public_key: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
                     evidence_viewer_archive_max_bytes: None,
+                    moderation_panel_notification_archive_binding: None,
                 }
             }
 
@@ -33510,9 +35763,12 @@ mod protocol {
                     evidence_viewer_receipt_signer_public_key: None,
                     evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
+                    moderation_checkpoint_max_bytes: None,
+                    moderation_checkpoint_attestation_public_key: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
                     evidence_viewer_archive_max_bytes: None,
+                    moderation_panel_notification_archive_binding: None,
                 };
                 match slot {
                     IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn => {
@@ -33538,12 +35794,27 @@ mod protocol {
                         binding.evidence_viewer_archive_max_bytes =
                             Some(64 * 1024 * 1024 + 16 * 1024);
                     }
+                    IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive => {
+                        binding.moderation_panel_notification_archive_binding =
+                            Some(ModerationPanelNotificationArchiveBindingWireV1 {
+                                archive_id: [0xC8; 32],
+                                bootstrap_public_key: TEST_SIGNER_KEY,
+                                public_key: TEST_SIGNER_KEY,
+                                max_bytes: 64 * 1024 * 1024 + 16 * 1024,
+                                max_records: 4_096,
+                            });
+                    }
+                    IrohaRuntimeProviderSlotV1::ModerationCheckpointStore => {
+                        binding.moderation_checkpoint_max_bytes = Some(32 * 1024 * 1024);
+                        binding.moderation_checkpoint_attestation_public_key =
+                            Some(TEST_SIGNER_KEY);
+                    }
                     IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher => {
                         binding.evidence_viewer_transparency_publisher_public_key =
                             Some(TEST_SIGNER_KEY);
                     }
                     IrohaRuntimeProviderSlotV1::EvidenceViewerErasure => {}
-                    _ => panic!("not an evidence-viewer slot"),
+                    _ => panic!("not an evidence-viewer or moderation runtime slot"),
                 }
                 binding
             }
@@ -33582,6 +35853,20 @@ mod protocol {
                 } else {
                     None
                 };
+                let moderation_panel_notification_archive_binding = if binding.slot
+                    == IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id()
+                {
+                    binding.moderation_panel_notification_archive_binding
+                } else {
+                    None
+                };
+                let moderation_checkpoint_attestation_public_key = if binding.slot
+                    == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id()
+                {
+                    binding.moderation_checkpoint_attestation_public_key
+                } else {
+                    None
+                };
                 ProviderObservationWireV1 {
                     binding: binding.clone(),
                     metadata_digest: provider_metadata_digest(
@@ -33593,6 +35878,8 @@ mod protocol {
                         &evidence_viewer_receipt_signer_public_key,
                         &evidence_viewer_archive_id,
                         &evidence_viewer_archive_public_key,
+                        &moderation_checkpoint_attestation_public_key,
+                        &moderation_panel_notification_archive_binding,
                     )
                     .expect("encode test provider metadata"),
                     signer_metadata,
@@ -33603,6 +35890,8 @@ mod protocol {
                     evidence_viewer_receipt_signer_public_key,
                     evidence_viewer_archive_id,
                     evidence_viewer_archive_public_key,
+                    moderation_checkpoint_attestation_public_key,
+                    moderation_panel_notification_archive_binding,
                 }
             }
 
@@ -33616,6 +35905,8 @@ mod protocol {
                     &observed.evidence_viewer_receipt_signer_public_key,
                     &observed.evidence_viewer_archive_id,
                     &observed.evidence_viewer_archive_public_key,
+                    &observed.moderation_checkpoint_attestation_public_key,
+                    &observed.moderation_panel_notification_archive_binding,
                 )
                 .expect("encode mutated test provider metadata");
             }
@@ -33635,7 +35926,21 @@ mod protocol {
                     payload,
                 )
                 .expect("construct evidence-viewer operation");
-                validate_operation_request(&request).expect("validate evidence-viewer operation");
+                if matches!(
+                    operation,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1
+                        | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1
+                        | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1
+                        | OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1
+                        | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1
+                        | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1
+                ) {
+                    validate_operation_request_for_session(&request, "server-test-chain")
+                        .expect("validate chain-bound moderation archive operation");
+                } else {
+                    validate_operation_request(&request)
+                        .expect("validate evidence-viewer operation");
+                }
                 request
             }
 
@@ -33984,9 +36289,12 @@ mod protocol {
                     evidence_viewer_receipt_signer_public_key: None,
                     evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
+                    moderation_checkpoint_max_bytes: None,
+                    moderation_checkpoint_attestation_public_key: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
                     evidence_viewer_archive_max_bytes: None,
+                    moderation_panel_notification_archive_binding: None,
                 }
             }
 
@@ -35454,9 +37762,12 @@ mod protocol {
                     evidence_viewer_receipt_signer_public_key: None,
                     evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
+                    moderation_checkpoint_max_bytes: None,
+                    moderation_checkpoint_attestation_public_key: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
                     evidence_viewer_archive_max_bytes: None,
+                    moderation_panel_notification_archive_binding: None,
                 };
                 let fetch = ProviderIngestSourceFetchRequestWireV1 {
                     authorization: test_source_authorization(17),
@@ -41366,7 +43677,7 @@ mod protocol {
             }
 
             #[test]
-            fn evidence_viewer_wire_bindings_and_observations_are_exactly_slot_shaped() {
+            fn evidence_viewer_and_moderation_archive_wire_shapes_are_exact() {
                 assert_eq!(
                     validate_exact_backend_set(&[], &RuntimeProviderBrokerBackendsV1::new()),
                     Ok(())
@@ -41378,6 +43689,7 @@ mod protocol {
                     IrohaRuntimeProviderSlotV1::EvidenceViewerErasure,
                     IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore,
                     IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive,
+                    IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive,
                     IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher,
                 ] {
                     let binding = evidence_viewer_binding(slot);
@@ -41430,6 +43742,777 @@ mod protocol {
                 assert_eq!(
                     validate_observation(&archive, &substituted_archive),
                     Err(BrokerError::BindingMismatch)
+                );
+            }
+
+            #[test]
+            fn moderation_archive_pre_dispatch_validation_is_slot_exact_and_body_bounded() {
+                let moderation_archive = evidence_viewer_binding(
+                    IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive,
+                );
+                let unit = encode_canonical(
+                    &ModerationPanelNotificationArchiveQualifyRequestWireV1 {
+                        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                        slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                            .wire_id(),
+                        chain_id: "server-test-chain".to_owned(),
+                    },
+                    MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                )
+                .expect("encode archive qualification");
+                let qualify = validated_test_operation(
+                    moderation_archive.clone(),
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1,
+                    unit,
+                );
+                assert_eq!(
+                    validate_operation_request_for_session(&qualify, "server-test-chain"),
+                    Ok(())
+                );
+
+                let install_payload = encode_canonical(
+                    &ModerationPanelNotificationArchiveInstallRequestWireV1 {
+                        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                        slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                            .wire_id(),
+                        chain_id: "server-test-chain".to_owned(),
+                        operation_id: [0xA1; 32],
+                        receipt_message: [0xA2; 32],
+                        canonical_artifact: vec![0xA3],
+                    },
+                    MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+                )
+                .expect("encode moderation archive install");
+                let install = validated_test_operation(
+                    moderation_archive.clone(),
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1,
+                    install_payload.clone(),
+                );
+                assert_eq!(
+                    validate_operation_request_for_session(&install, "server-test-chain"),
+                    Ok(())
+                );
+
+                let read_payload = encode_canonical(
+                    &ModerationPanelNotificationArchiveReadRequestWireV1 {
+                        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                        slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                            .wire_id(),
+                        chain_id: "server-test-chain".to_owned(),
+                        operation_id: [0xA1; 32],
+                    },
+                    MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                )
+                .expect("encode moderation archive read");
+                let read = validated_test_operation(
+                    moderation_archive.clone(),
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1,
+                    read_payload,
+                );
+                assert_eq!(
+                    validate_operation_request_for_session(&read, "server-test-chain"),
+                    Ok(())
+                );
+
+                let evidence_archive = evidence_viewer_binding(
+                    IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive,
+                );
+                let cross_slot = make_operation_request(
+                    TEST_SESSION_ID,
+                    91,
+                    evidence_archive.clone(),
+                    observation(&evidence_archive).metadata_digest,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1,
+                    install_payload.clone(),
+                )
+                .expect("seal cross-slot archive operation");
+                assert_eq!(
+                    validate_operation_request_for_session(&cross_slot, "server-test-chain"),
+                    Err(BrokerError::BindingMismatch)
+                );
+                for (request_id, operation, payload) in [
+                    (
+                        93,
+                        OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1,
+                        encode_canonical(
+                            &ModerationPanelNotificationArchiveQualifyRequestWireV1 {
+                                version:
+                                    MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                                slot:
+                                    IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                                        .wire_id(),
+                                chain_id: "server-test-chain".to_owned(),
+                            },
+                            MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                        )
+                        .expect("encode cross-slot moderation qualification"),
+                    ),
+                    (
+                        94,
+                        OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1,
+                        install_payload.clone(),
+                    ),
+                    (
+                        95,
+                        OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1,
+                        encode_canonical(
+                            &ModerationPanelNotificationArchiveReadRequestWireV1 {
+                                version:
+                                    MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                                slot:
+                                    IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                                        .wire_id(),
+                                chain_id: "server-test-chain".to_owned(),
+                                operation_id: [0xA1; 32],
+                            },
+                            MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                        )
+                        .expect("encode cross-slot moderation read"),
+                    ),
+                ] {
+                    let request = make_operation_request(
+                        TEST_SESSION_ID,
+                        request_id,
+                        evidence_archive.clone(),
+                        observation(&evidence_archive).metadata_digest,
+                        operation,
+                        payload,
+                    )
+                    .expect("seal moderation operation on evidence slot");
+                    assert_eq!(
+                        validate_operation_request_for_session(&request, "server-test-chain"),
+                        Err(BrokerError::BindingMismatch)
+                    );
+                }
+
+                for (request_id, operation, payload) in [
+                    (
+                        96,
+                        OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1,
+                        encode_canonical(
+                            &EvidenceViewerArchiveInstallRequestWireV1 {
+                                operation_id: [0xD1; 32],
+                                receipt_message: [0xD2; 32],
+                                canonical_artifact: vec![0xD3],
+                            },
+                            MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+                        )
+                        .expect("encode evidence archive install"),
+                    ),
+                    (
+                        97,
+                        OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1,
+                        encode_canonical(
+                            &EvidenceViewerArchiveReadRequestWireV1 {
+                                operation_id: [0xD1; 32],
+                            },
+                            MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                        )
+                        .expect("encode evidence archive read"),
+                    ),
+                ] {
+                    let request = make_operation_request(
+                        TEST_SESSION_ID,
+                        request_id,
+                        moderation_archive.clone(),
+                        observation(&moderation_archive).metadata_digest,
+                        operation,
+                        payload,
+                    )
+                    .expect("seal evidence operation on moderation slot");
+                    assert_eq!(
+                        validate_operation_request_for_session(&request, "server-test-chain"),
+                        Err(BrokerError::BindingMismatch)
+                    );
+                }
+
+                let mut one_byte_archive = moderation_archive;
+                one_byte_archive
+                    .moderation_panel_notification_archive_binding
+                    .as_mut()
+                    .expect("moderation archive binding")
+                    .max_bytes = 1;
+                assert_eq!(validate_wire_binding(&one_byte_archive), Ok(()));
+                let oversized_payload = encode_canonical(
+                    &ModerationPanelNotificationArchiveInstallRequestWireV1 {
+                        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                        slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                            .wire_id(),
+                        chain_id: "server-test-chain".to_owned(),
+                        operation_id: [0xB1; 32],
+                        receipt_message: [0xB2; 32],
+                        canonical_artifact: vec![0xB3, 0xB4],
+                    },
+                    MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+                )
+                .expect("encode over-bound moderation archive install");
+                let oversized = make_operation_request(
+                    TEST_SESSION_ID,
+                    92,
+                    one_byte_archive.clone(),
+                    observation(&one_byte_archive).metadata_digest,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1,
+                    oversized_payload,
+                )
+                .expect("seal over-bound archive operation");
+                assert_eq!(
+                    validate_operation_request_for_session(&oversized, "server-test-chain"),
+                    Err(BrokerError::Rejected)
+                );
+            }
+
+            #[test]
+            fn moderation_source_attestation_pre_dispatch_is_typed_chain_and_slot_exact() {
+                let checkpoint =
+                    evidence_viewer_binding(IrohaRuntimeProviderSlotV1::ModerationCheckpointStore);
+                let statement = sorafs_node::moderation_orchestrator::
+                    ModerationPanelNotificationSourceAttestationV1 {
+                        version: sorafs_node::moderation_orchestrator::
+                            MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
+                        attestor_slot: IrohaRuntimeProviderSlotV1::ModerationCheckpointStore
+                            .wire_id(),
+                        chain_id: "server-test-chain".to_owned(),
+                        checkpoint_namespace_digest: [0x31; 32],
+                        checkpoint_generation: 7,
+                        checkpoint_revision: [0x32; 32],
+                        checkpoint_digest: [0x33; 32],
+                        source_manifest_digest: [0x36; 32],
+                        terminal_set_digest: [0x34; 32],
+                        terminal_record_count: 1,
+                        first_notification_id: [0x35; 32],
+                        last_notification_id: [0x35; 32],
+                        attestor_handle: checkpoint.handle.clone(),
+                        attestor_revision: checkpoint.revision.expect("checkpoint revision"),
+                        attestor_policy_digest: checkpoint
+                            .policy_digest
+                            .expect("checkpoint policy"),
+                        attestor_public_key: checkpoint
+                            .moderation_checkpoint_attestation_public_key
+                            .expect("checkpoint attestation key"),
+                    };
+                let payload = encode_canonical(
+                    &ModerationPanelNotificationSourceAttestRequestWireV1 {
+                        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                        slot: IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id(),
+                        chain_id: "server-test-chain".to_owned(),
+                        statement: statement.clone(),
+                    },
+                    MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                )
+                .expect("encode typed source attestation");
+                let request = validated_test_operation(
+                    checkpoint.clone(),
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1,
+                    payload.clone(),
+                );
+                assert_eq!(
+                    validate_operation_request_for_session(&request, "server-test-chain"),
+                    Ok(())
+                );
+
+                let archive = evidence_viewer_binding(
+                    IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive,
+                );
+                let wrong_slot = make_operation_request(
+                    TEST_SESSION_ID,
+                    98,
+                    archive.clone(),
+                    observation(&archive).metadata_digest,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1,
+                    payload,
+                )
+                .expect("seal source attestation on archive slot");
+                assert_eq!(
+                    validate_operation_request_for_session(&wrong_slot, "server-test-chain"),
+                    Err(BrokerError::BindingMismatch)
+                );
+
+                let mut substituted = statement;
+                substituted.terminal_set_digest = [0; 32];
+                let substituted_payload = encode_canonical(
+                    &ModerationPanelNotificationSourceAttestRequestWireV1 {
+                        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                        slot: IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id(),
+                        chain_id: "server-test-chain".to_owned(),
+                        statement: substituted,
+                    },
+                    MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                )
+                .expect("encode substituted source attestation");
+                let substituted = make_operation_request(
+                    TEST_SESSION_ID,
+                    99,
+                    checkpoint.clone(),
+                    observation(&checkpoint).metadata_digest,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1,
+                    substituted_payload,
+                )
+                .expect("seal substituted source attestation");
+                assert_eq!(
+                    validate_operation_request_for_session(&substituted, "server-test-chain"),
+                    Err(BrokerError::Rejected)
+                );
+            }
+
+            #[test]
+            fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
+                let fixture = sorafs_node::moderation_orchestrator::
+                    moderation_panel_notification_archive_broker_fixture_v1()
+                    .expect("build genuine signed moderation archive fixture");
+                let catalog = IrohaRuntimeProviderBindingsV1::
+                    qualified_moderation_panel_notification_archive_for_test(
+                        &fixture,
+                        SERVER_TEST_MODERATION_PUBLICATION_HANDLE,
+                        7,
+                        TEST_POLICY_DIGEST,
+                    );
+                let checkpoint =
+                    Arc::new(ServerTestModerationCheckpointStore::from_fixture(&fixture));
+                let archive = Arc::new(ServerTestModerationPanelNotificationArchive::from_fixture(
+                    &fixture,
+                ));
+                let publication = Arc::new(ServerTestModerationHandoffBoundary::exact(
+                    sorafs_node::moderation_orchestrator::
+                        ModerationTerminalHandoffKindV1::Publication,
+                ));
+                let state = prepare_server_state(
+                    &catalog,
+                    RuntimeProviderBrokerBackendsV1::new()
+                        .with_moderation_publication_handoff(publication.clone())
+                        .with_moderation_checkpoint_store(checkpoint.clone())
+                        .with_moderation_panel_notification_archive(archive.clone()),
+                )
+                .expect("prepare exact moderation archive broker state");
+
+                let operation_for_slot =
+                    |request_id: u64, slot: IrohaRuntimeProviderSlotV1, operation, payload| {
+                        let index = state
+                            .catalog
+                            .iter()
+                            .position(|binding| binding.slot == slot.wire_id())
+                            .expect("fixture provider binding");
+                        make_operation_request(
+                            TEST_SESSION_ID,
+                            request_id,
+                            state.catalog[index].clone(),
+                            state.observations[index].metadata_digest,
+                            operation,
+                            payload,
+                        )
+                        .expect("seal fixture operation request")
+                    };
+
+                let mut substituted_receipt = fixture.validation.receipt_message;
+                substituted_receipt[0] ^= 1;
+                let substituted_install = operation_for_slot(
+                    1,
+                    IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1,
+                    encode_canonical(
+                        &ModerationPanelNotificationArchiveInstallRequestWireV1 {
+                            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                            slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                                .wire_id(),
+                            chain_id: fixture.chain_id.as_str().to_owned(),
+                            operation_id: fixture.validation.operation_id,
+                            receipt_message: substituted_receipt,
+                            canonical_artifact: fixture.canonical_artifact.clone(),
+                        },
+                        MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+                    )
+                    .expect("encode substituted archive install"),
+                );
+                validate_operation_request_for_session(
+                    &substituted_install,
+                    fixture.chain_id.as_str(),
+                )
+                .expect("substituted receipt is structurally canonical");
+                assert_eq!(
+                    dispatch_server_operation(&state, &substituted_install),
+                    Err(BrokerError::Rejected)
+                );
+                assert_eq!(
+                    archive.install_calls.load(Ordering::Acquire),
+                    0,
+                    "derived receipt substitution must be rejected before archive installation"
+                );
+
+                let install = operation_for_slot(
+                    2,
+                    IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1,
+                    encode_canonical(
+                        &ModerationPanelNotificationArchiveInstallRequestWireV1 {
+                            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                            slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                                .wire_id(),
+                            chain_id: fixture.chain_id.as_str().to_owned(),
+                            operation_id: fixture.validation.operation_id,
+                            receipt_message: fixture.validation.receipt_message,
+                            canonical_artifact: fixture.canonical_artifact.clone(),
+                        },
+                        MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+                    )
+                    .expect("encode exact archive install"),
+                );
+                validate_operation_request_for_session(&install, fixture.chain_id.as_str())
+                    .expect("validate exact archive install");
+                let install_result = dispatch_server_operation(&state, &install)
+                    .expect("install genuine archive fixture");
+                validate_operation_result(&install, STATUS_OK_V1, &install_result)
+                    .expect("validate exact archive install result");
+                let install_result = decode_canonical::<
+                    ModerationPanelNotificationArchiveInstallResultWireV1,
+                >(
+                    &install_result, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1
+                )
+                .expect("decode archive install result");
+                assert_eq!(install_result.signature, fixture.archive_signature);
+                assert_eq!(archive.install_calls.load(Ordering::Acquire), 1);
+
+                let read = operation_for_slot(
+                    3,
+                    IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1,
+                    encode_canonical(
+                        &ModerationPanelNotificationArchiveReadRequestWireV1 {
+                            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                            slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                                .wire_id(),
+                            chain_id: fixture.chain_id.as_str().to_owned(),
+                            operation_id: fixture.validation.operation_id,
+                        },
+                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                    )
+                    .expect("encode exact archive read"),
+                );
+                let readback =
+                    dispatch_server_operation(&state, &read).expect("read genuine archive fixture");
+                let readback = decode_canonical::<
+                    Option<ModerationPanelNotificationArchiveReadbackWireV1>,
+                >(&readback, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1)
+                .expect("decode exact archive readback")
+                .expect("installed fixture must be readable");
+                assert_eq!(
+                    readback.canonical_artifact.as_slice(),
+                    fixture.canonical_artifact.as_slice()
+                );
+                assert_eq!(readback.signature, fixture.archive_signature);
+
+                let mut substituted_statement = fixture.source_attestation.clone();
+                substituted_statement.terminal_set_digest[0] ^= 1;
+                let substituted_attestation = operation_for_slot(
+                    4,
+                    IrohaRuntimeProviderSlotV1::ModerationCheckpointStore,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1,
+                    encode_canonical(
+                        &ModerationPanelNotificationSourceAttestRequestWireV1 {
+                            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                            slot: IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id(),
+                            chain_id: fixture.chain_id.as_str().to_owned(),
+                            statement: substituted_statement,
+                        },
+                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                    )
+                    .expect("encode substituted source attestation"),
+                );
+                validate_operation_request_for_session(
+                    &substituted_attestation,
+                    fixture.chain_id.as_str(),
+                )
+                .expect("substituted source digest is structurally canonical");
+                assert_eq!(
+                    dispatch_server_operation(&state, &substituted_attestation),
+                    Err(BrokerError::Rejected)
+                );
+                assert_eq!(
+                    checkpoint.attest_calls.load(Ordering::Acquire),
+                    0,
+                    "source substitution must be rejected before the checkpoint HSM signs"
+                );
+
+                let attest = operation_for_slot(
+                    5,
+                    IrohaRuntimeProviderSlotV1::ModerationCheckpointStore,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1,
+                    encode_canonical(
+                        &ModerationPanelNotificationSourceAttestRequestWireV1 {
+                            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                            slot: IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id(),
+                            chain_id: fixture.chain_id.as_str().to_owned(),
+                            statement: fixture.source_attestation.clone(),
+                        },
+                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                    )
+                    .expect("encode exact source attestation"),
+                );
+                let attest_result = dispatch_server_operation(&state, &attest)
+                    .expect("attest genuine terminal set");
+                let attest_result = decode_canonical::<
+                    ModerationPanelNotificationSourceAttestResultWireV1,
+                >(
+                    &attest_result, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1
+                )
+                .expect("decode exact source attestation result");
+                assert_eq!(
+                    attest_result.statement_digest,
+                    fixture.validation.source_attestation_digest
+                );
+                fixture
+                    .source_attestation
+                    .verify(attest_result.signature)
+                    .expect("verify independently signed source attestation");
+                assert_eq!(checkpoint.attest_calls.load(Ordering::Acquire), 1);
+
+                let head = decode_canonical::<
+                    sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1,
+                >(
+                    &fixture.canonical_signed_head,
+                    MAX_MODERATION_HANDOFF_CANONICAL_BYTES_V1,
+                )
+                .expect("decode genuine signed archive head");
+                let archive_head_read_payload =
+                    encode_canonical(&(), MAX_MODERATION_HANDOFF_FRAME_BYTES_V1)
+                        .expect("encode archive-head read request");
+                let cross_slot_read = operation_for_slot(
+                    60,
+                    IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1,
+                    archive_head_read_payload.clone(),
+                );
+                assert_eq!(
+                    validate_operation_request_for_session(
+                        &cross_slot_read,
+                        fixture.chain_id.as_str(),
+                    ),
+                    Err(BrokerError::BindingMismatch)
+                );
+                assert_eq!(
+                    dispatch_server_operation(&state, &cross_slot_read),
+                    Err(BrokerError::BindingMismatch)
+                );
+
+                let mut trailing_read_payload = archive_head_read_payload.clone();
+                trailing_read_payload.push(0);
+                let trailing_read = operation_for_slot(
+                    61,
+                    IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1,
+                    trailing_read_payload,
+                );
+                assert_eq!(
+                    validate_operation_request_for_session(
+                        &trailing_read,
+                        fixture.chain_id.as_str(),
+                    ),
+                    Err(BrokerError::Protocol)
+                );
+                assert_eq!(
+                    dispatch_server_operation(&state, &trailing_read),
+                    Err(BrokerError::Protocol)
+                );
+
+                let empty_head_read = operation_for_slot(
+                    62,
+                    IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1,
+                    archive_head_read_payload.clone(),
+                );
+                validate_operation_request_for_session(
+                    &empty_head_read,
+                    fixture.chain_id.as_str(),
+                )
+                .expect("validate empty archive-head readback request");
+                let empty_head_read_result = dispatch_server_operation(&state, &empty_head_read)
+                    .expect("read empty public archive head");
+                validate_operation_result(
+                    &empty_head_read,
+                    STATUS_OK_V1,
+                    &empty_head_read_result,
+                )
+                .expect("validate empty archive-head readback result");
+                let empty_head_read_result = decode_canonical::<
+                    ModerationPanelNotificationArchiveHeadReadResultWireV1,
+                >(
+                    &empty_head_read_result, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1
+                )
+                .expect("decode empty archive-head readback");
+                assert_eq!(
+                    empty_head_read_result.version,
+                    MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
+                );
+                assert_eq!(
+                    empty_head_read_result.slot,
+                    IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id()
+                );
+                assert!(empty_head_read_result.canonical_head.is_none());
+                let publish_wire = ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
+                    version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                    slot: IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id(),
+                    chain_id: fixture.chain_id.as_str().to_owned(),
+                    head: head.clone(),
+                    canonical_head: fixture.canonical_signed_head.clone(),
+                };
+                let publish_payload =
+                    encode_canonical(&publish_wire, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1)
+                        .expect("encode exact archive-head publication");
+                let cross_slot_publish = operation_for_slot(
+                    6,
+                    IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1,
+                    publish_payload.clone(),
+                );
+                assert_eq!(
+                    validate_operation_request_for_session(
+                        &cross_slot_publish,
+                        fixture.chain_id.as_str(),
+                    ),
+                    Err(BrokerError::BindingMismatch)
+                );
+                assert_eq!(
+                    dispatch_server_operation(&state, &cross_slot_publish),
+                    Err(BrokerError::BindingMismatch)
+                );
+
+                let mut substituted_head = head;
+                substituted_head.source_checkpoint_revision[0] ^= 1;
+                let substituted_head_bytes =
+                    norito::to_bytes(&substituted_head).expect("encode substituted archive head");
+                let substituted_publish = operation_for_slot(
+                    7,
+                    IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1,
+                    encode_canonical(
+                        &ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
+                            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+                            slot: IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff
+                                .wire_id(),
+                            chain_id: fixture.chain_id.as_str().to_owned(),
+                            head: substituted_head,
+                            canonical_head: substituted_head_bytes,
+                        },
+                        MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
+                    )
+                    .expect("encode substituted archive-head publication"),
+                );
+                assert_eq!(
+                    validate_operation_request_for_session(
+                        &substituted_publish,
+                        fixture.chain_id.as_str(),
+                    ),
+                    Err(BrokerError::Rejected)
+                );
+                assert_eq!(
+                    dispatch_server_operation(&state, &substituted_publish),
+                    Err(BrokerError::Rejected)
+                );
+                let mut substituted_source_catalog = state.catalog.clone();
+                substituted_source_catalog
+                    .iter_mut()
+                    .find(|binding| {
+                        binding.slot
+                            == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id()
+                    })
+                    .expect("checkpoint fixture binding")
+                    .moderation_checkpoint_attestation_public_key = Some(TEST_SIGNER_KEY);
+                assert_eq!(
+                    validate_moderation_panel_notification_archive_head_at_broker_boundary(
+                        &fixture.canonical_signed_head,
+                        fixture.chain_id.as_str(),
+                        &substituted_source_catalog,
+                    ),
+                    Err(BrokerError::Rejected),
+                    "the independently administered checkpoint key is part of the head boundary"
+                );
+                let mut substituted_signer_catalog = state.catalog.clone();
+                substituted_signer_catalog
+                    .iter_mut()
+                    .find(|binding| {
+                        binding.slot
+                            == IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
+                                .wire_id()
+                    })
+                    .expect("archive fixture binding")
+                    .moderation_panel_notification_archive_binding
+                    .as_mut()
+                    .expect("exact archive fixture binding")
+                    .public_key = TEST_SIGNER_KEY;
+                assert_eq!(
+                    validate_moderation_panel_notification_archive_head_at_broker_boundary(
+                        &fixture.canonical_signed_head,
+                        fixture.chain_id.as_str(),
+                        &substituted_signer_catalog,
+                    ),
+                    Err(BrokerError::Rejected),
+                    "the sealed current signer epoch is part of the head boundary"
+                );
+                assert_eq!(
+                    publication.delivery_calls.load(Ordering::Acquire),
+                    0,
+                    "cross-slot and signed-head substitution must precede publication"
+                );
+
+                let publish = operation_for_slot(
+                    8,
+                    IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1,
+                    publish_payload,
+                );
+                validate_operation_request_for_session(&publish, fixture.chain_id.as_str())
+                    .expect("validate genuine archive-head publication");
+                let publish_result = dispatch_server_operation(&state, &publish)
+                    .expect("publish genuine signed archive head");
+                validate_operation_result(&publish, STATUS_OK_V1, &publish_result)
+                    .expect("validate dedicated archive-head result");
+                let publish_result = decode_canonical::<
+                    ModerationPanelNotificationArchiveHeadPublishResultWireV1,
+                >(
+                    &publish_result, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1
+                )
+                .expect("decode archive-head publication result");
+                assert_eq!(publish_result.operation_id, fixture.validation.operation_id);
+                assert_eq!(publish_result.head_digest, fixture.validation.head_digest);
+                assert_eq!(
+                    publish_result.chain_commitment,
+                    fixture.validation.chain_commitment
+                );
+                assert_eq!(publish_result.outcome, 1);
+                assert_eq!(publication.delivery_calls.load(Ordering::Acquire), 1);
+
+                let published_head_read = operation_for_slot(
+                    63,
+                    IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff,
+                    OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1,
+                    archive_head_read_payload,
+                );
+                validate_operation_request_for_session(
+                    &published_head_read,
+                    fixture.chain_id.as_str(),
+                )
+                .expect("validate published archive-head readback request");
+                let published_head_read_result =
+                    dispatch_server_operation(&state, &published_head_read)
+                        .expect("read exact public archive head");
+                validate_operation_result(
+                    &published_head_read,
+                    STATUS_OK_V1,
+                    &published_head_read_result,
+                )
+                .expect("validate published archive-head readback result");
+                let published_head_read_result = decode_canonical::<
+                    ModerationPanelNotificationArchiveHeadReadResultWireV1,
+                >(
+                    &published_head_read_result, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1
+                )
+                .expect("decode published archive-head readback");
+                assert_eq!(
+                    published_head_read_result.canonical_head.as_deref(),
+                    Some(fixture.canonical_signed_head.as_slice())
+                );
+                assert_eq!(
+                    publication.delivery_calls.load(Ordering::Acquire),
+                    1,
+                    "public head reads must never replay publication"
                 );
             }
 
@@ -41789,9 +44872,12 @@ mod protocol {
                     evidence_viewer_receipt_signer_public_key: None,
                     evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
+                    moderation_checkpoint_max_bytes: None,
+                    moderation_checkpoint_attestation_public_key: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
                     evidence_viewer_archive_max_bytes: None,
+                    moderation_panel_notification_archive_binding: None,
                 };
                 assert_eq!(validate_wire_binding(&source), Ok(()));
                 let mut source_observation = ProviderObservationWireV1 {
@@ -41804,6 +44890,8 @@ mod protocol {
                     evidence_viewer_receipt_signer_public_key: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
+                    moderation_checkpoint_attestation_public_key: None,
+                    moderation_panel_notification_archive_binding: None,
                     metadata_digest: [0; 32],
                 };
                 refresh_metadata_digest(&mut source_observation);
@@ -41857,9 +44945,12 @@ mod protocol {
                     evidence_viewer_receipt_signer_public_key: None,
                     evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
+                    moderation_checkpoint_max_bytes: None,
+                    moderation_checkpoint_attestation_public_key: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
                     evidence_viewer_archive_max_bytes: None,
+                    moderation_panel_notification_archive_binding: None,
                 };
                 assert_eq!(validate_wire_binding(&resolver), Ok(()));
                 let mut exact_minimum = resolver.clone();
@@ -41921,9 +45012,12 @@ mod protocol {
                     evidence_viewer_receipt_signer_public_key: None,
                     evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
+                    moderation_checkpoint_max_bytes: None,
+                    moderation_checkpoint_attestation_public_key: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
                     evidence_viewer_archive_max_bytes: None,
+                    moderation_panel_notification_archive_binding: None,
                 };
                 assert_eq!(validate_wire_binding(&checkpoint), Ok(()));
                 let checkpoint_load_payload = encode_canonical(
@@ -42029,9 +45123,12 @@ mod protocol {
                     evidence_viewer_receipt_signer_public_key: None,
                     evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
+                    moderation_checkpoint_max_bytes: None,
+                    moderation_checkpoint_attestation_public_key: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
                     evidence_viewer_archive_max_bytes: None,
+                    moderation_panel_notification_archive_binding: None,
                 };
                 assert_eq!(validate_wire_binding(&retention), Ok(()));
 

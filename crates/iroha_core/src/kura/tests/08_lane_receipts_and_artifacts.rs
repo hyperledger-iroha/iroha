@@ -1059,7 +1059,7 @@ fn lane_block_execution_input_rejects_forged_entrypoint_hashes() {
     forged.entrypoint_hashes[0] = Hash::new(b"forged lane execution input hash");
 
     assert!(
-        kura.write_lane_block_execution_input_artifact(&forged)
+        kura.write_lane_block_execution_input_artifact(&forged, None)
             .is_err(),
         "forged execution input hashes must not be persisted"
     );

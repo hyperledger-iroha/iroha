@@ -44,7 +44,7 @@ use thiserror::Error;
 
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::p256_external_binding_air::{
-    P256ExternalBindingFixedAccessV1, P256ExternalBindingTraceV1,
+    P256ExternalBindingFixedAccessV1, P256ExternalBindingRowV1, P256ExternalBindingTraceV1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::p256_value_bus::{
@@ -55,7 +55,7 @@ use super::{
     p256_ecdsa_air::P256EcdsaRoleV1,
     p256_external_binding_air::{
         P256_EXTERNAL_BINDINGS_PER_ROW_V1, P256ExternalBindingCrossExternalSourceV1,
-        P256ExternalBindingCrossSourceV1, P256ExternalBindingErrorV1, P256ExternalBindingRowV1,
+        P256ExternalBindingCrossSourceV1, P256ExternalBindingErrorV1,
         compile_zk_x509_p256_external_cross_sources_v1, p256_external_binding_active_equalities_v1,
         p256_external_binding_dynamic_sources_v1, p256_external_binding_rows_v1,
     },
@@ -195,9 +195,11 @@ pub(crate) enum P256CrossTraceEndpointV1 {
     /// Window, reduction, result-x, or low-s source cell.
     External,
     /// Arithmetic `c`-bit endpoint reserved for scalar-bit source binding.
+    #[cfg(test)]
     ScalarArithmetic,
     /// Canonical per-window bit endpoint reserved for scalar-bit source
     /// binding.
+    #[cfg(test)]
     ScalarWindow,
 }
 
@@ -206,7 +208,9 @@ impl P256CrossTraceEndpointV1 {
         match self {
             Self::Writer => F(1),
             Self::External => F(2),
+            #[cfg(test)]
             Self::ScalarArithmetic => F(3),
+            #[cfg(test)]
             Self::ScalarWindow => F(4),
         }
     }
@@ -378,6 +382,7 @@ pub(crate) struct P256CrossTraceRegularFixedRowV1 {
 }
 
 /// Challenge-dependent row for an ordinary product segment.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256CrossTraceRegularAuxRowV1 {
     /// Active-gated copies of actual committed source cells.
@@ -464,6 +469,7 @@ pub(crate) fn build_regular_row_v1(
 }
 
 /// Pure degree-two residues for one ordinary product row.
+#[cfg(test)]
 pub(crate) fn evaluate_zk_x509_p256_cross_trace_regular_row_constraints_v1(
     fixed: P256CrossTraceRegularFixedRowV1,
     source_values: [F; P256_CROSS_TRACE_EVENT_SLOTS_V1],
@@ -798,6 +804,7 @@ impl<'a> P256CrossTraceSinkStreamV1<'a> {
     }
 
     /// Exact fixed row corresponding to one streamed ordinal.
+    #[cfg(test)]
     pub(crate) fn fixed_row_v1(
         &self,
         row: usize,
@@ -812,6 +819,7 @@ impl<'a> P256CrossTraceSinkStreamV1<'a> {
     }
 
     /// Number of rows not yet emitted.
+    #[cfg(test)]
     pub(crate) const fn remaining_rows_v1(&self) -> usize {
         P256_CROSS_TRACE_SINK_TRACE_SIZE_V1 - self.next_row
     }
@@ -823,6 +831,7 @@ impl<'a> P256CrossTraceSinkStreamV1<'a> {
 }
 
 /// Pure sink residues over actual committed binder base cells.
+#[cfg(test)]
 pub(crate) fn evaluate_zk_x509_p256_cross_trace_sink_row_constraints_v1(
     fixed: P256CrossTraceSinkFixedRowV1,
     binding: &P256ExternalBindingRowV1,
@@ -848,6 +857,7 @@ pub(crate) fn evaluate_zk_x509_p256_cross_trace_sink_row_constraints_v1(
 /// Pure pointwise sink residues over the three committed writer/external
 /// equality pairs. Keeping these separate makes the local binding surface
 /// independently testable without allocating the complete sink product.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_zk_x509_p256_cross_trace_sink_local_constraints_v1(
     fixed: P256CrossTraceSinkFixedRowV1,
     binding: &P256ExternalBindingRowV1,
@@ -866,6 +876,7 @@ pub(crate) fn evaluate_zk_x509_p256_cross_trace_sink_local_constraints_v1(
     residues
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn sink_source_values_v1(
     binding: &P256ExternalBindingRowV1,
 ) -> [F; P256_CROSS_TRACE_EVENT_SLOTS_V1] {

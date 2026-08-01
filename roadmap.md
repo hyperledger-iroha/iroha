@@ -30,15 +30,15 @@ commands and the final reconciliation pass are recorded.
 
 ## SoraFS V1 Governance DAG deployment closure
 
-The standard outbound request path now has sealed cross-replica nonce fencing;
-completed source details and focused results live in `status.md`. Remaining
-work is deployment-owned: install the exact inbound verifier in both Kubo/head
-ingress administrations with receiver-side sealed replay state, package and
-supervise genuine HSM/authentication/sealed-CAS broker backends, finish bounded
-authenticated DAG block-prefix retention, and qualify two instances through
-CAS failover, signer rotation, rollback, public-mirror, corruption, outage, and
-disaster-recovery rehearsals. None of those external proofs may be replaced by
-the in-tree test provider or the outbound replay result.
+The standard outbound request path and exact inbound receiver now have sealed
+cross-replica nonce fencing, and bounded signed DAG block-prefix archive/readback
+is implemented; completed source details and focused results live in
+`status.md`. Remaining work is deployment-owned: install the receiver in both
+Kubo/head ingress administrations, package and supervise genuine
+HSM/authentication/sealed-CAS broker backends, and qualify two instances through
+CAS failover, signer rotation, archive recovery, rollback, public-mirror,
+corruption, outage, and disaster-recovery rehearsals. None of those external
+proofs may be replaced by an in-tree test provider or local source validation.
 
 ## Repository structure follow-ups
 
@@ -472,11 +472,11 @@ restart reads. Focused locked `sorafs_node` and `irohad` validation is green.
 All seven authenticated committed GET routes, strict JavaScript/TypeScript,
 Python, Kotlin/JVM, Java Android, Swift, and C# clients, and the
 canonical-account-signed Rust CLI/rollout collector are implemented locally.
-The genuine immutable historical-query, external threshold-signer, and
-authenticated Governance DAG deployment adapters, PoR/token callback-owner
-wiring, complete SDK/native and workspace validation, reviewed four-peer
-evidence, and promotion remain open. Latest, provider, weights, and event reads
-are gated on the fresh committed projection;
+Deployment qualification of the daemon-owned immutable historical query,
+genuine external threshold-signer and authenticated Governance DAG adapters,
+PoR/token callback-owner wiring, complete SDK/native and workspace validation,
+reviewed four-peer evidence, and promotion remain open. Latest, provider,
+weights, and event reads are gated on the fresh committed projection;
 snapshot-id reads resolve the exact authenticated snapshot from a durable
 immutable suffix capped at 1,024 entries and the publication-checkpoint byte
 ceiling. Unknown or evicted ids return `404` without substituting latest.

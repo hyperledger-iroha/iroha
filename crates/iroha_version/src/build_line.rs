@@ -37,13 +37,17 @@ impl BuildLine {
     /// Canonical first-release CLI binary name.
     #[must_use]
     pub const fn cli_bin(self) -> &'static str {
-        "iroha"
+        match self {
+            Self::Iroha2 | Self::Iroha3 => "iroha",
+        }
     }
 
     /// Canonical first-release daemon binary name.
     #[must_use]
     pub const fn daemon_bin(self) -> &'static str {
-        "irohad"
+        match self {
+            Self::Iroha2 | Self::Iroha3 => "irohad",
+        }
     }
 
     /// Whether this selector targets the Iroha 2 line.

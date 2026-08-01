@@ -1116,6 +1116,101 @@ fn ordered_release_barrier_is_nonselectable_idempotent_and_aba_safe() {
 }
 
 #[test]
+fn forgotten_release_requires_exact_fifo_membership_and_relative_order() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    let dir = tempdir().expect("tempdir");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    for _ in 0..2 {
+        push_globally_bound_lane_reservation_candidate(
+            &queue,
+            &state,
+            &dir,
+            accepted_tx_by_someone(&time_source),
+        );
+    }
+    let reserved = queue
+        .reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(
+                &state,
+                b"terminal-fifo-owner",
+                b"terminal-fifo-proposal",
+            ),
+            nonzero!(2_usize),
+        )
+        .expect("reserve terminal FIFO test batch");
+    let keys = reserved.iter().map(|tx| *tx.key()).collect::<Vec<_>>();
+    let barrier = lane_reservation_release_barrier(keys.clone(), b"terminal-fifo-retirement");
+    queue
+        .prepare_lane_reservation_release_barrier(&barrier)
+        .expect("prepare terminal FIFO test release");
+    assert_eq!(
+        queue
+            .finalize_lane_reservation_release_barrier(&barrier)
+            .expect("complete terminal FIFO test release"),
+        2
+    );
+
+    let first = keys[0].signed_transaction_hash;
+    let second = keys[1].signed_transaction_hash;
+    {
+        let _queue_guard = queue.push_remove_lock.lock();
+        assert_eq!(
+            queue.remove_hashes_from_fifo_locked(&HashSet::from([first])),
+            1
+        );
+    }
+    for failure in [
+        queue
+            .prepare_lane_reservation_release_barrier(&barrier)
+            .map(drop),
+        queue
+            .finalize_lane_reservation_release_barrier(&barrier)
+            .map(drop),
+    ] {
+        assert!(matches!(
+            failure,
+            Err(LaneQueueReservationError::InvalidIdentity(ref message))
+                if message.contains("lacks exact ordinary FIFO ownership")
+        ));
+    }
+
+    {
+        let _queue_guard = queue.push_remove_lock.lock();
+        queue.replace_fifo_locked(&[second, first]);
+    }
+    assert!(matches!(
+        queue.prepare_lane_reservation_release_barrier(&barrier),
+        Err(LaneQueueReservationError::InvalidIdentity(ref message))
+            if message.contains("lacks exact ordinary FIFO ownership")
+    ));
+    assert!(matches!(
+        queue.finalize_lane_reservation_release_barrier(&barrier),
+        Err(LaneQueueReservationError::InvalidIdentity(ref message))
+            if message.contains("lacks exact ordinary FIFO ownership")
+    ));
+
+    {
+        let _queue_guard = queue.push_remove_lock.lock();
+        queue.replace_fifo_locked(&[first, second]);
+    }
+    assert_eq!(
+        queue
+            .prepare_lane_reservation_release_barrier(&barrier)
+            .expect("exact terminal FIFO may remint a Queue proof"),
+        LaneQueueReservationOutcome::AlreadyFinalized
+    );
+    assert_eq!(
+        queue
+            .finalize_lane_reservation_release_barrier(&barrier)
+            .expect("exact terminal FIFO release retry is a stutter"),
+        0
+    );
+}
+
+#[test]
 fn ordered_release_restart_retains_barrier_until_explicit_evidence_gated_finalize() {
     for crash_after_completion in [false, true] {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());

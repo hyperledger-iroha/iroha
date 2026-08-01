@@ -147,7 +147,7 @@ static HANDSHAKE_BUCKET_COUNTS: [AtomicU64; HN] = [
 static HANDSHAKE_MS_SUM: AtomicU64 = AtomicU64::new(0);
 static HANDSHAKE_MS_COUNT: AtomicU64 = AtomicU64::new(0);
 
-/// Process-wide admission for the memory-hard SoraNet client puzzle.
+/// Process-wide admission for the memory-hard `SoraNet` client puzzle.
 ///
 /// Every outbound full-mesh dial used to run the Argon2 search inline on its
 /// async executor thread. Besides blocking unrelated network progress, a

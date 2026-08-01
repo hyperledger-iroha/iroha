@@ -364,6 +364,7 @@ impl ProducerContinuationHandoffToken {
     }
 
     /// Physical source class frozen before the source can retire.
+    #[cfg(test)]
     pub(crate) const fn source_class(self) -> ProducerContinuationSourceClass {
         self.source_class
     }
@@ -1831,6 +1832,24 @@ impl LeaderWireLifecycleStoreGate {
         self.mark_terminal(
             runtime,
             LeaderWireStableTerminalEvidence::Producer(producer_terminal),
+        )
+    }
+
+    /// Publish a body-backed stable terminal from a non-forgeable store receipt.
+    pub(crate) fn mark_durable_body_terminal(
+        &self,
+        runtime: &LeaderWireLifecycleRuntimeReceipt,
+        durable_body: &DurableBodyReceipt,
+    ) -> Result<(), String> {
+        self.mark_terminal(
+            runtime,
+            LeaderWireStableTerminalEvidence::DurableBody(
+                LeaderWireDurableBodyTerminalEvidence::from_receipt(
+                    durable_body,
+                    self.owner,
+                    runtime.owner,
+                ),
+            ),
         )
     }
 

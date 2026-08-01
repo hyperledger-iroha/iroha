@@ -66,7 +66,7 @@ pub(crate) enum ZkX509IoSegmentRoleV1 {
     /// Governed CA-membership accumulator segment.
     CaAccumulator,
     /// Exact signed-CRL governance-record commitment segment.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    #[cfg(test)]
     CrlCommitment,
     /// Output projection and disclosure segment.
     Projection,
@@ -328,6 +328,7 @@ pub(crate) fn build_zk_x509_io_base_tables_v1(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509IoTraceV1 {
     /// Number of globally bound endpoint byte accesses.
+    #[cfg(test)]
     pub(crate) const fn rows(&self) -> usize {
         self.execution.len()
     }
@@ -350,6 +351,7 @@ impl ZkX509IoTraceV1 {
     }
 
     /// Bind one endpoint's exact bytes to another segment's constrained cells.
+    #[cfg(test)]
     pub(crate) fn validate_endpoint_bytes(
         &self,
         channel: u32,
@@ -378,6 +380,7 @@ impl ZkX509IoTraceV1 {
 
     /// Bind all channel identifiers, lengths, and endpoint roles to the
     /// verifier-compiled topology rather than prover-selected metadata.
+    #[cfg(test)]
     pub(crate) fn validate_fixed_topology(
         &self,
         expected: &[ZkX509IoChannelDeclarationV1],
@@ -390,6 +393,7 @@ impl ZkX509IoTraceV1 {
     }
 
     /// Bind one public channel to verifier-supplied statement bytes.
+    #[cfg(test)]
     pub(crate) fn validate_public_channel(
         &self,
         channel: u32,

@@ -673,22 +673,6 @@ impl BlindIssuanceRequestTranscriptV1 {
     }
 }
 
-impl core::ops::Deref for PresentationTranscriptV1 {
-    type Target = ProofTranscriptCoreV1;
-
-    fn deref(&self) -> &Self::Target {
-        &self.core
-    }
-}
-
-impl core::ops::Deref for BlindIssuanceRequestTranscriptV1 {
-    type Target = ProofTranscriptCoreV1;
-
-    fn deref(&self) -> &Self::Target {
-        &self.core
-    }
-}
-
 impl ProofTranscriptCoreV1 {
     pub(crate) const fn matrix_seed(&self) -> MatrixSeedV1 {
         self.matrix_seed
@@ -1096,6 +1080,7 @@ pub(crate) fn derive_presentation_challenge_v1(
     derive_presentation_challenge_from_components_v1(binding, &[pre_challenge_commitments])
 }
 
+#[cfg(test)]
 fn derive_presentation_challenge_from_components_v1(
     binding: PresentationChallengeBindingV1,
     pre_challenge_commitment_components: &[&[u8]],
@@ -1328,9 +1313,10 @@ mod tests {
         core::array::from_fn(|index| challenge.centered_coefficient(index))
     }
 
-    fn presentation_transcript() -> PresentationTranscriptV1 {
+    fn presentation_transcript() -> ProofTranscriptCoreV1 {
         PresentationTranscriptV1::new(binding(), presentation_seed(), [0x95; 32])
             .expect("fully bound transcript")
+            .proof_core()
     }
 
     #[test]
@@ -1718,6 +1704,7 @@ mod tests {
             PresentationTranscriptV1::new(changed_binding, presentation_seed(), [0x95; 32])
                 .expect("binding");
         changed
+            .proof_core()
             .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
             .expect("stage");
         assert_ne!(first, second);
@@ -1725,6 +1712,7 @@ mod tests {
         let changed = PresentationTranscriptV1::new(binding(), presentation_seed(), [0x94; 32])
             .expect("relation binding");
         changed
+            .proof_core()
             .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
             .expect("stage");
         assert_ne!(first, second);

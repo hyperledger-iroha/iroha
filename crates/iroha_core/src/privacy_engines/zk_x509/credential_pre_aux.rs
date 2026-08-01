@@ -292,6 +292,7 @@ impl ZkX509CredentialPreAuxBindingV1 {
     }
 
     /// SHA word-memory and base-error-folding challenges.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) const fn sha_word(self) -> ZkX509ShaWordStarkChallengesV1 {
         self.main_post_base.sha_word()
     }

@@ -1965,3 +1965,131 @@ def test_inflight_layout_contract_rejects_refinement_claim_inflation(
     )
     errors = validate_fixture(tmp_path, module, contract)
     assert any("must not declare a production refinement" in error for error in errors)
+
+
+def test_inflight_layout_contract_rejects_kura_release_prefix_preflight_weakening(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/kura.rs"
+    replace_once(path, "if claim.stage > previous_stage", "if false")
+
+    errors = validate_fixture(tmp_path, module, contract)
+
+    assert any(
+        "Kura::transition_autonomous_lane_entrypoint_claims_locked" in error
+        and "if claim.stage > previous_stage" in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_kura_atomic_replace_order_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/kura.rs"
+    swap_ordered_once(path, ".write_all(bytes)", ".flush()")
+
+    errors = validate_fixture(tmp_path, module, contract)
+
+    assert any(
+        "ordered in-flight item Kura::write_atomic_synced_impl" in error
+        and "missing or reorders token" in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_missing_queue_release_pending_guard(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue.rs"
+    replace_once(
+        path,
+        "missing Queue release ownership cannot authorize pending Kura claims",
+        "missing Queue release ownership is accepted without Kura evidence",
+    )
+
+    errors = validate_fixture(tmp_path, module, contract)
+
+    assert any(
+        "Queue::prepare_lane_reservation_release_barrier_inner" in error
+        and "missing Queue release ownership cannot authorize pending Kura claims" in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_terminal_fifo_ownership_weakening(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue.rs"
+    replace_once(
+        path,
+        "for key in &barrier.ordered_keys {\n"
+        "            let hash = key.signed_transaction_hash;\n"
+        "            if !self.txs.contains_key(&hash)",
+        "for key in &barrier.ordered_keys {\n"
+        "            let hash = key.signed_transaction_hash;\n"
+        "            if false",
+    )
+
+    errors = validate_fixture(tmp_path, module, contract)
+
+    assert any(
+        "Queue::release_barrier_has_exact_fifo_ownership_locked" in error
+        and "self.txs.contains_key(&hash)" in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_disconnected_queue_to_kura_release_proof(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/kura.rs"
+    replace_once(
+        path,
+        "consume_for_claim_transition(queue_barrier)",
+        "disconnect_from_claim_transition(queue_barrier)",
+    )
+
+    errors = validate_fixture(tmp_path, module, contract)
+
+    assert any(
+        "ordered in-flight item Kura::finalize_autonomous_lane_slot_release_inner" in error
+        and "missing or reorders token" in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_queue_release_sink_reordering(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue.rs"
+    swap_ordered_once(
+        path,
+        "journal.complete_release(completion.clone())",
+        "journal.forget_release(completion.barrier.clone())",
+    )
+
+    errors = validate_fixture(tmp_path, module, contract)
+
+    assert any(
+        "ordered in-flight item Queue::finalize_lane_reservation_release_barrier_inner" in error
+        and "missing or reorders token" in error
+        for error in errors
+    ), errors

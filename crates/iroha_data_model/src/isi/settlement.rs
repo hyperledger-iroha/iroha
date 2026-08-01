@@ -392,7 +392,7 @@ isi! {
 impl DvpIsi {
     /// Stable wire identifier used by the instruction registry.
     pub const WIRE_ID: &'static str = "iroha.settlement.dvp";
-    /// Domain separator for the complete counterparty-authorized DvP intent.
+    /// Domain separator for the complete counterparty-authorized `DvP` intent.
     pub const INTENT_HASH_DOMAIN: &'static [u8] = b"iroha:settlement:dvp-intent:v1\0";
 
     /// Construct a `DvP` instruction enforcing basic invariants.
@@ -425,7 +425,7 @@ impl DvpIsi {
 impl PvpIsi {
     /// Stable wire identifier used by the instruction registry.
     pub const WIRE_ID: &'static str = "iroha.settlement.pvp";
-    /// Domain separator for the complete counterparty-authorized PvP intent.
+    /// Domain separator for the complete counterparty-authorized `PvP` intent.
     pub const INTENT_HASH_DOMAIN: &'static [u8] = b"iroha:settlement:pvp-intent:v1\0";
 
     /// Construct a `PvP` instruction enforcing basic invariants.

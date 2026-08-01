@@ -27,9 +27,9 @@ const SRC_V2_ED25519_DOMAIN: &[u8] = b"soranet.src.v2.ed25519";
 /// Canonical Blake3 domain separator for ML-DSA signing.
 const SRC_V2_MLDSA_DOMAIN: &[u8] = b"soranet.src.v2.mldsa65";
 
-/// Maximum encoded size of an SRCv2 certificate payload.
+/// Maximum encoded size of an `SRCv2` certificate payload.
 pub const SRC_V2_MAX_CERTIFICATE_BYTES: usize = 56 * 1024;
-/// Maximum encoded size of an SRCv2 certificate bundle.
+/// Maximum encoded size of an `SRCv2` certificate bundle.
 pub const SRC_V2_MAX_BUNDLE_BYTES: usize = 64 * 1024;
 /// Maximum number of transport endpoints in one certificate.
 pub const SRC_V2_MAX_ENDPOINTS: usize = 16;
@@ -784,9 +784,13 @@ impl RelayCertificateV2 {
         encoder.write_unsigned(Field::PqKemPublic as u64);
         encoder.write_bytes(&self.pq_kem_public, "certificate.pq_kem_public")?;
 
-        let encoded = encoder.finish();
-        validate_encoded_len(encoded.len(), SRC_V2_MAX_CERTIFICATE_BYTES, "certificate")?;
-        Ok(encoded)
+        let certificate_bytes = encoder.finish();
+        validate_encoded_len(
+            certificate_bytes.len(),
+            SRC_V2_MAX_CERTIFICATE_BYTES,
+            "certificate",
+        )?;
+        Ok(certificate_bytes)
     }
 
     /// Serialize the certificate payload to canonical CBOR bytes.
@@ -998,9 +1002,9 @@ impl RelayCertificateBundleV2 {
         encoder.write_bytes(&certificate, "bundle.certificate")?;
         encoder.write_unsigned(1);
         self.signatures.encode(&mut encoder)?;
-        let encoded = encoder.finish();
-        validate_encoded_len(encoded.len(), SRC_V2_MAX_BUNDLE_BYTES, "bundle")?;
-        Ok(encoded)
+        let bundle_bytes = encoder.finish();
+        validate_encoded_len(bundle_bytes.len(), SRC_V2_MAX_BUNDLE_BYTES, "bundle")?;
+        Ok(bundle_bytes)
     }
 
     /// Serialize the bundle to CBOR.
@@ -1759,7 +1763,7 @@ fn validate_container_len(
     }
     let minimum_bytes = len
         .checked_mul(2)
-        .ok_or(CertificateError::InvalidFieldValue {
+        .ok_or_else(|| CertificateError::InvalidFieldValue {
             field,
             reason: format!("map length {len} overflows its minimum encoded size"),
         })?;

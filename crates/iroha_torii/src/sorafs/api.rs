@@ -9729,6 +9729,10 @@ fn moderation_orchestrator_error_response(error: ModerationOrchestratorError) ->
         | ModerationOrchestratorError::CheckpointStoreAmbiguous
         | ModerationOrchestratorError::CheckpointStoreFenced
         | ModerationOrchestratorError::CheckpointStoreEquivocation
+        | ModerationOrchestratorError::PanelNotificationArchiveUnavailable
+        | ModerationOrchestratorError::PanelNotificationArchiveAmbiguous
+        | ModerationOrchestratorError::PanelNotificationArchiveRejected
+        | ModerationOrchestratorError::PanelNotificationArchiveInvalid
         | ModerationOrchestratorError::GenerationOverflow
         | ModerationOrchestratorError::StateLockPoisoned
         | ModerationOrchestratorError::CheckpointStoreLockPoisoned => (
@@ -16352,6 +16356,9 @@ async fn submit_sorafs_repair_transaction(
 struct ModerationMaintenancePassV1 {
     outcomes: Vec<sorafs_node::moderation_orchestrator::ModerationSubmitOutcomeV1>,
     delivered_panel_notifications: usize,
+    compacted_archive_batches: usize,
+    published_archive_heads: usize,
+    audited_archive_heads: u32,
     snapshot: sorafs_node::moderation_orchestrator::ModerationFinalizedLedgerSnapshotV1,
     durable_health: sorafs_node::moderation_orchestrator::ModerationOrchestratorDurableHealthV1,
 }
@@ -16361,9 +16368,52 @@ fn run_sorafs_moderation_maintenance_pass(
     maintenance_authority: AccountId,
     maintenance_batch_limit: usize,
 ) -> Result<ModerationMaintenancePassV1, ModerationOrchestratorError> {
+    let archive_batch_limit =
+        u32::try_from(maintenance_batch_limit.min(orchestrator.config().max_handoffs))
+            .unwrap_or(u32::MAX);
+    let mut compacted_archive_batches = 0_usize;
+    let mut published_archive_heads =
+        usize::from(orchestrator.reconcile_panel_notification_archive_publication()?);
+    let mut audited_archive_heads = orchestrator
+        .audit_panel_notification_archive(
+            sorafs_node::moderation_orchestrator::MODERATION_PANEL_NOTIFICATION_ARCHIVE_AUDIT_PAGE_MAX_V1,
+        )?
+        .verified_heads;
+    if orchestrator
+        .compact_panel_notification_receipts(archive_batch_limit)?
+        .is_some()
+    {
+        compacted_archive_batches = compacted_archive_batches.saturating_add(1);
+    }
+    published_archive_heads = published_archive_heads.saturating_add(usize::from(
+        orchestrator.reconcile_panel_notification_archive_publication()?,
+    ));
+    audited_archive_heads = audited_archive_heads.saturating_add(
+        orchestrator
+            .audit_panel_notification_archive(
+                sorafs_node::moderation_orchestrator::MODERATION_PANEL_NOTIFICATION_ARCHIVE_AUDIT_PAGE_MAX_V1,
+            )?
+            .verified_heads,
+    );
     let outcomes = orchestrator.run_maintenance(maintenance_authority, maintenance_batch_limit)?;
     let delivered_panel_notifications = orchestrator
         .deliver_due_panel_notifications(unix_timestamp_now_ms(), maintenance_batch_limit)?;
+    if orchestrator
+        .compact_panel_notification_receipts(archive_batch_limit)?
+        .is_some()
+    {
+        compacted_archive_batches = compacted_archive_batches.saturating_add(1);
+    }
+    published_archive_heads = published_archive_heads.saturating_add(usize::from(
+        orchestrator.reconcile_panel_notification_archive_publication()?,
+    ));
+    audited_archive_heads = audited_archive_heads.saturating_add(
+        orchestrator
+            .audit_panel_notification_archive(
+                sorafs_node::moderation_orchestrator::MODERATION_PANEL_NOTIFICATION_ARCHIVE_AUDIT_PAGE_MAX_V1,
+            )?
+            .verified_heads,
+    );
     let snapshot = orchestrator
         .snapshot()
         .ok_or(ModerationOrchestratorError::FinalizedReaderUnavailable)?;
@@ -16371,6 +16421,9 @@ fn run_sorafs_moderation_maintenance_pass(
     Ok(ModerationMaintenancePassV1 {
         outcomes,
         delivered_panel_notifications,
+        compacted_archive_batches,
+        published_archive_heads,
+        audited_archive_heads,
         snapshot,
         durable_health,
     })
@@ -16431,6 +16484,9 @@ fn finish_sorafs_moderation_maintenance_pass(
         pending_handoff_count = pass.durable_health.pending_handoffs,
         pending_panel_notification_count = pass.durable_health.pending_panel_notifications,
         delivered_panel_notification_count = pass.delivered_panel_notifications,
+        compacted_archive_batch_count = pass.compacted_archive_batches,
+        published_archive_head_count = pass.published_archive_heads,
+        audited_archive_head_count = pass.audited_archive_heads,
         "reconciled finalized SoraFS moderation state and deadline maintenance",
     );
 }
@@ -20135,6 +20191,10 @@ fn moderation_checkpoint_store_failures_map_to_service_unavailable() {
         ModerationOrchestratorError::CheckpointStoreFenced,
         ModerationOrchestratorError::CheckpointStoreEquivocation,
         ModerationOrchestratorError::CheckpointStoreLockPoisoned,
+        ModerationOrchestratorError::PanelNotificationArchiveUnavailable,
+        ModerationOrchestratorError::PanelNotificationArchiveAmbiguous,
+        ModerationOrchestratorError::PanelNotificationArchiveRejected,
+        ModerationOrchestratorError::PanelNotificationArchiveInvalid,
     ]
     .map(moderation_orchestrator_error_response);
 

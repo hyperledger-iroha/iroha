@@ -2091,6 +2091,8 @@ pub(crate) struct V2LanePayloadPlan {
 /// transaction contents.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AutonomousLaneReservationSlotPlan {
+    /// Exact frozen height-context identity used to derive both reservation hashes.
+    pub(crate) height_context_id: wire::HeightContextId,
     /// Lane allowed to reserve the queued work.
     pub(crate) lane_id: LaneId,
     /// Dataspace bound to the active lane route.
@@ -2134,6 +2136,7 @@ pub(crate) struct AutonomousLaneReservationSlotPlan {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct AutonomousLaneReservationSelectionAuthorization {
     scope: LaneQueueReservationScopeV1,
+    height_context_id: wire::HeightContextId,
     validator_count: u8,
     producer: u128,
 }
@@ -2143,6 +2146,14 @@ impl AutonomousLaneReservationSelectionAuthorization {
     #[must_use]
     pub(crate) const fn scope(&self) -> LaneQueueReservationScopeV1 {
         self.scope
+    }
+
+    /// Return the frozen height-context identity which committed the exact
+    /// predecessor, committee, quorum, QC domain, and producer into the slot's
+    /// reservation hashes.
+    #[must_use]
+    pub(crate) const fn height_context_id(&self) -> wire::HeightContextId {
+        self.height_context_id
     }
 
     /// Return the canonical committee width represented by the producer bit.
@@ -2158,9 +2169,12 @@ impl AutonomousLaneReservationSelectionAuthorization {
     }
 
     #[cfg(test)]
-    pub(crate) const fn single_validator_for_test(scope: LaneQueueReservationScopeV1) -> Self {
+    pub(crate) fn single_validator_for_test(scope: LaneQueueReservationScopeV1) -> Self {
         Self {
             scope,
+            height_context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"iroha:test:single-validator-reservation-height-context:v1",
+            ))),
             validator_count: 1,
             producer: 1,
         }
@@ -2199,6 +2213,7 @@ impl AutonomousLaneReservationSlotPlan {
             .ok_or(AutonomousLaneReservationSlotPlanError::InvalidQuorum)?;
         Ok(AutonomousLaneReservationSelectionAuthorization {
             scope: self.reservation_scope(),
+            height_context_id: self.height_context_id,
             validator_count,
             producer,
         })
@@ -2559,6 +2574,7 @@ fn assemble_autonomous_lane_reservation_slot(
         )?;
 
     Ok(AutonomousLaneReservationSlotPlan {
+        height_context_id: context.id(),
         lane_id,
         dataspace_id,
         lane_incarnation,

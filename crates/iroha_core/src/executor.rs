@@ -233,9 +233,6 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindFxCorridorPolicyRegistry(_)
         | SingularQueryBox::FindFxCorridorPolicyById(_)
         | SingularQueryBox::FindNftById(_) => NativeQueryAccess::AllLedger,
-
-        #[cfg(test)]
-        SingularQueryBox::__TestFallback => NativeQueryAccess::AllLedger,
     }
 }
 
@@ -382,19 +379,25 @@ fn native_iterable_query_access(
     if let Some(payload) =
         payload_for!(data_model_query::CommittedTransaction, CommittedTransaction)
     {
-        if any_exact!(payload; data_model_query::FindTransactions) {
+        if any_exact!(
+            payload;
+            data_model_query::transaction::prelude::FindTransactions
+        ) {
             return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
     }
     if let Some(payload) = payload_for!(iroha_data_model::block::SignedBlock, SignedBlock) {
-        if any_exact!(payload; data_model_query::FindBlocks) {
+        if any_exact!(payload; data_model_query::block::prelude::FindBlocks) {
             return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
     }
     if let Some(payload) = payload_for!(BlockHeader, BlockHeader) {
-        if any_exact!(payload; data_model_query::FindBlockHeaders) {
+        if any_exact!(
+            payload;
+            data_model_query::block::prelude::FindBlockHeaders
+        ) {
             return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());

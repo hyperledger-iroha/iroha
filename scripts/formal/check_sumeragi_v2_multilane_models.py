@@ -367,6 +367,7 @@ EXPECTED_CLOSURE_MUTATIONS = {
 EXPECTED_RELEASE_INVARIANT_SOURCE_PATHS = {
     "ML-MUT-API-01": (
         "crates/iroha_core/src/state.rs",
+        "crates/iroha_core/src/state/tests.rs",
         "crates/iroha_torii/src/routing.rs",
         "crates/iroha_torii/src/tests/routing.rs",
     ),

@@ -7,6 +7,7 @@
 /// Maximum bytes in one certificate or CRL DER document.
 pub(crate) const ZK_X509_DER_MAX_DOCUMENT_BYTES_V1: usize = 16 * 1024;
 /// Maximum content bytes in one DER value.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) const ZK_X509_DER_MAX_VALUE_BYTES_V1: usize = 16 * 1024;
 /// Maximum constructed-value nesting depth, counting the top-level value.
 pub(crate) const ZK_X509_DER_MAX_NESTING_DEPTH_V1: usize = 16;

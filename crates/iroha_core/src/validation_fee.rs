@@ -5434,7 +5434,7 @@ mod tests {
 
         let blocked = [
             (
-                InstructionBox::from(RepoInstructionBox::Initiate(repo_initiate(
+                InstructionBox::from(RepoInstructionBox::from(repo_initiate(
                     "repo_ds_cash",
                     &initiator,
                     &counterparty,
@@ -5444,7 +5444,7 @@ mod tests {
                 RepoIsi::WIRE_ID,
             ),
             (
-                InstructionBox::from(RepoInstructionBox::Initiate(repo_initiate(
+                InstructionBox::from(RepoInstructionBox::from(repo_initiate(
                     "repo_ds_collateral",
                     &initiator,
                     &counterparty,
@@ -5482,7 +5482,7 @@ mod tests {
         let non_ds = tx(
             1,
             vec![
-                RepoInstructionBox::Initiate(repo_initiate(
+                RepoInstructionBox::from(repo_initiate(
                     "repo_non_ds",
                     &initiator,
                     &counterparty,
@@ -5596,7 +5596,7 @@ mod tests {
         let trigger = Trigger::new(
             trigger_id.clone(),
             Action::new(
-                vec![InstructionBox::from(RepoInstructionBox::Initiate(
+                vec![InstructionBox::from(RepoInstructionBox::from(
                     repo_initiate(
                         "trigger_repo_ds",
                         &initiator,

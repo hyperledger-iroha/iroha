@@ -4189,10 +4189,8 @@ macro_rules! production_in_flight_first_release_state_body {
             && (history.ever_execution_input_durable & !carrier.execution_input_durable) == 0u128
             && (!history.ever_ready_qc_durable || carrier.ready_qc_durable)
             && history.reservation_committed_prefix <= queue.selected_count
-            && history.queue_plan_tombstoned_prefix
-                <= history.reservation_committed_prefix
-            && history.reservation_commit_forgotten_prefix
-                <= history.queue_plan_tombstoned_prefix
+            && history.queue_plan_tombstoned_prefix <= history.reservation_committed_prefix
+            && history.reservation_commit_forgotten_prefix <= history.queue_plan_tombstoned_prefix
             && history.pending_high_water <= release.pending_prefix
             && history.released_high_water <= release.released_prefix
             && (session.bodies & session.crashed) == 0u128
@@ -4661,8 +4659,7 @@ macro_rules! production_in_flight_first_release_transition_body {
                 )
             {
                 projection.actor == 0u128
-                    && before.history.reservation_committed_prefix
-                        < before.queue.selected_count
+                    && before.history.reservation_committed_prefix < before.queue.selected_count
                     && projection.target
                         == (before.history.reservation_committed_prefix + 1u64) as u128
                     && before.queue.plan_state
@@ -4677,9 +4674,7 @@ macro_rules! production_in_flight_first_release_transition_body {
                         == if before.history.reservation_committed_prefix + 1u64
                             == before.queue.selected_count
                         {
-                            refinement_tag_value!(
-                                IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED
-                            )
+                            refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED)
                         } else {
                             refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE)
                         }
@@ -4706,10 +4701,8 @@ macro_rules! production_in_flight_first_release_transition_body {
                 == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE)
             {
                 projection.actor == 0u128
-                    && before.history.reservation_committed_prefix
-                        == before.queue.selected_count
-                    && before.history.queue_plan_tombstoned_prefix
-                        < before.queue.selected_count
+                    && before.history.reservation_committed_prefix == before.queue.selected_count
+                    && before.history.queue_plan_tombstoned_prefix < before.queue.selected_count
                     && projection.target
                         == (before.history.queue_plan_tombstoned_prefix + 1u64) as u128
                     && before.queue.plan_state
@@ -4749,8 +4742,7 @@ macro_rules! production_in_flight_first_release_transition_body {
                 == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT)
             {
                 projection.actor == 0u128
-                    && before.history.queue_plan_tombstoned_prefix
-                        == before.queue.selected_count
+                    && before.history.queue_plan_tombstoned_prefix == before.queue.selected_count
                     && before.history.reservation_commit_forgotten_prefix
                         < before.queue.selected_count
                     && projection.target
@@ -4769,9 +4761,7 @@ macro_rules! production_in_flight_first_release_transition_body {
                                 IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN
                             )
                         } else {
-                            refinement_tag_value!(
-                                IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED
-                            )
+                            refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED)
                         }
                     && after.history.ever_queue_plan_v4 == before.history.ever_queue_plan_v4
                     && after.history.ever_reservation_v5 == before.history.ever_reservation_v5
@@ -8347,8 +8337,7 @@ pub(crate) const fn production_in_flight_first_release_terminal_owner(
         None
     } else if projection.queue.reservation_state
         == IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN
-        && projection.history.reservation_commit_forgotten_prefix
-            == projection.queue.selected_count
+        && projection.history.reservation_commit_forgotten_prefix == projection.queue.selected_count
     {
         Some(ProductionInFlightFirstReleaseTerminalOwnerProjection {
             ordinary_fifo_owner: false,

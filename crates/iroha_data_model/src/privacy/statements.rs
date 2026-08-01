@@ -231,7 +231,7 @@ impl BootleLanternIssuerPublicMatrixV1 {
     /// Rejects a first-column block with the wrong degree or a coefficient
     /// outside the canonical `0..12289` residue range.
     pub fn from_r512_first_column_blocks_v1(
-        first_column: [BootleLanternPolynomialV1; BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1],
+        first_column: &[BootleLanternPolynomialV1; BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1],
     ) -> Result<Self, BootleLanternIssuerPolicyValidationErrorV1> {
         for (row, polynomial) in first_column.iter().enumerate() {
             if polynomial.coefficients.len() != BOOTLE_LANTERN_RING_DEGREE_V1 {
@@ -289,22 +289,11 @@ impl BootleLanternIssuerPublicMatrixV1 {
         Ok(Self { entries })
     }
 
-    /// Validate the exact degree-512-to-eight-degree-64 negacyclic
-    /// multiplication-block structure and conservative public-key density.
-    ///
-    /// This method validates entry counts, coefficient counts, canonical
-    /// residues, and the all-zero sentinel before indexing any matrix entry,
-    /// so it is safe to call directly on untrusted decoded values.
-    ///
-    /// # Errors
-    ///
-    /// Rejects a non-Toeplitz block, an incorrect negacyclic `Y` shift, or a
-    /// public key whose eight first-column blocks are too sparse.
-    pub fn validate_r512_multiplication_structure_v1(
+    fn validate_matrix_entries_v1(
         &self,
+        dimension: usize,
+        degree: usize,
     ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
-        let dimension = BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1;
-        let degree = BOOTLE_LANTERN_RING_DEGREE_V1;
         let expected_entries = dimension * dimension;
         if self.entries.len() != expected_entries {
             return Err(
@@ -354,6 +343,26 @@ impl BootleLanternIssuerPublicMatrixV1 {
         if matrix_is_zero {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::AllZeroIssuerMatrix);
         }
+        Ok(())
+    }
+
+    /// Validate the exact degree-512-to-eight-degree-64 negacyclic
+    /// multiplication-block structure and conservative public-key density.
+    ///
+    /// This method validates entry counts, coefficient counts, canonical
+    /// residues, and the all-zero sentinel before indexing any matrix entry,
+    /// so it is safe to call directly on untrusted decoded values.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-Toeplitz block, an incorrect negacyclic `Y` shift, or a
+    /// public key whose eight first-column blocks are too sparse.
+    pub fn validate_r512_multiplication_structure_v1(
+        &self,
+    ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
+        let dimension = BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1;
+        let degree = BOOTLE_LANTERN_RING_DEGREE_V1;
+        self.validate_matrix_entries_v1(dimension, degree)?;
 
         for row in 0..dimension {
             for column in 0..dimension {

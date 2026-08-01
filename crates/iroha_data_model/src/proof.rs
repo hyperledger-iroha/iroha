@@ -1960,6 +1960,11 @@ impl ProofAttachmentList {
     ///
     /// The list is left unchanged when the appended value would violate an
     /// invariant.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the attachment count or canonical encoded frame
+    /// would exceed the first-release bounds.
     pub fn try_push(
         &mut self,
         attachment: ProofAttachment,
@@ -2145,10 +2150,8 @@ fn proof_attachment_list_base64_decoded_len(
 
     let padding = if encoded.ends_with("==") {
         2
-    } else if encoded.ends_with('=') {
-        1
     } else {
-        0
+        usize::from(encoded.ends_with('='))
     };
     let payload_len = encoded.len() - padding;
     let bytes = encoded.as_bytes();
@@ -2167,12 +2170,12 @@ fn proof_attachment_list_base64_decoded_len(
         1 => {
             payload_len % 4 == 3
                 && proof_attachment_list_base64_sextet(bytes[payload_len - 1])
-                    .is_some_and(|sextet| sextet & 0b11 == 0)
+                    .is_some_and(|sextet| sextet.trailing_zeros() >= 2)
         }
         2 => {
             payload_len % 4 == 2
                 && proof_attachment_list_base64_sextet(bytes[payload_len - 1])
-                    .is_some_and(|sextet| sextet & 0b1111 == 0)
+                    .is_some_and(|sextet| sextet.trailing_zeros() >= 4)
         }
         _ => false,
     };

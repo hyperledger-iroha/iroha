@@ -373,8 +373,7 @@ fn runtime_from_handshake(
         )
         .map_err(|err| {
             Error::HandshakeSoranet(format!(
-                "failed to load soranet revocation store at {}: {err}",
-                revocation_store_path
+                "failed to load soranet revocation store at {revocation_store_path}: {err}"
             ))
         })?
     } else {

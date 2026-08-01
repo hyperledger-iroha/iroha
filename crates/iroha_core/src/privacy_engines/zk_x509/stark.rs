@@ -2945,7 +2945,7 @@ fn role_field_v1(role: ZkX509IoSegmentRoleV1) -> F {
         ZkX509IoSegmentRoleV1::Sha256 => 2,
         ZkX509IoSegmentRoleV1::P256 => 3,
         ZkX509IoSegmentRoleV1::CaAccumulator => 4,
-        #[cfg(any(test, feature = "privacy-release-evidence"))]
+        #[cfg(test)]
         ZkX509IoSegmentRoleV1::CrlCommitment => 5,
         ZkX509IoSegmentRoleV1::Projection => 6,
         ZkX509IoSegmentRoleV1::PublicInput => 7,
@@ -4005,8 +4005,7 @@ fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> ZkX509StarkErrorV
         TransparentStarkErrorV1::InvalidGrinding
         | TransparentStarkErrorV1::ChallengeSamplingExhausted
         | TransparentStarkErrorV1::QuerySamplingExhausted => ZkX509StarkErrorV1::TranscriptMismatch,
-        TransparentStarkErrorV1::InvalidMerkleOpening
-        | TransparentStarkErrorV1::InvalidMerkleShape => ZkX509StarkErrorV1::TraceOpening,
+        TransparentStarkErrorV1::InvalidMerkleShape => ZkX509StarkErrorV1::TraceOpening,
         _ => ZkX509StarkErrorV1::InternalInvariant,
     }
 }
@@ -12040,7 +12039,7 @@ impl MainProjectionVerifierConstraintSourceV1 {
 
 /// Closed association between one implementation and one canonical MAIN
 /// native-log group. No proof or caller-provided integer selects a group.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 enum MainTraceGroupProviderV1<'a> {
     Log5(&'a mut MainP256Log5TraceGroupSourceV1<'a>),
     P256Scalar(&'a mut MainP256ScalarTraceGroupSourceV1<'a>),
@@ -12056,7 +12055,7 @@ enum MainTraceGroupProviderV1<'a> {
     TestLog16(&'a mut dyn MainTraceGroupSourceV1),
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 impl MainTraceGroupProviderV1<'_> {
     fn native_trace_log2_v1(&self) -> u8 {
         match self {

@@ -1,10 +1,11 @@
-//! Complete SHA-256 Boolean-circuit witness schedule for the zk-X509 AIR.
+//! Test-only SHA-256 Boolean-circuit oracle for the zk-X509 AIR.
 //!
 //! Every nonlinear operation is lowered to the degree-bounded Boolean gates in
 //! [`super::air`]. Rotations and shifts are wire aliases; every modular
 //! addition is a chain of constrained one-bit full adders. This module is the
 //! deterministic witness compiler intended for certificate, CRL, sparse-tree,
-//! transcript, and projection hashing.
+//! transcript, and projection hashing in differential tests. The release
+//! prover uses the word-oriented SHA AIR and never compiles this oracle.
 //!
 //! The global wire-copy argument binds execution-order gate accesses to the
 //! address-sorted SHA word-memory table, and the SHA call-bus STARK binds those

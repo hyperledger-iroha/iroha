@@ -370,7 +370,7 @@ impl Execute for RepoInstructionBox {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         match self {
-            RepoInstructionBox::Initiate(isi) => isi.execute(authority, state_transaction),
+            RepoInstructionBox::Initiate(isi) => (*isi).execute(authority, state_transaction),
             RepoInstructionBox::Reverse(isi) => isi.execute(authority, state_transaction),
             RepoInstructionBox::MarginCall(isi) => isi.execute(authority, state_transaction),
         }

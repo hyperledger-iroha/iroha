@@ -126,16 +126,34 @@ reservation-journal primitive seam. The fixed-width composed transition relation
 and source-bound. The autonomous FIFO selector consumes checked
 `SelectQueuePlanV4Conjunction` and `FsyncReservationV5` projections derived
 from the canonical slot authority and complete ordered reservation-group
-identity. The one-shot READY signer rederives that shared identity and exact
+identity. Queue then revalidates the live V4/V5 group and retains an exact
+per-transaction transition fence while Kura recomputes the slot hashes from
+the frozen height context, checks `ActivateKura`, and persists the local
+producer payload. The first autonomous execution-input append revalidates a
+repair-disabled exact payload/input pair, consumes a move-only authorization,
+and checks `PersistExecutionInput` before its indexed data/index sink; exact
+replay is a storage stutter. The one-shot READY signer rederives that shared identity and exact
 producer/signer committee bits, then consumes a checked `SignReady` projection
-immediately before signature construction. A separate pre-Kura
-reservation-batch direct-release path consumes
+immediately before signature construction. The first READY-QC Kura write now
+consumes an exact payload/certificate authorization, checks `PersistReadyQc`,
+and reaches the durable view-state sink only afterward; exact replay is a
+stutter. The first autonomous certified-session write consumes an exact
+source-bound authorization and checked `LaneCommit` projection before its
+durable latest-frontier sink; exact replay is also a stutter. The first Kura
+slot-retirement write now consumes an exact payload/group/retirement/path
+authorization and checked `PersistKuraRetirement` projection before the
+validated atomic view-state sink. Its claim-release continuation validates the
+whole on-disk group before mutation, accepts only canonical crash prefixes, and
+consumes a path-and-replacement-bound `AdvanceReleasePendingPrefix` or
+`AdvanceReleasedPrefix` authorization immediately before each synced atomic
+replacement. Invalid mixed-stage groups fail before any claim or temporary-file
+write, while exact restart prefixes and fully released retries stutter. A separate pre-Kura
+reservation-batch direct-release path uses the same complete-group predicate and consumes
 its checked `DirectReleased` projection under the Queue transition and FIFO
 locks immediately before the durable release append. Existing bounded
-consumers also check durable execution input/READY QC/lane Commit at merge
+consumers also recheck durable execution input/READY QC/lane Commit at merge
 source admission, canonical `ApplyCarrier` before the WSV commit sink, and the
-three ordered post-carrier Queue cleanup prefixes. Complete production trace
-extraction is not implemented.
+three ordered post-carrier Queue cleanup prefixes. Complete production trace extraction is not implemented.
 **Closure:** Open.
 **Evidence:** Current schema-5 structural/source binding, local checked
 reservation-journal transition evidence, and Rust/Verus composed relation.
@@ -183,6 +201,30 @@ reservation-group identity, and consumes checked QueuePlan-selection and V5
 fsync projections at the journal append. The READY signature boundary consumes
 its Kura-minted move-only authority only after checking the exact proposal,
 availability body, height context, committee geometry, and reservation group.
+The execution-input persistence boundary separately reconstructs the exact
+producer-authenticated payload and complete input, binds its canonical
+reservation group and authenticated writer witness, and consumes a checked
+`PersistExecutionInput` projection before the indexed Kura append.
+The READY-QC persistence boundary separately binds the exact certificate,
+payload, chain/epoch, producer, committee bitmap, and shared reservation group
+into a move-only authority, consumes it, and checks `PersistReadyQc` before the
+Kura view-state write. The autonomous certified-session boundary reconstructs
+the exact repair-disabled merge source, binds the immutable payload, durable
+input, READY/Commit signer intersection, canonical source bytes, and reservation
+group into a move-only authority, and consumes a checked `LaneCommit`
+projection before publishing the durable latest frontier. Exact replay is a
+storage stutter. The slot-retirement boundary independently binds the immutable
+payload and ordered reservation group, active committee/writer witness, exact
+retirement, and view-state path into a move-only authorization, then checks
+`PersistKuraRetirement` immediately before the durable view-state writer. The
+claim continuation preflights every main/temporary claim and the full canonical
+stage ordering before creating any replacement plan. Each planned replacement
+is pre-encoded and receives a one-shot exact-path/exact-bytes transition
+authorization; the authorization is consumed and its projection rechecked at
+the atomic synced replacement. The source ledger also binds the underlying
+temporary-file write, file sync, rename, persisted-file sync, symlink check, and
+directory sync order. These are bounded production seams, not the still-missing
+complete Rust trace-extraction theorem.
 The durable merge-source, canonical WSV commit, and post-carrier Queue cleanup
 consumers check their named projections against that same group identity. The
 pre-Kura reservation-batch direct-release linearization point separately

@@ -33,11 +33,11 @@ pub(crate) enum ZkX509AirErrorV1 {
     #[error("zk-X509 AIR range decomposition constraint failed")]
     RangeDecomposition,
     /// A selected bitwise gate equation is unsatisfied.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    #[cfg(test)]
     #[error("zk-X509 AIR bit-gate constraint failed")]
     BitGate,
     /// Gate selectors are not a one-hot fixed row.
-    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    #[cfg(test)]
     #[error("zk-X509 AIR gate selector constraint failed")]
     GateSelector,
 }
@@ -121,7 +121,7 @@ impl U32RangeAirRowV1 {
 /// Selectors are fixed preprocessing columns in the final segment.  Keeping
 /// them in this row type makes differential tests evaluate the exact equations
 /// that the verifier will mix into its composition polynomial.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BooleanGateAirRowV1 {
     /// Select `out = left AND right`.
@@ -142,7 +142,7 @@ pub(crate) struct BooleanGateAirRowV1 {
     pub(crate) carry_out: F,
 }
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 impl BooleanGateAirRowV1 {
     /// Canonical AND witness row.
     pub(crate) fn and(left: bool, right: bool) -> Self {

@@ -443,9 +443,6 @@ pub(crate) enum TransparentStarkErrorV1 {
     /// A Merkle tree or opening has an invalid shape.
     #[error("transparent STARK Merkle shape is invalid")]
     InvalidMerkleShape,
-    /// A Merkle opening does not match its root.
-    #[error("transparent STARK Merkle opening is invalid")]
-    InvalidMerkleOpening,
     /// Canonical transcript framing overflowed.
     #[error("transparent STARK transcript frame length overflow")]
     FrameLengthOverflow,
@@ -964,6 +961,7 @@ pub(crate) fn sample_trace_mask_v1<R: TryRngCore>(
 }
 
 /// Interpolate, sample a fresh mask, and evaluate one trace column's LDE.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn masked_trace_lde_column_v1<R: TryRngCore>(
     base_column: &[GoldilocksFieldV1],
     base_log_size: u8,
@@ -1062,7 +1060,7 @@ pub(crate) fn verify_sha256_merkle_path_v1(
         index >>= 1;
     }
     if index != 0 || leaf != *root {
-        return Err(TransparentStarkErrorV1::InvalidMerkleOpening);
+        return Err(TransparentStarkErrorV1::InvalidMerkleShape);
     }
     Ok(())
 }
@@ -2202,11 +2200,11 @@ mod tests {
         path[0][0] ^= 1;
         assert_eq!(
             verify_sha256_merkle_path_v1(domain, &tree.root(), leaves[3], 3, &path, 3),
-            Err(TransparentStarkErrorV1::InvalidMerkleOpening)
+            Err(TransparentStarkErrorV1::InvalidMerkleShape)
         );
         assert_eq!(
             verify_sha256_merkle_path_v1(b"other", &tree.root(), leaves[3], 3, &path, 3),
-            Err(TransparentStarkErrorV1::InvalidMerkleOpening)
+            Err(TransparentStarkErrorV1::InvalidMerkleShape)
         );
     }
 

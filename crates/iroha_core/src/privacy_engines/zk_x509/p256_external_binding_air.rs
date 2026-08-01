@@ -22,27 +22,28 @@ use thiserror::Error;
 
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::p256_trace::{P256EcdsaTraceMaterialV1, P256ReductionSourceV1};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
-    p256_air::ZkX509P256ArithmeticKindV1,
-    p256_reduction_air::{p256_low_s_limb_cell_v1, p256_reduction_limb_cells_v1},
-    p256_value_bus::{P256EqualityBindingV1, P256InitialValueKindV1, P256ValueBusBaseSourceV1},
-    p256_window_air::{
-        P256_WINDOW_ROWS_V1, P256WindowExternalAddressV1, p256_window_external_address_v1,
-        p256_window_external_limb_v1,
-    },
-};
-use super::{
-    p256_air::{P256_BASE_MODULUS_BE_V1, P256_SCALAR_MODULUS_BE_V1, ZkX509P256ModulusV1},
+    p256_air::ZkX509P256ModulusV1,
     p256_ecdsa_air::{P256EcdsaRoleV1, P256EcdsaWitnessV1},
     p256_group_air::{P256_CURVE_B_BE_V1, P256_TWO_SCALAR_ARITHMETIC_OPERATIONS_V1},
     p256_reduction_air::P256_REDUCTION_ROWS_V1,
-    p256_value_bus::{
-        P256_VALUE_BUS_LIMBS_V1, P256ValueBusBaseEndpointTraceV1, P256ValueBusErrorV1,
-        P256ValueIdV1, P256ValueKindV1, p256_value_bus_base_writer_limb_cell_v1,
-    },
+    p256_value_bus::{P256_VALUE_BUS_LIMBS_V1, P256ValueIdV1},
     p256_window_air::{
         P256_WINDOW_EXTERNAL_LIMBS_PER_ROW_V1, P256WindowCoordinateV1, P256WindowScalarV1,
+    },
+};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::{
+    p256_air::{P256_BASE_MODULUS_BE_V1, P256_SCALAR_MODULUS_BE_V1, ZkX509P256ArithmeticKindV1},
+    p256_reduction_air::{p256_low_s_limb_cell_v1, p256_reduction_limb_cells_v1},
+    p256_value_bus::{
+        P256EqualityBindingV1, P256InitialValueKindV1, P256ValueBusBaseEndpointTraceV1,
+        P256ValueBusBaseSourceV1, P256ValueBusErrorV1, P256ValueKindV1,
+        p256_value_bus_base_writer_limb_cell_v1,
+    },
+    p256_window_air::{
+        P256_WINDOW_ROWS_V1, P256WindowExternalAddressV1, p256_window_external_address_v1,
+        p256_window_external_limb_v1,
     },
 };
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
@@ -54,6 +55,7 @@ pub(crate) const P256_EXTERNAL_INITIAL_VALUES_V1: usize = 850;
 /// Verifier-owned constant initial values.
 pub(crate) const P256_EXTERNAL_CONSTANT_INITIAL_VALUES_V1: usize = 457;
 /// Input initial values with an explicit external or auxiliary owner.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) const P256_EXTERNAL_INPUT_INITIAL_VALUES_V1: usize = 393;
 /// Window candidate limbs bound across all 128 selectors.
 pub(crate) const P256_EXTERNAL_WINDOW_CANDIDATE_BINDINGS_V1: usize =
@@ -107,11 +109,16 @@ const GENERATOR_CONSTANTS_END_V1: usize = 47;
 const PUBLIC_KEY_X_ID_V1: u32 = 47;
 const PUBLIC_KEY_Y_ID_V1: u32 = 48;
 const PUBLIC_KEY_Z_ID_V1: u32 = 49;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const SIGNATURE_R_ID_V1: u32 = 52;
 const SIGNATURE_S_ID_V1: u32 = 53;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const R_INVERSE_ID_V1: u32 = 54;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const R_INVERSE_ONE_ID_V1: u32 = 55;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const S_INVERSE_ID_V1: u32 = 56;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const S_INVERSE_ONE_ID_V1: u32 = 57;
 const DIGEST_REDUCTION_OUTPUT_ID_V1: u32 = 58;
 const VARIABLE_IDENTITY_X_ID_V1: u32 = 59;
@@ -119,7 +126,9 @@ const VARIABLE_IDENTITY_Y_ID_V1: u32 = 60;
 const VARIABLE_IDENTITY_Z_ID_V1: u32 = 61;
 const WINDOW_INITIAL_START_V1: usize = 79;
 const WINDOW_INITIAL_STRIDE_V1: usize = 12;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const RESULT_Z_INVERSE_ID_V1: u32 = 847;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const RESULT_Z_INVERSE_ONE_ID_V1: u32 = 848;
 const RESULT_X_REDUCTION_OUTPUT_ID_V1: u32 = 849;
 
@@ -137,6 +146,7 @@ const THREE_BE_V1: [u8; 32] = [
 /// it uses the standard P-256 generator as the public key and the valid
 /// `(d, k) = (1, 1)` signature of SHA-256(empty).  It is selected only when
 /// the RFC adapter's certificate-slot selector is zero.
+#[cfg(test)]
 pub(crate) const ZK_X509_P256_OPTIONAL_CERTIFICATE_DUMMY_DOMAIN_V1: &[u8] =
     b"iroha.zk-x509.p256.optional-certificate-dummy.v1";
 
@@ -217,6 +227,7 @@ pub(crate) enum P256UnresolvedByteIoKindV1 {
     /// Strict-DER signature scalar s.
     SignatureS,
     /// Exact SHA-256/prehash word before scalar reduction.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     DigestWord,
 }
 
@@ -229,6 +240,7 @@ pub(crate) enum P256UnresolvedByteIoKindV1 {
     variant_size_differences,
     reason = "boxing a tiny verifier manifest would add allocation and lose Copy semantics"
 )]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256UnresolvedByteIoSourceV1 {
     /// One canonical value-bus writer.
@@ -246,6 +258,7 @@ pub(crate) enum P256UnresolvedByteIoSourceV1 {
 }
 
 /// One typed byte-I/O endpoint that is intentionally unresolved here.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256UnresolvedByteIoEndpointV1 {
     /// Semantic byte word.
@@ -255,6 +268,7 @@ pub(crate) struct P256UnresolvedByteIoEndpointV1 {
 }
 
 /// Exact Qx, Qy, r, s, and digest manifest in verifier-fixed order.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256UnresolvedByteIoManifestV1 {
     /// Five unresolved endpoints in the order documented above.
@@ -262,6 +276,7 @@ pub(crate) struct P256UnresolvedByteIoManifestV1 {
 }
 
 /// The only three input writers that are internal inverse witnesses.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256InverseAuxiliaryManifestV1 {
     /// Inverse used to prove r is nonzero.
@@ -361,6 +376,7 @@ pub(crate) struct P256ExternalBindingCrossSourceV1 {
 }
 
 /// Three deterministic pointwise equalities.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256ExternalBindingRowV1 {
     /// Verifier-regenerated addresses.
@@ -439,30 +455,38 @@ pub(crate) enum P256ExternalBindingErrorV1 {
     #[error("zk-X509 P-256 external-binding topology is invalid")]
     Topology,
     /// Initial inputs are missing, duplicated, aliased, or unowned.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 external-binding ownership is invalid")]
     Ownership,
     /// A verifier-owned constant or its fixed writer is wrong.
     #[error("zk-X509 P-256 external-binding constant is invalid")]
     Constant,
     /// A value-bus execution writer address or copied cell is wrong.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 external-binding writer source is invalid")]
     WriterSource,
     /// A window, reduction, low-s, or copied external cell is wrong.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 external-binding external source is invalid")]
     ExternalSource,
     /// Two pointwise source cells are unequal.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 external-binding equality is invalid")]
     Equality,
     /// A field or limb encoding is noncanonical.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 external-binding range is invalid")]
     Range,
     /// Inactive slots or the final padding count are noncanonical.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 external-binding padding is invalid")]
     Padding,
     /// A low-degree row residue is nonzero.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 external-binding row constraint failed")]
     Constraint,
     /// The optional-certificate selector or canonical inactive source is invalid.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 optional-certificate selection is invalid")]
     OptionalCertificateSelection,
     /// Length or index arithmetic exceeded the fixed envelope.
@@ -1087,6 +1111,7 @@ fn p256_byte_io_witness_v1(
 /// verifier-regenerated addresses and openings of the already-committed source
 /// traces.  Every active slot copies both sources and constrains equality.
 /// Inactive slots additionally constrain both committed copies to zero.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_zk_x509_p256_external_binding_row_constraints_v1(
     fixed: [P256ExternalBindingFixedAccessV1; P256_EXTERNAL_BINDINGS_PER_ROW_V1],
     row: &P256ExternalBindingRowV1,
@@ -1128,6 +1153,7 @@ struct ExpectedInitialV1 {
     constant: Option<[u8; 32]>,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug)]
 struct ExpectedTopologyV1 {
     initial: Vec<ExpectedInitialV1>,
@@ -1135,6 +1161,7 @@ struct ExpectedTopologyV1 {
     inverse_auxiliaries: P256InverseAuxiliaryManifestV1,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ExpectedBindingV1 {
     fixed: P256ExternalBindingFixedAccessV1,
@@ -1142,6 +1169,7 @@ struct ExpectedBindingV1 {
     external: F,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ExpectedBindingV1 {
     const fn inactive() -> Self {
         Self {
@@ -1873,6 +1901,7 @@ fn push_input_v1(
     });
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn expected_byte_io_manifest_v1() -> P256UnresolvedByteIoManifestV1 {
     P256UnresolvedByteIoManifestV1 {
         endpoints: [
@@ -1994,6 +2023,7 @@ fn expected_window_output_id_v1(
     ))
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn final_result_operation_v1(coordinate: usize) -> Result<usize, P256ExternalBindingErrorV1> {
     if coordinate >= 3 {
         return Err(P256ExternalBindingErrorV1::Topology);
@@ -2018,6 +2048,7 @@ fn derived_id_v1(operation: usize) -> Result<P256ValueIdV1, P256ExternalBindingE
     ))
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn writer_cell_v1(
     value_bus: &P256ValueBusBaseEndpointTraceV1,
     topology: &ExpectedTopologyV1,
@@ -2072,6 +2103,7 @@ fn validate_reduction_word_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn coordinate_index_v1(coordinate: P256WindowCoordinateV1) -> usize {
     match coordinate {
         P256WindowCoordinateV1::X => 0,
@@ -2098,6 +2130,7 @@ fn bytes_be_to_limbs_le_v1(bytes: [u8; 32]) -> [u16; P256_VALUE_BUS_LIMBS_V1] {
     })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn modulus_bytes_v1(modulus: ZkX509P256ModulusV1) -> [u8; 32] {
     match modulus {
         ZkX509P256ModulusV1::BaseField => P256_BASE_MODULUS_BE_V1,
@@ -2105,6 +2138,7 @@ fn modulus_bytes_v1(modulus: ZkX509P256ModulusV1) -> [u8; 32] {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn map_writer_error_v1(error: P256ValueBusErrorV1) -> P256ExternalBindingErrorV1 {
     match error {
         P256ValueBusErrorV1::Resource => P256ExternalBindingErrorV1::Resource,

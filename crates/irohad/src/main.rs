@@ -4992,12 +4992,9 @@ impl NetworkRelayShared {
             | SoracloudLocalReadProxyResponse(_)
             | ToriiProxyRequest(_)
             | ToriiProxyResponse(_)
-            | GenesisRequest(_)
-            | GenesisResponse(_)
             | Health
             | Connect(_)) => {
                 debug_assert!(Self::is_handled_by_dedicated_subscriber(&msg));
-                // Genesis bootstrap is handled by the dedicated bootstrapper listener.
                 // Health frames are handled elsewhere. Connect, Soracloud local-read proxy,
                 // and Torii proxy frames go to Torii via its own subscriber tasks when those
                 // surfaces are enabled.
@@ -5026,10 +5023,7 @@ impl NetworkRelayShared {
         msg.is_torii_proxy_control_message()
             || matches!(
                 msg,
-                iroha_core::NetworkMessage::GenesisRequest(_)
-                    | iroha_core::NetworkMessage::GenesisResponse(_)
-                    | iroha_core::NetworkMessage::Health
-                    | iroha_core::NetworkMessage::Connect(_)
+                iroha_core::NetworkMessage::Health | iroha_core::NetworkMessage::Connect(_)
             )
     }
 
@@ -10001,6 +9995,9 @@ impl Iroha {
             runtime_deps.sorafs_moderation_publication_handoff.clone();
         let sorafs_moderation_panel_notification =
             runtime_deps.sorafs_moderation_panel_notification.clone();
+        let sorafs_moderation_panel_notification_archive = runtime_deps
+            .sorafs_moderation_panel_notification_archive
+            .clone();
         let sorafs_moderation_checkpoint_store =
             runtime_deps.sorafs_moderation_checkpoint_store.clone();
         let sorafs_evidence_viewer_webauthn = runtime_deps.sorafs_evidence_viewer_webauthn.clone();
@@ -10736,6 +10733,11 @@ impl Iroha {
         };
         let runtime_deps = if let Some(boundary) = sorafs_moderation_panel_notification {
             runtime_deps.with_sorafs_moderation_panel_notification(boundary)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(archive) = sorafs_moderation_panel_notification_archive {
+            runtime_deps.with_sorafs_moderation_panel_notification_archive(archive)
         } else {
             runtime_deps
         };
@@ -16512,6 +16514,11 @@ mod tests {
         );
         assert!(
             dependencies
+                .sorafs_moderation_panel_notification_archive
+                .is_none()
+        );
+        assert!(
+            dependencies
                 .sorafs_pop_credential_provider_registry
                 .is_none()
         );
@@ -17051,6 +17058,10 @@ mod tests {
             (
                 "sorafs_moderation_panel_notification",
                 "with_sorafs_moderation_panel_notification",
+            ),
+            (
+                "sorafs_moderation_panel_notification_archive",
+                "with_sorafs_moderation_panel_notification_archive",
             ),
             (
                 "sorafs_evidence_viewer_grants",
@@ -19550,6 +19561,16 @@ mod tests {
                     panel_notification_handle: "queue:moderation:notification-primary".into(),
                     panel_notification_revision: 1,
                     panel_notification_policy_digest: [0x85; 32],
+                    panel_notification_archive_handle:
+                        "object-lock:moderation:notification-receipts-primary".into(),
+                    panel_notification_archive_revision: 1,
+                    panel_notification_archive_policy_digest: [0x86; 32],
+                    panel_notification_archive_id: [0x87; 32],
+                    panel_notification_archive_public_key: [
+                        0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe,
+                        0xd3, 0xc9, 0x64, 0x07, 0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6,
+                        0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a,
+                    ],
                     max_cases: 8,
                     max_events: 16,
                     max_outbox_entries: 8,

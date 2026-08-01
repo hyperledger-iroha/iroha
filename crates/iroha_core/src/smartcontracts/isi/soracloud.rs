@@ -20812,6 +20812,14 @@ mod tests {
         norito::encode_canonical(&ciphertext).expect("encode ciphertext")
     }
 
+    fn structurally_truncated_fhe_payload() -> Vec<u8> {
+        let canonical = norito::encode_canonical(&BfvIdentifierCiphertext { slots: Vec::new() })
+            .expect("encode canonical FHE envelope");
+        let flags = canonical[norito::core::Header::SIZE - 1];
+        norito::core::frame_bare_with_header_flags::<BfvIdentifierCiphertext>(&[], flags)
+            .expect("frame structurally truncated FHE envelope")
+    }
+
     fn sample_fhe_envelope(input: &[u8], seed: &[u8]) -> BfvIdentifierCiphertext {
         decode_soracloud_fhe_envelope(&sample_fhe_payload(input, seed))
             .expect("sample FHE payload decodes")

@@ -628,12 +628,7 @@ impl Root {
         }
 
         self.apply_storage_memory_budget();
-        let Some(max_disk) = self
-            .nexus
-            .storage
-            .local_budget_bytes
-            .map(|budget| budget.get())
-        else {
+        let Some(max_disk) = self.nexus.storage.local_budget_bytes.map(Bytes::get) else {
             return;
         };
         debug_assert!(max_disk > 0, "parsed storage budgets are non-zero");
@@ -3933,10 +3928,7 @@ fn execution_policy_duration(value: Duration) -> (u64, u32) {
 fn execution_policy_canonical_set<'a, T: Encode + 'a>(
     values: impl IntoIterator<Item = &'a T>,
 ) -> Vec<Vec<u8>> {
-    let mut encoded = values
-        .into_iter()
-        .map(|value| value.encode())
-        .collect::<Vec<_>>();
+    let mut encoded = values.into_iter().map(Encode::encode).collect::<Vec<_>>();
     encoded.sort_unstable();
     encoded.dedup();
     encoded
@@ -4445,12 +4437,7 @@ pub fn execution_policy_digest_v1(
     let per_provider_submitters = sorafs_telemetry
         .per_provider_submitters
         .iter()
-        .map(|(provider, accounts)| {
-            (
-                provider.clone(),
-                execution_policy_canonical_set(accounts.iter()),
-            )
-        })
+        .map(|(provider, accounts)| (*provider, execution_policy_canonical_set(accounts.iter())))
         .collect::<Vec<_>>();
     policy.push(
         "governance.sorafs_telemetry.per_provider_submitters",
@@ -6585,13 +6572,15 @@ impl KuraReplicaAdvertPolicy {
 
         let key_capacity =
             kura_replica_advert_registry_key_capacity(blocks_in_memory, self.evictable_window)
-                .ok_or(KuraReplicaAdvertPolicyError::RegistryKeyCapacityOverflow {
-                    blocks_in_memory: blocks_in_memory.get(),
-                    evictable_window: self.evictable_window.get(),
-                })?;
+                .ok_or_else(
+                    || KuraReplicaAdvertPolicyError::RegistryKeyCapacityOverflow {
+                        blocks_in_memory: blocks_in_memory.get(),
+                        evictable_window: self.evictable_window.get(),
+                    },
+                )?;
         kura_replica_advert_registry_entry_capacity(blocks_in_memory, self.evictable_window)
-            .ok_or(
-                KuraReplicaAdvertPolicyError::RegistryEntryCapacityOverflow {
+            .ok_or_else(
+                || KuraReplicaAdvertPolicyError::RegistryEntryCapacityOverflow {
                     key_capacity: key_capacity.get(),
                     keepers_per_key: KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT,
                 },
@@ -10423,6 +10412,9 @@ pub struct SorafsModerationOrchestrator {
     pub checkpoint_store_revision: u64,
     /// Exact checkpoint-store public-policy digest.
     pub checkpoint_store_policy_digest: [u8; 32],
+    /// Archive-lifetime-stable Ed25519 trust anchor for sealed checkpoint statements.
+    /// HSM-internal rotation must preserve this public identity in V1.
+    pub checkpoint_store_attestation_public_key: [u8; 32],
     /// Governance authority used only for deterministic deadline maintenance.
     pub maintenance_authority: AccountId,
     /// Identity-pinned runtime-only moderation transaction signer handle.
@@ -10455,6 +10447,24 @@ pub struct SorafsModerationOrchestrator {
     pub panel_notification_revision: u64,
     /// Exact panel-notification adapter public-policy digest.
     pub panel_notification_policy_digest: [u8; 32],
+    /// Identity-pinned immutable panel-notification receipt archive handle.
+    pub panel_notification_archive_handle: String,
+    /// Exact non-zero receipt archive adapter revision.
+    pub panel_notification_archive_revision: u64,
+    /// Exact receipt archive adapter public-policy digest.
+    pub panel_notification_archive_policy_digest: [u8; 32],
+    /// Stable non-secret receipt archive namespace identity.
+    pub panel_notification_archive_id: [u8; 32],
+    /// Bootstrap Ed25519 archive signer anchoring the sealed epoch log.
+    pub panel_notification_archive_bootstrap_public_key: [u8; 32],
+    /// Exact Ed25519 public key authenticating durable archive readback.
+    pub panel_notification_archive_public_key: [u8; 32],
+    /// Inclusive final generation authorized for the predecessor archive signer.
+    pub panel_notification_archive_predecessor_revocation_generation: Option<u64>,
+    /// Prior-signer authorization signature for the current transition.
+    pub panel_notification_archive_predecessor_authorization_signature: Option<[u8; 64]>,
+    /// New-signer proof-of-possession signature for the current transition.
+    pub panel_notification_archive_new_key_possession_signature: Option<[u8; 64]>,
     /// Maximum appeals and activated cases in one complete finalized snapshot.
     pub max_cases: usize,
     /// Maximum finalized typed events retained in one snapshot.
@@ -10469,6 +10479,8 @@ pub struct SorafsModerationOrchestrator {
     pub max_submit_attempts: u32,
     /// Maximum canonical checkpoint size.
     pub checkpoint_max_bytes: Bytes<u64>,
+    /// Maximum canonical panel-notification archive artifact size.
+    pub panel_notification_archive_max_bytes: Bytes<u64>,
     /// Finalized reconciliation and maintenance cadence.
     pub worker_interval: Duration,
     /// Maximum native maintenance actions emitted in one scan.
