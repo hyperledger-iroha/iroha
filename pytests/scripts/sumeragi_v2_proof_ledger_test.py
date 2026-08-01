@@ -434,7 +434,13 @@ def copy_async_source_fidelity_fixture(
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT_DIR / relative, destination)
-    for name in (*formal_names, "SumeragiV2AsyncTemporalClosureProofs.tla"):
+    for name in dict.fromkeys(
+        (
+            *formal_names,
+            "SumeragiV2AsyncTemporalClosureProofs.tla",
+            "SumeragiV2AsyncStage6Proofs.tla",
+        )
+    ):
         destination = formal_dir / name
         if name == "SumeragiV2AsyncLivenessProofs.tla":
             destination.write_text(
@@ -2156,9 +2162,9 @@ def test_cross_tool_status_is_fail_closed_and_production_only() -> None:
     gate_call_count = sum(
         call_site.gate_call_count for call_site in production_call_sites
     )
-    assert gate_call_count == 32
-    assert len(linked_consumers) == 4
-    assert gate_call_count + len(linked_consumers) == 36
+    assert gate_call_count == 33
+    assert len(linked_consumers) == 6
+    assert gate_call_count + len(linked_consumers) == 39
     sealed_production_seams = sum(
         call_site.gate_call_count
         for call_site in production_call_sites
@@ -2167,7 +2173,7 @@ def test_cross_tool_status_is_fail_closed_and_production_only() -> None:
         consumer.item_token_sha256 is not None
         for consumer in linked_consumers
     )
-    assert sealed_production_seams == 34
+    assert sealed_production_seams == 37
     promotion_errors = module._cross_tool_promotion_contract_errors(
         module.CROSS_TOOL_REFINEMENT_CONTRACTS
     )
@@ -2371,7 +2377,7 @@ def ingress_auxiliary(module, kernel: str):
         "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
     )
     views = module._cross_tool_kernel_views(claim)
-    assert len(views) == 3
+    assert len(views) == 4
     matching = tuple(view for view in views if view.verified_kernel == kernel)
     assert len(matching) == 1
     return claim, matching[0]
@@ -2396,8 +2402,17 @@ def leader_wire_auxiliary(module):
     )
 
 
+def effect_candidate_auxiliary(module):
+    """Return the ingress claim and concrete effect/candidate bridge."""
+
+    return ingress_auxiliary(
+        module,
+        "production_effect_to_candidate_refines_async_ownership_kernel",
+    )
+
+
 def test_total_checked_gate_contract_cardinality_and_payload_schema() -> None:
-    """Thirteen total claims own exactly seventeen distinct checked gates."""
+    """Thirteen total claims own exactly eighteen distinct checked gates."""
 
     module = load_checker()
     assert module.CROSS_TOOL_EVIDENCE_SCHEMA_VERSION == 3
@@ -2424,8 +2439,8 @@ def test_total_checked_gate_contract_cardinality_and_payload_schema() -> None:
         if claim.proof_mode == "total_checked_gate"
         for view in module._cross_tool_kernel_views(claim)
     ]
-    assert len(gates) == 17
-    assert len({gate.name for gate in gates}) == 17
+    assert len(gates) == 18
+    assert len({gate.name for gate in gates}) == 18
 
     claim = total_gate_claim(
         module, "ProductionDurableIntentTraceRefinesProgressWitness"
@@ -2455,19 +2470,20 @@ def test_claim_local_checked_token_contract_includes_borrower_seal() -> None:
     }
 
 
-def test_ingress_claim_binds_materialization_and_leader_wire_evidence() -> None:
-    """Ingress owns reservation materialization before leader-wire evidence."""
+def test_ingress_claim_binds_materialization_leader_wire_and_candidate_evidence() -> None:
+    """Ingress owns materialization, leader-wire, and candidate evidence."""
 
     module = load_checker()
     claim, materialization_view = materialization_auxiliary(module)
     _same_claim, leader_view = leader_wire_auxiliary(module)
-    materialization, leader_wire = claim.supplemental_kernels
+    _same_claim, effect_view = effect_candidate_auxiliary(module)
+    materialization, leader_wire, effect_candidate = claim.supplemental_kernels
     assert [len(contract.claims) for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS] == [
         4,
         7,
         6,
     ]
-    assert len(claim.supplemental_kernels) == 2
+    assert len(claim.supplemental_kernels) == 3
     assert (
         materialization.auxiliary_verus_theorem
         == "production_ingress_reservation_materialization_refines_"
@@ -2482,17 +2498,27 @@ def test_ingress_claim_binds_materialization_and_leader_wire_evidence() -> None:
         == module._INGRESS_RESERVATION_MATERIALIZATION_GATE
     )
     assert leader_wire.total_gate == module._LEADER_WIRE_ADMISSION_GATE
+    assert effect_candidate.auxiliary_verus_theorem == (
+        "production_effect_to_candidate_trace_refines_async_ownership"
+    )
+    assert effect_candidate.total_gate == module._EFFECT_TO_CANDIDATE_GATE
     assert (
         "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"
         in claim.production_sources
     )
+    assert "crates/iroha_core/src/sumeragi/v2_effects.rs" in claim.production_sources
     assert (
         "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"
+        in module._verus_evidence_contract_module().REQUIRED_SOURCE_PATHS
+    )
+    assert (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs"
         in module._verus_evidence_contract_module().REQUIRED_SOURCE_PATHS
     )
     assert claim.source_item_seals == (
         *module._INGRESS_RESERVATION_MATERIALIZATION_SOURCE_ITEM_SEALS,
         *module._LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS,
+        *module._EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS,
     )
 
     relevant_sources = {
@@ -2500,6 +2526,8 @@ def test_ingress_claim_binds_materialization_and_leader_wire_evidence() -> None:
         materialization_view.production_call_sites[0].source,
         leader_view.verified_kernel_source,
         leader_view.production_call_sites[0].source,
+        effect_view.verified_kernel_source,
+        effect_view.production_call_sites[0].source,
     }
     source_entries = [
         {
@@ -2547,6 +2575,25 @@ def test_ingress_claim_binds_materialization_and_leader_wire_evidence() -> None:
         source_entries=source_entries,
         root_dir=ROOT_DIR,
     )
+    effect_kernel, _ = module._cross_tool_total_kernel_payload(
+        claim,
+        effect_view,
+        source_entries=source_entries,
+        verus_source=verus_source,
+        root_dir=ROOT_DIR,
+    )
+    effect_theorem = module._cross_tool_auxiliary_total_theorem_payload(
+        claim,
+        effect_view,
+        verus_source=verus_source,
+    )
+    effect_call = module._cross_tool_total_call_site_payload(
+        claim,
+        effect_view,
+        effect_view.production_call_sites[0],
+        source_entries=source_entries,
+        root_dir=ROOT_DIR,
+    )
     assert materialization_kernel["name"] == materialization.verified_kernel
     assert materialization_theorem["name"] == (
         materialization.auxiliary_verus_theorem
@@ -2557,9 +2604,13 @@ def test_ingress_claim_binds_materialization_and_leader_wire_evidence() -> None:
     assert leader_theorem["name"] == leader_wire.auxiliary_verus_theorem
     assert leader_call["gate_call_count"] == 3
     assert leader_call["mutation_authorization_indices"] == [0, 0, 2, 2, 2]
+    assert effect_kernel["name"] == effect_candidate.verified_kernel
+    assert effect_theorem["name"] == effect_candidate.auxiliary_verus_theorem
+    assert effect_call["gate_call_count"] == 1
+    assert effect_call["mutation_authorization_indices"] == [0]
     assert len(
         module._cross_tool_source_item_seal_payload(claim, root_dir=ROOT_DIR)
-    ) == 29
+    ) == 61
 
 
 @pytest.mark.parametrize("mutation", ("missing", "reordered", "weakened_gate"))
@@ -2570,11 +2621,11 @@ def test_ingress_auxiliary_inventory_rejects_materialization_drift(
 
     module = load_checker()
     claim, _view = materialization_auxiliary(module)
-    materialization, leader_wire = claim.supplemental_kernels
+    materialization, leader_wire, effect_candidate = claim.supplemental_kernels
     if mutation == "missing":
-        supplemental = (leader_wire,)
+        supplemental = (leader_wire, effect_candidate)
     elif mutation == "reordered":
-        supplemental = (leader_wire, materialization)
+        supplemental = (leader_wire, materialization, effect_candidate)
     else:
         assert materialization.total_gate is not None
         weakened_gate = replace(
@@ -2584,12 +2635,13 @@ def test_ingress_auxiliary_inventory_rejects_materialization_drift(
         supplemental = (
             replace(materialization, total_gate=weakened_gate),
             leader_wire,
+            effect_candidate,
         )
     errors, _gates, _calls = module._cross_tool_total_gate_promotion_contract_errors(
         replace(claim, supplemental_kernels=supplemental)
     )
     assert any(
-        "reservation-materialization/leader-wire auxiliary" in error
+        "reservation-materialization/leader-wire/effect-candidate auxiliary" in error
         for error in errors
     ), errors
 
@@ -3877,6 +3929,73 @@ def test_total_checked_gate_linked_consumer_must_authorize_before_mutation(
         )
 
 
+def test_ingress_ordinal_source_commits_only_after_checked_closure_success(
+    tmp_path: Path,
+) -> None:
+    """Both ordinal mirrors advance only after the checked ingress closure."""
+
+    module = load_checker()
+    claim = total_gate_claim(
+        module,
+        "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+    )
+    assert [consumer.item for consumer in claim.linked_consumers] == [
+        "with_checked_admission_ordinal_range",
+        "with_checked_reservation",
+    ]
+
+    for index, consumer in enumerate(claim.linked_consumers):
+        root_dir = tmp_path / str(index)
+        destination = root_dir / consumer.source
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / consumer.source, destination)
+        source = destination.read_text(encoding="utf-8")
+        items = [
+            item
+            for item in module.rust_items(source, consumer.item)
+            if item.brace_context == consumer.brace_context
+        ]
+        assert len(items) == 1
+        item = items[0]
+        mutation = consumer.mutation_boundaries[0]
+        helper = consumer.required_expression
+        assert item.source.count(mutation) == 1
+        without_mutation = item.source.replace(mutation, "", 1)
+        assert without_mutation.count(helper) == 1
+        mutated_item = without_mutation.replace(
+            helper,
+            f"{mutation}\n            {helper}",
+            1,
+        )
+        destination.write_text(
+            source.replace(item.source, mutated_item, 1),
+            encoding="utf-8",
+        )
+        mutated_source = destination.read_text(encoding="utf-8")
+        mutated = [
+            candidate
+            for candidate in module.rust_items(mutated_source, consumer.item)
+            if candidate.brace_context == consumer.brace_context
+        ][0]
+        mutated_consumer = replace(
+            consumer,
+            item_token_sha256=module._rust_sealed_item_token_sha256(mutated),
+        )
+        entries = [
+            {
+                "path": consumer.source,
+                "sha256": module._sha256_file(destination),
+            }
+        ]
+        with pytest.raises(ValueError, match="before mutating state"):
+            module._cross_tool_linked_consumer_payload(
+                claim,
+                mutated_consumer,
+                source_entries=entries,
+                root_dir=root_dir,
+            )
+
+
 def test_cross_tool_contract_rejects_call_source_missing_from_verus_inventory() -> None:
     """Every authoritative production call item is part of Verus evidence."""
 
@@ -5108,7 +5227,7 @@ def test_effective_lock_checked_token_seams_bind_live_mutation_boundaries() -> N
         ],
         root_dir=ROOT_DIR,
     )
-    assert token_payload["constructor_count"] == 23
+    assert token_payload["constructor_count"] == 24
     assert token_payload["borrower_item_token_sha256"] == (
         module._CHECKED_PRODUCTION_TOKEN_BORROWER_SHA256
     )
@@ -5793,6 +5912,95 @@ def test_body_service_cross_tool_claim_requires_live_production_dequeue(
             "exact checked-gate seam|state-changing linearization point|source seal",
         ),
         (
+            "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "            5u8 => 5u8,\n            6u8 => 6u8,",
+            "            5u8 => 4u8,\n            6u8 => 6u8,",
+            "shared macro|source seal",
+        ),
+        (
+            "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "            append_runtime_identity_field(&mut identity, &certified_sources.encode());",
+            "            identity.push(0);",
+            "source seal",
+        ),
+        (
+            "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "RuntimeEffectCausality::Inherit => parent == Some(owner),",
+            "RuntimeEffectCausality::Inherit => true,",
+            "source seal",
+        ),
+        (
+            "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "self.owner == other.owner && self.causality == other.causality",
+            "self.owner == other.owner",
+            "source seal",
+        ),
+        (
+            "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "SerializedV2Runtime::take_effect_ownership(self, effects.len())",
+            "SerializedV2Runtime::take_effect_ownership(\n"
+            "            self,\n"
+            "            effects.len().saturating_sub(1),\n"
+            "        )",
+            "source seal",
+        ),
+        (
+            "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "pub const MAX_CAUSAL_SUCCESSORS_PER_COMMAND: usize = 3;",
+            "pub const MAX_CAUSAL_SUCCESSORS_PER_COMMAND: usize = 4;",
+            "source seal",
+        ),
+        (
+            "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "pub const COMPLETION_CAPACITY_RANK_RADIX: u64 = 4;",
+            "pub const COMPLETION_CAPACITY_RANK_RADIX: u64 = 3;",
+            "source seal",
+        ),
+        (
+            "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+            "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+            "        (root_after == root_before && successor_after < successor_before)\n"
+            "            || root_after < root_before,",
+            "        root_after <= root_before,",
+            "source seal",
+        ),
+        (
+            "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "let checked = check_production_effect_to_candidate_transition(projection)",
+            "let checked = Some(CheckedProductionTransition { projection })",
+            "checked-gate|item token seal|source seal",
+        ),
+        (
+            "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "let producer_episode_retained = candidate_identity.as_ref().is_none_or(|identity| {\n"
+            "                retained_candidate_owners\n"
+            "                    .get(identity)\n"
+            "                    .is_none_or(|existing| existing == evidence.owner())\n"
+            "            });",
+            "let producer_episode_retained = true;",
+            "source seal",
+        ),
+        (
+            "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "let checked = check_production_effect_to_candidate_transition(projection)",
+            "self.retained_effect_batch = Some(RetainedEffectBatch {\n"
+            "                effects: Vec::new(),\n"
+            "                oldest_at: Instant::now(),\n"
+            "            });\n"
+            "            let checked = check_production_effect_to_candidate_transition(projection)",
+            "linearization|item token seal|source seal",
+        ),
+        (
             "ProductionReliableFlushTraceRefinesOutboundOwnership",
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "ticket_rank: reliable_flush_usize(evidence.ticket_rank)?,",
@@ -5858,7 +6066,7 @@ def test_exact_identity_cross_tool_claims_reject_real_source_mutations(
     new: str,
     expected_error: str,
 ) -> None:
-    """Recovery, reliable flush, and application stay source-bound end to end."""
+    """Exact ownership, recovery, flush, and application stay source-bound."""
 
     module = load_checker()
     claim = next(
@@ -35009,6 +35217,84 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         in error
         for error in errors
     ), errors
+
+
+def test_effect_candidate_and_completion_capacity_tla_seals_reject_weakening(
+    tmp_path: Path,
+) -> None:
+    """Candidate identity, successor capacity, and Stage 6 closure are sealed."""
+
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+    )
+    check = module._production_causal_fifo_source_fidelity_errors
+    assert check(formal_dir) == []
+    network = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    stage6 = formal_dir / "SumeragiV2AsyncStage6Proofs.tla"
+    canonical_network = network.read_text(encoding="utf-8")
+    canonical_stage6 = stage6.read_text(encoding="utf-8")
+
+    mutations = (
+        (
+            network,
+            canonical_network,
+            "AsyncCausalCandidateLifecycleCapacity ==\n  3 * AsyncQueueCapacity",
+            "AsyncCausalCandidateLifecycleCapacity ==\n  4 * AsyncQueueCapacity",
+            "AsyncCausalCandidateLifecycleCapacity",
+        ),
+        (
+            network,
+            canonical_network,
+            "   causalOrigin |-> candidate.causalOrigin,",
+            "   causalOrigin |-> NoAsyncCausalOrigin,",
+            "ExactAsyncCandidateIdentity",
+        ),
+        (
+            network,
+            canonical_network,
+            "      successor.causalOrigin = command.causalOrigin",
+            "      TRUE",
+            "CommandSuccessorsRetainCausalOrigin",
+        ),
+        (
+            network,
+            canonical_network,
+            "FreshCommandSuccessors(command) ==\n"
+            "  LET successors == CommandSuccessors(command)",
+            "FreshCommandSuccessors(command) ==\n"
+            "  LET successors == <<>>",
+            "FreshCommandSuccessors",
+        ),
+        (
+            stage6,
+            canonical_stage6,
+            "Stage6CompletionCapacityGoal(candidate, position) ==\n"
+            "  \\/ ProtectedRankProgressExit(candidate, <<6, position>>)",
+            "Stage6CompletionCapacityGoal(candidate, position) ==\n"
+            "  \\/ TRUE",
+            "Stage6CompletionCapacityGoal",
+        ),
+        (
+            stage6,
+            canonical_stage6,
+            "THEOREM FairStage6CompletionCapacityOpens ==\n"
+            "  \\A initialContext, candidate, position:\n"
+            "    Stage4RefinementFiniteServeEpisodeResidualProperty(",
+            "THEOREM FairStage6CompletionCapacityOpens ==\n"
+            "  \\A initialContext, candidate, position:\n"
+            "    TRUE \\/ Stage4RefinementFiniteServeEpisodeResidualProperty(",
+            "FairStage6CompletionCapacityOpens",
+        ),
+    )
+    for path, canonical, old, new, symbol in mutations:
+        assert canonical.count(old) == 1, (path, symbol)
+        path.write_text(canonical.replace(old, new, 1), encoding="utf-8")
+        errors = check(formal_dir)
+        assert any(symbol in error for error in errors), (symbol, errors)
+        path.write_text(canonical, encoding="utf-8")
 
 
 def test_progress_witness_source_fidelity_requires_exact_decision_owner(

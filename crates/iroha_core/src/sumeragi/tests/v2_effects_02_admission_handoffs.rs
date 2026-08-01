@@ -350,13 +350,12 @@
         let key = (fixture.manifest.round, fixture.manifest.subject);
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let id = executor.allocate_work_id().expect("allocate store work");
-        let task = BodyStoreTask {
-            id,
-            tag: tag(0),
-            manifest: fixture.manifest.clone(),
-            canonical_wire: Arc::from(fixture.body.clone()),
-            ownership: RuntimeEffectOwnership::fresh_for_test(tag(0), u128::from(id.get())),
-        };
+        let task = BodyStoreTask::for_test(
+            id.get(),
+            tag(0),
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+        );
         executor.pending_store_bytes =
             u64::try_from(task.canonical_wire.len()).expect("body length");
         executor.pending_stores.insert(
@@ -949,19 +948,11 @@
             self.pending_fetches.insert(
                 id,
                 PendingFetch {
-                    task: BodyFetchTask {
-                        id,
-                        tag: tag(0),
-                        round: fixture.manifest.round,
-                        subject: fixture.manifest.subject,
-                        manifest: Some(fixture.manifest.clone()),
-                        sources: Vec::new(),
-                        certified_request: None,
-                        ownership: RuntimeEffectOwnership::fresh_for_test(
-                            tag(0),
-                            u128::from(id.get()),
-                        ),
-                    },
+                    task: BodyFetchTask::for_test(
+                        id.get(),
+                        tag(0),
+                        fixture.manifest.clone(),
+                    ),
                     request_hash: None,
                 },
             );

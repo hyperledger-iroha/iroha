@@ -28,12 +28,28 @@ use std::{
 };
 
 use super::v2_core::{
-    EFFECTIVE_LOCK_TRACE_SERVICE, EffectiveLockTraceProjection, EventTag,
-    ExactBodyCompletionOwnership, MAX_EFFECTS_PER_STEP,
+    CanonicalIdentityProjection, EFFECTIVE_LOCK_TRACE_SERVICE, EffectiveLockTraceProjection,
+    EventTag,
+    ExactBodyCompletionOwnership, IDENTITY_DOMAIN_PROCESS_LOCAL,
+    IDENTITY_KIND_RUNTIME_CANDIDATE_SEMANTIC, IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE,
+    IDENTITY_KIND_RUNTIME_EFFECT, IDENTITY_KIND_RUNTIME_LIFECYCLE_OWNER,
+    MAX_CAUSAL_SUCCESSORS_PER_COMMAND, MAX_EFFECTS_PER_STEP,
     ProductionIngressIdentityAndClassTraceProjection,
-    ProductionIngressReservationMaterializationTraceProjection, SERVICE_CLASS_COMPLETION,
+    ProductionEffectToCandidateTraceProjection,
+    ProductionIngressReservationMaterializationTraceProjection, RUNTIME_CANDIDATE_KIND_APPLY,
+    RUNTIME_CANDIDATE_KIND_FETCH_BODY, RUNTIME_CANDIDATE_KIND_NONE,
+    RUNTIME_CANDIDATE_KIND_SIGN_PROPOSAL, RUNTIME_CANDIDATE_KIND_SIGN_TIMEOUT,
+    RUNTIME_CANDIDATE_KIND_SIGN_VOTE, RUNTIME_CANDIDATE_KIND_STORE_BODY,
+    RUNTIME_CANDIDATE_KIND_VALIDATE_BODY, RUNTIME_EFFECT_CAUSALITY_FRESH,
+    RUNTIME_EFFECT_CAUSALITY_INHERIT, RUNTIME_EFFECT_KIND_APPLY,
+    RUNTIME_EFFECT_KIND_BROADCAST, RUNTIME_EFFECT_KIND_ENTER_VIEW, RUNTIME_EFFECT_KIND_FETCH_BODY,
+    RUNTIME_EFFECT_KIND_OPAQUE_TEST, RUNTIME_EFFECT_KIND_REPORT_EQUIVOCATION,
+    RUNTIME_EFFECT_KIND_REPORT_INVALID_CERTIFIED_BODY, RUNTIME_EFFECT_KIND_SIGN_PROPOSAL,
+    RUNTIME_EFFECT_KIND_SIGN_TIMEOUT, RUNTIME_EFFECT_KIND_SIGN_VOTE,
+    RUNTIME_EFFECT_KIND_STORE_BODY, RUNTIME_EFFECT_KIND_VALIDATE_BODY, SERVICE_CLASS_COMPLETION,
     SERVICE_CLASS_NONE, SERVICE_CLASS_NORMAL, SERVICE_CLASS_PROGRESS, ScheduleState, ScheduledWork,
     check_production_body_service_effective_lock_transition,
+    check_production_effect_to_candidate_transition,
     check_production_ingress_reservation_materialization_transition,
     check_production_ingress_transition, classify_exact_body_completion_ownership,
     select_bounded_service_class,
@@ -1562,18 +1578,265 @@ pub(crate) enum RuntimeEffectCausality {
     Fresh(RuntimeFreshRootKind),
 }
 
-/// Sidecar metadata paired positionally with one reducer effect.
+fn runtime_effect_causality_code(causality: RuntimeEffectCausality) -> u8 {
+    match causality {
+        RuntimeEffectCausality::Inherit => RUNTIME_EFFECT_CAUSALITY_INHERIT,
+        RuntimeEffectCausality::Fresh(_) => RUNTIME_EFFECT_CAUSALITY_FRESH,
+    }
+}
+
+fn runtime_effect_fresh_root_code(causality: RuntimeEffectCausality) -> u8 {
+    match causality {
+        RuntimeEffectCausality::Inherit => 0,
+        RuntimeEffectCausality::Fresh(kind) => kind.code(),
+    }
+}
+
+fn runtime_effect_identity_hash(effect_kind: u8, semantic_identity: &[u8]) -> iroha_crypto::Hash {
+    let mut projection = Vec::new();
+    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-effect:v1");
+    projection.push(effect_kind);
+    append_runtime_identity_field(&mut projection, semantic_identity);
+    iroha_crypto::Hash::new(projection)
+}
+
+fn runtime_effect_candidate_semantic_hash(
+    candidate_kind: u8,
+    semantic_identity: &[u8],
+) -> iroha_crypto::Hash {
+    let mut projection = Vec::new();
+    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-candidate-semantic:v1");
+    projection.push(candidate_kind);
+    append_runtime_identity_field(&mut projection, semantic_identity);
+    iroha_crypto::Hash::new(projection)
+}
+
+fn runtime_effect_candidate_identity_hash(
+    owner: &RuntimeLifecycleOwner,
+    candidate_kind: u8,
+    semantic_identity: &iroha_crypto::Hash,
+) -> iroha_crypto::Hash {
+    let mut projection = Vec::new();
+    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-causal-candidate:v1");
+    append_runtime_identity_field(
+        &mut projection,
+        owner.causal_origin().lifecycle_key.as_ref(),
+    );
+    projection.push(candidate_kind);
+    append_runtime_identity_field(&mut projection, semantic_identity.as_ref());
+    iroha_crypto::Hash::new(projection)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeEffectCandidateBinding {
+    owner_projection_hash: iroha_crypto::Hash,
+    parent_owner_projection_hash: Option<iroha_crypto::Hash>,
+    effect_kind: u8,
+    effect_identity: iroha_crypto::Hash,
+    candidate_kind: u8,
+    candidate_semantic_identity: Option<iroha_crypto::Hash>,
+    candidate_identity: Option<iroha_crypto::Hash>,
+    effect_position: u8,
+    effect_count: u8,
+    candidate_position: u8,
+    candidate_count: u8,
+    projection_hash: iroha_crypto::Hash,
+}
+
+fn append_optional_runtime_hash(
+    projection: &mut Vec<u8>,
+    value: Option<&iroha_crypto::Hash>,
+) {
+    match value {
+        None => projection.push(0),
+        Some(value) => {
+            projection.push(1);
+            append_runtime_identity_field(projection, value.as_ref());
+        }
+    }
+}
+
+fn runtime_effect_candidate_binding_projection_hash(
+    owner: &RuntimeLifecycleOwner,
+    causality: RuntimeEffectCausality,
+    binding: &RuntimeEffectCandidateBinding,
+) -> iroha_crypto::Hash {
+    let mut projection = Vec::new();
+    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-effect-binding:v1");
+    append_runtime_identity_field(&mut projection, owner.projection_hash.as_ref());
+    projection.push(runtime_effect_causality_code(causality));
+    projection.push(runtime_effect_fresh_root_code(causality));
+    append_runtime_identity_field(
+        &mut projection,
+        binding.owner_projection_hash.as_ref(),
+    );
+    append_optional_runtime_hash(
+        &mut projection,
+        binding.parent_owner_projection_hash.as_ref(),
+    );
+    projection.push(binding.effect_kind);
+    append_runtime_identity_field(&mut projection, binding.effect_identity.as_ref());
+    projection.push(binding.candidate_kind);
+    append_optional_runtime_hash(
+        &mut projection,
+        binding.candidate_semantic_identity.as_ref(),
+    );
+    append_optional_runtime_hash(&mut projection, binding.candidate_identity.as_ref());
+    projection.push(binding.effect_position);
+    projection.push(binding.effect_count);
+    projection.push(binding.candidate_position);
+    projection.push(binding.candidate_count);
+    iroha_crypto::Hash::new(projection)
+}
+
+impl RuntimeEffectCandidateBinding {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        owner: &RuntimeLifecycleOwner,
+        causality: RuntimeEffectCausality,
+        parent: Option<&RuntimeLifecycleOwner>,
+        effect_kind: u8,
+        effect_semantic_identity: &[u8],
+        candidate: Option<(u8, &[u8])>,
+        effect_position: u8,
+        effect_count: u8,
+        candidate_position: u8,
+        candidate_count: u8,
+    ) -> Result<Self, EnqueueError> {
+        let exact_parent = match causality {
+            RuntimeEffectCausality::Inherit => parent == Some(owner),
+            RuntimeEffectCausality::Fresh(_) => parent.is_none(),
+        };
+        if !owner.validate_exact()
+            || !exact_parent
+            || effect_kind == 0
+            || effect_count == 0
+            || usize::from(effect_count) > MAX_EFFECTS_PER_STEP
+            || effect_position == 0
+            || effect_position > effect_count
+            || usize::from(candidate_count) > MAX_CAUSAL_SUCCESSORS_PER_COMMAND
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let effect_identity = runtime_effect_identity_hash(effect_kind, effect_semantic_identity);
+        let (candidate_kind, candidate_semantic_identity, candidate_identity) = match candidate {
+            None if candidate_position == 0 => (RUNTIME_CANDIDATE_KIND_NONE, None, None),
+            Some((candidate_kind, semantic_identity))
+                if candidate_kind != RUNTIME_CANDIDATE_KIND_NONE
+                    && candidate_count != 0
+                    && candidate_position != 0
+                    && candidate_position <= candidate_count =>
+            {
+                let semantic_identity =
+                    runtime_effect_candidate_semantic_hash(candidate_kind, semantic_identity);
+                let candidate_identity = runtime_effect_candidate_identity_hash(
+                    owner,
+                    candidate_kind,
+                    &semantic_identity,
+                );
+                (
+                    candidate_kind,
+                    Some(semantic_identity),
+                    Some(candidate_identity),
+                )
+            }
+            _ => return Err(EnqueueError::FailClosed),
+        };
+        let parent_owner_projection_hash = parent.map(|owner| owner.projection_hash);
+        let mut binding = Self {
+            owner_projection_hash: owner.projection_hash,
+            parent_owner_projection_hash,
+            effect_kind,
+            effect_identity,
+            candidate_kind,
+            candidate_semantic_identity,
+            candidate_identity,
+            effect_position,
+            effect_count,
+            candidate_position,
+            candidate_count,
+            projection_hash: iroha_crypto::Hash::new([]),
+        };
+        binding.projection_hash =
+            runtime_effect_candidate_binding_projection_hash(owner, causality, &binding);
+        binding
+            .validate_exact(owner, causality)
+            .then_some(binding)
+            .ok_or(EnqueueError::FailClosed)
+    }
+
+    fn validate_exact(
+        &self,
+        owner: &RuntimeLifecycleOwner,
+        causality: RuntimeEffectCausality,
+    ) -> bool {
+        let exact_parent = match causality {
+            RuntimeEffectCausality::Inherit => {
+                self.parent_owner_projection_hash == Some(owner.projection_hash)
+            }
+            RuntimeEffectCausality::Fresh(_) => self.parent_owner_projection_hash.is_none(),
+        };
+        let exact_candidate = match (
+            self.candidate_kind,
+            self.candidate_semantic_identity.as_ref(),
+            self.candidate_identity.as_ref(),
+        ) {
+            (RUNTIME_CANDIDATE_KIND_NONE, None, None) => self.candidate_position == 0,
+            (candidate_kind, Some(semantic_identity), Some(candidate_identity)) => {
+                candidate_kind != RUNTIME_CANDIDATE_KIND_NONE
+                    && self.candidate_count != 0
+                    && self.candidate_position != 0
+                    && self.candidate_position <= self.candidate_count
+                    && *candidate_identity
+                        == runtime_effect_candidate_identity_hash(
+                            owner,
+                            candidate_kind,
+                            semantic_identity,
+                        )
+            }
+            _ => false,
+        };
+        owner.validate_exact()
+            && self.owner_projection_hash == owner.projection_hash
+            && exact_parent
+            && self.effect_kind != 0
+            && self.effect_count != 0
+            && usize::from(self.effect_count) <= MAX_EFFECTS_PER_STEP
+            && self.effect_position != 0
+            && self.effect_position <= self.effect_count
+            && usize::from(self.candidate_count) <= MAX_CAUSAL_SUCCESSORS_PER_COMMAND
+            && exact_candidate
+            && self.projection_hash
+                == runtime_effect_candidate_binding_projection_hash(owner, causality, self)
+    }
+}
+
+/// Sidecar metadata paired positionally with one reducer effect.
+#[derive(Clone, Debug)]
 pub(crate) struct RuntimeEffectOwnership {
     owner: RuntimeLifecycleOwner,
     causality: RuntimeEffectCausality,
+    binding: Option<RuntimeEffectCandidateBinding>,
 }
+
+impl PartialEq for RuntimeEffectOwnership {
+    // Equality names the immutable lifecycle owner, not the replaceable
+    // positional effect binding. Fetch-route upgrades and later consumer-stage
+    // rebinds must retain this equality while recomputing and validating the
+    // complete binding before the next asynchronous owner is published.
+    fn eq(&self, other: &Self) -> bool {
+        self.owner == other.owner && self.causality == other.causality
+    }
+}
+
+impl Eq for RuntimeEffectOwnership {}
 
 impl RuntimeEffectOwnership {
     fn inherited(owner: RuntimeLifecycleOwner) -> Self {
         Self {
             owner,
             causality: RuntimeEffectCausality::Inherit,
+            binding: None,
         }
     }
 
@@ -1581,11 +1844,62 @@ impl RuntimeEffectOwnership {
         Self {
             owner,
             causality: RuntimeEffectCausality::Fresh(kind),
+            binding: None,
         }
     }
 
     fn validate_exact(&self) -> bool {
         self.owner.validate_exact()
+            && self
+                .binding
+                .as_ref()
+                .is_none_or(|binding| binding.validate_exact(&self.owner, self.causality))
+    }
+
+    fn validate_bound_exact(&self) -> bool {
+        self.validate_exact() && self.binding.is_some()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn bind_runtime_effect(
+        mut self,
+        parent: Option<&RuntimeLifecycleOwner>,
+        effect_kind: u8,
+        effect_semantic_identity: &[u8],
+        candidate: Option<(u8, &[u8])>,
+        effect_position: u8,
+        effect_count: u8,
+        candidate_position: u8,
+        candidate_count: u8,
+    ) -> Result<Self, EnqueueError> {
+        if self.binding.is_some() {
+            return Err(EnqueueError::FailClosed);
+        }
+        self.binding = Some(RuntimeEffectCandidateBinding::new(
+            &self.owner,
+            self.causality,
+            parent,
+            effect_kind,
+            effect_semantic_identity,
+            candidate,
+            effect_position,
+            effect_count,
+            candidate_position,
+            candidate_count,
+        )?);
+        self.validate_bound_exact()
+            .then_some(self)
+            .ok_or(EnqueueError::FailClosed)
+    }
+
+    fn binding(&self) -> Option<&RuntimeEffectCandidateBinding> {
+        self.binding.as_ref()
+    }
+
+    pub(crate) fn candidate_identity(&self) -> Option<iroha_crypto::Hash> {
+        self.binding
+            .as_ref()
+            .and_then(|binding| binding.candidate_identity)
     }
 
     /// Immutable owner carried into an asynchronous task or completion.
@@ -1613,6 +1927,464 @@ impl RuntimeEffectOwnership {
             kind,
         )
     }
+}
+
+fn append_optional_runtime_identity_bytes(identity: &mut Vec<u8>, value: Option<Vec<u8>>) {
+    match value {
+        None => identity.push(0),
+        Some(value) => {
+            identity.push(1);
+            append_runtime_identity_field(identity, &value);
+        }
+    }
+}
+
+/// Closed classification of every production adapter effect.
+pub(crate) const fn production_adapter_effect_kind(effect: &AdapterEffect) -> u8 {
+    match effect {
+        AdapterEffect::Sign {
+            request: super::v2::SignRequest::Proposal(_),
+            ..
+        } => RUNTIME_EFFECT_KIND_SIGN_PROPOSAL,
+        AdapterEffect::Sign {
+            request: super::v2::SignRequest::Vote(_),
+            ..
+        } => RUNTIME_EFFECT_KIND_SIGN_VOTE,
+        AdapterEffect::Sign {
+            request: super::v2::SignRequest::TimeoutVote(_),
+            ..
+        } => RUNTIME_EFFECT_KIND_SIGN_TIMEOUT,
+        AdapterEffect::FetchBody { .. } => RUNTIME_EFFECT_KIND_FETCH_BODY,
+        AdapterEffect::StoreBody { .. } => RUNTIME_EFFECT_KIND_STORE_BODY,
+        AdapterEffect::ValidateBody { .. } => RUNTIME_EFFECT_KIND_VALIDATE_BODY,
+        AdapterEffect::Apply { .. } => RUNTIME_EFFECT_KIND_APPLY,
+        AdapterEffect::Broadcast(_) => RUNTIME_EFFECT_KIND_BROADCAST,
+        AdapterEffect::EnterView { .. } => RUNTIME_EFFECT_KIND_ENTER_VIEW,
+        AdapterEffect::ReportEquivocation { .. } => RUNTIME_EFFECT_KIND_REPORT_EQUIVOCATION,
+        AdapterEffect::ReportInvalidCertifiedBody { .. } => {
+            RUNTIME_EFFECT_KIND_REPORT_INVALID_CERTIFIED_BODY
+        }
+    }
+}
+
+/// Canonical exact identity bytes for every field of one production effect.
+///
+/// These bytes are internal evidence only. They are never serialized as a wire
+/// field and do not introduce a runtime configuration surface.
+pub(crate) fn production_adapter_effect_semantic_identity(effect: &AdapterEffect) -> Vec<u8> {
+    let mut identity = Vec::new();
+    identity.extend_from_slice(b"iroha:sumeragi:v2:adapter-effect-semantic:v1");
+    identity.push(production_adapter_effect_kind(effect));
+    match effect {
+        AdapterEffect::Sign { tag, request } => {
+            append_runtime_identity_tag(&mut identity, *tag);
+            append_runtime_identity_field(&mut identity, &request.signature_preimage());
+        }
+        AdapterEffect::Broadcast(message) => {
+            append_runtime_identity_field(&mut identity, &message.encode());
+        }
+        AdapterEffect::FetchBody {
+            tag,
+            round,
+            subject,
+            manifest,
+            certified_sources,
+            certificate,
+        } => {
+            append_runtime_identity_tag(&mut identity, *tag);
+            append_runtime_identity_field(&mut identity, &round.encode());
+            append_runtime_identity_field(&mut identity, &subject.encode());
+            append_optional_runtime_identity_bytes(
+                &mut identity,
+                manifest.as_ref().map(norito::codec::Encode::encode),
+            );
+            append_runtime_identity_field(&mut identity, &certified_sources.encode());
+            append_optional_runtime_identity_bytes(
+                &mut identity,
+                certificate.as_ref().map(norito::codec::Encode::encode),
+            );
+        }
+        AdapterEffect::StoreBody {
+            tag,
+            round,
+            subject,
+        }
+        | AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } => {
+            append_runtime_identity_tag(&mut identity, *tag);
+            append_runtime_identity_field(&mut identity, &round.encode());
+            append_runtime_identity_field(&mut identity, &subject.encode());
+        }
+        AdapterEffect::Apply {
+            tag,
+            subject,
+            certificate,
+        } => {
+            append_runtime_identity_tag(&mut identity, *tag);
+            append_runtime_identity_field(&mut identity, &subject.encode());
+            append_runtime_identity_field(&mut identity, &certificate.encode());
+        }
+        AdapterEffect::EnterView {
+            tag,
+            certificate,
+            protected_body,
+        } => {
+            append_runtime_identity_tag(&mut identity, *tag);
+            append_runtime_identity_field(&mut identity, &certificate.encode());
+            match protected_body {
+                None => identity.push(0),
+                Some((round, subject)) => {
+                    identity.push(1);
+                    append_runtime_identity_field(&mut identity, &round.encode());
+                    append_runtime_identity_field(&mut identity, &subject.encode());
+                }
+            }
+        }
+        AdapterEffect::ReportEquivocation {
+            offender,
+            round,
+            kind,
+        } => {
+            append_runtime_identity_field(&mut identity, &offender.encode());
+            append_runtime_identity_field(&mut identity, &round.encode());
+            identity.push(match kind {
+                super::v2_core::EquivocationKind::Vote => 1,
+                super::v2_core::EquivocationKind::Timeout => 2,
+                super::v2_core::EquivocationKind::Proposal => 3,
+            });
+        }
+        AdapterEffect::ReportInvalidCertifiedBody {
+            subject,
+            certificate,
+        } => {
+            append_runtime_identity_field(&mut identity, &subject.encode());
+            append_runtime_identity_field(&mut identity, &certificate.encode());
+        }
+    }
+    identity
+}
+
+/// Route-neutral TLA work kind and semantic payload for candidate-producing
+/// effects. Transport destinations are intentionally absent; the exact
+/// certificate, tag, subject, and durable stage remain present.
+pub(crate) fn production_adapter_effect_candidate_semantic_identity(
+    effect: &AdapterEffect,
+) -> Option<(u8, Vec<u8>)> {
+    let (candidate_kind, tag) = match effect {
+        AdapterEffect::Sign {
+            tag,
+            request: super::v2::SignRequest::Proposal(_),
+        } => (RUNTIME_CANDIDATE_KIND_SIGN_PROPOSAL, *tag),
+        AdapterEffect::Sign {
+            tag,
+            request: super::v2::SignRequest::Vote(_),
+        } => (RUNTIME_CANDIDATE_KIND_SIGN_VOTE, *tag),
+        AdapterEffect::Sign {
+            tag,
+            request: super::v2::SignRequest::TimeoutVote(_),
+        } => (RUNTIME_CANDIDATE_KIND_SIGN_TIMEOUT, *tag),
+        AdapterEffect::FetchBody { tag, .. } => (RUNTIME_CANDIDATE_KIND_FETCH_BODY, *tag),
+        AdapterEffect::StoreBody { tag, .. } => (RUNTIME_CANDIDATE_KIND_STORE_BODY, *tag),
+        AdapterEffect::ValidateBody { tag, .. } => (RUNTIME_CANDIDATE_KIND_VALIDATE_BODY, *tag),
+        AdapterEffect::Apply { tag, .. } => (RUNTIME_CANDIDATE_KIND_APPLY, *tag),
+        AdapterEffect::Broadcast(_)
+        | AdapterEffect::EnterView { .. }
+        | AdapterEffect::ReportEquivocation { .. }
+        | AdapterEffect::ReportInvalidCertifiedBody { .. } => return None,
+    };
+    let mut identity = Vec::new();
+    identity.extend_from_slice(b"iroha:sumeragi:v2:tla-candidate-semantic:v1");
+    append_runtime_identity_tag(&mut identity, tag);
+    match effect {
+        AdapterEffect::Sign { request, .. } => {
+            append_runtime_identity_field(&mut identity, &request.signature_preimage());
+        }
+        AdapterEffect::FetchBody {
+            round,
+            subject,
+            manifest,
+            certificate,
+            ..
+        } => {
+            append_runtime_identity_field(&mut identity, &round.encode());
+            append_runtime_identity_field(&mut identity, &subject.encode());
+            append_optional_runtime_identity_bytes(
+                &mut identity,
+                manifest.as_ref().map(norito::codec::Encode::encode),
+            );
+            append_optional_runtime_identity_bytes(
+                &mut identity,
+                certificate.as_ref().map(norito::codec::Encode::encode),
+            );
+        }
+        AdapterEffect::StoreBody { round, subject, .. }
+        | AdapterEffect::ValidateBody { round, subject, .. } => {
+            append_runtime_identity_field(&mut identity, &round.encode());
+            append_runtime_identity_field(&mut identity, &subject.encode());
+        }
+        AdapterEffect::Apply {
+            subject,
+            certificate,
+            ..
+        } => {
+            append_runtime_identity_field(&mut identity, &subject.encode());
+            append_runtime_identity_field(&mut identity, &certificate.encode());
+        }
+        AdapterEffect::Broadcast(_)
+        | AdapterEffect::EnterView { .. }
+        | AdapterEffect::ReportEquivocation { .. }
+        | AdapterEffect::ReportInvalidCertifiedBody { .. } => {
+            unreachable!("non-candidate effects returned before semantic extraction")
+        }
+    }
+    Some((candidate_kind, identity))
+}
+
+fn runtime_identity_projection(
+    kind: u8,
+    identity: &iroha_crypto::Hash,
+) -> CanonicalIdentityProjection {
+    CanonicalIdentityProjection::from_bytes(
+        IDENTITY_DOMAIN_PROCESS_LOCAL,
+        kind,
+        *identity.as_ref(),
+    )
+}
+
+fn optional_runtime_identity_projection(
+    kind: u8,
+    identity: Option<&iroha_crypto::Hash>,
+) -> CanonicalIdentityProjection {
+    identity.map_or_else(CanonicalIdentityProjection::zero, |identity| {
+        runtime_identity_projection(kind, identity)
+    })
+}
+
+/// Bind a complete test/executor effect batch to exact positional candidate
+/// identities. Production runtime drivers use the same low-level constructor.
+pub(crate) fn bind_adapter_effect_batch_ownership(
+    effects: &[AdapterEffect],
+    ownership: Vec<RuntimeEffectOwnership>,
+) -> Result<Vec<RuntimeEffectOwnership>, String> {
+    if effects.is_empty() || effects.len() != ownership.len() || effects.len() > MAX_EFFECTS_PER_STEP
+    {
+        return Err("Sumeragi v2 effect batch cannot be bound positionally".to_owned());
+    }
+    let effect_count = u8::try_from(effects.len())
+        .map_err(|_| "Sumeragi v2 effect count is not representable".to_owned())?;
+    let candidate_count_usize = effects
+        .iter()
+        .filter(|effect| production_adapter_effect_candidate_semantic_identity(effect).is_some())
+        .count();
+    if candidate_count_usize > MAX_CAUSAL_SUCCESSORS_PER_COMMAND {
+        return Err("Sumeragi v2 effect batch exceeded the causal-successor bound".to_owned());
+    }
+    let candidate_count = u8::try_from(candidate_count_usize)
+        .map_err(|_| "Sumeragi v2 candidate count is not representable".to_owned())?;
+    let mut candidate_position = 0u8;
+    effects
+        .iter()
+        .zip(ownership)
+        .enumerate()
+        .map(|(index, (effect, ownership))| {
+            let effect_position = u8::try_from(index + 1)
+                .map_err(|_| "Sumeragi v2 effect position is not representable".to_owned())?;
+            let effect_semantic_identity = production_adapter_effect_semantic_identity(effect);
+            let candidate = production_adapter_effect_candidate_semantic_identity(effect);
+            if candidate.is_some() {
+                candidate_position = candidate_position.checked_add(1).ok_or_else(|| {
+                    "Sumeragi v2 candidate position overflowed".to_owned()
+                })?;
+            }
+            let ownership = match ownership.causality() {
+                RuntimeEffectCausality::Inherit => {
+                    RuntimeEffectOwnership::inherited(ownership.owner().clone())
+                }
+                RuntimeEffectCausality::Fresh(kind) => {
+                    RuntimeEffectOwnership::fresh(ownership.owner().clone(), kind)
+                }
+            };
+            let parent = matches!(ownership.causality(), RuntimeEffectCausality::Inherit)
+                .then(|| ownership.owner().clone());
+            ownership
+                .bind_runtime_effect(
+                    parent.as_ref(),
+                    production_adapter_effect_kind(effect),
+                    &effect_semantic_identity,
+                    candidate
+                        .as_ref()
+                        .map(|(kind, semantic)| (*kind, semantic.as_slice())),
+                    effect_position,
+                    effect_count,
+                    candidate
+                        .as_ref()
+                        .map_or(0, |_| candidate_position),
+                    candidate_count,
+                )
+                .map_err(|_| "Sumeragi v2 effect binding failed closed".to_owned())
+        })
+        .collect()
+}
+
+impl RuntimeEffectOwnership {
+    /// Replace the positional binding while retaining the same lifecycle root.
+    /// This is used only when one completed local async stage atomically creates
+    /// its next exact stage without returning through the serialized reducer.
+    pub(crate) fn rebind_as_inherited_adapter_effect(
+        &self,
+        effect: &AdapterEffect,
+    ) -> Result<Self, String> {
+        let candidate = production_adapter_effect_candidate_semantic_identity(effect);
+        let candidate_count = u8::from(candidate.is_some());
+        RuntimeEffectOwnership::inherited(self.owner.clone())
+            .bind_runtime_effect(
+                Some(&self.owner),
+                production_adapter_effect_kind(effect),
+                &production_adapter_effect_semantic_identity(effect),
+                candidate
+                    .as_ref()
+                    .map(|(kind, semantic)| (*kind, semantic.as_slice())),
+                1,
+                1,
+                candidate_count,
+                candidate_count,
+            )
+            .map_err(|_| "Sumeragi v2 successor effect binding failed closed".to_owned())
+    }
+
+    pub(crate) fn rebind_same_adapter_effect(
+        &self,
+        effect: &AdapterEffect,
+    ) -> Result<Self, String> {
+        let candidate = production_adapter_effect_candidate_semantic_identity(effect);
+        let candidate_count = u8::from(candidate.is_some());
+        let mut ownership = match self.causality {
+            RuntimeEffectCausality::Inherit => RuntimeEffectOwnership::inherited(self.owner.clone()),
+            RuntimeEffectCausality::Fresh(kind) => {
+                RuntimeEffectOwnership::fresh(self.owner.clone(), kind)
+            }
+        };
+        ownership.binding = None;
+        let parent = matches!(ownership.causality, RuntimeEffectCausality::Inherit)
+            .then(|| ownership.owner.clone());
+        ownership
+            .bind_runtime_effect(
+                parent.as_ref(),
+                production_adapter_effect_kind(effect),
+                &production_adapter_effect_semantic_identity(effect),
+                candidate
+                    .as_ref()
+                    .map(|(kind, semantic)| (*kind, semantic.as_slice())),
+                1,
+                1,
+                candidate_count,
+                candidate_count,
+            )
+            .map_err(|_| "Sumeragi v2 exact effect rebind failed closed".to_owned())
+    }
+}
+
+/// Recompute one total effect/candidate gate projection from concrete effect
+/// bytes and the independently retained runtime binding.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn production_adapter_effect_candidate_trace_projection(
+    effect: &AdapterEffect,
+    ownership: &RuntimeEffectOwnership,
+    effect_position: u8,
+    effect_count: u8,
+    candidate_position: u8,
+    candidate_count: u8,
+    candidate_owner_count_before: u8,
+    candidate_owner_count_after: u8,
+    producer_episode_retained: bool,
+) -> Result<ProductionEffectToCandidateTraceProjection, String> {
+    let binding = ownership
+        .binding()
+        .filter(|binding| binding.validate_exact(ownership.owner(), ownership.causality()))
+        .ok_or_else(|| "Sumeragi v2 effect omitted its exact candidate binding".to_owned())?;
+    let effect_kind = production_adapter_effect_kind(effect);
+    let effect_identity =
+        runtime_effect_identity_hash(effect_kind, &production_adapter_effect_semantic_identity(effect));
+    let candidate = production_adapter_effect_candidate_semantic_identity(effect);
+    let (candidate_kind, candidate_semantic_identity, candidate_identity) = match candidate {
+        None => (RUNTIME_CANDIDATE_KIND_NONE, None, None),
+        Some((candidate_kind, semantic_identity)) => {
+            let semantic_identity =
+                runtime_effect_candidate_semantic_hash(candidate_kind, &semantic_identity);
+            let candidate_identity = runtime_effect_candidate_identity_hash(
+                ownership.owner(),
+                candidate_kind,
+                &semantic_identity,
+            );
+            (
+                candidate_kind,
+                Some(semantic_identity),
+                Some(candidate_identity),
+            )
+        }
+    };
+    Ok(ProductionEffectToCandidateTraceProjection {
+        incoming_effect_kind: effect_kind,
+        stored_effect_kind: binding.effect_kind,
+        incoming_candidate_kind: candidate_kind,
+        stored_candidate_kind: binding.candidate_kind,
+        causality: runtime_effect_causality_code(ownership.causality()),
+        fresh_root_kind: runtime_effect_fresh_root_code(ownership.causality()),
+        incoming_effect_position: effect_position,
+        stored_effect_position: binding.effect_position,
+        incoming_effect_count: effect_count,
+        stored_effect_count: binding.effect_count,
+        incoming_candidate_position: candidate_position,
+        stored_candidate_position: binding.candidate_position,
+        incoming_candidate_count: candidate_count,
+        stored_candidate_count: binding.candidate_count,
+        incoming_lifecycle_ordinal: ownership.owner().lifecycle_ordinal(),
+        stored_lifecycle_ordinal: ownership.owner().lifecycle_ordinal(),
+        incoming_effect_identity: runtime_identity_projection(
+            IDENTITY_KIND_RUNTIME_EFFECT,
+            &effect_identity,
+        ),
+        stored_effect_identity: runtime_identity_projection(
+            IDENTITY_KIND_RUNTIME_EFFECT,
+            &binding.effect_identity,
+        ),
+        incoming_owner_identity: runtime_identity_projection(
+            IDENTITY_KIND_RUNTIME_LIFECYCLE_OWNER,
+            &ownership.owner().projection_hash,
+        ),
+        stored_owner_identity: runtime_identity_projection(
+            IDENTITY_KIND_RUNTIME_LIFECYCLE_OWNER,
+            &binding.owner_projection_hash,
+        ),
+        parent_owner_identity: optional_runtime_identity_projection(
+            IDENTITY_KIND_RUNTIME_LIFECYCLE_OWNER,
+            binding.parent_owner_projection_hash.as_ref(),
+        ),
+        incoming_candidate_semantic_identity: optional_runtime_identity_projection(
+            IDENTITY_KIND_RUNTIME_CANDIDATE_SEMANTIC,
+            candidate_semantic_identity.as_ref(),
+        ),
+        stored_candidate_semantic_identity: optional_runtime_identity_projection(
+            IDENTITY_KIND_RUNTIME_CANDIDATE_SEMANTIC,
+            binding.candidate_semantic_identity.as_ref(),
+        ),
+        incoming_candidate_identity: optional_runtime_identity_projection(
+            IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE,
+            candidate_identity.as_ref(),
+        ),
+        stored_candidate_identity: optional_runtime_identity_projection(
+            IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE,
+            binding.candidate_identity.as_ref(),
+        ),
+        candidate_owner_count_before,
+        candidate_owner_count_after,
+        candidate_owner_admitted: candidate_kind != RUNTIME_CANDIDATE_KIND_NONE
+            && candidate_owner_count_before == 0,
+        producer_episode_retained,
+    })
 }
 
 /// One exact FIFO candidate selected by the class-aware service cursor.
@@ -5831,6 +6603,19 @@ pub(crate) trait RuntimeDriver {
     ) -> RuntimeEffectCausality {
         RuntimeEffectCausality::Inherit
     }
+    /// Closed refinement kind for exact effect-to-candidate projection.
+    fn effect_refinement_kind(_effect: &Self::Effect) -> u8 {
+        RUNTIME_EFFECT_KIND_OPAQUE_TEST
+    }
+    /// Exact semantic bytes for the complete concrete effect.
+    fn effect_semantic_identity(_effect: &Self::Effect) -> Vec<u8> {
+        vec![RUNTIME_EFFECT_KIND_OPAQUE_TEST]
+    }
+    /// Route-neutral candidate kind and semantic bytes, or `None` for a
+    /// synchronous/transport/diagnostic effect.
+    fn effect_candidate_semantic_identity(_effect: &Self::Effect) -> Option<(u8, Vec<u8>)> {
+        None
+    }
     /// Route-neutral semantic identity for a new TLA effect root. Diagnostic
     /// generation and local admission ordinals must not appear here.
     fn fresh_effect_semantic_identity(
@@ -6126,6 +6911,18 @@ impl RuntimeDriver for SumeragiV2Adapter {
         } else {
             RuntimeEffectCausality::Inherit
         }
+    }
+
+    fn effect_refinement_kind(effect: &Self::Effect) -> u8 {
+        production_adapter_effect_kind(effect)
+    }
+
+    fn effect_semantic_identity(effect: &Self::Effect) -> Vec<u8> {
+        production_adapter_effect_semantic_identity(effect)
+    }
+
+    fn effect_candidate_semantic_identity(effect: &Self::Effect) -> Option<(u8, Vec<u8>)> {
+        production_adapter_effect_candidate_semantic_identity(effect)
     }
 
     fn fresh_effect_semantic_identity(
@@ -6699,8 +7496,28 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if self.pending_effect_ownership.is_some() {
             return Err(EnqueueError::FailClosed);
         }
+        if effects.len() > MAX_EFFECTS_PER_STEP {
+            return Err(EnqueueError::FailClosed);
+        }
+        let effect_count = u8::try_from(effects.len()).map_err(|_| EnqueueError::FailClosed)?;
+        let candidate_semantics = effects
+            .iter()
+            .map(D::effect_candidate_semantic_identity)
+            .collect::<Vec<_>>();
+        let candidate_count_usize = candidate_semantics
+            .iter()
+            .filter(|candidate| candidate.is_some())
+            .count();
+        if candidate_count_usize > MAX_CAUSAL_SUCCESSORS_PER_COMMAND {
+            return Err(EnqueueError::FailClosed);
+        }
+        let candidate_count =
+            u8::try_from(candidate_count_usize).map_err(|_| EnqueueError::FailClosed)?;
         let mut ownership = Vec::with_capacity(effects.len());
-        for effect in effects {
+        let mut candidate_position = 0u8;
+        for (index, (effect, candidate)) in
+            effects.iter().zip(candidate_semantics.iter()).enumerate()
+        {
             let causality = if source == RuntimeEffectSource::Startup {
                 RuntimeEffectCausality::Fresh(RuntimeFreshRootKind::StartupRecovery)
             } else {
@@ -6722,7 +7539,28 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                     RuntimeEffectOwnership::fresh(owner, kind)
                 }
             };
-            if !evidence.validate_exact() {
+            if candidate.is_some() {
+                candidate_position = candidate_position
+                    .checked_add(1)
+                    .ok_or(EnqueueError::FailClosed)?;
+            }
+            let effect_position =
+                u8::try_from(index + 1).map_err(|_| EnqueueError::FailClosed)?;
+            let evidence = evidence.bind_runtime_effect(
+                matches!(causality, RuntimeEffectCausality::Inherit)
+                    .then_some(parent)
+                    .flatten(),
+                D::effect_refinement_kind(effect),
+                &D::effect_semantic_identity(effect),
+                candidate
+                    .as_ref()
+                    .map(|(kind, semantic)| (*kind, semantic.as_slice())),
+                effect_position,
+                effect_count,
+                candidate.as_ref().map_or(0, |_| candidate_position),
+                candidate_count,
+            )?;
+            if !evidence.validate_bound_exact() {
                 return Err(EnqueueError::FailClosed);
             }
             // Startup is fenced before live ingress. Its deterministic effect
@@ -6764,7 +7602,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             .take()
             .ok_or_else(|| "Sumeragi v2 effect batch omitted its lifecycle ownership".to_owned())?;
         if ownership.len() != effect_count
-            || ownership.iter().any(|evidence| !evidence.validate_exact())
+            || ownership
+                .iter()
+                .any(|evidence| !evidence.validate_bound_exact())
         {
             self.latch_fail_closed("effect lifecycle ownership did not match its batch");
             return Err("Sumeragi v2 effect lifecycle ownership was invalid".to_owned());
@@ -6973,7 +7813,17 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 ownership.owner(),
             )
             .map_err(|error| error.to_string())?;
-            return Ok(RuntimeEffectOwnership::inherited(ownership.owner().clone()));
+            let effect = AdapterEffect::StoreBody {
+                tag,
+                round: manifest.round,
+                subject: manifest.subject,
+            };
+            return bind_adapter_effect_batch_ownership(
+                std::slice::from_ref(&effect),
+                vec![RuntimeEffectOwnership::inherited(ownership.owner().clone())],
+            )?
+            .pop()
+            .ok_or_else(|| "local proposal StoreBody binding was empty".to_owned());
         }
         if self.clocks_armed && tag == self.round_tag {
             self.latch_fail_closed(
@@ -6992,10 +7842,20 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 &manifest.encode(),
             )
             .map_err(|error| error.to_string())?;
-        Ok(RuntimeEffectOwnership::fresh(
-            owner,
-            RuntimeFreshRootKind::LocalProposalAdmission,
-        ))
+        let effect = AdapterEffect::StoreBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&effect),
+            vec![RuntimeEffectOwnership::fresh(
+                owner,
+                RuntimeFreshRootKind::LocalProposalAdmission,
+            )],
+        )?
+        .pop()
+        .ok_or_else(|| "local proposal StoreBody binding was empty".to_owned())
     }
 
     /// Return whether the runner may begin one local proposal for this view.
@@ -11788,6 +12648,118 @@ mod tests {
             &[body],
         )
         .expect("valid runtime manifest")
+    }
+
+    #[test]
+    fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
+        let (context, keys) = authenticated_runtime_context();
+        let manifest = runtime_manifest(&context, 0x6A);
+        let tag = EventTag::new(context.height, 0, Generation::new(1));
+        let store = AdapterEffect::StoreBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        assert_eq!(
+            production_adapter_effect_kind(&store),
+            RUNTIME_EFFECT_KIND_STORE_BODY
+        );
+        assert_eq!(
+            production_adapter_effect_candidate_semantic_identity(&store)
+                .expect("StoreBody is a causal candidate")
+                .0,
+            RUNTIME_CANDIDATE_KIND_STORE_BODY
+        );
+
+        let owner = RuntimeEffectOwnership::fresh_for_test(tag, 71);
+        let bound = bind_adapter_effect_batch_ownership(&[store.clone()], vec![owner])
+            .expect("one exact StoreBody candidate is within the bound");
+        assert!(bound[0].validate_bound_exact());
+        let first_owner_projection = production_adapter_effect_candidate_trace_projection(
+            &store, &bound[0], 1, 1, 1, 1, 0, 1, true,
+        )
+        .expect("recompute lossless first-owner projection");
+        assert!(
+            check_production_effect_to_candidate_transition(first_owner_projection).is_some()
+        );
+        assert!(first_owner_projection.candidate_owner_admitted);
+
+        let retry_owner = RuntimeEffectOwnership::fresh_for_test(tag, 71);
+        let retry = bind_adapter_effect_batch_ownership(&[store.clone()], vec![retry_owner])
+            .expect("same exact producer retry remains bindable");
+        assert_eq!(bound[0].candidate_identity(), retry[0].candidate_identity());
+        let retry_projection = production_adapter_effect_candidate_trace_projection(
+            &store, &retry[0], 1, 1, 1, 1, 1, 1, true,
+        )
+        .expect("recompute coalesced retry projection");
+        assert!(check_production_effect_to_candidate_transition(retry_projection).is_some());
+        assert!(!retry_projection.candidate_owner_admitted);
+
+        let changed_tag = EventTag::new(context.height, 0, Generation::new(2));
+        let changed = AdapterEffect::StoreBody {
+            tag: changed_tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        assert_ne!(
+            production_adapter_effect_semantic_identity(&store),
+            production_adapter_effect_semantic_identity(&changed)
+        );
+        assert_ne!(
+            production_adapter_effect_candidate_semantic_identity(&store),
+            production_adapter_effect_candidate_semantic_identity(&changed)
+        );
+
+        let sources = keys[..2]
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let mut reversed_sources = sources.clone();
+        reversed_sources.reverse();
+        let fetch = |certified_sources| AdapterEffect::FetchBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources,
+            certificate: None,
+        };
+        let first_route = fetch(sources);
+        let second_route = fetch(reversed_sources);
+        assert_ne!(
+            production_adapter_effect_semantic_identity(&first_route),
+            production_adapter_effect_semantic_identity(&second_route),
+            "the exact transport effect includes ordered destinations"
+        );
+        assert_eq!(
+            production_adapter_effect_candidate_semantic_identity(&first_route),
+            production_adapter_effect_candidate_semantic_identity(&second_route),
+            "transport retries retain one route-neutral abstract candidate"
+        );
+
+        let four_candidates = vec![store.clone(), store.clone(), store.clone(), store.clone()];
+        let four_owners = (1_u128..=4)
+            .map(|ordinal| RuntimeEffectOwnership::fresh_for_test(tag, 100 + ordinal))
+            .collect();
+        assert!(
+            bind_adapter_effect_batch_ownership(&four_candidates, four_owners).is_err(),
+            "a fourth causal successor must fail before retention"
+        );
+
+        let mut forged = bound[0].clone();
+        forged
+            .binding
+            .as_mut()
+            .expect("bound ownership has positional evidence")
+            .effect_position = 2;
+        assert!(!forged.validate_exact());
+        assert!(
+            production_adapter_effect_candidate_trace_projection(
+                &store, &forged, 1, 1, 1, 1, 0, 1, true,
+            )
+            .is_err(),
+            "positional binding mutation must fail before projection"
+        );
     }
 
     fn observe_enter_view_for_test(

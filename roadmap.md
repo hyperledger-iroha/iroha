@@ -135,10 +135,11 @@ package-layout preflight and aggregate checker also bind the sole reviewed
 test-only `v2_core/refinement_cases.rs` source split and reject additional,
 parent-relative, non-test, or skipped-verifier mutations. Its focused pytest
 mutation execution remains pending while concurrent checker jobs are active.
-The broader `check_sumeragi_v2_multilane_models.py` structural gate is presently
-red on concurrent Native AMX/Kura source-binding drift. Reconcile that owning
-work before the final source freeze, and do not reuse the older green
-structural result as evidence for this tree.
+The broader `check_sumeragi_v2_multilane_models.py` structural gate now passes
+after binding Kura's whole-plan route preflight, all-manifest readback,
+transition-checked latest-index publication, configured evidence-byte bounds,
+and State-frontier authentication. Its focused failing-mutation pytest cases
+must still execute on the final source before freeze.
 
 The production source now contains the Native evidence, autonomous execution,
 automatic lifecycle, diagnostics, SDK model, and versioned-wire paths mapped by

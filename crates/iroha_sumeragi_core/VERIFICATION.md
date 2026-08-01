@@ -660,14 +660,29 @@ production reducer can be described as deductively verified:
    witnesses pin the two corresponding semantic mutations. A token-aware
    source gate binds those contracts and proof bodies to real direct children
    of `verus!`, rejecting comments, literals, macros, and `cfg` replacements.
-   The abstract stable first-owner filter remains conditional: `drive_effects` does not itself own
-   scheduler-wide coalescing, and these integer sequences
-   are not a proved identity map from executable effects to TLA+ candidates.
+   `ProductionEffectToCandidateTraceProjection` now closes the concrete
+   effect boundary. Each positional runtime sidecar hashes the complete
+   adapter effect, immutable lifecycle owner and parent relation, and the
+   route-neutral semantic TLA+ candidate. The executor recomputes that
+   projection from the concrete effect, counts the corresponding owner across
+   every retained asynchronous task, and calls
+   `check_production_effect_to_candidate_transition` before retaining the
+   batch. A first owner is installed once; exact retries are consumed without minting a second asynchronous owner, and an equal candidate under a
+   replacement owner fails closed.
 
-   TODO: discharge the remaining machine-checked production effect-to-TLA
-   candidate identity/ownership mapping and the Completion-capacity
-   product-rank proof before promoting this seam or the temporal liveness
-   obligation.
+   The mirrored Verus theorem checks the closed effect-kind map, exact
+   identities and positions, the three-successor bound, and first-owner versus
+   coalesced-retry accounting. The Completion residual is composed with the
+   root residual by `production_completion_capacity_product_rank_descends`:
+   radix four makes one root descent dominate resetting the successor
+   component to its maximum value of three. The source checker seals this
+   Rust/Verus gate and its production mutation boundary together with
+   `AsyncCandidateCausalOrigin`, `ExactAsyncCandidateIdentity`,
+   `FreshCommandSuccessors`, `AppendCausalSuccessors`, and
+   `FairStage6CompletionCapacityOpens`. This discharges the concrete causal
+   FIFO/Completion-capacity mapping seam; the broader independently parsed
+   TLA+ action-body equivalence described at the start of this item remains a
+   separate boundary.
 6. **Temporal liveness.** This module proves safety-style transition
    preservation only. Fair delivery, timeout-certificate progress, rotating
    honest leaders, repeated runtime invocation, terminating body service, and

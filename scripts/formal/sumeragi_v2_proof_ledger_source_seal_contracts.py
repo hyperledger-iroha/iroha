@@ -35,6 +35,48 @@ _PRODUCTION_CAUSAL_FIFO_VERUS_ITEM_SHA256 = {
     "production_reversed_fresh_order_mutant_is_rejected": (
         "a0b995d9442eb0fef330eb7383c258f16dab35b61b84e02716437f758214a6f5"
     ),
+    "production_completion_capacity_product_rank": (
+        _CHECKED_PRODUCTION_COMPLETION_PRODUCT_RANK_SHA256
+    ),
+    "production_completion_capacity_product_rank_descends": (
+        _CHECKED_PRODUCTION_COMPLETION_PRODUCT_RANK_DESCENT_SHA256
+    ),
+}
+
+_PRODUCTION_EFFECT_CANDIDATE_TLA_OPERATOR_SHA256 = {
+    "AsyncCausalCandidateLifecycleCapacity": (
+        "02882bb4b0f0b52c5e9d0994bdb8f459b768e7612851b68956932bbaecf93591"
+    ),
+    "AsyncCandidateCausalOrigin": (
+        "00a780f6b919c66fc03507311341ff7590f4d37cba9bc4711ee73ec29e23eeef"
+    ),
+    "ExactAsyncCandidateIdentity": (
+        "ea61970ab14753196453163eb63728d5d84bcd2b79ddc6a2dd3668279730ebbf"
+    ),
+    "FreshCommandSuccessors": (
+        "387d64f773b0d6df95e41ce65e108bd37e23c6b3574ecdd0f049b242b2235997"
+    ),
+    "AppendCausalSuccessors": (
+        "f4c500c716af8d23357691a07a603700fa1d762b2192a2f310845ea021bc5781"
+    ),
+}
+
+_PRODUCTION_EFFECT_CANDIDATE_TLA_THEOREM_SHA256 = {
+    "CommandSuccessorsRetainCausalOrigin": (
+        "2ea1ea72d3500d58aa8cd88b242a05182fcd717d9fab0c513931cd1bbdf3ca25"
+    ),
+}
+
+_PRODUCTION_COMPLETION_CAPACITY_TLA_OPERATOR_SHA256 = {
+    "Stage6CompletionCapacityGoal": (
+        "c983618885f38d74a140a2e1d03f0e9e2e1721553db0e0e457efbf67dbc41dde"
+    ),
+}
+
+_PRODUCTION_COMPLETION_CAPACITY_TLA_THEOREM_SHA256 = {
+    "FairStage6CompletionCapacityOpens": (
+        "d6395e9f9616aca03edbd2dffde7e3aa340e80e3be9fe333f8c4a362ef2e21c1"
+    ),
 }
 
 # Exact comment/literal-free token digests for the production Rust items whose

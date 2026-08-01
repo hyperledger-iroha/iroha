@@ -17756,7 +17756,7 @@ pub(super) mod tests {
         v2_runtime::{
             BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
             RetiredBodyPipelineCompletions, RuntimeEffectOwnership, RuntimeLifecycleOwner,
-            RuntimeStep,
+            RuntimeStep, bind_adapter_effect_batch_ownership,
         },
         v2_transport::{authenticate_certified_body_request, authenticate_payload_chunk},
     };
@@ -18440,10 +18440,11 @@ pub(super) mod tests {
             &mut self,
             effects: &[AdapterEffect],
         ) -> Result<Vec<RuntimeEffectOwnership>, String> {
-            effects
+            let ownership = effects
                 .iter()
                 .map(|effect| self.effect_ownership(effect))
-                .collect()
+                .collect::<Result<Vec<_>, _>>()?;
+            bind_adapter_effect_batch_ownership(effects, ownership)
         }
 
         fn take_leader_wire_runtime_terminals(
@@ -18505,7 +18506,18 @@ pub(super) mod tests {
             let mut identity = Vec::from(b"body-pipeline".as_slice());
             identity.extend_from_slice(&manifest.round.encode());
             identity.extend_from_slice(&manifest.subject.encode());
-            self.ownership_for_identity(tag, Hash::new(identity))
+            let ownership = self.ownership_for_identity(tag, Hash::new(identity))?;
+            let effect = AdapterEffect::StoreBody {
+                tag,
+                round: manifest.round,
+                subject: manifest.subject,
+            };
+            bind_adapter_effect_batch_ownership(
+                std::slice::from_ref(&effect),
+                vec![ownership],
+            )?
+            .pop()
+            .ok_or_else(|| "saturated local proposal StoreBody binding was empty".to_owned())
         }
 
         fn reconcile_active_view_producer(

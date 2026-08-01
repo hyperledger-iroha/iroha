@@ -449,6 +449,13 @@ _INGRESS_RESERVATION_MATERIALIZATION_GATE = _total_gate(
     _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_VERUS_GATE_SHA256,
     verus_kernel_arguments="projection,",
 )
+_EFFECT_TO_CANDIDATE_GATE = _total_gate(
+    "check_production_effect_to_candidate_transition",
+    "ProductionEffectToCandidateTraceProjection",
+    "projection",
+    _CHECKED_PRODUCTION_EFFECT_TO_CANDIDATE_GATE_SHA256,
+    _CHECKED_PRODUCTION_EFFECT_TO_CANDIDATE_VERUS_GATE_SHA256,
+)
 _INGRESS_RESERVATION_MATERIALIZATION_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal(
         "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
@@ -462,6 +469,215 @@ _INGRESS_RESERVATION_MATERIALIZATION_SOURCE_ITEM_SEALS = (
         _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_VERUS_PROJECTION_SHA256,
         "struct",
         (("verus", "!"),),
+    ),
+)
+_EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "ProductionEffectToCandidateTraceProjection",
+        _CHECKED_PRODUCTION_EFFECT_TO_CANDIDATE_PROJECTION_SHA256,
+        "struct",
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+        "ProductionEffectToCandidateTraceProjection",
+        _CHECKED_PRODUCTION_EFFECT_TO_CANDIDATE_VERUS_PROJECTION_SHA256,
+        "struct",
+        (("verus", "!"),),
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "MAX_CAUSAL_SUCCESSORS_PER_COMMAND",
+        "b3a69f4e70f4aa9b6f534cd1828936c64c64e8089dbc89a6cac5473292483b9c",
+        "const",
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "COMPLETION_CAPACITY_RANK_RADIX",
+        "050a462729e2c206af37bb60f17c8043e42bb390d78d62c5dfd95ccfd7f9ebd8",
+        "const",
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+        "RuntimeEffectCandidateBinding",
+        "6fb5952ef09d4bb30eb3d9c5e1ad2a18df203961e3b825a41249326238615fd6",
+        "struct",
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+        "RuntimeEffectOwnership",
+        "35743d680ca008038833aa3282dfefa25f654270181a745d978ed14175dba613",
+        "struct",
+    ),
+    *(
+        CrossToolSourceItemSeal(
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            name,
+            sha256,
+            brace_context=context,
+        )
+        for name, sha256, context in (
+            (
+                "runtime_effect_identity_hash",
+                "165989bc25212ccc33820a137f9a077a6196b9f1e472693c75f3fb55640db2df",
+                (),
+            ),
+            (
+                "runtime_effect_candidate_semantic_hash",
+                "3f418ccbba6c9a87e9881eb1b0bfac05ca20df9a1d2d758e6ded8c661748bffa",
+                (),
+            ),
+            (
+                "runtime_effect_candidate_identity_hash",
+                "37a267defe4a33ea07931b2d71d042dfbb199bcba73f40b13e51663b3a95c37d",
+                (),
+            ),
+            (
+                "runtime_effect_candidate_binding_projection_hash",
+                "afaaed95ba28e5c9e1c2bb856165d09c07647765fc6f4a4a1a7d89866efde2c5",
+                (),
+            ),
+            (
+                "new",
+                "283fefeefdc1875b8710bb3d9fbfbb70ea01c4d9afe66d47d3205e30e568a0ea",
+                (("impl", "RuntimeEffectCandidateBinding"),),
+            ),
+            (
+                "validate_exact",
+                "87b9ba93bd1ff7cad22335b77d4c76320969b897597bba6fcc91c80c4664ce4e",
+                (("impl", "RuntimeEffectCandidateBinding"),),
+            ),
+            (
+                "production_adapter_effect_kind",
+                "794ac7708b9fe0570423338ff2ec214a21e1a3269a8d766934aebf7cd303d3de",
+                (),
+            ),
+            (
+                "production_adapter_effect_semantic_identity",
+                "89ed8da214803440d6dc7c893e371586a5b9f3f66d422c4c6a586efaec0feb80",
+                (),
+            ),
+            (
+                "production_adapter_effect_candidate_semantic_identity",
+                "15cb0d17cef4d5012bc3cd30551dba0ccf350f82e98e2761f1d035317deb8fe9",
+                (),
+            ),
+            (
+                "runtime_identity_projection",
+                "efc93171971e222e0ed699ea21822c98364a7132c78885007c8202c38ad8bd92",
+                (),
+            ),
+            (
+                "optional_runtime_identity_projection",
+                "035dfef1ab8afa13f5eb8ffc4c05563a6d05b4f5b46dd3dacd26944288e49356",
+                (),
+            ),
+            (
+                "bind_adapter_effect_batch_ownership",
+                "476b676f09bf74a625763bb9d42c80fd26d342f7cc44bcb90e41ad6a85b5d793",
+                (),
+            ),
+            (
+                "eq",
+                "8fa7c01088b04aaf0ebaae6f956201cae803b85d76e861d65bdda9b385e79da2",
+                (("impl", "PartialEq", "for", "RuntimeEffectOwnership"),),
+            ),
+            (
+                "validate_exact",
+                "cfdf58c67aeeca6a1f7f948d5a559e25adb340b3613526f47de25a1b60007638",
+                (("impl", "RuntimeEffectOwnership"),),
+            ),
+            (
+                "validate_bound_exact",
+                "2b27b985ad5b1a8e04fac4bb4ff33ffa6a9319e29dcac6ce7702c43576c77e14",
+                (("impl", "RuntimeEffectOwnership"),),
+            ),
+            (
+                "bind_runtime_effect",
+                "14bb57b820cf99eff65d587576bb6d651b7e3fc1e7d3926befb74ab402a8fc8e",
+                (("impl", "RuntimeEffectOwnership"),),
+            ),
+            (
+                "candidate_identity",
+                "84faf06f2e7a9a2d4fdc914f67fbc8c11095b32638f6dad0cdb921b993feb6b7",
+                (("impl", "RuntimeEffectOwnership"),),
+            ),
+            (
+                "rebind_as_inherited_adapter_effect",
+                "19532dbdacd6d552c366d53a66cdccd94fe8a6197e1a61eb3c96ccdb81af01b9",
+                (("impl", "RuntimeEffectOwnership"),),
+            ),
+            (
+                "rebind_same_adapter_effect",
+                "381d23d7958885dfadf46aca24e85c79eb28bc144e09fa58a03f10fbd7f4fd79",
+                (("impl", "RuntimeEffectOwnership"),),
+            ),
+            (
+                "production_adapter_effect_candidate_trace_projection",
+                "a078274abccf56c9f8bdddc9b43cef842deffb7ad4c5faa27c6d292925a7d8c2",
+                (),
+            ),
+            (
+                "retain_effect_ownership",
+                "609a0f3cc0e001f670139e54da1e596792fbb80a291d28d9a642946baadef62e",
+                (
+                    (
+                        "impl",
+                        "<",
+                        "D",
+                        ":",
+                        "RuntimeDriver",
+                        ">",
+                        "SerializedV2Runtime",
+                        "<",
+                        "D",
+                        ">",
+                    ),
+                ),
+            ),
+            (
+                "take_effect_ownership",
+                "ba71a932428394b6f0dd70fa4f338e0aaee01acf1b0d613c44107ce46521c16c",
+                (
+                    (
+                        "impl",
+                        "<",
+                        "D",
+                        ":",
+                        "RuntimeDriver",
+                        ">",
+                        "SerializedV2Runtime",
+                        "<",
+                        "D",
+                        ">",
+                    ),
+                ),
+            ),
+        )
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "take_effect_ownership",
+        "e9961e6a5079a1f3f9fad224148b0aeb2b2470163d5140eea186d1b8b68b9ba3",
+        brace_context=(("impl", "EffectRuntime", "for", "SerializedV2Runtime"),),
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "retained_candidate_owners",
+        "196ae8bdf35f4ebf32e978e6c528ae08226bb24ea2e65fcfde590dcc450615ea",
+        brace_context=(("impl", "<", "R", ":", "EffectRuntime", ">", "V2EffectExecutor", "<", "R", ">"),),
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+        "production_completion_capacity_product_rank",
+        _CHECKED_PRODUCTION_COMPLETION_PRODUCT_RANK_SHA256,
+        brace_context=(("verus", "!"),),
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+        "production_completion_capacity_product_rank_descends",
+        _CHECKED_PRODUCTION_COMPLETION_PRODUCT_RANK_DESCENT_SHA256,
+        brace_context=(("verus", "!"),),
     ),
 )
 _LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS = (
@@ -643,15 +859,18 @@ _RELIABLE_FLUSH_LINK_GATE = CrossToolTotalGateContract(
 # Mutable-source refresh points are deliberately named rather than buried in
 # the contract tuples.
 _TOTAL_GATE_CALL_ITEM_SHA256 = {
-    "reducer_step": "973c0e730c20011084928eab3fa0339fe2a6a8b25a4fa8aea891373131a89dfe",
+    "reducer_step": "c9f1ab80636f76db9de0ac05f8ce5ca6d121ec9ecdf46b235c551844f9263b97",
     "decision_helper": "f3efc44997b37497fae752b5d655f32be907ef2468cba073e82214fc058ad11a",
     "decision_consumer": "5859d3a23844ea3fdeedfc3caaf11ade8678aaf8ab4b92e6be84c4aa2542cb6a",
     "scheduler_select": "aec8d0ba48d61ad39f9a62178913f701be0f78222f63a4cf839d47ea536e6cfb",
-    "ingress_one": "b09f804c4bd9a39d44b6b670036bdb6b114525a7023b0a176febca8e3c03ae38",
-    "ingress_batch": "34ee27dae41b4e054af344f4a27697b3528040c77c446df86dbd4fc8a3deb4e0",
-    "body_available_prepare": "7abd833689ce0bd3211f26745c2985da3091d9bb16876d2ffeb01d238f8478e0",
+    "ingress_one": "7d2c7f25809a426b6d9c418cc5f5637e19c37cf42cf58135de0a8d62b0d5424f",
+    "ingress_batch": "d918c1f57aff8fbcc64aa83614344f352a857de6166329812e0e1d52230ecd17",
+    "body_available_prepare": "be233788697efc9907ddccee7e66ce82a0e79e95b924d28970a543f51d3cf3a8",
+    "ingress_atomic_commit": "6842895a159090efa2c4da65863b2e1f83f3afbb2bab05e55e8cfbfb0092d640",
+    "lifecycle_ordinal_source_commit": "ededc4d64c8d76d3458b7bcf2f7e9812fe7303673b9d314686968a2369d7c4f6",
     "body_available_commit": "b41866a0e52ed0760c8221fcee78c1dc1bb88ec7d79c75bb5ec4928a388bc522",
-    "relay_retry": "4eaa732c6b69e6c455ac7bef64be8b0c76425c70bb5ce5138fb1fa4f063395c1",
+    "effect_candidate_retain": "529e79ca910c2c315a72bbb9b0e44611bf52e74413c2541d31cd9df3a80f0da6",
+    "relay_retry": "f668e5ce645905c1e717c47f35512de6102d0d64f71da6b8508ce454209015f6",
     # Refresh after atomic-reservation work stops touching v2_worker.rs.
     "worker_poll_reply_flushes": "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749",
     "flush_bind": "7e277f9b3f4f147ef93cc5bdc97ef36c1f60296492a3f3339fc498b30cfc3b92",
@@ -664,9 +883,9 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     # Refresh after atomic-reservation work stops touching v2_runner.rs.
     "successor_retry": "6891e48b93cba8622846afda4f0f08fb5efaa7fb98f5d58d5cfb791ce64cc203",
     "historical_certificate": "9028b1db75d71c3ab5e72573e5c3e7b46d92c0ffe4a1cd1805ebfde379fbdbfa",
-    "historical_body": "f3ab3a4498153ca38f436d9262d6ca29514b7c854ca87f7dc894580ae82af2e3",
+    "historical_body": "61abf0bd81035ebb5776a4a8893fd955249d6b2dfc2dcb23904749e75e71de79",
     # Refresh after atomic-reservation work stops touching v2_runner.rs.
-    "terminal_application": "60b696f3df37c881f43e3168cf9cc91f214beb9826549bcea1ad9e5330912ea2",
+    "terminal_application": "87928053e811f75f45e24ee5782d1e1e44a516769e29612c1537d9c74c02cd8f",
 }
 
 
@@ -689,9 +908,13 @@ def _total_gate_call_sites(
                     let Some(checked_transition) =
                         check_production_durable_intent_transition(durable_intent_trace)
                     else {
+                        iroha_logger::error!(
+                            event = ?audit_event,
+                            ?durable_intent_trace,
+                            "Sumeragi v2 reducer rejected the durable-intent refinement predicate"
+                        );
                         return Err(ReducerError::RefinementViolation);
                     };
-                    let _authorized_transition = checked_transition.into_projection();
                 """,
                 (("impl", "Reducer"),),
                 hashes["reducer_step"],
@@ -771,8 +994,7 @@ def _total_gate_call_sites(
                     "let _authorized_transition = checked_transition.into_projection();",
                 ),
                 mutation_boundaries=(
-                    "self.next_admission_ordinal = ordinal_successor;",
-                    "self.commands.push_back(command);",
+                    "ingress.commands.push_back(command);",
                 ),
             ),
             CrossToolProductionCallContract(
@@ -801,8 +1023,7 @@ def _total_gate_call_sites(
                 hashes["ingress_batch"],
                 token_consumptions=(".into_projection()",),
                 mutation_boundaries=(
-                    "self.next_admission_ordinal = ordinal_successor;",
-                    "self.commands.extend(commands);",
+                    "ingress.commands.extend(commands);",
                 ),
             ),
             CrossToolProductionCallContract(
@@ -821,8 +1042,7 @@ def _total_gate_call_sites(
                     "let _authorized_transition = checked_transition.into_projection();",
                 ),
                 mutation_boundaries=(
-                    "self.next_admission_ordinal = ordinal_successor;",
-                    "self.reserved_body_available = Some(reservation.clone());",
+                    "ingress.reserved_body_available = Some(reservation.clone());",
                 ),
             ),
         ),
@@ -1085,6 +1305,39 @@ def _total_gate_call_sites(
                 item_token_sha256=hashes["decision_consumer"],
             ),
         ),
+        "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership": (
+            CrossToolLinkedConsumerContract(
+                source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
+                item="with_checked_admission_ordinal_range",
+                required_expression=(
+                    "let committed = commit(self, first, successor)?;"
+                ),
+                mutation_boundaries=(
+                    "self.next_admission_ordinal = Some(successor);",
+                ),
+                brace_context=((
+                    "impl",
+                    "<",
+                    "C",
+                    ":",
+                    "ExactRuntimeCommandIdentity",
+                    ">",
+                    "BoundedIngress",
+                    "<",
+                    "C",
+                    ">",
+                ),),
+                item_token_sha256=hashes["ingress_atomic_commit"],
+            ),
+            CrossToolLinkedConsumerContract(
+                source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
+                item="with_checked_reservation",
+                required_expression="let committed = commit(first, successor)?;",
+                mutation_boundaries=("*next = Some(successor);",),
+                brace_context=(("impl", "RuntimeLifecycleOrdinalSource"),),
+                item_token_sha256=hashes["lifecycle_ordinal_source_commit"],
+            ),
+        ),
     }
     return calls[constant], linked.get(constant, ())
 
@@ -1243,6 +1496,94 @@ def _ingress_reservation_materialization_supplemental_total_contract(
     )
 
 
+def _effect_to_candidate_supplemental_total_contract(
+) -> CrossToolSupplementalKernelContract:
+    """Bind concrete adapter effects to unique bounded TLA candidates."""
+
+    call_site = CrossToolProductionCallContract(
+        source="crates/iroha_core/src/sumeragi/v2_effects.rs",
+        item="retain_effect_batch",
+        projection="projection",
+        required_expression="""
+            let checked = check_production_effect_to_candidate_transition(projection).ok_or_else(
+                || {
+                    EffectExecutorError::Contract(
+                        "one adapter effect failed its exact candidate-ownership refinement"
+                            .to_owned(),
+                    )
+                },
+            )?;
+            let _authorized_effect_candidate = checked.into_projection();
+        """,
+        brace_context=((
+            "impl",
+            "<",
+            "R",
+            ":",
+            "EffectRuntime",
+            ">",
+            "V2EffectExecutor",
+            "<",
+            "R",
+            ">",
+        ),),
+        item_token_sha256=_TOTAL_GATE_CALL_ITEM_SHA256["effect_candidate_retain"],
+        token_consumptions=(
+            "let _authorized_effect_candidate = checked.into_projection();",
+        ),
+        mutation_boundaries=("self.retained_effect_batch = Some(",),
+    )
+    return CrossToolSupplementalKernelContract(
+        verified_kernel=(
+            "production_effect_to_candidate_refines_async_ownership_kernel"
+        ),
+        verified_kernel_source=(
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+        ),
+        verified_kernel_parameters=(
+            "projection: ProductionEffectToCandidateTraceProjection,"
+        ),
+        verified_kernel_body=(
+            "production_effect_to_candidate_trace_body!(projection)"
+        ),
+        theorem_kernel_projection="projection",
+        theorem_projection_builders=(),
+        verified_kernel_shared_macro_sha256=(
+            (
+                "refinement_tag_value",
+                "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8",
+            ),
+            (
+                "canonical_identity_is_typed_body",
+                "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76",
+            ),
+            (
+                "canonical_identity_equal_body",
+                "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3",
+            ),
+            (
+                "canonical_identity_is_zero_body",
+                "659e4ab0b79335d08311a07134239aa7338818f507fb721b71c336fc65a52f6d",
+            ),
+            (
+                "production_effect_to_candidate_trace_body",
+                _CHECKED_PRODUCTION_EFFECT_TO_CANDIDATE_MACRO_SHA256,
+            ),
+        ),
+        production_call_sites=(call_site,),
+        total_gate=_EFFECT_TO_CANDIDATE_GATE,
+        auxiliary_verus_theorem=(
+            "production_effect_to_candidate_trace_refines_async_ownership"
+        ),
+        auxiliary_verus_parameters=(
+            "projection: ProductionEffectToCandidateTraceProjection,"
+        ),
+        auxiliary_verus_theorem_item_sha256=(
+            _CHECKED_PRODUCTION_EFFECT_TO_CANDIDATE_AUXILIARY_THEOREM_SHA256
+        ),
+    )
+
+
 def _leader_wire_admission_supplemental_total_contract(
 ) -> CrossToolSupplementalKernelContract:
     """Bind durable leader-wire admission as auxiliary ingress evidence."""
@@ -1298,7 +1639,7 @@ def _leader_wire_admission_supplemental_total_contract(
         verified_kernel_shared_macro_sha256=(
             (
                 "refinement_tag_value",
-                "d76a2d87c5afac70c71613f7f3f8cd665d9262a0e90a67523569f6257906223e",
+                "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8",
             ),
             (
                 "canonical_identity_is_typed_body",
@@ -1361,14 +1702,17 @@ def _install_total_checked_gate_contracts(
                 supplemental = (
                     _ingress_reservation_materialization_supplemental_total_contract(),
                     _leader_wire_admission_supplemental_total_contract(),
+                    _effect_to_candidate_supplemental_total_contract(),
                 )
                 production_sources = (
                     *production_sources,
                     "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+                    "crates/iroha_core/src/sumeragi/v2_effects.rs",
                 )
                 supplemental_source_item_seals = (
                     *_INGRESS_RESERVATION_MATERIALIZATION_SOURCE_ITEM_SEALS,
                     *_LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS,
+                    *_EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS,
                 )
             if claim.constant == "ProductionReliableFlushTraceRefinesOutboundOwnership":
                 supplemental = _reliable_flush_supplemental_total_contracts(
@@ -3078,15 +3422,17 @@ def _cross_tool_contract_errors() -> list[str]:
     if auxiliary_verus_theorems != [
         "production_ingress_reservation_materialization_refines_protected_ownership",
         "production_leader_wire_admission_trace_refines_lifecycle_ownership",
+        "production_effect_to_candidate_trace_refines_async_ownership",
     ]:
         errors.append(
             "cross-tool auxiliary Verus theorem inventory must contain exactly "
-            "the reservation-materialization and durable leader-wire proofs"
+            "the reservation-materialization, durable leader-wire, and "
+            "effect-to-candidate proofs"
         )
-    if len(total_gate_names) != 17 or len(set(total_gate_names)) != 17:
+    if len(total_gate_names) != 18 or len(set(total_gate_names)) != 18:
         errors.append(
             "cross-tool total checked-gate inventory must contain exactly "
-            "seventeen unique gates"
+            "eighteen unique gates"
         )
     return errors
 
@@ -3502,22 +3848,24 @@ def _cross_tool_total_gate_promotion_contract_errors(
         canonical_supplemental = (
             _ingress_reservation_materialization_supplemental_total_contract(),
             _leader_wire_admission_supplemental_total_contract(),
+            _effect_to_candidate_supplemental_total_contract(),
         )
         if claim.supplemental_kernels != canonical_supplemental:
             errors.append(
                 f"cross-tool claim {claim.constant} changed its canonical "
-                "reservation-materialization/leader-wire auxiliary "
+                "reservation-materialization/leader-wire/effect-candidate auxiliary "
                 "kernel/gate/proof contract"
             )
         if tuple(claim.source_item_seals) != tuple(
             (
                 *_INGRESS_RESERVATION_MATERIALIZATION_SOURCE_ITEM_SEALS,
                 *_LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS,
+                *_EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS,
             )
         ):
             errors.append(
                 f"cross-tool claim {claim.constant} changed its canonical "
-                "materialization/leader-wire type and identity source seals"
+                "materialization/leader-wire/effect-candidate source seals"
             )
     if (
         claim.constant
@@ -3631,6 +3979,12 @@ def _cross_tool_total_gate_promotion_contract_errors(
             and kernel_index == 2
         ):
             canonical_gate = _LEADER_WIRE_ADMISSION_GATE
+        elif (
+            claim.constant
+            == "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership"
+            and kernel_index == 3
+        ):
+            canonical_gate = _EFFECT_TO_CANDIDATE_GATE
         elif (
             claim.constant
             == "ProductionReliableFlushTraceRefinesOutboundOwnership"
@@ -6699,7 +7053,7 @@ def _all_total_gate_kernel_views(
 ) -> tuple[
     tuple[CrossToolClaimContract, _CrossToolKernelContractView], ...
 ]:
-    """Return the canonical seventeen total gate/kernel pairs."""
+    """Return the canonical eighteen total gate/kernel pairs."""
 
     return tuple(
         (claim, kernel_view)
@@ -7211,10 +7565,10 @@ def _cross_tool_checked_token_payload(
     constructor_count = _token_sequence_count(
         source_tokens, ("CheckedProductionTransition", "{")
     )
-    if constructor_count != 23:
+    if constructor_count != 24:
         raise ValueError(
-            "cross-tool opaque token closure must contain exactly twenty-three "
-            "checked constructors (seventeen total gates, four effective-lock gates, and "
+            "cross-tool opaque token closure must contain exactly twenty-four "
+            "checked constructors (eighteen total gates, four effective-lock gates, and "
             "the outer reducer plus in-flight reservation transition gates); "
             f"found {constructor_count}"
         )
@@ -52922,6 +53276,57 @@ pub open spec fn production_async_causal_fifo_after_batch(
                         f"digest {expected_sha256}; found {observed_sha256}"
                     )
 
+    for path, operator_hashes, theorem_hashes, description in (
+        (
+            formal_dir / "SumeragiV2AsyncNetwork.tla",
+            _PRODUCTION_EFFECT_CANDIDATE_TLA_OPERATOR_SHA256,
+            _PRODUCTION_EFFECT_CANDIDATE_TLA_THEOREM_SHA256,
+            "effect-to-candidate causal ownership",
+        ),
+        (
+            formal_dir / "SumeragiV2AsyncStage6Proofs.tla",
+            _PRODUCTION_COMPLETION_CAPACITY_TLA_OPERATOR_SHA256,
+            _PRODUCTION_COMPLETION_CAPACITY_TLA_THEOREM_SHA256,
+            "Completion-capacity closure",
+        ),
+    ):
+        if not path.is_file() or path.is_symlink():
+            errors.append(f"{path}: {description} TLA+ source must be a regular file")
+            continue
+        source = path.read_text(encoding="utf-8")
+        for symbol, expected_sha256 in operator_hashes.items():
+            extracted = _top_level_operator_body(
+                source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(f"{path}: missing source-sealed operator {symbol}")
+                continue
+            body, line = extracted
+            observed_sha256 = hashlib.sha256(
+                " ".join(body.split()).encode("utf-8")
+            ).hexdigest()
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{path}:{line}: {description} operator {symbol} must match "
+                    f"reviewed digest {expected_sha256}; found {observed_sha256}"
+                )
+        for symbol, expected_sha256 in theorem_hashes.items():
+            extracted = _top_level_theorem_body(
+                source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(f"{path}: missing source-sealed theorem {symbol}")
+                continue
+            body, line = extracted
+            observed_sha256 = hashlib.sha256(
+                " ".join(body.split()).encode("utf-8")
+            ).hexdigest()
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{path}:{line}: {description} theorem {symbol} must match "
+                    f"reviewed digest {expected_sha256}; found {observed_sha256}"
+                )
+
     verify_path = repo_root / "scripts/verify_sumeragi_v2.sh"
     if not verify_path.is_file():
         errors.append(
@@ -52952,10 +53357,11 @@ pub open spec fn production_async_causal_fifo_after_batch(
         required_boundary_text = (
             "prepend_causal_continuation",
             "production_reverse_push_front_refines_fifo",
-            "first-owner filter remains conditional: `drive_effects` does not itself own",
-            "TODO: discharge the remaining machine-checked production effect-to-TLA",
-            "candidate identity/ownership mapping and the Completion-capacity",
-            "product-rank proof before promoting this seam",
+            "ProductionEffectToCandidateTraceProjection",
+            "check_production_effect_to_candidate_transition",
+            "production_completion_capacity_product_rank_descends",
+            "radix four",
+            "exact retries are consumed without minting a second asynchronous owner",
         )
         missing = [
             fragment
@@ -52964,7 +53370,7 @@ pub open spec fn production_async_causal_fifo_after_batch(
         ]
         if missing:
             errors.append(
-                f"{verification_doc_path}: conditional causal FIFO boundary "
+                f"{verification_doc_path}: source-sealed causal FIFO boundary "
                 f"omits exact source-bound text {missing}"
             )
 
