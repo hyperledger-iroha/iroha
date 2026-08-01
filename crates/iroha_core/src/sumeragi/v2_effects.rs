@@ -2368,6 +2368,16 @@ pub(crate) trait EffectRuntime {
         )>,
         String,
     >;
+    /// Bind an independently durable validation receipt to the adapter's
+    /// exact-round execution authority without reviving a stale reducer
+    /// consumer.
+    fn bind_validated_body(
+        &mut self,
+        _manifest: &wire::PayloadManifest,
+        _validated_receipt: &ValidatedBodyReceipt,
+    ) -> Result<(), String> {
+        Err("runtime does not support validated-body authority binding".to_owned())
+    }
     fn enqueue_body_available(
         &mut self,
         tag: EventTag,
@@ -2660,6 +2670,15 @@ impl EffectRuntime for SerializedV2Runtime {
         String,
     > {
         self.replayed_decision_key()
+            .map_err(|error| error.to_string())
+    }
+
+    fn bind_validated_body(
+        &mut self,
+        manifest: &wire::PayloadManifest,
+        validated_receipt: &ValidatedBodyReceipt,
+    ) -> Result<(), String> {
+        SerializedV2Runtime::bind_validated_body(self, manifest, validated_receipt)
             .map_err(|error| error.to_string())
     }
 
@@ -4929,6 +4948,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.ensure_open()?;
         let Some(pending) = self.pending_validations.get(&completion.work_id()).cloned() else {
             if let Some(validated) = completion.validated_receipt() {
+                if let Err(error) = self.preflight_validated_body(validated) {
+                    return Err(self.close(error, services));
+                }
+                if let Err(error) = self.bind_validated_body(validated) {
+                    return Err(self.close(error, services));
+                }
                 if let Err(error) = self.record_validated_body(validated.clone()) {
                     return Err(self.close(error, services));
                 }
@@ -4988,6 +5013,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ));
             }
             if let Err(error) = self.preflight_validated_body(&validated) {
+                return Err(self.close(error, services));
+            }
+            // The durable validation result is wire-authentication authority,
+            // not a view-local reducer effect. Bind it before the optional
+            // reducer completion so a retired consumer or stale-tag coalesce
+            // cannot leave an exact early Vote permanently waiting on
+            // evidence already fsynced by this node.
+            if let Err(error) = self.bind_validated_body(&validated) {
                 return Err(self.close(error, services));
             }
             let admission = match &pending.consumer {
@@ -8508,6 +8541,28 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(())
     }
 
+    fn bind_validated_body(
+        &mut self,
+        validated: &ValidatedBodyReceipt,
+    ) -> Result<(), EffectExecutorError> {
+        let durable = validated.durable();
+        let key = (durable.round(), durable.subject());
+        let (manifest, recovered) = self.recovered_bodies.get(&key).ok_or_else(|| {
+            EffectExecutorError::BodyStore(
+                "validated body has no exact recovered manifest authority".to_owned(),
+            )
+        })?;
+        if recovered != durable || HashOf::new(manifest) != durable.manifest_hash() {
+            return Err(EffectExecutorError::BodyStore(
+                "validated body differs from its recovered manifest authority".to_owned(),
+            ));
+        }
+        let manifest = manifest.clone();
+        self.runtime
+            .bind_validated_body(&manifest, validated)
+            .map_err(EffectExecutorError::Runtime)
+    }
+
     fn preflight_rejected_body(
         &self,
         key: (wire::ConsensusRound, wire::BlockSubject),
@@ -10134,6 +10189,7 @@ mod tests {
     struct FakeRuntime {
         steps: VecDeque<Result<RuntimeStep<AdapterEffect>, String>>,
         completions: Vec<RuntimeCompletion>,
+        bound_validations: Vec<(wire::PayloadManifest, ValidatedBodyReceipt)>,
         reserved_body_available: Option<BodyAvailableReservation>,
         decided_body: Option<DurableDecision>,
         decision_on_next_step: Option<DurableDecision>,
@@ -10184,6 +10240,7 @@ mod tests {
             BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
         rejected_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
         runtime_completions: Vec<RuntimeCompletion>,
+        runtime_bound_validations: Vec<(wire::PayloadManifest, ValidatedBodyReceipt)>,
         runtime_body_reservation: Option<BodyAvailableReservation>,
     }
 
@@ -10208,6 +10265,7 @@ mod tests {
                 validated_bodies: self.validated_bodies.clone(),
                 rejected_bodies: self.rejected_bodies.clone(),
                 runtime_completions: self.runtime.completions.clone(),
+                runtime_bound_validations: self.runtime.bound_validations.clone(),
                 runtime_body_reservation: self.runtime.reserved_body_available.clone(),
             }
         }
@@ -10405,6 +10463,33 @@ mod tests {
 
         fn decided_body(&self) -> Result<Option<DurableDecision>, String> {
             Ok(self.decided_body)
+        }
+
+        fn bind_validated_body(
+            &mut self,
+            manifest: &wire::PayloadManifest,
+            validated_receipt: &ValidatedBodyReceipt,
+        ) -> Result<(), String> {
+            let durable = validated_receipt.durable();
+            if durable.round() != manifest.round
+                || durable.subject() != manifest.subject
+                || durable.manifest_hash() != HashOf::new(manifest)
+            {
+                return Err("fake validated binding differs from its manifest".to_owned());
+            }
+            if let Some((bound_manifest, bound_receipt)) =
+                self.bound_validations.iter().find(|(bound_manifest, _)| {
+                    bound_manifest.round == manifest.round
+                        && bound_manifest.subject == manifest.subject
+                })
+            {
+                return (bound_manifest == manifest && bound_receipt == validated_receipt)
+                    .then_some(())
+                    .ok_or_else(|| "fake validated binding conflicts with authority".to_owned());
+            }
+            self.bound_validations
+                .push((manifest.clone(), validated_receipt.clone()));
+            Ok(())
         }
 
         fn enqueue_body_available(
@@ -17816,6 +17901,35 @@ mod tests {
         );
         assert_eq!(services.cancelled_stores, vec![store_id]);
         assert_eq!(services.cancelled_validations, vec![validation_id]);
+
+        let late_validation = services.execute_validation(validation_id);
+        let late_receipt = late_validation
+            .validated_receipt()
+            .expect("late validation succeeds deterministically")
+            .clone();
+        executor.runtime.completions.clear();
+        assert_eq!(
+            executor
+                .complete_body_validation(late_validation, &mut services)
+                .expect("late durable validation binds wire authority"),
+            CompletionDisposition::Stale
+        );
+        assert!(
+            executor.runtime.completions.is_empty(),
+            "a retired reducer consumer must not be resurrected"
+        );
+        assert_eq!(
+            executor.runtime.bound_validations,
+            vec![(fixture.manifest.clone(), late_receipt.clone())],
+            "the exact fsynced receipt must still release matching wire votes"
+        );
+        assert_eq!(
+            executor
+                .validated_bodies
+                .get(&(fixture.manifest.round, fixture.manifest.subject)),
+            Some(&late_receipt)
+        );
+        assert!(!executor.status().fail_closed);
     }
 
     #[test]
