@@ -3,6 +3,7 @@
 use std::{
     fmt, fs, io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener},
+    num::NonZeroU64,
     path::{Path, PathBuf},
 };
 
@@ -10,6 +11,8 @@ use iroha_data_model::parameter::system::SumeragiConsensusMode;
 
 const MIN_PEER_COUNT: usize = 1;
 const MAX_PEER_COUNT: usize = 7;
+const SINGLE_PEER_BLOCK_CADENCE_MS: NonZeroU64 = NonZeroU64::new(100).unwrap();
+const MULTI_PEER_BLOCK_CADENCE_MS: NonZeroU64 = NonZeroU64::new(1_000).unwrap();
 /// Relative directory used for Mochi-generated workspace artifacts.
 pub const WORKSPACE_MOCHI_DIR: &str = ".mochi";
 /// Relative directory under a workspace that stores sandbox runtime state.
@@ -228,6 +231,20 @@ impl NetworkProfile {
             ),
         }
     }
+
+    /// Signed block cadence suitable for this local topology.
+    ///
+    /// A single peer keeps Mochi's rapid-prototyping cadence. Multi-peer
+    /// profiles use Kagami localnet's one-second cadence so crash-safe
+    /// consensus persistence has enough headroom when every validator runs on
+    /// the same developer machine.
+    pub const fn signed_block_cadence_ms(&self) -> NonZeroU64 {
+        if self.topology.peer_count == 1 {
+            SINGLE_PEER_BLOCK_CADENCE_MS
+        } else {
+            MULTI_PEER_BLOCK_CADENCE_MS
+        }
+    }
 }
 
 impl Default for NetworkProfile {
@@ -428,6 +445,18 @@ mod tests {
         assert_eq!(four.topology.peer_count, 4);
         assert_eq!(four.preset, Some(ProfilePreset::FourPeerBft));
         assert_eq!(four.consensus_mode, SumeragiConsensusMode::Permissioned);
+    }
+
+    #[test]
+    fn profile_cadence_keeps_single_peer_fast_and_gives_bft_persistence_headroom() {
+        let single = NetworkProfile::from_preset(ProfilePreset::SinglePeer);
+        assert_eq!(single.signed_block_cadence_ms().get(), 100);
+
+        let four = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
+        assert_eq!(four.signed_block_cadence_ms().get(), 1_000);
+
+        let custom_multi = NetworkProfile::custom(3, SumeragiConsensusMode::Permissioned).unwrap();
+        assert_eq!(custom_multi.signed_block_cadence_ms().get(), 1_000);
     }
 
     #[test]

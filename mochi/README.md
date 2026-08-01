@@ -21,6 +21,10 @@ cargo run -p mochi-ui --features gui --bin mochi -- --profile single-peer --buil
 ```
 
 Use `--profile four-peer-bft` when you want a closer validator/quorum rehearsal.
+Unprofiled `single-peer` genesis keeps a 100 ms signed block cadence, while
+multi-peer profiles use the one-second localnet cadence so crash-safe consensus
+persistence can keep up when all validators share one development machine.
+Explicit Kagami genesis profiles retain their profile-defined cadence.
 
 The desktop app now treats the selected workspace as the home for bootstrap files and uses
 `<workspace>/.mochi/sandbox/<profile>` as the default runtime state root. The dashboard and the

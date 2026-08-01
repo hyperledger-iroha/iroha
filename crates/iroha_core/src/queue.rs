@@ -12436,7 +12436,29 @@ impl Queue {
             );
         }
 
-        let mut hashes = self.fifo_snapshot_locked();
+        let raw_hashes = self.fifo_snapshot_locked();
+        // Committed removals deliberately leave a tombstoned hash in the bounded FIFO until a
+        // consumer drains it. Candidate assembly can commit a returned guard without another
+        // destructive FIFO pop, so the next durable admission may be the first operation that
+        // rebuilds exact FIFO order. Exclude only terminal physical tombstones here: an unmarked
+        // missing transaction, or a tombstoned hash that is still tracked, remains a fail-closed
+        // invariant violation below.
+        let mut hashes = Vec::with_capacity(raw_hashes.len().saturating_add(1));
+        let mut drained_terminal_tombstones = Vec::new();
+        for queued_hash in raw_hashes {
+            let removed = self.removed_hashes.contains_key(&queued_hash);
+            let tracked = self.txs.contains_key(&queued_hash);
+            let has_fifo_order = self.fifo_order_by_hash.contains_key(&queued_hash);
+            match (removed, tracked, has_fifo_order) {
+                (true, false, false) => drained_terminal_tombstones.push(queued_hash),
+                (false, true, _) => hashes.push(queued_hash),
+                _ => {
+                    return Err(format!(
+                        "queued transaction {queued_hash} has inconsistent FIFO ownership: removed={removed}, tracked={tracked}, fifo_order={has_fifo_order}"
+                    ));
+                }
+            }
+        }
         if !hashes.contains(&hash) {
             hashes.push(hash);
         }
@@ -12472,6 +12494,11 @@ impl Queue {
                 .map(|(_, queued_hash)| queued_hash)
                 .collect::<Vec<_>>(),
         );
+        // Clear only the removal fences whose physical FIFO entries were atomically drained.
+        // Non-FIFO fences can still protect concurrent guard/conflict reconciliation.
+        for drained_hash in drained_terminal_tombstones {
+            self.removed_hashes.remove(&drained_hash);
+        }
         self.removed_hashes.remove(&hash);
         Ok(())
     }
@@ -18951,6 +18978,98 @@ pub mod tests {
             removed_len,
             "removed retry must not append a replacement Put"
         );
+    }
+
+    #[test]
+    fn strict_durable_admission_drains_committed_physical_fifo_tombstone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir
+            .path()
+            .join("strict-claim-committed-fifo-tombstone-v4.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state.set_nexus(nexus).expect("apply disabled Nexus state");
+        install_single_validator_topology_for_queue_test(&state, 0x9B);
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_000));
+        let mut config = config_factory();
+        config.capacity = nonzero!(4_usize);
+        config.capacity_per_user = nonzero!(4_usize);
+        let queue = Queue::test_with_router_for_routes(
+            config,
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install committed-tombstone journal");
+
+        let first = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &first);
+        let first_hash = first.hash();
+        let first_plan = queue
+            .route_plan_with_state(&first, &state)
+            .expect("resolve first route");
+        let first_context = queue
+            .plan_admission_context_with_state(&state, &first_plan)
+            .expect("capture first admission context");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                first,
+                &state,
+                first_plan,
+                &first_context,
+            )
+            .expect("admit first strict durable transaction");
+        assert_eq!(queue.remove_committed_hashes([first_hash], None), 1);
+        assert!(queue.removed_hashes.contains_key(&first_hash));
+        assert!(!queue.fifo_order_by_hash.contains_key(&first_hash));
+        {
+            let _queue_guard = queue.push_remove_lock.lock();
+            assert_eq!(queue.fifo_snapshot_locked(), vec![first_hash]);
+        }
+
+        time_handle.advance(Duration::from_millis(1));
+        let non_fifo_marker = accepted_tx_by_someone(&time_source).hash();
+        queue.removed_hashes.insert(non_fifo_marker, ());
+        time_handle.advance(Duration::from_millis(1));
+        let second = accepted_tx_by_someone(&time_source);
+        let second_hash = second.hash();
+        let second_plan = queue
+            .route_plan_with_state(&second, &state)
+            .expect("resolve second route");
+        let second_context = queue
+            .plan_admission_context_with_state(&state, &second_plan)
+            .expect("capture second admission context");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                second,
+                &state,
+                second_plan,
+                &second_context,
+            )
+            .expect("admit after committed physical FIFO tombstone");
+
+        {
+            let _queue_guard = queue.push_remove_lock.lock();
+            assert_eq!(queue.fifo_snapshot_locked(), vec![second_hash]);
+        }
+        assert!(!queue.removed_hashes.contains_key(&first_hash));
+        assert!(
+            queue.removed_hashes.contains_key(&non_fifo_marker),
+            "exact FIFO reconstruction must preserve unrelated non-FIFO removal fences"
+        );
+        assert!(queue.fifo_order_by_hash.contains_key(&second_hash));
+        assert!(!queue.accepted_work_validation_faulted());
+        assert!(!queue.transaction_selection_durability_faulted());
     }
 
     #[test]
