@@ -6081,9 +6081,35 @@ impl FairV2Ingress {
                                                 entry.admission_ordinal <= cutoff
                                             })
                                         };
-                                    let dependency_bypass = !ingress_barrier_allows
-                                        && leader_wire_control_barrier
-                                        && selected_serve_barrier.is_none_or(|serve| {
+                                    let selected_serve_vote_dependency =
+                                        leader_wire_vote_dependency.is_some_and(
+                                            |(round, subject)| {
+                                                selected_serve_barrier.is_some_and(|serve| {
+                                                entry.admission_ordinal == serve.carrier_ordinal()
+                                                    && entry
+                                                        .certified_serve_reservation
+                                                        .as_ref()
+                                                        .is_some_and(|reservation| {
+                                                            reservation.matches_barrier(serve)
+                                                        })
+                                                    && matches!(
+                                                        entry.inbound.message(),
+                                                        BlockMessage::V2(ConsensusMessageV2 {
+                                                            payload:
+                                                                ConsensusMessageV2Payload::CertifiedBodyRequest(
+                                                                    request
+                                                                ),
+                                                            ..
+                                                        }) if request.round == round
+                                                            && request.subject == subject
+                                                            && HashOf::new(request)
+                                                                == serve.request_hash()
+                                                    )
+                                                })
+                                            },
+                                        );
+                                    let earlier_dependency = selected_serve_barrier
+                                        .is_none_or(|serve| {
                                             entry.admission_ordinal < serve.carrier_ordinal()
                                         })
                                         && (entry.class
@@ -6103,6 +6129,9 @@ impl FairV2Ingress {
                                                     )
                                                 },
                                             ));
+                                    let dependency_bypass = !ingress_barrier_allows
+                                        && leader_wire_control_barrier
+                                        && (earlier_dependency || selected_serve_vote_dependency);
                                     (!has_live_control_predecessor
                                         && (ingress_barrier_allows || dependency_bypass))
                                         .then(|| {
@@ -6133,10 +6162,11 @@ impl FairV2Ingress {
             }
         }
         if selected.is_none() {
-            // A retained Vote can depend on a matching Proposal, and reducer
-            // control can depend on bounded body completion. Neither dependency
-            // replaces the durable owner; it only makes that owner admissible
-            // on a later turn.
+            // A retained Vote can depend on a matching Proposal or the exact
+            // selected Serve request which produces its missing body, and
+            // reducer control can depend on bounded body completion. No
+            // dependency replaces the durable owner; it only makes that owner
+            // admissible on a later turn.
             'bypass: for (source_index, source_candidates) in candidates.iter().enumerate() {
                 for (admission_ordinal, inbound, dependency_bypass) in source_candidates {
                     if *dependency_bypass && predicate(inbound.as_ref()) {
