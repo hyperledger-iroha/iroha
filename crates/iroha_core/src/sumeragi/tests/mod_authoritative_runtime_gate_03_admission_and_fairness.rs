@@ -229,6 +229,95 @@
     }
 
     #[test]
+    fn retained_vote_does_not_hide_matching_proposal_or_transport_completion() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+        let validator = PeerId::new(KeyPair::random().public_key().clone());
+        let vote_message = v2_vote(wire::GlobalPhase::Prepare);
+        let (vote_round, proposal_round, subject) = match &vote_message {
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Vote(vote),
+                ..
+            }) => (vote.round, vote.proposal_round, vote.subject),
+            _ => unreachable!("vote fixture carries a v2 Vote"),
+        };
+        let _directory = bind_test_leader_wire_gate(&ingress, &validator, vote_round, 1);
+
+        let layout = wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::Plain,
+            chunk_size_bytes: 1,
+            data_shards: 0,
+            parity_shards: 0,
+            max_payload_size_bytes: 1,
+            max_chunk_count: 1,
+        };
+        let mut proposal_message = v2_maximum_structural_proposal_wire(layout, 1);
+        let manifest_hash = match &mut proposal_message {
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Proposal(proposal),
+                ..
+            }) => {
+                proposal.round = proposal_round;
+                proposal.subject = subject;
+                proposal.manifest.round = proposal_round;
+                proposal.manifest.subject = subject;
+                HashOf::new(&proposal.manifest)
+            }
+            _ => unreachable!("proposal fixture carries a v2 Proposal"),
+        };
+        let chunk_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+                manifest_hash,
+                index: 0,
+                bytes: vec![0xA5],
+                sender: 0,
+                signature: vec![0x5A],
+            }),
+        ));
+
+        for message in [vote_message.clone(), proposal_message, chunk_message] {
+            assert!(matches!(
+                ingress.try_push(InboundBlockMessage::new(
+                    message,
+                    Some(validator.clone()),
+                )),
+                Ok(super::FairV2IngressPushDisposition::Enqueued)
+            ));
+        }
+
+        let proposal = ingress
+            .try_recv_if(|inbound| {
+                matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload: wire::ConsensusMessageV2Payload::Proposal(_),
+                        ..
+                    })
+                )
+            })
+            .expect("a matching Proposal bypasses the retained Vote that it unblocks");
+        assert!(matches!(
+            proposal.message(),
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Proposal(_),
+                ..
+            })
+        ));
+        assert_eq!(ingress.state.lock().len, 2);
+
+        let chunk = ingress
+            .try_recv_if(super::fair_v2_ingress_is_transport_completion)
+            .expect("body completion bypasses retained reducer-control ownership");
+        assert_eq!(payload_chunk_index(&chunk), Some(0));
+        assert_eq!(ingress.state.lock().len, 1);
+
+        let retained_vote = ingress
+            .try_recv_if(|_| true)
+            .expect("the retained Vote remains owned after its dependencies drain");
+        assert_eq!(retained_vote.message().encode(), vote_message.encode());
+        assert_eq!(ingress.state.lock().len, 0);
+    }
+
+    #[test]
     fn ingress_stays_closed_until_replay_owner_acknowledges_ready() {
         let (handle, receiver, _relay_receiver) = test_sumeragi_handle(1);
         handle.ingress_ready.store(false, Ordering::Release);
@@ -798,4 +887,3 @@
         assert_eq!(sender, Some(lane_origin));
         assert!(matches!(message, BlockMessage::LaneBlockCertificate(_)));
     }
-

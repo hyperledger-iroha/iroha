@@ -9519,6 +9519,23 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             .recover_validated_body(manifest, validated_receipt)
     }
 
+    /// Bind one live, independently durable validation marker without
+    /// delivering an obsolete reducer event.
+    ///
+    /// Effect completions call this inside the same serialized actor turn as
+    /// their catalog update. The registry mutation is exact and monotone; it
+    /// does not retag or otherwise revive a retired reducer consumer.
+    pub(crate) fn bind_validated_body(
+        &mut self,
+        manifest: &wire::PayloadManifest,
+        validated_receipt: &ValidatedBodyReceipt,
+    ) -> Result<(), AdapterError> {
+        if self.fail_closed {
+            return Err(AdapterError::FailClosed);
+        }
+        self.driver.bind_validated_body(manifest, validated_receipt)
+    }
+
     /// Authenticate and enqueue one reducer-directed network message.
     ///
     /// Traffic which passes the bounded capacity check, exactly matches an
@@ -21589,9 +21606,30 @@ mod tests {
             );
             assert!(!runtime.fail_closed);
 
+            let reducer_round = reducer::Round::new(manifest.round.height, manifest.round.view);
+            let reducer_subject =
+                reducer::Subject::new(Hash::new(manifest.subject.encode()).into());
+            let reducer_tag_before_binding = runtime.driver.reducer.current_tag();
+            let reducer_body_before_binding = runtime
+                .driver
+                .reducer
+                .body_state(reducer_round, reducer_subject);
             runtime
-                .recover_validated_body(&manifest, &validated)
-                .expect("local validation establishes canonical commitment authority");
+                .bind_validated_body(&manifest, &validated)
+                .expect("live validation establishes canonical commitment authority");
+            assert_eq!(
+                runtime.driver.reducer.current_tag(),
+                reducer_tag_before_binding,
+                "wire-authority binding cannot retag the reducer"
+            );
+            assert_eq!(
+                runtime
+                    .driver
+                    .reducer
+                    .body_state(reducer_round, reducer_subject),
+                reducer_body_before_binding,
+                "wire-authority binding cannot revive a reducer consumer"
+            );
             assert!(
                 runtime.can_admit_network_message(&signed_vote),
                 "the retained fair-ingress {phase:?} vote becomes drainable after validation"

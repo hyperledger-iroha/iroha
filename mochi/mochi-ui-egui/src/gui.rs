@@ -89,7 +89,7 @@ use mochi_core::{
         ReadinessOptions, ReadinessSmokeOutcome, SmokeCommitOptions, StatusMetrics, ToriiErrorInfo,
         ToriiErrorKind, ToriiMetricsSnapshot, ToriiStatusSnapshot,
     },
-    write_bootstrap_bundle,
+    wait_for_all_managed_peers_genesis, write_bootstrap_bundle,
 };
 use norito::json;
 use norito::json::{Map, Value};
@@ -1152,6 +1152,30 @@ fn run_sandbox_serve_cli(overrides: CliOverrides) -> Result<(), String> {
     let runtime = Runtime::new().map_err(|err| format!("failed to create runtime: {err}"))?;
     runtime.block_on(async {
         if readiness_smoke {
+            if supervisor.peers().len() > 1 {
+                let managed_clients = supervisor
+                    .peers()
+                    .iter()
+                    .map(|peer| {
+                        peer.torii_client()
+                            .map(|client| (peer.alias().to_owned(), client))
+                            .map_err(|err| {
+                                format!(
+                                    "failed to create Torii client for managed peer {} at {}: {err}",
+                                    peer.alias(),
+                                    peer.torii_address()
+                                )
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                wait_for_all_managed_peers_genesis(managed_clients, readiness_options)
+                    .await
+                    .map_err(|err| {
+                        format!(
+                            "failed while waiting for committed genesis on every managed peer: {err}"
+                        )
+                    })?;
+            }
             let mut plan = supervisor
                 .default_readiness_smoke_plan()
                 .map_err(|err| format!("failed while preparing readiness smoke: {err}"))?;

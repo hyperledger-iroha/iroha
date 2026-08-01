@@ -53,12 +53,13 @@ pub use supervisor::{
 pub use torii::{
     BlockDecodeStage, BlockStream, BlockStreamDecodeError, BlockStreamEvent, BlockSummary,
     EventCategory, EventDecodeStage, EventStream, EventStreamDecodeError, EventStreamEvent,
-    EventSummary, LocalMcpProbeResult, ManagedBlockStream, ManagedEventStream, ManagedStatusStream,
+    EventSummary, LocalMcpProbeResult, ManagedBlockStream, ManagedEventStream,
+    ManagedPeerGenesisFailure, ManagedPeerGenesisReadinessError, ManagedStatusStream,
     ReadinessOptions, ReadinessSmokeBuildError, ReadinessSmokeOutcome, ReadinessSmokePlan,
     SmokeCommitOptions, SmokeCommitSnapshot, StatusMetrics, StatusStreamEvent, ToriiClient,
     ToriiError, ToriiErrorInfo, ToriiErrorKind, ToriiMetricsSnapshot, ToriiResult,
     ToriiStatusSnapshot, TriggerListPage, TriggerListQuery, TriggerRecord, WsFrame, WsSubscription,
-    decode_norito_with_alignment,
+    decode_norito_with_alignment, wait_for_all_managed_peers_genesis,
 };
 pub use vault::{SIGNERS_FILE_NAME, SignerVault, SignerVaultError};
 
