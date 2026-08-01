@@ -80,11 +80,10 @@ use iroha_data_model::{
         BOOTLE_LANTERN_MAX_DISCLOSED_ATTRIBUTES_V1, BootleLanternAllowedAttributeValuesV1,
         BootleLanternAttributeValueV1, BootleLanternDisclosedAttributeV1,
         BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1, IrohaZkAmsProofV1,
-        IrohaZkAmsStatementV1,
-        IrohaZkX509StarkP256StatementV1, OrchardHalo2ActionsStatementV1, PrivacyActiveLifecycleV1,
-        PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyChallengeV1, PrivacyConsensusLimitsV1,
-        PrivacyCredentialDocumentTypeV1, PrivacyEngineIdV1, PrivacyIssuerIdV1,
-        PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
+        IrohaZkAmsStatementV1, IrohaZkX509StarkP256StatementV1, OrchardHalo2ActionsStatementV1,
+        PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyChallengeV1,
+        PrivacyConsensusLimitsV1, PrivacyCredentialDocumentTypeV1, PrivacyEngineIdV1,
+        PrivacyIssuerIdV1, PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
         PrivacyNativeConsensusBindingV1, PrivacyNullifierV1, PrivacyOrchardActionV1,
         PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
         PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1,
@@ -149,8 +148,7 @@ use crate::privacy_engines::{
             holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_with_rng_v1,
             issuer_blind_issue_with_rng_v1,
         },
-        prove_bound_presentation_v1,
-        verify_bound_presentation_encoded_v1,
+        prove_bound_presentation_v1, verify_bound_presentation_encoded_v1,
     },
     fcmp_plus_plus::{
         FCMP_MAX_INPUTS_NATIVE_V1, FCMP_MAX_OUTPUTS_NATIVE_V1, FCMP_MAX_PROOF_WIRE_BYTES_V1,
@@ -2739,8 +2737,14 @@ fn run_bootle_lantern_stage_v1(
     let proof_bytes = proof.encode();
     let proof_cap = u32::try_from(BOOTLE_PROOF_BYTES_V1)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-    verify_bound_presentation_encoded_v1(&statement, &policy, GENESIS_HASH, &proof_bytes, proof_cap)
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
+    verify_bound_presentation_encoded_v1(
+        &statement,
+        &policy,
+        GENESIS_HASH,
+        &proof_bytes,
+        proof_cap,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
     let original_typed = PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone());
     let original_material = norito::encode_canonical(&original_typed)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;

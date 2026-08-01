@@ -1441,9 +1441,7 @@ mod tests {
         prove_bound_presentation_v1,
         relation::{compile_application_relation_v1, validate_presentation_witness_v1},
         ring::ApplicationPolynomialV1,
-        transcript::{
-            MatrixSeedV1, PresentationChallengeBindingV1, matrix_seed_v1,
-        },
+        transcript::{MatrixSeedV1, PresentationChallengeBindingV1, matrix_seed_v1},
         verify_bound_presentation_encoded_v1, verify_bound_presentation_v1,
     };
 
@@ -1653,14 +1651,9 @@ mod tests {
                 &mut preimage_rng,
             )
             .expect("native blind issuance");
-            let credential = holder_finalize_blind_issuance_v1(
-                state,
-                &context,
-                genesis_hash,
-                &policy,
-                response,
-            )
-            .expect("holder issuance finalization");
+            let credential =
+                holder_finalize_blind_issuance_v1(state, &context, genesis_hash, &policy, response)
+                    .expect("holder issuance finalization");
             let statement = statement(&policy);
             let witness = credential
                 .presentation_witness_v1(&statement, &policy, genesis_hash)

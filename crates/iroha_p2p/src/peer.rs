@@ -10638,7 +10638,7 @@ mod run {
             assert_eq!(budgets.retained_high_ordinary(), ordinary_max);
             handles[ORDINARY_PEERS]
                 .post(high_other.clone())
-                .expect("high block-sync/genesis work must use this peer's progress reserve");
+                .expect("high block-sync work must use this peer's progress reserve");
             assert_eq!(
                 handles[ORDINARY_PEERS].post(ordinary.clone()),
                 Err(handles::PostError::Full),

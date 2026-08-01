@@ -17189,7 +17189,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 enqueued,
                 scheduled_reconnect,
                 reason,
-                "Retained route-qualified progress for a missing peer session"
+                "Retained topic-qualified progress for a missing peer session"
             );
         }
         enqueued

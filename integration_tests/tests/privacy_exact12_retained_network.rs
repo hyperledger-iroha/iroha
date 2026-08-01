@@ -1054,8 +1054,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
                 "same Bootle/Lantern fixture seed did not reproduce both governed policy revisions"
             );
             ensure!(
-                bootle.policy.issuer_public_matrix
-                    != bootle.successor_policy.issuer_public_matrix,
+                bootle.policy.issuer_public_matrix != bootle.successor_policy.issuer_public_matrix,
                 "Bootle/Lantern successor reused the initial issuer public key"
             );
             let fcmp = build_privacy_release_fcmp_network_action_v1(

@@ -2345,12 +2345,11 @@ mod tests {
         name::Name,
         privacy::{
             BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
-            BootleLanternDisclosedAttributeV1,
-            IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1, IrohaZkAmsProofV1,
-            PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyChallengeV1,
-            PrivacyCredentialDocumentTypeV1, PrivacyEncryptionKeyV1, PrivacyEngineIdV1,
-            PrivacyFcmpInputPublicV1, PrivacyFcmpKeyImageV1, PrivacyFcmpPoolBootstrapV1,
-            PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1,
+            BootleLanternDisclosedAttributeV1, IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
+            IrohaZkAmsProofV1, PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+            PrivacyChallengeV1, PrivacyCredentialDocumentTypeV1, PrivacyEncryptionKeyV1,
+            PrivacyEngineIdV1, PrivacyFcmpInputPublicV1, PrivacyFcmpKeyImageV1,
+            PrivacyFcmpPoolBootstrapV1, PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1,
             PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyJindoFieldElementV1,
             PrivacyNamespaceScopeV1, PrivacyNoteEncryptionKeyDigestV1, PrivacyOrchardActionV1,
             PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
@@ -2399,8 +2398,8 @@ mod tests {
                 codec::PROOF_BYTES_V1 as BOOTLE_LANTERN_PROOF_BYTES_V1,
                 issuer::{
                     BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
-                    holder_finalize_blind_issuance_v1,
-                    holder_prepare_blind_issuance_with_rng_v1, issuer_blind_issue_with_rng_v1,
+                    holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_with_rng_v1,
+                    issuer_blind_issue_with_rng_v1,
                 },
                 prove_bound_presentation_v1,
             },
@@ -2943,15 +2942,15 @@ mod tests {
             let chain_id = ChainId::from("taira-privacy-bootle-lantern-test");
             let genesis_hash = [0xA7; 32];
             let context = PrivacyStatementContextV1 {
-                    chain_id: chain_id.clone(),
-                    action_index: 0,
-                    transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0xB4; 32]),
-                    parameter_id: compiled.parameter_id,
-                    parameter_digest: compiled.parameter_digest,
-                    verifier_digest: compiled.verifier_digest,
-                    statement_schema_digest: compiled.statement_schema_digest,
-                    engine_manifest_digest: compiled.engine_manifest_digest,
-                };
+                chain_id: chain_id.clone(),
+                action_index: 0,
+                transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0xB4; 32]),
+                parameter_id: compiled.parameter_id,
+                parameter_digest: compiled.parameter_digest,
+                verifier_digest: compiled.verifier_digest,
+                statement_schema_digest: compiled.statement_schema_digest,
+                engine_manifest_digest: compiled.engine_manifest_digest,
+            };
             let mut keygen_rng = KatRng::new([0xB3; 32]);
             let issuer_key_pair = BootleLanternIssuerKeyPairV1::generate_with_rng_v1(
                 PrivacyParameterIdV1::new([0xB3; 32]),
@@ -2979,16 +2978,15 @@ mod tests {
             attributes[1] = [1; 8];
             let mut holder_mask_rng = KatRng::new([0xB4; 32]);
             let mut holder_proof_rng = KatRng::new([0xB5; 32]);
-            let (issuance_request, issuance_state) =
-                holder_prepare_blind_issuance_with_rng_v1(
-                    &context,
-                    genesis_hash,
-                    &policy,
-                    attributes,
-                    &mut holder_mask_rng,
-                    &mut holder_proof_rng,
-                )
-                .expect("holder blind-issuance request");
+            let (issuance_request, issuance_state) = holder_prepare_blind_issuance_with_rng_v1(
+                &context,
+                genesis_hash,
+                &policy,
+                attributes,
+                &mut holder_mask_rng,
+                &mut holder_proof_rng,
+            )
+            .expect("holder blind-issuance request");
             let mut tag_rng = KatRng::new([0xB6; 32]);
             let mut preimage_rng = KatRng::new([0xB7; 32]);
             let issuance_response = issuer_blind_issue_with_rng_v1(

@@ -18,10 +18,10 @@ use iroha_data_model::{
         PrivacyFcmpOutputTupleV1, PrivacyFcmpPoolBootstrapV1, PrivacyFcmpTreeRootV1,
         PrivacyIssuerIdV1, PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyNamespaceScopeV1,
         PrivacyNamespaceV1, PrivacyNativeConsensusBindingV1, PrivacyP256CiphertextV1,
-        PrivacyP256PointV1, PrivacyParameterIdV1,
-        PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1,
-        PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1,
-        PrivacyProofEnvelopeV1, PrivacyProofManagedPoolBootstrapV1, PrivacyProofV1, PrivacyRootV1,
+        PrivacyP256PointV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
+        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+        PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+        PrivacyProofManagedPoolBootstrapV1, PrivacyProofV1, PrivacyRootV1,
         PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
         PrivacyVeRangeBitLengthV1, PrivacyZkAcePolicyLifecycleV1, PrivacyZkAcePolicyRecordV1,
         VeRangeTransparentRangeStatementV1, ZkAcePqAuthorizationStatementV1,
@@ -476,16 +476,11 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
         })
         .collect::<Vec<_>>();
     let context = statement_context_v1(&transaction_context, profile);
-    let mut keygen_rng = EvidenceRng06::new(network_seed_v1(
-        fixture_seed,
-        b"bootle-issuer-keygen",
-        0,
-    ));
-    let issuer_key_pair = BootleLanternIssuerKeyPairV1::generate_with_rng_v1(
-        issuer_parameter_id,
-        &mut keygen_rng,
-    )
-    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let mut keygen_rng =
+        EvidenceRng06::new(network_seed_v1(fixture_seed, b"bootle-issuer-keygen", 0));
+    let issuer_key_pair =
+        BootleLanternIssuerKeyPairV1::generate_with_rng_v1(issuer_parameter_id, &mut keygen_rng)
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     let policy = issuer_key_pair
         .active_policy_v1(BootleLanternIssuerPolicyMetadataV1 {
             issuer_id,
@@ -521,11 +516,8 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
 
     let mut attributes = [[0_u8; 8]; 8];
     attributes[1] = [1; 8];
-    let mut holder_mask_rng = EvidenceRng06::new(network_seed_v1(
-        fixture_seed,
-        b"bootle-holder-mask",
-        0,
-    ));
+    let mut holder_mask_rng =
+        EvidenceRng06::new(network_seed_v1(fixture_seed, b"bootle-holder-mask", 0));
     let mut holder_request_proof_rng = EvidenceRng06::new(network_seed_v1(
         fixture_seed,
         b"bootle-holder-request-proof",
@@ -540,16 +532,10 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
         &mut holder_request_proof_rng,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
-    let mut issuer_tag_rng = EvidenceRng06::new(network_seed_v1(
-        fixture_seed,
-        b"bootle-issuer-tag",
-        0,
-    ));
-    let mut issuer_preimage_rng = EvidenceRng06::new(network_seed_v1(
-        fixture_seed,
-        b"bootle-issuer-preimage",
-        0,
-    ));
+    let mut issuer_tag_rng =
+        EvidenceRng06::new(network_seed_v1(fixture_seed, b"bootle-issuer-tag", 0));
+    let mut issuer_preimage_rng =
+        EvidenceRng06::new(network_seed_v1(fixture_seed, b"bootle-issuer-preimage", 0));
     let issuance_response = issuer_blind_issue_with_rng_v1(
         &issuer_key_pair,
         &context,
@@ -593,11 +579,8 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
         b"bootle-successor-issuer-parameter",
         0,
     ));
-    let mut successor_keygen_rng = EvidenceRng06::new(network_seed_v1(
-        fixture_seed,
-        b"bootle-successor-keygen",
-        0,
-    ));
+    let mut successor_keygen_rng =
+        EvidenceRng06::new(network_seed_v1(fixture_seed, b"bootle-successor-keygen", 0));
     let successor_key_pair = BootleLanternIssuerKeyPairV1::generate_with_rng_v1(
         successor_parameter_id,
         &mut successor_keygen_rng,
