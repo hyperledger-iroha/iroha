@@ -5990,21 +5990,37 @@ impl FairV2Ingress {
                     .all(|entry| entry.admission_ordinal >= serve.carrier_ordinal())
             });
 
-            let leader_wire_vote_dependency = leader_wire_barrier.as_ref().and_then(|owner| {
+            let leader_wire_body_dependency = leader_wire_barrier.as_ref().and_then(|owner| {
                 state
                     .lanes
                     .values()
                     .flat_map(|lane| lane.entries.iter())
                     .find(|entry| entry.leader_wire_token.as_ref() == Some(&owner.token))
                     .and_then(|entry| {
-                        let BlockMessage::V2(ConsensusMessageV2 {
-                            payload: ConsensusMessageV2Payload::Vote(vote),
-                            ..
-                        }) = entry.inbound.message()
-                        else {
+                        let BlockMessage::V2(message) = entry.inbound.message() else {
                             return None;
                         };
-                        Some((vote.proposal_round, vote.subject))
+                        match &message.payload {
+                            ConsensusMessageV2Payload::Proposal(proposal) => {
+                                Some((proposal.round, proposal.subject))
+                            }
+                            ConsensusMessageV2Payload::Vote(vote) => {
+                                Some((vote.proposal_round, vote.subject))
+                            }
+                            ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+                                Some((certificate.proposal_round, certificate.subject))
+                            }
+                            ConsensusMessageV2Payload::TimeoutVote(_)
+                            | ConsensusMessageV2Payload::TimeoutCertificate(_)
+                            | ConsensusMessageV2Payload::PayloadManifest(_)
+                            | ConsensusMessageV2Payload::PayloadChunk(_)
+                            | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+                            | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+                            | ConsensusMessageV2Payload::CommitCertificateRequest(_)
+                            | ConsensusMessageV2Payload::CommitCertificateResponse(_)
+                            | ConsensusMessageV2Payload::VrfCommit(_)
+                            | ConsensusMessageV2Payload::VrfReveal(_) => None,
+                        }
                     })
             });
             let leader_wire_control_barrier = leader_wire_barrier.as_ref().is_some_and(|owner| {
@@ -6081,8 +6097,8 @@ impl FairV2Ingress {
                                                 entry.admission_ordinal <= cutoff
                                             })
                                         };
-                                    let selected_serve_vote_dependency =
-                                        leader_wire_vote_dependency.is_some_and(
+                                    let selected_serve_control_dependency =
+                                        leader_wire_body_dependency.is_some_and(
                                             |(round, subject)| {
                                                 selected_serve_barrier.is_some_and(|serve| {
                                                 entry.admission_ordinal == serve.carrier_ordinal()
@@ -6114,7 +6130,7 @@ impl FairV2Ingress {
                                         })
                                         && (entry.class
                                             == FairV2IngressClass::TransportCompletion
-                                            || leader_wire_vote_dependency.is_some_and(
+                                            || leader_wire_body_dependency.is_some_and(
                                                 |(round, subject)| {
                                                     matches!(
                                                         entry.inbound.message(),
@@ -6131,7 +6147,8 @@ impl FairV2Ingress {
                                             ));
                                     let dependency_bypass = !ingress_barrier_allows
                                         && leader_wire_control_barrier
-                                        && (earlier_dependency || selected_serve_vote_dependency);
+                                        && (earlier_dependency
+                                            || selected_serve_control_dependency);
                                     (!has_live_control_predecessor
                                         && (ingress_barrier_allows || dependency_bypass))
                                         .then(|| {
@@ -6162,11 +6179,11 @@ impl FairV2Ingress {
             }
         }
         if selected.is_none() {
-            // A retained Vote can depend on a matching Proposal or the exact
-            // selected Serve request which produces its missing body, and
-            // reducer control can depend on bounded body completion. No
-            // dependency replaces the durable owner; it only makes that owner
-            // admissible on a later turn.
+            // Retained body-dependent control can depend on a matching
+            // Proposal or the exact selected Serve request which produces its
+            // missing body, and reducer control can depend on bounded body
+            // completion. No dependency replaces the durable owner; it only
+            // makes that owner admissible on a later turn.
             'bypass: for (source_index, source_candidates) in candidates.iter().enumerate() {
                 for (admission_ordinal, inbound, dependency_bypass) in source_candidates {
                     if *dependency_bypass && predicate(inbound.as_ref()) {
