@@ -383,6 +383,17 @@ fn response_status_error(response: &reqwest::Response) -> ToriiError {
     }
 }
 
+fn websocket_connect_error(error: WebSocketError) -> ToriiError {
+    match error {
+        WebSocketError::Http(response) if response.status() == StatusCode::TOO_MANY_REQUESTS => {
+            ToriiError::RateLimited {
+                retry_after: retry_after_from_headers(response.headers()),
+            }
+        }
+        other => ToriiError::WebSocket(other),
+    }
+}
+
 fn error_message_from_body(body: &[u8]) -> Option<String> {
     if let Ok(envelope) = decode_norito_with_alignment::<ToriiErrorEnvelope>(body) {
         return Some(envelope.summary());
@@ -2866,10 +2877,22 @@ impl ToriiClient {
         let tx_hash_str = tx_hash.to_string();
         let started = Instant::now();
 
-        let block_stream = self.block_stream().await?;
-        let events_stream = self.events_stream().await?;
-        let mut block_rx = block_stream.subscribe();
-        let mut event_rx = events_stream.subscribe();
+        // Stream notifications are latency optimizations for this exact-hash
+        // readiness check. Torii may temporarily throttle WebSocket handshakes
+        // while all peers start; keep the canonical HTTP status reconciliation
+        // authoritative instead of failing an otherwise healthy localnet.
+        let block_stream = match self.block_stream().await {
+            Ok(stream) => Some(stream),
+            Err(ToriiError::RateLimited { .. }) => None,
+            Err(error) => return Err(error),
+        };
+        let events_stream = match self.events_stream().await {
+            Ok(stream) => Some(stream),
+            Err(ToriiError::RateLimited { .. }) => None,
+            Err(error) => return Err(error),
+        };
+        let mut block_rx = block_stream.as_ref().map(BlockStream::subscribe);
+        let mut event_rx = events_stream.as_ref().map(EventStream::subscribe);
         let signed_bytes = transaction.encode_versioned();
 
         let mut admission_outcome_unknown = match self.submit_transaction(&signed_bytes).await {
@@ -2926,7 +2949,12 @@ impl ToriiClient {
                             Err(_err) => {}
                         }
                     }
-                    message = block_rx.recv() => {
+                    message = async {
+                        match &mut block_rx {
+                            Some(receiver) => receiver.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
                         match message {
                             Ok(BlockStreamEvent::Block { block, .. }) => {
                                 if let Some(result) =
@@ -2945,7 +2973,12 @@ impl ToriiClient {
                             Err(RecvError::Lagged(_)) | Err(RecvError::Closed) => {}
                         }
                     }
-                    message = event_rx.recv() => {
+                    message = async {
+                        match &mut event_rx {
+                            Some(receiver) => receiver.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
                         match message {
                             Ok(EventStreamEvent::Event { event, .. }) => {
                                 if let EventBox::Pipeline(PipelineEventBox::Transaction(tx_event)) = event.as_ref()
@@ -3836,7 +3869,9 @@ impl ToriiClient {
                 HeaderValue::from_static(NORITO_V1_WEBSOCKET_SUBPROTOCOL),
             );
         }
-        let (stream, response) = connect_async(request).await?;
+        let (stream, response) = connect_async(request)
+            .await
+            .map_err(websocket_connect_error)?;
         let selected_protocol = response
             .headers()
             .get(SEC_WEBSOCKET_PROTOCOL)
@@ -5957,6 +5992,22 @@ mod tests {
             } if delay == Duration::from_secs(7)
         ));
         throttled.assert();
+    }
+
+    #[test]
+    fn websocket_rate_limit_preserves_retry_after() {
+        let response = http::Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .header(reqwest::header::RETRY_AFTER, "3")
+            .body(None)
+            .expect("valid WebSocket HTTP response");
+        let error = websocket_connect_error(WebSocketError::Http(response));
+        assert!(matches!(
+            error,
+            ToriiError::RateLimited {
+                retry_after: Some(delay),
+            } if delay == Duration::from_secs(3)
+        ));
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -33,10 +33,10 @@ commands and the final reconciliation pass are recorded.
   until every documented and CI caller has migrated, then remove only the
   adapters whose replacement paths have parity evidence.
 
-## Taira testnet recovery and offline-cash release closure
+## Taira testnet recovery and universal offline protocol closure
 
 The source-side consensus-stall, exact `/status.blocks`, supervisor-loop, and
-canonical offline-cash ingress repairs are complete. The restart source patch
+cash-handoff protocol ingress repairs are complete. The restart source patch
 also restores snapshot-authenticated autoscale windows before canonical
 reserialization, rejects any writer payload that cannot pass isolated restart
 initialization before publication/geometry compaction, keeps capture and
@@ -63,11 +63,12 @@ regression fixtures also mirror production semantics for durable post-decision
 CommitQC rebroadcast and startup auxiliary-lane binding. Source-bound focused
 revalidation, compact-commitment validation, source sealing, release
 generation, and live rollout remain open, and public Taira remains on the old
-deployment. Do not
-expose it as a ready offline-cash lane until the guarded reset reports
-`mandatory: true`, `ready: true` and passes the signed public canary. The
-rollout checker now enforces that same `/readyz` invariant on public ingress
-and every direct validator rather than relying on controller evidence alone.
+deployment. Offline application protocols are a universal Iroha capability;
+they require no validator mode, dataspace or asset opt-in, escrow catalog, or
+backend readiness gate. Taira promotion therefore evaluates ordinary node and
+consensus health only. App/device offline user-interface state must never make
+`/health` or `/readyz` fail. The guarded reset must still pass the signed public
+canary and prove a healthy, advancing validator cohort.
 
 The earlier populated-profile probe is superseded for promotion. Authentic
 final-VK generation exposed a 20,154-byte raw compiled-protocol identity: its
@@ -108,9 +109,10 @@ Remaining work stays ordered and fail-closed:
   probe output is not a candidate or promotion record.
 - Perform the authorized guarded reset across all four validators, deploy the
   sealed binary/configuration/artifact set, and prove advancing consensus,
-  query-visible `/status.blocks` equality, mandatory offline readiness, signed
-  canary operation, a restart below 45 seconds, and continued advancement after
-  restart.
+  query-visible `/status.blocks` equality, ordinary node readiness, universal
+  `cash_handoff_v1`/ABI-21 capability discovery without an asset catalog,
+  signed canary operation, a restart below 45 seconds, and continued
+  advancement after restart.
 
 ## ZK-ACE JavaScript signed-transaction parity
 

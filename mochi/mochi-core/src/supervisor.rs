@@ -3436,27 +3436,6 @@ impl PeerSpec {
         sorafs.insert("storage".into(), toml::Value::Table(sorafs_storage));
         root.insert("sorafs".into(), toml::Value::Table(sorafs));
 
-        // Mochi's generated chain is a local development profile and does not
-        // opt into Taira's offline-cash service. Declare that explicitly so a
-        // new Iroha default cannot accidentally turn an unconfigured optional
-        // service into a node-startup failure. A caller can still supply a
-        // complete settlement overlay for offline-cash testing, while Iroha's
-        // public-Taira chain gate continues to reject disabling the service.
-        let mut offline = toml::Table::new();
-        offline.insert("enabled".into(), toml::Value::Boolean(false));
-        offline.insert("escrow_required".into(), toml::Value::Boolean(true));
-        offline.insert(
-            "escrow_accounts".into(),
-            toml::Value::Table(toml::Table::new()),
-        );
-        offline.insert(
-            "kagemusha_max_decoded_bytes".into(),
-            toml::Value::Integer(268_435_456),
-        );
-        let mut settlement = toml::Table::new();
-        settlement.insert("offline".into(), toml::Value::Table(offline));
-        root.insert("settlement".into(), toml::Value::Table(settlement));
-
         if let Some(table) = config_overrides.sumeragi.as_ref()
             && !table.is_empty()
         {
@@ -5215,30 +5194,13 @@ esac
                 .and_then(toml::Value::as_bool),
             Some(true)
         );
-        let offline = value
-            .get("settlement")
-            .and_then(toml::Value::as_table)
-            .and_then(|table| table.get("offline"))
-            .and_then(toml::Value::as_table)
-            .expect("local settlement.offline config");
-        assert_eq!(
-            offline.get("enabled").and_then(toml::Value::as_bool),
-            Some(false),
-            "Mochi local chains must not opt into Taira's offline-cash service"
-        );
-        assert_eq!(
-            offline
-                .get("escrow_required")
-                .and_then(toml::Value::as_bool),
-            Some(true),
-            "the escrow invariant remains mandatory whenever offline cash is enabled"
-        );
         assert!(
-            offline
-                .get("escrow_accounts")
+            value
+                .get("settlement")
                 .and_then(toml::Value::as_table)
-                .is_some_and(toml::Table::is_empty),
-            "the disabled local service must not fabricate an asset escrow binding"
+                .and_then(|table| table.get("offline"))
+                .is_none(),
+            "offline protocol support is universal and must not be represented as a Mochi opt-in"
         );
         assert_eq!(
             value

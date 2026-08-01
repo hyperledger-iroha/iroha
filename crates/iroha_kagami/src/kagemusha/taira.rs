@@ -28,14 +28,12 @@ use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::consensus_v2::{ConsensusMode, ValidatorPower},
     isi::{
-        Grant, GrantBox, InstructionBox, Mint, MintBox, Register, RegisterBox, SetKeyValue,
-        SetKeyValueBox,
+        Grant, GrantBox, InstructionBox, Mint, MintBox, Register, RegisterBox,
         asset_alias::SetAssetDefinitionAlias,
         offline::ActivateKagemushaRecursiveReleaseV4,
         verifying_keys::{self, RegisterVerifyingKey},
         zk::{RegisterZkAsset, ZkAssetMode},
     },
-    name::Name,
     offline::{
         KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1, KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND,
         KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2, KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
@@ -43,9 +41,8 @@ use iroha_data_model::{
         KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4, KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4,
         KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2, KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
         KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2, KagemushaTopUpFinalityRosterArtifactV2,
-        KagemushaTopUpFinalityRosterWindowV2, OFFLINE_ASSET_ENABLED_METADATA_KEY,
-        OfflineAuthenticatedArtifactSet, kagemusha_recursive_spend_release_sha256,
-        offline_escrow_account_id,
+        KagemushaTopUpFinalityRosterWindowV2, OfflineAuthenticatedArtifactSet,
+        kagemusha_recursive_spend_release_sha256, offline_escrow_account_id,
     },
     peer::PeerId,
     permission::Permission,
@@ -512,7 +509,6 @@ struct TairaGenesisInventory {
     asset_scales: BTreeMap<AssetDefinitionId, Option<u32>>,
     asset_names: BTreeMap<AssetDefinitionId, String>,
     asset_mints: Vec<(AssetId, Quantity)>,
-    offline_enabled_assets: BTreeSet<AssetDefinitionId>,
     verifier_ids: BTreeSet<VerifyingKeyId>,
     verifier_circuit_versions: BTreeSet<(String, u32)>,
     zk_assets: BTreeSet<AssetDefinitionId>,
@@ -523,9 +519,6 @@ struct TairaGenesisInventory {
 
 impl TairaGenesisInventory {
     fn from_genesis(genesis: &RawGenesisTransaction) -> Result<Self> {
-        let offline_key: Name = OFFLINE_ASSET_ENABLED_METADATA_KEY
-            .parse()
-            .expect("static offline metadata key");
         let ds_alias: AssetDefinitionAlias = PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS
             .parse()
             .expect("static Taira offline alias");
@@ -534,7 +527,6 @@ impl TairaGenesisInventory {
             asset_scales: BTreeMap::new(),
             asset_names: BTreeMap::new(),
             asset_mints: Vec::new(),
-            offline_enabled_assets: BTreeSet::new(),
             verifier_ids: BTreeSet::new(),
             verifier_circuit_versions: BTreeSet::new(),
             zk_assets: BTreeSet::new(),
@@ -572,26 +564,6 @@ impl TairaGenesisInventory {
                 }
                 continue;
             }
-            if let Some(set_key_value) = instruction.as_any().downcast_ref::<SetKeyValueBox>() {
-                if let SetKeyValueBox::AssetDefinition(set) = set_key_value {
-                    if set.key() == &offline_key {
-                        let enabled = set.value().try_into_any::<bool>().map_err(|_| {
-                            eyre!(
-                                "existing `{}` metadata update is not a boolean",
-                                OFFLINE_ASSET_ENABLED_METADATA_KEY
-                            )
-                        })?;
-                        if enabled {
-                            inventory
-                                .offline_enabled_assets
-                                .insert(set.object().clone());
-                        } else {
-                            inventory.offline_enabled_assets.remove(set.object());
-                        }
-                    }
-                }
-                continue;
-            }
             if let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() {
                 if let GrantBox::Permission(grant) = grant {
                     inventory
@@ -621,13 +593,6 @@ impl TairaGenesisInventory {
                     inventory
                         .asset_names
                         .insert(definition.id.clone(), definition.name.clone());
-                    if definition.metadata.get(&offline_key).is_some_and(|value| {
-                        value.try_into_any::<bool>().is_ok_and(|enabled| enabled)
-                    }) {
-                        inventory
-                            .offline_enabled_assets
-                            .insert(definition.id.clone());
-                    }
                 }
                 _ => {}
             }
@@ -1002,21 +967,6 @@ pub(super) fn prepare_testnet_bootstrap_v4<T: std::io::Write>(
         {
             instructions.push(Grant::account_permission(permission, destination).into());
         }
-    }
-    if !inventory
-        .offline_enabled_assets
-        .contains(&asset_definition_id)
-    {
-        instructions.push(
-            SetKeyValue::asset_definition(
-                asset_definition_id.clone(),
-                OFFLINE_ASSET_ENABLED_METADATA_KEY
-                    .parse()
-                    .expect("static offline metadata key"),
-                Json::new(true),
-            )
-            .into(),
-        );
     }
     if inventory.ds_alias_binding.is_none() {
         instructions.push(

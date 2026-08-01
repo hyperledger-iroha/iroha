@@ -98,12 +98,11 @@ import {
 } from "./sccp.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
 import {
-  normalizeKagemushaAssetSelector,
   normalizeKagemushaOperationId,
   normalizeKagemushaOperationReference,
   normalizeKagemushaOperationStatus,
   normalizeKagemushaRedeemRequestV4,
-  normalizeKagemushaReadinessV4,
+  normalizeOfflineStatus,
   normalizeKagemushaTopUpRequestV4,
   requireKagemushaJsonContentType,
 } from "./kagemushaOffline.js";
@@ -1772,29 +1771,34 @@ export class ToriiClient {
     }
   }
 
-  /** Fetch the transport-only ABI-21/V4 Kagemusha readiness projection. */
-  async getKagemushaReadinessV4(assetDefinitionId, options = {}) {
-    const selector = normalizeKagemushaAssetSelector(assetDefinitionId);
+  /** Fetch the universally compiled, asset-neutral OfflineStatus projection. */
+  async getOfflineCapability(options = {}) {
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
       options,
-      "getKagemushaReadinessV4",
+      "getOfflineCapability",
     );
-    assertSupportedOptionKeys(rest, new Set([]), "getKagemushaReadinessV4 options");
+    assertSupportedOptionKeys(rest, new Set([]), "getOfflineCapability options");
     const response = await this._request("GET", "/v1/offline/readiness", {
-      params: { asset_definition_id: selector },
       headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
     requireKagemushaJsonContentType(
       this._getHeader(response, "content-type"),
-      "Kagemusha readiness response",
+      "Offline capability response",
     );
     const payload = await this._maybeJson(response);
     if (!payload) {
-      throw new TypeError("Kagemusha readiness response must contain JSON");
+      throw new TypeError("Offline capability response must contain JSON");
     }
-    return normalizeKagemushaReadinessV4(payload, selector);
+    return normalizeOfflineStatus(payload);
+  }
+
+  /**
+   * @deprecated Use getOfflineCapability(). The asset selector is ignored.
+   */
+  getKagemushaReadinessV4(_assetDefinitionId, options = {}) {
+    return this.getOfflineCapability(options);
   }
 
   /** Submit an externally produced manifest-V4 top-up Norito archive. */

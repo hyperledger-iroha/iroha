@@ -74,7 +74,7 @@ SORACLOUD_SIGNER_PUBLIC_KEY_HEX = (
 SORACLOUD_SIGNER_POLICY_DIGEST_HEX = "95" * 32
 
 
-def test_taira_templates_expose_offline_without_asset_enrollment() -> None:
+def test_taira_templates_require_no_backend_offline_enrollment() -> None:
     config_text = TAIRA_CONFIG_PATH.read_text(encoding="utf-8")
     secrets_text = TAIRA_SECRETS_EXAMPLE_PATH.read_text(encoding="utf-8")
 
@@ -84,16 +84,15 @@ def test_taira_templates_expose_offline_without_asset_enrollment() -> None:
     assert "offline_asset_definition_id" not in secrets_text
     assert "offline_asset_scale" not in secrets_text
     assert "offline_escrow_account" not in secrets_text
-    offline_section = config_text.split("[settlement.offline]", 1)[1].split("\n[", 1)[0]
-    assert "enabled = true" not in offline_section
     assert "escrow_required" not in config_text
     assert "escrow_accounts" not in config_text
     assert "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_HANDLE" in secrets_text
     assert "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_HANDLE" in config_text
     assert "operation_registry_max_entries = 4096" in config_text
     assert "operation_registry_max_bytes = 524288" in config_text
-    offline_section = config_text.split("[settlement.offline]", 1)[1].split("\n[", 1)[0]
-    assert TAIRA_GAS_ASSET_ID not in offline_section
+    assert "[settlement.offline]" not in config_text
+    assert "kagemusha_release_policy_path" not in config_text
+    assert "kagemusha_artifact_dir" not in config_text
 
 
 def test_taira_runtime_paths_and_deploy_rate_are_release_pinned() -> None:
@@ -119,14 +118,7 @@ def test_taira_runtime_paths_and_deploy_rate_are_release_pinned() -> None:
         genesis["sumeragi_v2"]["da_layout"]["max_payload_size_bytes"]
         == config["sumeragi"]["block"]["max_payload_bytes"]
     )
-    assert (
-        config["settlement"]["offline"]["kagemusha_release_policy_path"]
-        == "/etc/iroha/taira-validator/kagemusha/release-policy.norito"
-    )
-    assert (
-        config["settlement"]["offline"]["kagemusha_artifact_dir"]
-        == "/var/lib/iroha/taira-validator/kagemusha/v4"
-    )
+    assert "offline" not in config.get("settlement", {})
 
 
 def test_taira_governance_timing_contract_is_release_pinned() -> None:
@@ -409,11 +401,6 @@ public_key_hex = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_PUBLIC_KEY_HEX"
 revision = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_REVISION"
 policy_digest_hex = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_POLICY_DIGEST_HEX"
 
-[settlement.offline]
-kagemusha_release_policy_path = "/etc/iroha/taira-validator/kagemusha/release-policy.norito"
-kagemusha_artifact_dir = "/var/lib/iroha/taira-validator/kagemusha/v4"
-kagemusha_max_decoded_bytes = 268435456
-
 [nexus.registry]
 manifest_directory = "configs/soranexus/taira/manifests"
 cache_directory = "configs/soranexus/taira/manifests"
@@ -591,15 +578,9 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     )
     assert 'cache_directory = "/etc/iroha/taira-validator/manifests"' in config
     assert (
-        'kagemusha_release_policy_path = '
-        '"/etc/iroha/taira-validator/kagemusha/release-policy.norito"' in config
-    )
-    assert (
         'envelopes_dir = "/etc/iroha/taira-validator/sorafs_admission"' in config
     )
-    assert stat.S_IMODE(
-        (output_dir / "taira-validator-3" / "kagemusha").stat().st_mode
-    ) == 0o700
+    assert not (output_dir / "taira-validator-3" / "kagemusha").exists()
     assert stat.S_IMODE(
         (output_dir / "taira-validator-3" / "sorafs_admission").stat().st_mode
     ) == 0o700
@@ -650,10 +631,7 @@ def test_render_bundle_uses_explicit_canonical_install_root(tmp_path: Path) -> N
         'manifest_directory = "/srv/iroha/taira-validator/manifests"' in config
     )
     assert 'cache_directory = "/srv/iroha/taira-validator/manifests"' in config
-    assert (
-        'kagemusha_release_policy_path = '
-        '"/srv/iroha/taira-validator/kagemusha/release-policy.norito"' in config
-    )
+    assert "kagemusha_release_policy_path" not in config
     assert (
         'envelopes_dir = "/srv/iroha/taira-validator/sorafs_admission"' in config
     )

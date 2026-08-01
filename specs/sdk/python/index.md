@@ -81,7 +81,7 @@ print(assets, txs, holders)
 
 The first-release HTTP lifecycle consists of exactly four canonical routes:
 
-- `GET /v1/offline/readiness?asset_definition_id=...`
+- `GET /v1/offline/readiness`
 - `POST /v1/offline/top-up`
 - `POST /v1/offline/redeem`
 - `GET /v1/offline/operations/{operation_id}`
@@ -91,52 +91,29 @@ Accepted` with a typed operation reference and `Location`. They do not accept
 JSON or whole-request base64 wrapper objects. The Python surface is
 transport-only: it does not install recursive artifacts or claim a native
 prover. Top-up requests are limited to 512 KiB and redemption requests to 48
-MiB. Readiness requires
-`asset_definition_id`; a response with `ready: false` is a successfully
-evaluated domain state, while `503 readiness_unavailable` means the node could
-not perform the evaluation.
+MiB. The legacy-named readiness route is query-free and reports the universal,
+asset-neutral application capability. It is not backend readiness and does not
+evaluate an asset or dataspace.
 
 ```python
 from iroha_python import ToriiClient
 
 client = ToriiClient("https://torii.sora.example")
-readiness = client.get_kagemusha_readiness(asset_definition_id="xor#wonderland")
+capability = client.get_offline_capability()
 print(
-    "offline ready",
-    readiness.ready,
-    readiness.required_bridge_abi_version,
-    readiness.active_transfer_verifier,
-    readiness.active_topup_shield_verifier,
-    readiness.active_unshield_verifier,
-    readiness.active_recursive_step_eq_verifier,
-    readiness.active_recursive_step_ep_verifier,
-    readiness.artifact_set,
-    readiness.proof_backend_available,
-    readiness.recursive_lineage_supported,
-    readiness.blockers,
+    "offline UI capability",
+    capability.ready,
+    capability.cash_handoff_capability,
+    capability.required_bridge_abi_version,
+    capability.max_hops,
 )
 ```
 
-All five verifier fields are required nullable snapshots for distinct roles.
-Each is null exactly with its matching unavailable blocker. Readiness requires
-exact bridge ABI 21. The recursive records use the exact logical V4 roles
-`kagemusha_recursive_step_eq_v4_verifier_record` and
-`kagemusha_recursive_step_ep_v4_verifier_record`, with circuits
-`kagemusha-recursive-spend-step-eq-compact-layout-v5` and
-`kagemusha-recursive-spend-step-ep-compact-lineage-v5` respectively, and
-backend `halo2/ipa`.
-
-`artifact_set` is required but nullable. When present, it binds the
-authenticated V4 generation, manifest, release-policy and release-attestation
-digests, issuance window, proof-pair bound, and asset scale to both recursive
-verifier records. A null value requires both recursive records and backend
-construction to be unavailable with exactly one
-`recursive_v4_registry_unavailable` or `recursive_v4_registry_malformed`
-blocker; a non-null value forbids both. It may coexist with
-`proof_backend_available=True`, which means that the exact authenticated
-backend was constructed. `recursive_lineage_supported` additionally requires
-the authenticated artifact set and distinct active Eq/Ep records;
-`recursive_lineage_unavailable` is present exactly when that conjunction is
-false. `ready` is true only when the complete blocker set is empty, so unrelated
-blockers do not erase valid backend or lineage facts. The client rejects
-inconsistent combinations.
+The closed response is always `mandatory=False`,
+`cash_handoff_capability="cash_handoff_v1"`, bridge ABI `21`, maximum hop count
+`8`, `ready=True`, and empty `assets` and `blockers`. The deprecated
+`get_kagemusha_readiness(asset_definition_id)` method ignores its selector and
+returns the same status. Wallet/device peer handoff must not depend on network
+discovery. Missing proof material for a particular online top-up or redemption
+rejects that command only; it cannot make a node, asset, or dataspace “not
+offline ready.”

@@ -238,9 +238,10 @@ fn indexed_kagemusha_v4_verifier_v4(
 /// Visit every release whose terminal Eq/Ep verifier records have Active status.
 ///
 /// Terminal records deliberately outlive their issuance windows so historic
-/// offline notes can still be redeemed. Startup therefore must authenticate
-/// every Active version, including future-activation records, not merely the
-/// numerically newest registry entry or the releases usable at this snapshot.
+/// offline notes can still be redeemed. A command that explicitly uses the
+/// release cache therefore authenticates every Active version, including
+/// future-activation records, not merely the newest registry entry. This is
+/// command-scoped validation, never node startup or capability admission.
 fn visit_active_kagemusha_v4_release_pairs(
     world: &impl WorldReadOnly,
     _block_height: u64,
@@ -659,12 +660,13 @@ pub fn resolve_kagemusha_recursive_transaction_release_v4(
     })
 }
 
-/// Fail startup unless an active V4 release is present and its exact material
-/// is authenticated in the local cache.
+/// Validate an explicitly requested V4 proof release against exact material in
+/// the local cache.
 ///
-/// Validators call this after authenticated Kura replay and before joining the
-/// voting set. Offline cash is a mandatory protocol capability: an
-/// unactivated or unconfigured node must not start networking.
+/// This helper is for application-managed issuance/redemption proof workflows.
+/// It is not node startup, health, readiness, dataspace, or asset admission:
+/// wallet-facing cash handoff support is universal whether or not a release
+/// cache is configured.
 pub fn ensure_kagemusha_active_release_material_v4(
     world: &impl WorldReadOnly,
     catalog: &KagemushaReleaseCatalogV4,
@@ -1019,7 +1021,7 @@ mod recursive_readiness_tests {
 fn resolve_offline_escrow_account(
     state_transaction: &mut StateTransaction<'_, '_>,
     definition: &AssetDefinitionId,
-) -> Result<Option<AccountId>, Error> {
+) -> Result<AccountId, Error> {
     let asset_definition = state_transaction.world.asset_definition(definition)?;
     // Offline support is a protocol primitive, not an asset enrollment mode.
     // Materialize the deterministic escrow only when an offline instruction
@@ -1034,7 +1036,7 @@ fn resolve_offline_escrow_account(
         state_transaction.chain_id(),
         definition,
     );
-    Ok(Some(derived))
+    Ok(derived)
 }
 
 pub(crate) fn is_offline_escrow_source_asset(
@@ -1115,15 +1117,6 @@ fn reserve_kagemusha_escrow(
     amount: &Quantity,
 ) -> Result<(), Error> {
     let escrow_account = resolve_offline_escrow_account(state_transaction, asset.definition())?;
-    let escrow_account = escrow_account.ok_or_else(|| {
-        labeled_invariant(
-            "escrow_missing",
-            format!(
-                "offline escrow account not configured for asset definition `{}`",
-                asset.definition(),
-            ),
-        )
-    })?;
     if amount.is_zero() {
         return Ok(());
     }
@@ -4604,11 +4597,10 @@ pub mod isi {
     ) -> Result<KagemushaV2EscrowCreditPlan, Error> {
         let definition_id = source_asset.definition().clone();
         state_transaction.world.asset_definition(&definition_id)?;
-        let escrow_account =
-            crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
-                state_transaction.chain_id(),
-                &definition_id,
-            );
+        let escrow_account = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
+            state_transaction.chain_id(),
+            &definition_id,
+        );
         state_transaction.world.account(recipient)?;
         state_transaction.world.account(&escrow_account)?;
         ensure_distinct_offline_escrow_account(
@@ -8253,11 +8245,10 @@ pub mod isi {
                 .build(&ALICE_ID);
             let source_asset = AssetId::new(definition_id.clone(), ALICE_ID.clone());
             let chain_id = ChainId::from("offline-holding-limit-test");
-            let escrow_account =
-                crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
-                    &chain_id,
-                    &definition_id,
-                );
+            let escrow_account = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
+                &chain_id,
+                &definition_id,
+            );
             let escrow_asset = AssetId::new(definition_id.clone(), escrow_account.clone());
             let mut assets = vec![Asset::new(source_asset.clone(), Quantity::from(10_u32))];
             if let Some(balance) = escrow_balance {
@@ -8354,7 +8345,13 @@ pub mod isi {
             );
             let mut block = state.block(offline_test_header());
             let mut state_transaction = block.transaction();
-            assert!(state_transaction.settlement.offline.escrow_accounts.is_empty());
+            assert!(
+                state_transaction
+                    .settlement
+                    .offline
+                    .escrow_accounts
+                    .is_empty()
+            );
 
             reserve_kagemusha_escrow(
                 &mut state_transaction,

@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """Run the exact macOS/arm64 Taira cohort and emit its canonical receipt.
 
-This is a release-capture command for a dedicated disposable macOS runner.  It
-requires root because the production configs bind the content-addressed
-Kagemusha release store and qualification seal below ``/Library/SORA/Taira``.
-The command temporarily installs only the exact release catalog, candidate
-binary, and supervisor in root-controlled content-addressed paths; it starts
+This is a release-capture command for a dedicated disposable macOS runner. It
+requires root to install the candidate binary and supervisor in root-controlled
+content-addressed validation paths. It starts
 four ordinary per-peer supervisors as the reset-bundle owner, proves common
 consensus advancement, restarts every validator child in turn, and then
-restores the fresh deploy bundle before writing the receipt.
+leaves the fresh deploy bundle unchanged before writing the receipt.
 
 The original deploy bundle's storage is never used.  Each peer runs in an
 owner-private shadow work directory with empty throw-away storage, while the
@@ -491,9 +489,6 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
     installed_identity: tuple[int, ...] | None = None
     installed_supervisor: Path | None = None
     installed_supervisor_identity: tuple[int, ...] | None = None
-    seal_path: Path | None = None
-    seal_identity: tuple[int, ...] | None = None
-    release_moved = False
     running: list[RunningSupervisor] = []
     runtime_root: Path | None = None
     captured_error: BaseException | None = None
@@ -516,14 +511,7 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
             maximum_bytes=4 * 1024 * 1024,
             label="supervisor",
         )
-        deploy.move_release_to_root_store(bundle)
-        release_moved = True
-        seal_path = deploy.prepare_qualification_seal_path(bundle)
-        seal_identity = deploy.write_catalog_qualification_seal(
-            installed_binary, bundle, seal_path
-        )
         deploy.validate_installed_peer_configs(installed_binary, bundle)
-        deploy.require_post_qualification_cutover_identity(bundle)
 
         runtime_root = _prepare_runtime_root(
             args.runtime_root, bundle.owner_uid, bundle.owner_gid
@@ -586,26 +574,6 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
                 shutil.rmtree(runtime_root)
             except BaseException:
                 cleanup_errors.append("runtime-root")
-        if seal_path is not None and seal_identity is None and supervisors_stopped:
-            try:
-                if seal_path.exists() and not seal_path.is_symlink():
-                    seal_identity = deploy.authenticate_qualification_seal(seal_path)
-            except BaseException:
-                cleanup_errors.append("unattributed-qualification-seal")
-        if seal_path is not None and seal_identity is not None and supervisors_stopped:
-            try:
-                deploy.remove_created_qualification_seal(seal_path, seal_identity)
-            except BaseException:
-                cleanup_errors.append("qualification-seal")
-        seal_cleanup_safe = not any(
-            label in cleanup_errors
-            for label in ("unattributed-qualification-seal", "qualification-seal")
-        )
-        if release_moved and supervisors_stopped and seal_cleanup_safe:
-            try:
-                deploy.restore_release_to_bundle(bundle)
-            except BaseException:
-                cleanup_errors.append("release-catalog")
         if (
             installed_supervisor is not None
             and installed_supervisor_identity is not None

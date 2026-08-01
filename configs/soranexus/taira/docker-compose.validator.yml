@@ -12,7 +12,6 @@ services:
       IROHA_TAIRA_CONFIG: /etc/iroha/taira-validator/config.toml
       TAIRA_RUNTIME_PROFILE: production
       TAIRA_IMAGE_REFERENCE: ${TAIRA_IMAGE:?set TAIRA_IMAGE to the admitted immutable image digest}
-      IROHA_TAIRA_KAGEMUSHA_ARTIFACT_DIR: /var/lib/iroha/taira-validator/kagemusha/v4
       # Uncomment when mounting a custom genesis file below.
       # IROHA_TAIRA_GENESIS: /config/genesis.json
       # Uncomment when mounting an explicit signed genesis payload below.
@@ -23,7 +22,6 @@ services:
     volumes:
       - "${TAIRA_CONFIG_BUNDLE_PATH:-/etc/iroha/taira-validator}:/etc/iroha/taira-validator:ro"
       - "${TAIRA_STORAGE_PATH:-/var/lib/iroha/taira-validator-1}:/storage"
-      - "${TAIRA_KAGEMUSHA_ARTIFACT_PATH:-/var/lib/iroha/taira-validator/kagemusha/v4}:/var/lib/iroha/taira-validator/kagemusha/v4"
       # Uncomment to override the bundled public genesis.
       # - "${TAIRA_GENESIS_PATH:-/etc/iroha/taira-validator-1/genesis.json}:/config/genesis.json:ro"
       # Uncomment to inject a signed genesis block for disconnected/local smoke boots.

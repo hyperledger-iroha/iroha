@@ -75074,12 +75074,11 @@ mod status_block_visibility_tests {
     #[test]
     fn authoritative_state_height_replaces_lagging_and_leading_counters() {
         for telemetry_height in [3, 19] {
+            let mut sumeragi = SumeragiConsensusStatus::default();
+            sumeragi.commit_qc_height = telemetry_height;
             let mut status = Status {
                 blocks: telemetry_height,
-                sumeragi: Some(SumeragiConsensusStatus {
-                    commit_qc_height: telemetry_height,
-                    ..SumeragiConsensusStatus::default()
-                }),
+                sumeragi: Some(sumeragi),
                 ..Status::default()
             };
 
@@ -75091,12 +75090,11 @@ mod status_block_visibility_tests {
 
     #[test]
     fn missing_state_anchor_keeps_monotonic_commit_qc_fallback() {
+        let mut sumeragi = SumeragiConsensusStatus::default();
+        sumeragi.commit_qc_height = 8;
         let mut status = Status {
             blocks: 5,
-            sumeragi: Some(SumeragiConsensusStatus {
-                commit_qc_height: 8,
-                ..SumeragiConsensusStatus::default()
-            }),
+            sumeragi: Some(sumeragi),
             ..Status::default()
         };
 

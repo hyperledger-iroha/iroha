@@ -71,7 +71,7 @@ use iroha_torii_shared::{
     PipelineTransactionStatusResponse, TriggerCompletionListResponse,
     offline_api::{
         OfflineOperationKind, OfflineOperationReference, OfflineOperationResult,
-        OfflineOperationState, OfflineOperationStatus, OfflineReadiness, OfflineRedeemRequest,
+        OfflineOperationState, OfflineOperationStatus, OfflineRedeemRequest, OfflineStatus,
         OfflineTopUpRequest,
     },
     uri as torii_uri,
@@ -7385,439 +7385,84 @@ impl Client {
         Self::require_lower_hex_32(transaction_hash, "transaction_hash")
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each argument names one independent first-release verifier binding or limit"
-    )]
-    fn validate_offline_readiness_verifier(
-        readiness: &OfflineReadiness,
-        verifier: Option<&iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>,
-        field: &str,
-        unavailable_blocker: &str,
-        expected_role: &str,
-        expected_circuit_id: &str,
-        expected_schema_hash: Option<[u8; 32]>,
-        max_allowed_proof_bytes: u32,
-    ) -> Result<()> {
-        let has_unavailable_blocker = readiness
-            .blockers
-            .iter()
-            .any(|blocker| blocker.code == unavailable_blocker);
-        let Some(verifier) = verifier else {
-            if !has_unavailable_blocker {
-                return Err(eyre!(
-                    "offline readiness response omitted {field} without a {unavailable_blocker} blocker"
-                ));
-            }
-            return Ok(());
-        };
-        if has_unavailable_blocker {
+    fn validate_offline_capability(status: &OfflineStatus) -> Result<()> {
+        if status.mandatory {
             return Err(eyre!(
-                "offline readiness response contains both {field} and a {unavailable_blocker} blocker"
+                "offline capability must not be reported as a backend-mandatory service"
             ));
         }
-        if verifier.id.backend != "halo2/ipa"
-            || verifier.id.name != expected_role
-            || verifier.circuit_id != expected_circuit_id
+        if status.cash_handoff_capability
+            != iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1
         {
             return Err(eyre!(
-                "offline readiness response contains substituted {field} metadata"
+                "offline capability response does not advertise cash_handoff_v1"
             ));
         }
-        if verifier.version == 0 {
-            return Err(eyre!(
-                "offline readiness response selected {field} with version zero"
-            ));
-        }
-        Self::require_lower_hex_32(&verifier.commitment, &format!("{field}.commitment"))?;
-        Self::require_lower_hex_32(
-            &verifier.public_inputs_schema_hash,
-            &format!("{field}.public_inputs_schema_hash"),
-        )?;
-        if verifier.commitment.bytes().all(|byte| byte == b'0')
-            || verifier
-                .public_inputs_schema_hash
-                .bytes()
-                .all(|byte| byte == b'0')
+        if status.required_bridge_abi_version
+            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
         {
             return Err(eyre!(
-                "offline readiness response contains zero {field} metadata"
+                "offline capability response does not advertise native bridge ABI 21"
             ));
         }
-        if let Some(expected_schema_hash) = expected_schema_hash
-            && verifier.public_inputs_schema_hash != hex::encode(expected_schema_hash)
+        if status.max_hops != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
         {
             return Err(eyre!(
-                "offline readiness response contains a substituted {field} public-input schema"
+                "offline capability response does not advertise the canonical peer-spend hop limit"
             ));
         }
-        if verifier.max_proof_bytes == 0 || verifier.max_proof_bytes > max_allowed_proof_bytes {
+        if !status.ready {
             return Err(eyre!(
-                "offline readiness response selected {field} with an invalid proof limit"
+                "offline capability response must report the universally compiled capability as ready"
             ));
         }
-        if verifier.activation_height > readiness.evaluated_block_height {
+        if !status.assets.is_empty() {
             return Err(eyre!(
-                "offline readiness response selected {field} before activation"
+                "offline capability response must not contain asset-specific readiness entries"
             ));
         }
-        if verifier.withdrawal_height.is_some_and(|withdrawal_height| {
-            withdrawal_height <= verifier.activation_height
-                || readiness.evaluated_block_height >= withdrawal_height
-        }) {
+        if !status.blockers.is_empty() {
             return Err(eyre!(
-                "offline readiness response selected {field} outside its activation window"
+                "offline capability response must not contain backend readiness blockers"
             ));
         }
         Ok(())
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the artifact-set verifier keeps its authenticated digest and activation checks ordered"
-    )]
-    fn validate_offline_readiness_artifact_set(readiness: &OfflineReadiness) -> Result<()> {
-        let has_blocker = |code: &str| {
-            readiness
-                .blockers
-                .iter()
-                .any(|blocker| blocker.code == code)
-        };
-        let registry_blocker_count = [
-            "recursive_v4_registry_unavailable",
-            "recursive_v4_registry_malformed",
-        ]
-        .into_iter()
-        .filter(|code| has_blocker(code))
-        .count();
-        let recursive_verifiers = (
-            readiness.active_recursive_step_eq_verifier.as_ref(),
-            readiness.active_recursive_step_ep_verifier.as_ref(),
-        );
-
-        let Some(artifact_set) = readiness.artifact_set.as_ref() else {
-            if registry_blocker_count != 1 {
-                return Err(eyre!(
-                    "offline readiness response omitted artifact_set without exactly one authenticated V4 registry blocker"
-                ));
-            }
-            if recursive_verifiers.0.is_some() || recursive_verifiers.1.is_some() {
-                return Err(eyre!(
-                    "offline readiness response exposes recursive verifiers without an authenticated artifact_set"
-                ));
-            }
-            if readiness.proof_backend_available {
-                return Err(eyre!(
-                    "offline readiness response exposes a proof backend without an authenticated artifact_set"
-                ));
-            }
-            return Ok(());
-        };
-
-        if registry_blocker_count != 0 {
-            return Err(eyre!(
-                "offline readiness response contains both artifact_set and an authenticated V4 registry blocker"
-            ));
-        }
-        let (Some(vesta_verifier), Some(pallas_verifier)) = recursive_verifiers else {
-            return Err(eyre!(
-                "offline readiness response contains artifact_set without both recursive verifiers"
-            ));
-        };
-        if !iroha_data_model::offline::is_kagemusha_portable_identifier(&artifact_set.generation) {
-            return Err(eyre!(
-                "offline readiness response contains an invalid artifact_set generation"
-            ));
-        }
-        let mut artifact_digests = std::collections::BTreeSet::new();
-        for (field, digest) in [
-            ("manifest_sha256", &artifact_set.manifest_sha256),
-            ("release_policy_sha256", &artifact_set.release_policy_sha256),
-            (
-                "release_attestation_sha256",
-                &artifact_set.release_attestation_sha256,
-            ),
-        ] {
-            Self::require_lower_hex_32(digest, &format!("artifact_set.{field}"))?;
-            if digest.bytes().all(|byte| byte == b'0') {
-                return Err(eyre!(
-                    "offline readiness response contains a zero artifact_set.{field} digest"
-                ));
-            }
-            if !artifact_digests.insert(digest.as_str()) {
-                return Err(eyre!(
-                    "offline readiness response reuses an authenticated artifact digest"
-                ));
-            }
-        }
-        if artifact_set.activation_height == 0
-            || artifact_set.withdrawal_height <= artifact_set.activation_height
-            || readiness.evaluated_block_height < artifact_set.activation_height
-            || readiness.evaluated_block_height >= artifact_set.withdrawal_height
-        {
-            return Err(eyre!(
-                "offline readiness response selected artifact_set outside its activation window"
-            ));
-        }
-        if artifact_set.max_proof_bytes == 0
-            || artifact_set.max_proof_bytes
-                > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
-        {
-            return Err(eyre!(
-                "offline readiness response contains an invalid artifact_set proof limit"
-            ));
-        }
-        if artifact_set.asset_scale
-            > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
-            || readiness.asset_scale != Some(artifact_set.asset_scale)
-        {
-            return Err(eyre!(
-                "offline readiness response artifact_set is not bound to the live asset scale"
-            ));
-        }
-        for (field, verifier) in [
-            ("active_recursive_step_eq_verifier", vesta_verifier),
-            ("active_recursive_step_ep_verifier", pallas_verifier),
-        ] {
-            if verifier.activation_height != artifact_set.activation_height
-                || verifier.withdrawal_height != Some(artifact_set.withdrawal_height)
-                || verifier.max_proof_bytes != artifact_set.max_proof_bytes
-            {
-                return Err(eyre!(
-                    "offline readiness response {field} is not bound to artifact_set"
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    /// Evaluate whether one asset definition is ready for offline payments.
+    /// Discover the universally compiled offline cash-handoff capability.
     ///
-    /// A normal not-ready domain state is returned as `Ok` with `ready == false`.
+    /// The capability is independent of backend configuration, asset catalogs,
+    /// and dataspace routing, so this request never includes an asset selector.
     ///
     /// # Errors
-    /// Returns an error for transport failures, non-success responses, malformed negotiated
-    /// representations, or a response that is not bound to the requested asset definition.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the readiness decoder keeps ordered first-release blocker and verifier checks together"
-    )]
-    pub fn get_offline_readiness(
-        &self,
-        asset_definition_id: &AssetDefinitionId,
-    ) -> Result<OfflineReadiness> {
-        let asset_definition_id = asset_definition_id.to_string();
-        let mut url = join_torii_url(&self.torii_url, torii_uri::OFFLINE_READINESS);
-        url.query_pairs_mut()
-            .append_pair("asset_definition_id", &asset_definition_id);
+    /// Returns an error for transport failures, non-success responses, malformed
+    /// negotiated representations, or a response that does not describe the
+    /// exact first-release `cash_handoff_v1` ABI-21 capability.
+    pub fn get_offline_capability(&self) -> Result<OfflineStatus> {
+        let url = join_torii_url(&self.torii_url, torii_uri::OFFLINE_READINESS);
         let response = self.send_builder(
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", self.wire_format_preference.accept_header()),
         )?;
-        let readiness: OfflineReadiness = Self::parse_negotiated_typed_response(
+        let status: OfflineStatus = Self::parse_negotiated_typed_response(
             &response,
             StatusCode::OK,
-            "Failed to evaluate offline readiness",
+            "Failed to discover offline capability",
         )?;
-        if readiness.asset_definition_id != asset_definition_id {
-            return Err(eyre!(
-                "offline readiness response is not bound to the requested asset definition"
-            ));
-        }
-        Self::require_lower_hex_32(&readiness.evaluated_block_hash, "evaluated_block_hash")?;
-        if readiness.required_bridge_abi_version
-            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
-            || readiness.max_hops
-                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
-        {
-            return Err(eyre!(
-                "offline readiness response does not describe the first-release Kagemusha contract"
-            ));
-        }
-        let has_blocker = |code: &str| {
-            readiness
-                .blockers
-                .iter()
-                .any(|blocker| blocker.code == code)
-        };
-        let mut blocker_codes = std::collections::BTreeSet::new();
-        for blocker in &readiness.blockers {
-            let code = blocker.code.as_str();
-            if code.is_empty()
-                || code.len() > 64
-                || !code
-                    .as_bytes()
-                    .first()
-                    .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-                || !code.as_bytes()[1..]
-                    .iter()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
-                || !blocker_codes.insert(code)
-            {
-                return Err(eyre!(
-                    "offline readiness response contains an invalid or duplicate blocker code"
-                ));
-            }
-            let message = blocker.message.as_str();
-            let message_chars = message.chars().count();
-            if message_chars == 0
-                || message_chars > 1_024
-                || message
-                    .chars()
-                    .next()
-                    .is_some_and(char::is_whitespace)
-                || message
-                    .chars()
-                    .next_back()
-                    .is_some_and(char::is_whitespace)
-                || message
-                    .chars()
-                    .any(|character| matches!(character, '\u{0000}'..='\u{001f}' | '\u{007f}'..='\u{009f}'))
-            {
-                return Err(eyre!(
-                    "offline readiness response contains an invalid blocker message"
-                ));
-            }
-        }
-        let scale_unavailable = has_blocker("asset_scale_unavailable");
-        let scale_unsupported = has_blocker("asset_scale_unsupported");
-        match readiness.asset_scale {
-            None if !scale_unavailable || scale_unsupported => {
-                return Err(eyre!(
-                    "offline readiness response omitted the live asset scale without exactly the asset_scale_unavailable blocker"
-                ));
-            }
-            Some(scale)
-                if scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
-                    && (!scale_unsupported || scale_unavailable) =>
-            {
-                return Err(eyre!(
-                    "offline readiness response exposes an unsupported asset scale without exactly the asset_scale_unsupported blocker"
-                ));
-            }
-            Some(scale)
-                if scale <= iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
-                    && (scale_unavailable || scale_unsupported) =>
-            {
-                return Err(eyre!(
-                    "offline readiness response has an inconsistent asset scale blocker"
-                ));
-            }
-            _ => {}
-        }
-        let confidential_proof_limit =
-            u32::try_from(iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2)
-                .expect("Kagemusha proof limit fits u32");
-        Self::validate_offline_readiness_verifier(
-            &readiness,
-            readiness.active_transfer_verifier.as_ref(),
-            "active_transfer_verifier",
-            "transfer_verifier_unavailable",
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
-            "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-            None,
-            confidential_proof_limit,
-        )?;
-        Self::validate_offline_readiness_verifier(
-            &readiness,
-            readiness.active_topup_shield_verifier.as_ref(),
-            "active_topup_shield_verifier",
-            "topup_shield_verifier_unavailable",
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
-            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-            None,
-            confidential_proof_limit,
-        )?;
-        Self::validate_offline_readiness_verifier(
-            &readiness,
-            readiness.active_unshield_verifier.as_ref(),
-            "active_unshield_verifier",
-            "unshield_verifier_unavailable",
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-            "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-            None,
-            confidential_proof_limit,
-        )?;
-        Self::validate_offline_readiness_verifier(
-            &readiness,
-            readiness.active_recursive_step_eq_verifier.as_ref(),
-            "active_recursive_step_eq_verifier",
-            "recursive_step_eq_verifier_unavailable",
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-            None,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
-        )?;
-        Self::validate_offline_readiness_verifier(
-            &readiness,
-            readiness.active_recursive_step_ep_verifier.as_ref(),
-            "active_recursive_step_ep_verifier",
-            "recursive_step_ep_verifier_unavailable",
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-            None,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
-        )?;
-        Self::validate_offline_readiness_artifact_set(&readiness)?;
-        let mut verifier_ids = std::collections::BTreeSet::new();
-        let mut verifier_commitments = std::collections::BTreeSet::new();
-        let mut verifier_schema_hashes = std::collections::BTreeSet::new();
-        for verifier in [
-            readiness.active_transfer_verifier.as_ref(),
-            readiness.active_topup_shield_verifier.as_ref(),
-            readiness.active_unshield_verifier.as_ref(),
-            readiness.active_recursive_step_eq_verifier.as_ref(),
-            readiness.active_recursive_step_ep_verifier.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if !verifier_ids.insert((verifier.id.backend.as_str(), verifier.id.name.as_str()))
-                || !verifier_commitments.insert(verifier.commitment.as_str())
-                || !verifier_schema_hashes.insert(verifier.public_inputs_schema_hash.as_str())
-            {
-                return Err(eyre!(
-                    "offline readiness response reuses verifier identity material across roles"
-                ));
-            }
-        }
-        if readiness.proof_backend_available == has_blocker("proof_backend_unavailable") {
-            return Err(eyre!(
-                "offline readiness response has an inconsistent proof backend blocker"
-            ));
-        }
-        let expected_recursive_lineage_supported = readiness.proof_backend_available
-            && readiness.artifact_set.is_some()
-            && readiness.active_recursive_step_eq_verifier.is_some()
-            && readiness.active_recursive_step_ep_verifier.is_some();
-        if readiness.recursive_lineage_supported != expected_recursive_lineage_supported {
-            return Err(eyre!(
-                "offline readiness response has an inconsistent exact ABI-21 recursive lineage capability"
-            ));
-        }
-        if readiness.recursive_lineage_supported == has_blocker("recursive_lineage_unavailable") {
-            return Err(eyre!(
-                "offline readiness response has an inconsistent recursive lineage blocker"
-            ));
-        }
-        let expected_ready = readiness.proof_backend_available
-            && readiness.recursive_lineage_supported
-            && readiness.artifact_set.is_some()
-            && readiness.asset_scale.is_some_and(|scale| {
-                scale <= iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
-            })
-            && readiness.active_transfer_verifier.is_some()
-            && readiness.active_topup_shield_verifier.is_some()
-            && readiness.active_unshield_verifier.is_some()
-            && readiness.active_recursive_step_eq_verifier.is_some()
-            && readiness.active_recursive_step_ep_verifier.is_some()
-            && readiness.blockers.is_empty();
-        if readiness.ready != expected_ready {
-            return Err(eyre!(
-                "offline readiness response has an inconsistent complete ABI-21 readiness claim"
-            ));
-        }
-        Ok(readiness)
+        Self::validate_offline_capability(&status)?;
+        Ok(status)
+    }
+
+    /// Compatibility alias for clients that previously selected one asset.
+    ///
+    /// Offline capability is universal. The selector is intentionally ignored
+    /// and no query parameter is sent.
+    #[deprecated(note = "use get_offline_capability(); offline capability is asset-neutral")]
+    pub fn get_offline_readiness(
+        &self,
+        _asset_definition_id: &AssetDefinitionId,
+    ) -> Result<OfflineStatus> {
+        self.get_offline_capability()
     }
 
     /// Submit a signed online-to-offline top-up operation.
@@ -8487,9 +8132,6 @@ mod offline_client_tests {
         nonce: u64,
     }
 
-    const TEST_RECURSIVE_PROOF_MAX_BYTES: u32 =
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4;
-
     fn asset_definition_id(name: &str) -> AssetDefinitionId {
         AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").expect("asset domain id"),
@@ -8529,553 +8171,119 @@ mod offline_client_tests {
             .expect("response")
     }
 
-    fn active_verifier(
-        role: &str,
-        circuit_id: &str,
-        schema_hash: String,
-        commitment_byte: &str,
-        max_proof_bytes: u32,
-    ) -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
-        iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
-            id: iroha_torii_shared::offline_api::OfflineVerifierId {
-                backend: "halo2/ipa".to_owned(),
-                name: role.to_owned(),
-            },
-            version: 1,
-            circuit_id: circuit_id.to_owned(),
-            commitment: commitment_byte.repeat(32),
-            public_inputs_schema_hash: schema_hash,
-            max_proof_bytes,
-            activation_height: 1,
-            withdrawal_height: None,
-        }
-    }
-
-    fn readiness_blocker(
-        code: &str,
-        message: &str,
-    ) -> iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-        iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-            code: code.to_owned(),
-            message: message.to_owned(),
-        }
-    }
-
-    fn active_transfer_verifier() -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier
-    {
-        active_verifier(
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
-            "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-            "22".repeat(32),
-            "11",
-            65_536,
-        )
-    }
-
-    fn active_topup_shield_verifier()
-    -> iroha_torii_shared::offline_api::OfflineActiveTopUpShieldVerifier {
-        active_verifier(
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
-            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-            "44".repeat(32),
-            "33",
-            196_608,
-        )
-    }
-
-    fn active_unshield_verifier() -> iroha_torii_shared::offline_api::OfflineActiveUnshieldVerifier
-    {
-        active_verifier(
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-            "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-            "66".repeat(32),
-            "55",
-            196_608,
-        )
-    }
-
-    fn active_recursive_step_eq_verifier()
-    -> iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEqVerifier {
-        let mut verifier = active_verifier(
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-            "99".repeat(32),
-            "77",
-            TEST_RECURSIVE_PROOF_MAX_BYTES,
-        );
-        verifier.withdrawal_height = Some(80);
-        verifier
-    }
-
-    fn active_recursive_step_ep_verifier()
-    -> iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEpVerifier {
-        let mut verifier = active_verifier(
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-            "aa".repeat(32),
-            "88",
-            TEST_RECURSIVE_PROOF_MAX_BYTES,
-        );
-        verifier.withdrawal_height = Some(80);
-        verifier
-    }
-
-    fn authenticated_artifact_set()
-    -> iroha_torii_shared::offline_api::OfflineAuthenticatedArtifactSet {
-        iroha_torii_shared::offline_api::OfflineAuthenticatedArtifactSet {
-            generation: "release-v4".to_owned(),
-            manifest_sha256: "b1".repeat(32),
-            release_policy_sha256: "b2".repeat(32),
-            release_attestation_sha256: "b3".repeat(32),
-            activation_height: 1,
-            withdrawal_height: 80,
-            max_proof_bytes: TEST_RECURSIVE_PROOF_MAX_BYTES,
-            asset_scale: 9,
-        }
-    }
-
-    fn first_release_readiness(asset_definition_id: &AssetDefinitionId) -> OfflineReadiness {
-        OfflineReadiness {
+    fn universal_offline_capability() -> OfflineStatus {
+        OfflineStatus {
+            mandatory: false,
             cash_handoff_capability:
                 iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-            asset_definition_id: asset_definition_id.to_string(),
-            asset_scale: Some(9),
-            evaluated_block_height: 19,
-            evaluated_block_hash: "ab".repeat(32),
-            active_transfer_verifier: Some(active_transfer_verifier()),
-            active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-            active_unshield_verifier: Some(active_unshield_verifier()),
-            active_recursive_step_eq_verifier: Some(active_recursive_step_eq_verifier()),
-            active_recursive_step_ep_verifier: Some(active_recursive_step_ep_verifier()),
-            artifact_set: Some(authenticated_artifact_set()),
-            proof_backend_available: true,
-            recursive_lineage_supported: true,
             ready: true,
+            assets: Vec::new(),
             blockers: Vec::new(),
         }
     }
 
     #[test]
-    fn readiness_request_is_typed_negotiated_and_asset_bound() {
-        let asset_definition_id = asset_definition_id("xor");
-        let mut readiness = first_release_readiness(&asset_definition_id);
-        readiness.ready = false;
-        readiness.blockers.push(readiness_blocker(
-            "issuer_unavailable",
-            "The issuer is unavailable.",
-        ));
+    fn offline_capability_request_is_asset_neutral_and_exact() {
+        let capability = universal_offline_capability();
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", "application/json; charset=utf-8")
-            .body(norito::json::to_vec(&readiness).expect("encode readiness"))
+            .body(norito::json::to_vec(&capability).expect("encode capability"))
             .expect("response");
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let result = with_mock_http(respond_with(&snapshots, response), || {
-            client_with_base_url(base_url()).get_offline_readiness(&asset_definition_id)
+            client_with_base_url(base_url()).get_offline_capability()
         })
-        .expect("readiness response");
+        .expect("offline capability response");
 
-        assert!(!result.ready);
-        assert!(result.proof_backend_available);
-        assert!(result.recursive_lineage_supported);
-        assert!(
-            result
-                .blockers
-                .iter()
-                .any(|blocker| blocker.code == "issuer_unavailable")
-        );
+        assert!(!result.mandatory);
+        assert_eq!(result.cash_handoff_capability, "cash_handoff_v1");
+        assert_eq!(result.required_bridge_abi_version, 21);
+        assert_eq!(result.max_hops, 8);
+        assert!(result.ready);
+        assert!(result.assets.is_empty());
+        assert!(result.blockers.is_empty());
+
         let snapshots = snapshots.lock().expect("snapshots");
         assert_eq!(snapshots.len(), 1);
         let snapshot = &snapshots[0];
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), torii_uri::OFFLINE_READINESS);
-        assert_eq!(
-            snapshot
-                .url
-                .query_pairs()
-                .find(|(key, _)| key == "asset_definition_id")
-                .map(|(_, value)| value.into_owned()),
-            Some(asset_definition_id.to_string())
-        );
+        assert!(snapshot.url.query().is_none());
         assert_single_accept_header(snapshot, ACCEPT_NORITO_PREFERRED);
     }
 
     #[test]
-    fn readiness_rejects_cross_asset_and_inconsistent_states() {
-        let requested = asset_definition_id("xor");
-        let other_asset = asset_definition_id("rose");
-        let cross_asset = first_release_readiness(&other_asset);
-        let mut inconsistent = first_release_readiness(&requested);
-        inconsistent.ready = false;
-        let mut uppercase_hash = first_release_readiness(&requested);
-        uppercase_hash.evaluated_block_hash = "AB".repeat(32);
-        for readiness in [cross_asset, inconsistent, uppercase_hash] {
-            let response = HttpResponse::builder()
-                .status(StatusCode::OK)
-                .header("content-type", APPLICATION_NORITO)
-                .body(norito::to_bytes(&readiness).expect("encode readiness"))
-                .expect("response");
-            let error = with_mock_http(
-                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-                || client_with_base_url(base_url()).get_offline_readiness(&requested),
-            )
-            .expect_err("forged readiness response must fail closed");
-            assert!(
-                error.to_string().contains("offline readiness response")
-                    || error.to_string().contains("evaluated_block_hash"),
-                "unexpected error: {error:#}"
-            );
-        }
+    #[expect(deprecated)]
+    fn deprecated_readiness_selector_is_ignored() {
+        let capability = universal_offline_capability();
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&capability).expect("encode capability"))
+            .expect("response");
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let result = with_mock_http(respond_with(&snapshots, response), || {
+            client_with_base_url(base_url()).get_offline_readiness(&asset_definition_id("ignored"))
+        })
+        .expect("compatibility response");
+
+        assert_eq!(result, capability);
+        let snapshots = snapshots.lock().expect("snapshots");
+        assert!(snapshots[0].url.query().is_none());
     }
 
     #[test]
-    fn readiness_rejects_unbound_scale_and_verifier_snapshots() {
-        let requested = asset_definition_id("xor");
-        let unrelated_blocker = || iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-            code: "issuer_unavailable".to_owned(),
-            message: "issuer is unavailable".to_owned(),
-        };
-        let mut future_verifier = active_transfer_verifier();
-        future_verifier.activation_height = 20;
-        let mut missing_scale_blocker = first_release_readiness(&requested);
-        missing_scale_blocker.asset_scale = None;
-        missing_scale_blocker.blockers.push(unrelated_blocker());
-        let mut missing_transfer_blocker = first_release_readiness(&requested);
-        missing_transfer_blocker.active_transfer_verifier = None;
-        missing_transfer_blocker.blockers.push(unrelated_blocker());
-        let mut future_transfer = first_release_readiness(&requested);
-        future_transfer.active_transfer_verifier = Some(future_verifier);
-        future_transfer.blockers.push(unrelated_blocker());
-        let mut null_scale_with_conflicting_blockers = first_release_readiness(&requested);
-        null_scale_with_conflicting_blockers.asset_scale = None;
-        null_scale_with_conflicting_blockers.blockers.extend([
-            readiness_blocker("asset_scale_unavailable", "The asset scale is unavailable."),
-            readiness_blocker("asset_scale_unsupported", "The asset scale is unsupported."),
-        ]);
-        let mut unsupported_scale_with_conflicting_blockers = first_release_readiness(&requested);
-        unsupported_scale_with_conflicting_blockers.asset_scale = Some(29);
-        unsupported_scale_with_conflicting_blockers
+    fn offline_capability_rejects_non_universal_claims() {
+        let mut cases = Vec::new();
+
+        let mut mandatory = universal_offline_capability();
+        mandatory.mandatory = true;
+        cases.push(mandatory);
+
+        let mut wrong_capability = universal_offline_capability();
+        wrong_capability.cash_handoff_capability = "cash_handoff_v2".to_owned();
+        cases.push(wrong_capability);
+
+        let mut wrong_abi = universal_offline_capability();
+        wrong_abi.required_bridge_abi_version = 20;
+        cases.push(wrong_abi);
+
+        let mut wrong_hops = universal_offline_capability();
+        wrong_hops.max_hops = 7;
+        cases.push(wrong_hops);
+
+        let mut not_ready = universal_offline_capability();
+        not_ready.ready = false;
+        cases.push(not_ready);
+
+        let mut blocked = universal_offline_capability();
+        blocked
             .blockers
-            .extend([
-                readiness_blocker("asset_scale_unavailable", "The asset scale is unavailable."),
-                readiness_blocker("asset_scale_unsupported", "The asset scale is unsupported."),
-            ]);
-        for readiness in [
-            missing_scale_blocker,
-            missing_transfer_blocker,
-            future_transfer,
-            null_scale_with_conflicting_blockers,
-            unsupported_scale_with_conflicting_blockers,
-        ] {
+            .push(iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+                code: "backend_gate".to_owned(),
+                message: "Backend readiness must not gate the capability.".to_owned(),
+            });
+        cases.push(blocked);
+
+        for capability in cases {
             let response = HttpResponse::builder()
                 .status(StatusCode::OK)
                 .header("content-type", APPLICATION_NORITO)
-                .body(norito::to_bytes(&readiness).expect("encode readiness"))
+                .body(norito::to_bytes(&capability).expect("encode capability"))
                 .expect("response");
             let error = with_mock_http(
                 respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-                || client_with_base_url(base_url()).get_offline_readiness(&requested),
+                || client_with_base_url(base_url()).get_offline_capability(),
             )
-            .expect_err("unbound readiness metadata must fail closed");
+            .expect_err("non-universal capability claim must fail closed");
             assert!(
-                error.to_string().contains("asset scale")
-                    || error.to_string().contains("active_transfer_verifier"),
+                error.to_string().contains("offline capability"),
                 "unexpected error: {error:#}"
             );
-        }
-    }
-
-    #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the readiness test keeps the complete fail-closed verifier, artifact, and lineage substitution matrix together"
-    )]
-    fn readiness_rejects_contract_verifier_and_lineage_substitution() {
-        let requested = asset_definition_id("xor");
-        let mut wrong_abi = first_release_readiness(&requested);
-        wrong_abi.required_bridge_abi_version -= 1;
-        let mut wrong_hops = first_release_readiness(&requested);
-        wrong_hops.max_hops -= 1;
-        let mut substituted_topup = first_release_readiness(&requested);
-        substituted_topup
-            .active_topup_shield_verifier
-            .as_mut()
-            .expect("fixture top-up verifier")
-            .id
-            .name = iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2.to_owned();
-        let mut substituted_unshield = first_release_readiness(&requested);
-        substituted_unshield
-            .active_unshield_verifier
-            .as_mut()
-            .expect("fixture unshield verifier")
-            .circuit_id =
-            "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3".to_owned();
-        let mut zero_step_eq_schema = first_release_readiness(&requested);
-        zero_step_eq_schema
-            .active_recursive_step_eq_verifier
-            .as_mut()
-            .expect("fixture StepEq verifier")
-            .public_inputs_schema_hash = "00".repeat(32);
-        let mut zero_transfer_version = first_release_readiness(&requested);
-        zero_transfer_version
-            .active_transfer_verifier
-            .as_mut()
-            .expect("fixture transfer verifier")
-            .version = 0;
-        let mut zero_topup_commitment = first_release_readiness(&requested);
-        zero_topup_commitment
-            .active_topup_shield_verifier
-            .as_mut()
-            .expect("fixture top-up verifier")
-            .commitment = "00".repeat(32);
-        let mut mismatched_step_ep_proof = first_release_readiness(&requested);
-        let artifact_proof_limit = mismatched_step_ep_proof
-            .artifact_set
-            .as_ref()
-            .expect("fixture artifact set")
-            .max_proof_bytes;
-        mismatched_step_ep_proof
-            .active_recursive_step_ep_verifier
-            .as_mut()
-            .expect("fixture StepEp verifier")
-            .max_proof_bytes = artifact_proof_limit - 1;
-        let mut reused_commitment = first_release_readiness(&requested);
-        let transfer_commitment = reused_commitment
-            .active_transfer_verifier
-            .as_ref()
-            .expect("fixture transfer verifier")
-            .commitment
-            .clone();
-        reused_commitment
-            .active_topup_shield_verifier
-            .as_mut()
-            .expect("fixture top-up verifier")
-            .commitment = transfer_commitment;
-        let mut reused_schema = first_release_readiness(&requested);
-        let transfer_schema = reused_schema
-            .active_transfer_verifier
-            .as_ref()
-            .expect("fixture transfer verifier")
-            .public_inputs_schema_hash
-            .clone();
-        reused_schema
-            .active_topup_shield_verifier
-            .as_mut()
-            .expect("fixture top-up verifier")
-            .public_inputs_schema_hash = transfer_schema;
-        let mut forged_lineage = first_release_readiness(&requested);
-        forged_lineage.recursive_lineage_supported = false;
-        let mut duplicate_blockers = first_release_readiness(&requested);
-        duplicate_blockers.ready = false;
-        duplicate_blockers.blockers = vec![
-            iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-                code: "proof_backend_unavailable".to_owned(),
-                message: "first".to_owned(),
-            },
-            iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-                code: "proof_backend_unavailable".to_owned(),
-                message: "second".to_owned(),
-            },
-        ];
-
-        for readiness in [
-            wrong_abi,
-            wrong_hops,
-            substituted_topup,
-            substituted_unshield,
-            zero_step_eq_schema,
-            zero_transfer_version,
-            zero_topup_commitment,
-            mismatched_step_ep_proof,
-            reused_commitment,
-            reused_schema,
-            forged_lineage,
-            duplicate_blockers,
-        ] {
-            let response = HttpResponse::builder()
-                .status(StatusCode::OK)
-                .header("content-type", APPLICATION_NORITO)
-                .body(norito::to_bytes(&readiness).expect("encode readiness"))
-                .expect("response");
-            let _ = with_mock_http(
-                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-                || client_with_base_url(base_url()).get_offline_readiness(&requested),
-            )
-            .expect_err("substituted Kagemusha readiness must fail closed");
-        }
-    }
-
-    #[test]
-    fn readiness_accepts_exact_authenticated_backend_and_lineage() {
-        let requested = asset_definition_id("xor");
-        let readiness = first_release_readiness(&requested);
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&readiness).expect("encode readiness"))
-            .expect("response");
-
-        let decoded = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).get_offline_readiness(&requested),
-        )
-        .expect("the exact authenticated release is a valid ready state");
-
-        assert!(decoded.artifact_set.is_some());
-        assert!(decoded.proof_backend_available);
-        assert!(decoded.recursive_lineage_supported);
-        assert!(decoded.ready);
-        assert!(decoded.blockers.is_empty());
-    }
-
-    #[test]
-    fn readiness_accepts_nullable_unavailable_v4_artifact_set() {
-        let requested = asset_definition_id("xor");
-        let mut readiness = first_release_readiness(&requested);
-        readiness.active_recursive_step_eq_verifier = None;
-        readiness.active_recursive_step_ep_verifier = None;
-        readiness.artifact_set = None;
-        readiness.proof_backend_available = false;
-        readiness.recursive_lineage_supported = false;
-        readiness.ready = false;
-        readiness.blockers = vec![
-            readiness_blocker(
-                "recursive_v4_registry_unavailable",
-                "No active authenticated V4 registry release is installed.",
-            ),
-            readiness_blocker(
-                "recursive_step_eq_verifier_unavailable",
-                "The recursive StepEq verifier is unavailable.",
-            ),
-            readiness_blocker(
-                "recursive_step_ep_verifier_unavailable",
-                "The recursive StepEp verifier is unavailable.",
-            ),
-            readiness_blocker(
-                "proof_backend_unavailable",
-                "The proof backend is unavailable.",
-            ),
-            readiness_blocker(
-                "recursive_lineage_unavailable",
-                "Recursive lineage transaction verification and redemption are not implemented.",
-            ),
-        ];
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(norito::to_bytes(&readiness).expect("encode readiness"))
-            .expect("response");
-
-        let decoded = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            || client_with_base_url(base_url()).get_offline_readiness(&requested),
-        )
-        .expect("an unavailable authenticated V4 release is a valid domain state");
-
-        assert!(decoded.artifact_set.is_none());
-        assert!(!decoded.proof_backend_available);
-        assert!(!decoded.recursive_lineage_supported);
-        assert!(!decoded.ready);
-    }
-
-    #[test]
-    fn readiness_rejects_malformed_or_unbound_v4_artifact_set() {
-        let requested = asset_definition_id("xor");
-        let mut invalid_generation = first_release_readiness(&requested);
-        invalid_generation
-            .artifact_set
-            .as_mut()
-            .expect("fixture artifact set")
-            .generation = "con.release".to_owned();
-        let mut invalid_manifest_digest = first_release_readiness(&requested);
-        invalid_manifest_digest
-            .artifact_set
-            .as_mut()
-            .expect("fixture artifact set")
-            .manifest_sha256 = "B1".repeat(32);
-        let mut invalid_policy_digest = first_release_readiness(&requested);
-        invalid_policy_digest
-            .artifact_set
-            .as_mut()
-            .expect("fixture artifact set")
-            .release_policy_sha256 = "b2".repeat(31);
-        let mut invalid_attestation_digest = first_release_readiness(&requested);
-        invalid_attestation_digest
-            .artifact_set
-            .as_mut()
-            .expect("fixture artifact set")
-            .release_attestation_sha256 = "00".repeat(32);
-        let mut reused_artifact_digest = first_release_readiness(&requested);
-        let manifest_digest = reused_artifact_digest
-            .artifact_set
-            .as_ref()
-            .expect("fixture artifact set")
-            .manifest_sha256
-            .clone();
-        reused_artifact_digest
-            .artifact_set
-            .as_mut()
-            .expect("fixture artifact set")
-            .release_policy_sha256 = manifest_digest;
-        let mut zero_activation = first_release_readiness(&requested);
-        zero_activation
-            .artifact_set
-            .as_mut()
-            .expect("fixture artifact set")
-            .activation_height = 0;
-        let mut invalid_withdrawal = first_release_readiness(&requested);
-        invalid_withdrawal
-            .artifact_set
-            .as_mut()
-            .expect("fixture artifact set")
-            .withdrawal_height = 1;
-        let mut zero_proof_limit = first_release_readiness(&requested);
-        zero_proof_limit
-            .artifact_set
-            .as_mut()
-            .expect("fixture artifact set")
-            .max_proof_bytes = 0;
-        let mut cross_scale = first_release_readiness(&requested);
-        cross_scale
-            .artifact_set
-            .as_mut()
-            .expect("fixture artifact set")
-            .asset_scale = 8;
-        let mut missing_artifact = first_release_readiness(&requested);
-        missing_artifact.artifact_set = None;
-        let mut mismatched_window = first_release_readiness(&requested);
-        mismatched_window
-            .active_recursive_step_eq_verifier
-            .as_mut()
-            .expect("fixture StepEq verifier")
-            .withdrawal_height = Some(79);
-
-        for readiness in [
-            invalid_generation,
-            invalid_manifest_digest,
-            invalid_policy_digest,
-            invalid_attestation_digest,
-            reused_artifact_digest,
-            zero_activation,
-            invalid_withdrawal,
-            zero_proof_limit,
-            cross_scale,
-            missing_artifact,
-            mismatched_window,
-        ] {
-            let response = HttpResponse::builder()
-                .status(StatusCode::OK)
-                .header("content-type", APPLICATION_NORITO)
-                .body(norito::to_bytes(&readiness).expect("encode readiness"))
-                .expect("response");
-            let _ = with_mock_http(
-                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-                || client_with_base_url(base_url()).get_offline_readiness(&requested),
-            )
-            .expect_err("malformed or unbound artifact metadata must fail closed");
         }
     }
 
@@ -9216,11 +8424,11 @@ mod offline_client_tests {
 
     #[test]
     fn negotiated_decoder_rejects_retired_and_missing_media_types() {
-        let readiness = first_release_readiness(&asset_definition_id("xor"));
-        let body = norito::json::to_vec(&readiness).expect("encode readiness");
+        let capability = universal_offline_capability();
+        let body = norito::json::to_vec(&capability).expect("encode capability");
         for content_type in [Some("text/json"), Some("application/octet-stream"), None] {
             let response = mk_response(StatusCode::OK, body.clone(), content_type);
-            let error = Client::parse_negotiated_typed_response::<OfflineReadiness>(
+            let error = Client::parse_negotiated_typed_response::<OfflineStatus>(
                 &response,
                 StatusCode::OK,
                 "offline response",

@@ -90,6 +90,7 @@ export {
   ToriiBrowserStreamGapError,
 } from "./toriiBrowserClient.js";
 export {
+  KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
   KAGEMUSHA_MANIFEST_VERSION,
   KAGEMUSHA_MAX_HOPS,
   KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
@@ -101,6 +102,7 @@ export {
   normalizeKagemushaOperationStatus,
   normalizeKagemushaRedeemRequestV4,
   normalizeKagemushaReadinessV4,
+  normalizeOfflineStatus,
   normalizeKagemushaTopUpRequestV4,
 } from "./kagemushaOffline.js";
 export { NoritoRpcClient, NoritoRpcError } from "./noritoRpcClient.js";

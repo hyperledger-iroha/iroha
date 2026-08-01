@@ -1235,9 +1235,6 @@ def render_validator_config(
     faucet_private_key_file: Path | None = None,
     manifest_directory: Path = DEFAULT_INSTALL_ROOT / "manifests",
     sorafs_admission_directory: Path = DEFAULT_INSTALL_ROOT / "sorafs_admission",
-    kagemusha_release_policy_path: Path = (
-        DEFAULT_INSTALL_ROOT / "kagemusha" / "release-policy.norito"
-    ),
     sumeragi_body_bytes: int | None = None,
 ) -> str:
     """Rewrite the checked-in peer-1 baseline for one validator."""
@@ -1391,15 +1388,6 @@ def render_validator_config(
                 )
                 continue
         if (
-            current_section == "[settlement.offline]"
-            and stripped.startswith("kagemusha_release_policy_path = ")
-        ):
-            rendered.append(
-                "kagemusha_release_policy_path = "
-                f"{_quote_toml(str(kagemusha_release_policy_path))}"
-            )
-            continue
-        if (
             current_section == "[torii.faucet]"
             and stripped.startswith("private_key_file = ")
             and faucet_private_key_file is not None
@@ -1537,19 +1525,12 @@ def render_bundle(
         sorafs_admission_dir = target_dir / "sorafs_admission"
         sorafs_admission_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         sorafs_admission_dir.chmod(0o700)
-        kagemusha_dir = target_dir / "kagemusha"
-        kagemusha_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        kagemusha_dir.chmod(0o700)
-
         onboarding_private_key_file: Path | None = None
         onboarding_token_hash: str | None = None
         faucet_private_key_file: Path | None = None
         installed_runtime_dir = install_root / "runtime"
         installed_manifest_dir = install_root / "manifests"
         installed_sorafs_admission_dir = install_root / "sorafs_admission"
-        installed_kagemusha_release_policy = (
-            install_root / "kagemusha" / "release-policy.norito"
-        )
         if secret_material is not None:
             shared = secret_material.shared
             if shared.account_onboarding_private_key is not None:
@@ -1588,7 +1569,6 @@ def render_bundle(
                 faucet_private_key_file=faucet_private_key_file,
                 manifest_directory=installed_manifest_dir,
                 sorafs_admission_directory=installed_sorafs_admission_dir,
-                kagemusha_release_policy_path=installed_kagemusha_release_policy,
                 sumeragi_body_bytes=sumeragi_body_bytes,
             ),
         )

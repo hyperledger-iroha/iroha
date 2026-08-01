@@ -217,7 +217,9 @@ decide whether to discard or resubmit the affected envelope.
 ### Kagemusha offline cash
 
 Production offline value flows use Kagemusha top-up, transfer, and recursive redeem.
-Torii HTTP discovery is limited to the Offline readiness endpoint.
+Torii's legacy-named `GET /v1/offline/readiness` endpoint reports universal
+protocol capability only. Offline UI and peer handoff must remain available
+without making this or any other network discovery call.
 
 Peer transfers exchange a nonce-bound payment request, one constant-size recursive
 spend bundle, and a signed durable acknowledgement over QR or NFC with networking disabled.
@@ -231,50 +233,29 @@ claim.
 
 ### Kagemusha Torii API
 
-Torii exposes `GET /v1/offline/readiness?asset_definition_id=...`,
-`POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
-`GET /v1/offline/operations/{operation_id}`. Use
-`getKagemushaReadiness(assetDefinitionId:)`, `submitKagemushaTopUp(_:)`,
+Torii exposes the legacy-named, asset-neutral `GET /v1/offline/readiness`
+universal capability endpoint,
+plus `POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
+`GET /v1/offline/operations/{operation_id}` for separate online consensus
+lifecycles. Use `getOfflineCapability()`, `submitKagemushaTopUp(_:)`,
 `submitKagemushaRedeem(_:)`, and
-`getKagemushaOperationStatus(operationId:)`. Top-up and redemption send only
-canonical Norito archives and return a `KagemushaOperationReference`; follow
-its status URI until the tagged `KagemushaOperationStatus` is applied or
-rejected. The request models enforce Torii's exact route limits: 512 KiB for
-top-up and 48 MiB for redemption.
-A `200` readiness response may legitimately contain `ready: false`; `503`
-means Torii could not evaluate readiness. Readiness is a closed snapshot-bound
-object. It carries exact bridge ABI 21, maximum hop count, canonical asset and
-scale, evaluated block height/hash, active transfer, top-up-shield, unshield,
-recursive StepEq and StepEp verifier records, a required nullable
-`artifactSet`, backend-construction state, recursive-lineage support, readiness,
-and blockers. A non-null artifact set binds the authenticated V4 generation,
-manifest, release-policy and release-attestation digests, issuance window,
-proof-pair bound, and asset scale to the atomic recursive verifier pair.
-A null value requires both recursive records and backend construction to be
-unavailable with exactly one `recursive_v4_registry_unavailable` or
-`recursive_v4_registry_malformed` blocker; a non-null value forbids both.
+`getKagemushaOperationStatus(operationId:)`. The deprecated
+`getKagemushaReadiness(assetDefinitionId:)` shim ignores its selector and
+returns the same universal `ToriiOfflineStatus`.
 
-The response carries five required nullable SDK snapshots:
-`activeTransferVerifier`, `activeTopUpShieldVerifier`,
-`activeUnshieldVerifier`, `activeRecursiveStepEqVerifier`, and
-`activeRecursiveStepEpVerifier`. Each is null exactly with its matching
-unavailable blocker. The recursive records are exactly
-`kagemusha_recursive_step_eq_v4_verifier_record` with circuit
-`kagemusha-recursive-spend-step-eq-compact-layout-v5` and
-`kagemusha_recursive_step_ep_v4_verifier_record` with circuit
-`kagemusha-recursive-spend-step-ep-compact-lineage-v5`, both under
-`halo2/ipa`. They appear or disappear atomically with `artifactSet` and must
-match its activation window and proof bound. Verifier ids, commitments, and
-public-input schema hashes remain distinct across all five roles.
+Capability discovery is not per-asset or per-dataspace backend readiness. The
+SDK accepts only the exact ABI-21 `cash_handoff_v1` contract with maximum hop
+count 8, `mandatory: false`, `ready: true`, and empty `assets` and `blockers`.
+No asset metadata, escrow catalog, dataspace enrollment, or backend enable flag
+is required for an app to expose offline user interfaces. Apps must not gate
+offline UI on this network discovery call; the endpoint is only a compatibility
+check when Torii happens to be reachable.
 
-`proofBackendAvailable` reports exact authenticated backend construction
-independently. `recursiveLineageSupported` additionally requires the non-null
-artifact set and distinct active Eq/Ep records;
-`recursive_lineage_unavailable` is present exactly when that conjunction is
-false. `ready` is true only when the complete blocker set is empty, so unrelated
-blockers do not erase valid backend or lineage facts. Swift rejects inconsistent
-combinations.
-
+Top-up and redemption send canonical Norito archives and return a
+`KagemushaOperationReference`; follow its status URI until the tagged
+`KagemushaOperationStatus` is applied or rejected. Command-specific proof and
+verifier material is validated when the corresponding operation consumes it
+and never changes universal offline capability.
 ## SoraFS orchestrator client
 
 `SorafsOrchestratorClient` wraps the same native Norito bridge used by the CLI parity harness, making

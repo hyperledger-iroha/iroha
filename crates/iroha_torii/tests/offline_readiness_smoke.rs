@@ -124,7 +124,7 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
 
     let app = torii.api_router_for_tests();
 
-    let missing_readiness_query = app
+    let readiness = app
         .clone()
         .oneshot(
             Request::builder()
@@ -136,122 +136,28 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
         )
         .await
         .expect("readiness response");
-    assert_eq!(missing_readiness_query.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(readiness.status(), StatusCode::OK);
     assert_eq!(
-        missing_readiness_query.headers().get(CONTENT_TYPE),
+        readiness.headers().get(CONTENT_TYPE),
         Some(&HeaderValue::from_static("application/json; charset=utf-8"))
     );
-    let missing_query_body = missing_readiness_query
+    let readiness_body = readiness
         .into_body()
         .collect()
         .await
-        .expect("collect missing-query error")
+        .expect("collect universal offline capability")
         .to_bytes();
-    let missing_query_error: iroha_torii_shared::ErrorEnvelope =
-        norito::json::from_slice(&missing_query_body).expect("decode missing-query error");
-    assert_eq!(missing_query_error.code(), "request_query_invalid");
+    let capability: iroha_torii_shared::offline_api::OfflineStatus =
+        norito::json::from_slice(&readiness_body).expect("decode universal offline capability");
+    assert!(!capability.mandatory);
+    assert_eq!(capability.cash_handoff_capability, "cash_handoff_v1");
+    assert_eq!(capability.required_bridge_abi_version, 21);
+    assert_eq!(capability.max_hops, 8);
+    assert!(capability.ready);
+    assert!(capability.assets.is_empty());
+    assert!(capability.blockers.is_empty());
 
-    for query in [
-        "asset_definition_id=first&asset_definition_id=second",
-        "asset_definition_id=first&asset_definition_id=first",
-        "asset_definition_id=first&asset%5fdefinition%5fid=second",
-    ] {
-        let duplicate = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/offline/readiness?{query}"))
-                    .header(ACCEPT, "application/json")
-                    .extension(connect_info())
-                    .body(Body::empty())
-                    .expect("duplicate readiness query request"),
-            )
-            .await
-            .expect("duplicate readiness query response");
-        assert_eq!(
-            duplicate.status(),
-            StatusCode::BAD_REQUEST,
-            "a repeated asset_definition_id must be rejected before the readiness handler: {query}"
-        );
-        let duplicate_body = duplicate
-            .into_body()
-            .collect()
-            .await
-            .expect("collect duplicate-query error")
-            .to_bytes();
-        let duplicate_error: iroha_torii_shared::ErrorEnvelope =
-            norito::json::from_slice(&duplicate_body).expect("decode duplicate-query error");
-        assert_eq!(
-            duplicate_error.code(),
-            "request_query_invalid",
-            "query={query}"
-        );
-        assert!(
-            duplicate_error.message().contains("duplicate field"),
-            "query={query}, error={duplicate_error:?}"
-        );
-    }
-
-    for query in [
-        "asset_definition_id=xor%23wonderland&ignored=value",
-        "asset_definition_id=%",
-        "asset_definition_id=%2",
-        "asset_definition_id=%GG",
-    ] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/offline/readiness?{query}"))
-                    .header(ACCEPT, "application/json")
-                    .extension(connect_info())
-                    .body(Body::empty())
-                    .expect("invalid readiness query request"),
-            )
-            .await
-            .expect("invalid readiness query response");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "query={query}");
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("collect invalid-query error")
-            .to_bytes();
-        let error: iroha_torii_shared::ErrorEnvelope =
-            norito::json::from_slice(&body).expect("decode invalid-query error");
-        assert_eq!(error.code(), "request_query_invalid", "query={query}");
-    }
-
-    for query in [
-        "asset_definition_id=%20xor%23wonderland",
-        "asset_definition_id=xor%23wonderland%20",
-        "asset_definition_id=+xor%23wonderland",
-    ] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/offline/readiness?{query}"))
-                    .header(ACCEPT, "application/json")
-                    .extension(connect_info())
-                    .body(Body::empty())
-                    .expect("noncanonical readiness query request"),
-            )
-            .await
-            .expect("noncanonical readiness query response");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "query={query}");
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("collect noncanonical-query error")
-            .to_bytes();
-        let error: iroha_torii_shared::ErrorEnvelope =
-            norito::json::from_slice(&body).expect("decode noncanonical-query error");
-        assert_eq!(error.code(), "asset_definition_id_invalid", "query={query}");
-    }
-
-    let readiness = app
+    let legacy_selector = app
         .clone()
         .oneshot(
             Request::builder()
@@ -262,12 +168,18 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                 .expect("readiness request"),
         )
         .await
-        .expect("readiness response");
-    assert_eq!(
-        readiness.status(),
-        StatusCode::NOT_FOUND,
-        "the route is mounted and rejects an unregistered requested asset"
-    );
+        .expect("legacy selector response");
+    assert_eq!(legacy_selector.status(), StatusCode::OK);
+    let legacy_selector_body = legacy_selector
+        .into_body()
+        .collect()
+        .await
+        .expect("collect selector-neutral offline capability")
+        .to_bytes();
+    let legacy_selector_capability: iroha_torii_shared::offline_api::OfflineStatus =
+        norito::json::from_slice(&legacy_selector_body)
+            .expect("decode selector-neutral offline capability");
+    assert_eq!(legacy_selector_capability, capability);
 
     for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
         enum RejectedHeaders {

@@ -2093,34 +2093,6 @@ async fn parse_asset_definition_id_rejects_alias_after_grace() {
             iroha_data_model::query::error::QueryExecutionFail::NotFound
         ))
     ));
-
-    let state = app.state.view();
-    let world = state.world();
-    assert_eq!(
-        parse_offline_readiness_asset_definition_id(world, 1_500, alias.as_ref())
-            .expect("the same snapshot resolver accepts a live alias"),
-        definition_id
-    );
-    let expired = parse_offline_readiness_asset_definition_id(world, after_grace, alias.as_ref())
-        .expect_err("readiness must reject an alias outside the evaluated snapshot");
-    assert!(matches!(
-        expired,
-        Error::AppNotFound {
-            code: "asset_definition_not_found",
-            ..
-        }
-    ));
-    for invalid in ["", " usd#issuer.main", "usd#issuer.main ", "prefix:opaque"] {
-        let error = parse_offline_readiness_asset_definition_id(world, 1_500, invalid)
-            .expect_err("malformed readiness selector must fail as a 400-class error");
-        assert!(matches!(
-            error,
-            Error::AppQueryValidation {
-                code: "asset_definition_id_invalid",
-                ..
-            }
-        ));
-    }
 }
 
 #[tokio::test]

@@ -6874,20 +6874,12 @@ mod offline_cache_policy_tests {
             )
             .route(
                 "/v1/offline/readiness",
-                get(|headers: axum::http::HeaderMap| async move {
-                    if headers.contains_key("x-ready") {
-                        (
-                            [(header::CACHE_CONTROL, "public, max-age=86400")],
-                            StatusCode::OK,
-                        )
-                            .into_response()
-                    } else {
-                        (
-                            [(header::CACHE_CONTROL, "public, max-age=86400")],
-                            StatusCode::BAD_REQUEST,
-                        )
-                            .into_response()
-                    }
+                get(|| async move {
+                    (
+                        [(header::CACHE_CONTROL, "public, max-age=86400")],
+                        StatusCode::OK,
+                    )
+                        .into_response()
                 }),
             )
             .route(
@@ -6939,24 +6931,25 @@ mod offline_cache_policy_tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/v1/offline/readiness?asset_definition_id=missing")
+                    .uri("/v1/offline/readiness")
                     .body(Body::empty())
                     .expect("request"),
             )
             .await
             .expect("response");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response.headers().get(header::CACHE_CONTROL),
-            Some(&axum::http::HeaderValue::from_static("no-store"))
+            Some(&axum::http::HeaderValue::from_static(
+                "private, max-age=0, must-revalidate"
+            ))
         );
 
         let response = router
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/v1/offline/readiness?asset_definition_id=known")
-                    .header("x-ready", "1")
+                    .uri("/v1/offline/readiness?asset_definition_id=legacy")
                     .body(Body::empty())
                     .expect("request"),
             )
@@ -11996,483 +11989,6 @@ const fn offline_redeem_body_limit(transaction_max_content_len: usize) -> usize 
 }
 
 #[cfg(feature = "app_api")]
-fn offline_kagemusha_readiness_error(message: impl Into<String>) -> Error {
-    Error::AppServiceUnavailable {
-        code: "readiness_unavailable",
-        message: message.into(),
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn offline_kagemusha_readiness_verifier_record(
-    world: &impl WorldReadOnly,
-    block_height: u64,
-    circuit_id: &str,
-    role: &str,
-    expected_curve: &str,
-    expected_public_inputs_schema_hash: [u8; 32],
-    max_allowed_proof_bytes: u32,
-) -> Result<Option<iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>, Error> {
-    let mut selected = None;
-    for ((registered_circuit_id, indexed_version), id) in world.verifying_keys_by_circuit().iter() {
-        if registered_circuit_id != circuit_id {
-            continue;
-        }
-        let record = world.verifying_keys().get(id).ok_or_else(|| {
-            offline_kagemusha_readiness_error(format!(
-                "{role} verifier index version {indexed_version} points at missing key `{}/{}`",
-                id.backend, id.name
-            ))
-        })?;
-        if record.version != *indexed_version {
-            return Err(offline_kagemusha_readiness_error(format!(
-                "{role} verifier index version {indexed_version} points at record version {}",
-                record.version
-            )));
-        }
-        if record.circuit_id != circuit_id {
-            return Err(offline_kagemusha_readiness_error(format!(
-                "{role} verifier index points at circuit `{}` instead of `{circuit_id}`",
-                record.circuit_id
-            )));
-        }
-        if !id.is_portable_registry_id() {
-            return Err(offline_kagemusha_readiness_error(format!(
-                "{role} verifier index contains a non-portable key id"
-            )));
-        }
-        if id.backend.as_str() != iroha_core::zk::ZK_BACKEND_HALO2_IPA
-            || id.name != role
-            || record.namespace != iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE
-            || record.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta
-            || record.curve != expected_curve
-            || record.commitment == [0; 32]
-            || record.public_inputs_schema_hash != expected_public_inputs_schema_hash
-            || record.max_proof_bytes == 0
-            || record.max_proof_bytes > max_allowed_proof_bytes
-        {
-            return Err(offline_kagemusha_readiness_error(format!(
-                "{role} verifier record is missing required proof metadata"
-            )));
-        }
-        let Some(verifier_key) = record.key.as_ref() else {
-            return Err(offline_kagemusha_readiness_error(format!(
-                "{role} verifier key is not available inline"
-            )));
-        };
-        if verifier_key.backend.as_str() != iroha_core::zk::ZK_BACKEND_HALO2_IPA
-            || verifier_key.bytes.is_empty()
-            || u32::try_from(verifier_key.bytes.len()).ok() != Some(record.vk_len)
-            || iroha_core::zk::hash_vk(verifier_key) != record.commitment
-        {
-            return Err(offline_kagemusha_readiness_error(format!(
-                "{role} verifier key material is inconsistent"
-            )));
-        }
-        if record.is_active_at(block_height)
-            && selected
-                .as_ref()
-                .is_none_or(|(version, _, _)| indexed_version > version)
-        {
-            selected = Some((*indexed_version, id, record));
-        }
-    }
-
-    Ok(selected.map(|(_, id, record)| {
-        iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
-            id: iroha_torii_shared::offline_api::OfflineVerifierId {
-                backend: id.backend.as_str().to_owned(),
-                name: id.name.clone(),
-            },
-            version: record.version,
-            circuit_id: record.circuit_id.clone(),
-            commitment: hex::encode(record.commitment),
-            public_inputs_schema_hash: hex::encode(record.public_inputs_schema_hash),
-            max_proof_bytes: record.max_proof_bytes,
-            activation_height: record.activation_height.unwrap_or(0),
-            withdrawal_height: record.withdraw_height,
-        }
-    }))
-}
-
-#[cfg(feature = "app_api")]
-fn offline_kagemusha_asset_transfer_verifier_record(
-    world: &impl WorldReadOnly,
-    asset: &AssetDefinitionId,
-    block_height: u64,
-) -> Result<Option<iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>, Error> {
-    let Some(zk_asset) = world.zk_assets().get(asset) else {
-        return Ok(None);
-    };
-    let Some(binding) = zk_asset.vk_transfer.as_ref() else {
-        return Ok(None);
-    };
-    let record = world.verifying_keys().get(&binding.id).ok_or_else(|| {
-        offline_kagemusha_readiness_error(format!(
-            "asset-bound transfer verifier `{}/{}` is missing from the registry",
-            binding.id.backend, binding.id.name
-        ))
-    })?;
-    let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
-    let expected_schema_hash: [u8; 32] = iroha_crypto::Hash::new(
-        iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
-    )
-    .into();
-    if record.circuit_id != circuit_id
-        || record.namespace != iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE
-        || record.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta
-        || record.curve != "pallas"
-        || binding.id.backend.as_str() != iroha_core::zk::ZK_BACKEND_HALO2_IPA
-        || binding.id.name != iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2
-        || binding.commitment == [0; 32]
-        || binding.commitment != record.commitment
-        || !binding.id.is_portable_registry_id()
-        || record.public_inputs_schema_hash != expected_schema_hash
-        || record.max_proof_bytes == 0
-    {
-        return Err(offline_kagemusha_readiness_error(
-            "asset-bound transfer verifier metadata is inconsistent with Kagemusha",
-        ));
-    }
-    let circuit_key = (record.circuit_id.clone(), record.version);
-    if world.verifying_keys_by_circuit().get(&circuit_key) != Some(&binding.id) {
-        return Err(offline_kagemusha_readiness_error(
-            "asset-bound transfer verifier is not the active registry entry for its circuit version",
-        ));
-    }
-    let Some(verifier_key) = record.key.as_ref() else {
-        return Err(offline_kagemusha_readiness_error(
-            "asset-bound transfer verifier key is not available inline",
-        ));
-    };
-    if verifier_key.backend.as_str() != iroha_core::zk::ZK_BACKEND_HALO2_IPA
-        || verifier_key.bytes.is_empty()
-        || u32::try_from(verifier_key.bytes.len()).ok() != Some(record.vk_len)
-        || iroha_core::zk::hash_vk(verifier_key) != record.commitment
-    {
-        return Err(offline_kagemusha_readiness_error(
-            "asset-bound transfer verifier key material is inconsistent",
-        ));
-    }
-    iroha_core::zk::confidential_v2::ensure_confidential_transfer_v2_canonical_vk_box(verifier_key)
-        .map_err(|error| {
-            offline_kagemusha_readiness_error(format!(
-                "asset-bound transfer verifier is not canonical: {error}"
-            ))
-        })?;
-    if !record.is_active_at(block_height) {
-        return Ok(None);
-    }
-
-    Ok(Some(
-        iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
-            id: iroha_torii_shared::offline_api::OfflineVerifierId {
-                backend: binding.id.backend.as_str().to_owned(),
-                name: binding.id.name.clone(),
-            },
-            version: record.version,
-            circuit_id: record.circuit_id.clone(),
-            commitment: hex::encode(record.commitment),
-            public_inputs_schema_hash: hex::encode(record.public_inputs_schema_hash),
-            max_proof_bytes: record.max_proof_bytes,
-            activation_height: record.activation_height.unwrap_or(0),
-            withdrawal_height: record.withdraw_height,
-        },
-    ))
-}
-
-#[cfg(feature = "app_api")]
-fn offline_kagemusha_asset_topup_shield_verifier_record(
-    world: &impl WorldReadOnly,
-    asset: &AssetDefinitionId,
-    block_height: u64,
-) -> Result<Option<iroha_torii_shared::offline_api::OfflineActiveTopUpShieldVerifier>, Error> {
-    let Some(zk_asset) = world.zk_assets().get(asset) else {
-        return Ok(None);
-    };
-    let Some(binding) = zk_asset.vk_shield.as_ref() else {
-        return Ok(None);
-    };
-    let record = world.verifying_keys().get(&binding.id).ok_or_else(|| {
-        offline_kagemusha_readiness_error(format!(
-            "asset-bound top-up shield verifier `{}/{}` is missing from the registry",
-            binding.id.backend, binding.id.name
-        ))
-    })?;
-    let circuit_id = iroha_core::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID;
-    let expected_schema_hash: [u8; 32] = iroha_crypto::Hash::new(
-        iroha_core::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2,
-    )
-    .into();
-    if record.circuit_id != circuit_id
-        || record.namespace != iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE
-        || record.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta
-        || record.curve != "pallas"
-        || binding.id.backend.as_str() != iroha_core::zk::ZK_BACKEND_HALO2_IPA
-        || binding.id.name != iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2
-        || binding.commitment == [0; 32]
-        || binding.commitment != record.commitment
-        || !binding.id.is_portable_registry_id()
-        || record.public_inputs_schema_hash != expected_schema_hash
-        || record.max_proof_bytes == 0
-    {
-        return Err(offline_kagemusha_readiness_error(
-            "asset-bound top-up shield verifier metadata is inconsistent with Kagemusha",
-        ));
-    }
-    let circuit_key = (record.circuit_id.clone(), record.version);
-    if world.verifying_keys_by_circuit().get(&circuit_key) != Some(&binding.id) {
-        return Err(offline_kagemusha_readiness_error(
-            "asset-bound top-up shield verifier is not the active registry entry for its circuit version",
-        ));
-    }
-    let Some(verifier_key) = record.key.as_ref() else {
-        return Err(offline_kagemusha_readiness_error(
-            "asset-bound top-up shield verifier key is not available inline",
-        ));
-    };
-    if verifier_key.backend.as_str() != iroha_core::zk::ZK_BACKEND_HALO2_IPA
-        || verifier_key.bytes.is_empty()
-        || u32::try_from(verifier_key.bytes.len()).ok() != Some(record.vk_len)
-        || iroha_core::zk::hash_vk(verifier_key) != record.commitment
-    {
-        return Err(offline_kagemusha_readiness_error(
-            "asset-bound top-up shield verifier key material is inconsistent",
-        ));
-    }
-    iroha_core::zk::confidential_v2::ensure_kagemusha_topup_shield_v2_canonical_vk_box(
-        verifier_key,
-    )
-    .map_err(|error| {
-        offline_kagemusha_readiness_error(format!(
-            "asset-bound top-up shield verifier is not canonical: {error}"
-        ))
-    })?;
-    if !record.is_active_at(block_height) {
-        return Ok(None);
-    }
-    Ok(Some(
-        iroha_torii_shared::offline_api::OfflineActiveTopUpShieldVerifier {
-            id: iroha_torii_shared::offline_api::OfflineVerifierId {
-                backend: binding.id.backend.as_str().to_owned(),
-                name: binding.id.name.clone(),
-            },
-            version: record.version,
-            circuit_id: record.circuit_id.clone(),
-            commitment: hex::encode(record.commitment),
-            public_inputs_schema_hash: hex::encode(record.public_inputs_schema_hash),
-            max_proof_bytes: record.max_proof_bytes,
-            activation_height: record.activation_height.unwrap_or(0),
-            withdrawal_height: record.withdraw_height,
-        },
-    ))
-}
-
-#[cfg(feature = "app_api")]
-fn ensure_offline_readiness_verifier_roles_are_distinct(
-    roles: [(
-        &'static str,
-        Option<&iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>,
-    ); 5],
-) -> Result<(), Error> {
-    let mut ids = std::collections::BTreeSet::new();
-    let mut commitments = std::collections::BTreeSet::new();
-    let mut schema_hashes = std::collections::BTreeSet::new();
-    for (role, verifier) in roles {
-        let Some(verifier) = verifier else {
-            continue;
-        };
-        if !ids.insert((verifier.id.backend.as_str(), verifier.id.name.as_str())) {
-            return Err(offline_kagemusha_readiness_error(format!(
-                "active Kagemusha verifier role `{role}` reuses another role's registry id"
-            )));
-        }
-        if !commitments.insert(verifier.commitment.as_str()) {
-            return Err(offline_kagemusha_readiness_error(format!(
-                "active Kagemusha verifier role `{role}` reuses another role's key commitment"
-            )));
-        }
-        if !schema_hashes.insert(verifier.public_inputs_schema_hash.as_str()) {
-            return Err(offline_kagemusha_readiness_error(format!(
-                "active Kagemusha verifier role `{role}` reuses another role's public-input schema hash"
-            )));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(feature = "app_api")]
-fn offline_readiness_blocker(
-    code: &'static str,
-    message: impl Into<String>,
-) -> iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-    iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-        code: code.to_owned(),
-        message: message.into(),
-    }
-}
-
-#[cfg(feature = "app_api")]
-struct OfflineKagemushaRecursiveV4Evaluation {
-    step_eq: Option<iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEqVerifier>,
-    step_ep: Option<iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEpVerifier>,
-    artifact_set: Option<iroha_torii_shared::offline_api::OfflineAuthenticatedArtifactSet>,
-    proof_backend_available: bool,
-    blockers: Vec<iroha_torii_shared::offline_api::OfflineReadinessBlocker>,
-}
-
-#[cfg(feature = "app_api")]
-fn offline_kagemusha_readiness_capability_flags(
-    proof_backend_available: bool,
-    artifact_set_available: bool,
-    recursive_step_eq_available: bool,
-    recursive_step_ep_available: bool,
-    blockers: &[iroha_torii_shared::offline_api::OfflineReadinessBlocker],
-) -> (bool, bool, bool) {
-    let recursive_lineage_supported = proof_backend_available
-        && artifact_set_available
-        && recursive_step_eq_available
-        && recursive_step_ep_available;
-    (
-        proof_backend_available,
-        recursive_lineage_supported,
-        blockers.is_empty(),
-    )
-}
-
-#[cfg(feature = "app_api")]
-fn project_kagemusha_recursive_verifier_v4(
-    verifier: iroha_core::smartcontracts::isi::offline::KagemushaRecursiveVerifierReadinessV4,
-) -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
-    iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
-        id: iroha_torii_shared::offline_api::OfflineVerifierId {
-            backend: verifier.id.backend.as_str().to_owned(),
-            name: verifier.id.name,
-        },
-        version: verifier.version,
-        circuit_id: verifier.circuit_id,
-        commitment: hex::encode(verifier.commitment),
-        public_inputs_schema_hash: hex::encode(verifier.public_inputs_schema_hash),
-        max_proof_bytes: verifier.max_proof_bytes,
-        activation_height: verifier.activation_height,
-        withdrawal_height: verifier.withdrawal_height,
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn offline_kagemusha_recursive_v4_evaluation_from_resolution(
-    resolution: Result<
-        Option<iroha_core::smartcontracts::isi::offline::KagemushaRecursiveReadinessV4>,
-        String,
-    >,
-) -> OfflineKagemushaRecursiveV4Evaluation {
-    let unavailable_components = || {
-        vec![
-            offline_readiness_blocker(
-                "recursive_step_eq_verifier_unavailable",
-                "The authenticated ABI-21 V4 recursive StepEq verifier is unavailable.",
-            ),
-            offline_readiness_blocker(
-                "recursive_step_ep_verifier_unavailable",
-                "The authenticated ABI-21 V4 recursive StepEp verifier is unavailable.",
-            ),
-            offline_readiness_blocker(
-                "proof_backend_unavailable",
-                "The ABI-21 V4 proof backend cannot be constructed without an authenticated active recursive release.",
-            ),
-            offline_readiness_blocker(
-                "recursive_lineage_unavailable",
-                "The authenticated ABI-21 V4 recursive lineage proof path is unavailable.",
-            ),
-        ]
-    };
-    let Some(resolved) = (match resolution {
-        Ok(resolved) => resolved,
-        Err(error) => {
-            let mut blockers = vec![offline_readiness_blocker(
-                "recursive_v4_registry_malformed",
-                format!("The ABI-21 V4 recursive registry failed authentication: {error}"),
-            )];
-            blockers.extend(unavailable_components());
-            return OfflineKagemushaRecursiveV4Evaluation {
-                step_eq: None,
-                step_ep: None,
-                artifact_set: None,
-                proof_backend_available: false,
-                blockers,
-            };
-        }
-    }) else {
-        let mut blockers = vec![offline_readiness_blocker(
-            "recursive_v4_registry_unavailable",
-            "No active atomic ABI-21 V4 Eq/Ep verifier release is installed at the evaluated block.",
-        )];
-        blockers.extend(unavailable_components());
-        return OfflineKagemushaRecursiveV4Evaluation {
-            step_eq: None,
-            step_ep: None,
-            artifact_set: None,
-            proof_backend_available: false,
-            blockers,
-        };
-    };
-
-    let proof_backend_available = resolved.proof_backend_error.is_none();
-    let mut blockers = Vec::new();
-    if let Some(error) = resolved.proof_backend_error {
-        blockers.push(offline_readiness_blocker(
-            "proof_backend_unavailable",
-            format!("The authenticated ABI-21 V4 proof backend could not be constructed: {error}"),
-        ));
-        blockers.push(offline_readiness_blocker(
-            "recursive_lineage_unavailable",
-            "The authenticated ABI-21 V4 recursive lineage proof path is unavailable because the proof backend could not be constructed.",
-        ));
-    }
-    OfflineKagemushaRecursiveV4Evaluation {
-        step_eq: Some(project_kagemusha_recursive_verifier_v4(resolved.step_eq)),
-        step_ep: Some(project_kagemusha_recursive_verifier_v4(resolved.step_ep)),
-        artifact_set: Some(
-            iroha_torii_shared::offline_api::OfflineAuthenticatedArtifactSet {
-                generation: resolved.artifact_set.generation,
-                manifest_sha256: hex::encode(resolved.artifact_set.manifest_sha256),
-                release_policy_sha256: hex::encode(resolved.artifact_set.release_policy_sha256),
-                release_attestation_sha256: hex::encode(
-                    resolved.artifact_set.release_attestation_sha256,
-                ),
-                activation_height: resolved.artifact_set.activation_height,
-                withdrawal_height: resolved.artifact_set.withdrawal_height,
-                max_proof_bytes: resolved.artifact_set.max_proof_bytes,
-                asset_scale: resolved.artifact_set.asset_scale,
-            },
-        ),
-        proof_backend_available,
-        blockers,
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn encode_offline_readiness_representation(
-    payload: &iroha_torii_shared::offline_api::OfflineReadiness,
-    format: crate::utils::ResponseFormat,
-) -> Result<(&'static str, Vec<u8>), Error> {
-    match format {
-        crate::utils::ResponseFormat::Json => norito::json::to_vec(payload)
-            .map(|bytes| ("application/json", bytes))
-            .map_err(|source| Error::SerializationFailure {
-                context: "offline_readiness",
-                source: Box::new(source),
-            }),
-        crate::utils::ResponseFormat::Norito => norito::to_bytes(payload)
-            .map(|bytes| (crate::utils::NORITO_MIME_TYPE, bytes))
-            .map_err(|source| Error::SerializationFailure {
-                context: "offline_readiness",
-                source: Box::new(source),
-            }),
-    }
-}
-
-#[cfg(feature = "app_api")]
 fn encode_offline_capability_representation(
     payload: &iroha_torii_shared::offline_api::OfflineStatus,
     format: crate::utils::ResponseFormat,
@@ -12498,176 +12014,6 @@ fn strong_etag_for_representation(bytes: &[u8]) -> String {
     use sha2::Digest as _;
 
     format!("\"{}\"", hex::encode(sha2::Sha256::digest(bytes)))
-}
-
-#[cfg(feature = "app_api")]
-fn offline_kagemusha_readiness_snapshot(
-    app: &AppState,
-    asset_definition_selector: &str,
-) -> Result<iroha_torii_shared::offline_api::OfflineReadiness, Error> {
-    let offline_command_readiness = app
-        .offline_commands
-        .as_deref()
-        .map(|issuer| offline_commands::ensure_offline_command_authority_ready(&app, issuer));
-    let state_view = app.state.view();
-    let world = state_view.world();
-    let alias_observation_time_ms = state_view.latest_block().map_or(0, |block| {
-        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-    });
-    let asset_definition_id = parse_offline_readiness_asset_definition_id(
-        world,
-        alias_observation_time_ms,
-        asset_definition_selector,
-    )?;
-    let asset_definition =
-        world
-            .asset_definition(&asset_definition_id)
-            .map_err(|_| Error::AppNotFound {
-                code: "asset_definition_not_found",
-                message: format!("Asset definition `{asset_definition_id}` is not registered."),
-            })?;
-    let asset_scale = asset_definition.spec().scale();
-    let block_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
-    let block_hash = state_view.latest_block_hash().ok_or_else(|| {
-        offline_kagemusha_readiness_error(
-            "the evaluated committed block has no canonical hash for device attestation",
-        )
-    })?;
-    let evaluated_block_hash = hex::encode(block_hash.as_ref().as_ref());
-    let transfer = offline_kagemusha_asset_transfer_verifier_record(
-        world,
-        &asset_definition_id,
-        block_height,
-    )?;
-    let topup_shield = offline_kagemusha_asset_topup_shield_verifier_record(
-        world,
-        &asset_definition_id,
-        block_height,
-    )?;
-    let unshield = offline_kagemusha_readiness_verifier_record(
-        world,
-        block_height,
-        iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-        "pallas",
-        iroha_crypto::Hash::new(
-            iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1,
-        )
-        .into(),
-        iroha_core::zk::confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES,
-    )?;
-    let recursive_v4 = offline_kagemusha_recursive_v4_evaluation_from_resolution(
-        asset_scale.map_or(Ok(None), |scale| {
-            iroha_core::smartcontracts::isi::offline::resolve_kagemusha_recursive_readiness_v4(
-                world,
-                &state_view.kagemusha_release_catalog,
-                app.chain_id.as_ref(),
-                &asset_definition_id,
-                scale,
-                block_height,
-            )
-        }),
-    );
-    let issuance_window_active = recursive_v4
-        .artifact_set
-        .as_ref()
-        .is_some_and(|artifact_set| {
-            block_height >= artifact_set.activation_height
-                && block_height < artifact_set.withdrawal_height
-        });
-    let recursive_backend_constructed = recursive_v4.proof_backend_available;
-    let recursive_step_eq = recursive_v4.step_eq;
-    let recursive_step_ep = recursive_v4.step_ep;
-    ensure_offline_readiness_verifier_roles_are_distinct([
-        ("transfer", transfer.as_ref()),
-        ("topup_shield", topup_shield.as_ref()),
-        ("unshield", unshield.as_ref()),
-        ("recursive_step_eq", recursive_step_eq.as_ref()),
-        ("recursive_step_ep", recursive_step_ep.as_ref()),
-    ])?;
-    let mut blockers = recursive_v4.blockers;
-    match offline_command_readiness {
-        None => blockers.push(offline_readiness_blocker(
-            "issuer_unavailable",
-            "The offline command issuer is not configured on this node.",
-        )),
-        Some(Ok(())) => {}
-        Some(Err(Error::AppServiceUnavailable { code, message })) => {
-            blockers.push(offline_readiness_blocker(code, message));
-        }
-        Some(Err(error)) => return Err(error),
-    }
-    if recursive_v4.artifact_set.is_some() && !issuance_window_active {
-        blockers.push(offline_readiness_blocker(
-            "recursive_release_outside_issuance_window",
-            "The authenticated ABI-21/V4 release is not inside its issuance window.",
-        ));
-    }
-    if asset_scale.is_none() {
-        blockers.push(offline_readiness_blocker(
-            "asset_scale_unavailable",
-            "The asset definition has no authoritative numeric scale.",
-        ));
-    } else if asset_scale.is_some_and(|scale| {
-        scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
-    }) {
-        blockers.push(offline_readiness_blocker(
-            "asset_scale_unsupported",
-            "The asset scale exceeds the offline payment limit.",
-        ));
-    }
-    for (available, code, message) in [
-        (
-            transfer.is_some(),
-            "transfer_verifier_unavailable",
-            "The transfer verifier is not active at the evaluated block.",
-        ),
-        (
-            topup_shield.is_some(),
-            "topup_shield_verifier_unavailable",
-            "The top-up shield verifier is not active at the evaluated block.",
-        ),
-        (
-            unshield.is_some(),
-            "unshield_verifier_unavailable",
-            "The unshield verifier is not active at the evaluated block.",
-        ),
-    ] {
-        if !available {
-            blockers.push(offline_readiness_blocker(code, message));
-        }
-    }
-    // Role distinctness was checked above. Preserve the recursive capabilities
-    // independently from unrelated issuer, transfer, or issuance blockers.
-    let (proof_backend_available, recursive_lineage_supported, ready) =
-        offline_kagemusha_readiness_capability_flags(
-            recursive_backend_constructed,
-            recursive_v4.artifact_set.is_some(),
-            recursive_step_eq.is_some(),
-            recursive_step_ep.is_some(),
-            &blockers,
-        );
-    Ok(iroha_torii_shared::offline_api::OfflineReadiness {
-        cash_handoff_capability: iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1
-            .to_owned(),
-        required_bridge_abi_version:
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-        max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-        asset_definition_id: asset_definition_id.to_string(),
-        asset_scale,
-        evaluated_block_height: block_height,
-        evaluated_block_hash,
-        active_transfer_verifier: transfer,
-        active_topup_shield_verifier: topup_shield,
-        active_unshield_verifier: unshield,
-        active_recursive_step_eq_verifier: recursive_step_eq,
-        active_recursive_step_ep_verifier: recursive_step_ep,
-        artifact_set: recursive_v4.artifact_set,
-        proof_backend_available,
-        recursive_lineage_supported,
-        ready,
-        blockers,
-    })
 }
 
 #[cfg(feature = "app_api")]
@@ -12713,7 +12059,7 @@ async fn handler_offline_readiness(
         .status(axum::http::StatusCode::OK)
         .header(axum::http::header::CONTENT_TYPE, content_type)
         .body(axum::body::Body::from(representation))
-        .expect("build pre-encoded offline readiness response");
+        .expect("build pre-encoded offline capability response");
     response
         .headers_mut()
         .insert(axum::http::header::CACHE_CONTROL, cache_control);
@@ -12939,15 +12285,9 @@ async fn handler_offline_recipient_lineage(
 }
 
 #[cfg(all(test, feature = "app_api"))]
-mod offline_kagemusha_readiness_tests {
-    use iroha_data_model::asset::AssetDefinitionId;
-
+mod universal_offline_capability_tests {
     use super::{
-        encode_offline_capability_representation, encode_offline_readiness_representation,
-        ensure_offline_readiness_verifier_roles_are_distinct, handler_livez, handler_readyz,
-        offline_kagemusha_asset_transfer_verifier_record,
-        offline_kagemusha_readiness_capability_flags, offline_kagemusha_readiness_verifier_record,
-        offline_kagemusha_recursive_v4_evaluation_from_resolution, offline_readiness_blocker,
+        encode_offline_capability_representation, handler_livez, handler_readyz,
         offline_redeem_body_limit, offline_top_up_body_limit, strong_etag_for_representation,
         universal_offline_capability_status,
     };
@@ -12958,18 +12298,33 @@ mod offline_kagemusha_readiness_tests {
         assert!(!capability.mandatory);
         assert_eq!(capability.cash_handoff_capability, "cash_handoff_v1");
         assert_eq!(capability.required_bridge_abi_version, 21);
+        assert_eq!(capability.max_hops, 8);
         assert!(capability.ready);
         assert!(capability.assets.is_empty());
         assert!(capability.blockers.is_empty());
 
-        for format in [
+        let (json_content_type, json) = encode_offline_capability_representation(
+            &capability,
             crate::utils::ResponseFormat::Json,
+        )
+        .expect("encode universal offline capability as JSON");
+        assert_eq!(json_content_type, "application/json");
+        let decoded: iroha_torii_shared::offline_api::OfflineStatus =
+            norito::json::from_slice(&json).expect("decode universal capability JSON");
+        assert_eq!(decoded, capability);
+
+        let (norito_content_type, norito) = encode_offline_capability_representation(
+            &capability,
             crate::utils::ResponseFormat::Norito,
-        ] {
-            let (_, encoded) = encode_offline_capability_representation(&capability, format)
-                .expect("encode universal offline capability");
-            assert!(!encoded.is_empty());
-        }
+        )
+        .expect("encode universal offline capability as Norito");
+        assert_eq!(norito_content_type, crate::utils::NORITO_MIME_TYPE);
+        assert!(!norito.is_empty());
+        assert_ne!(
+            strong_etag_for_representation(&json),
+            strong_etag_for_representation(&norito),
+            "ETags bind the selected representation"
+        );
     }
 
     #[tokio::test]
@@ -12991,566 +12346,17 @@ mod offline_kagemusha_readiness_tests {
     }
 
     #[test]
-    fn readiness_authenticates_exact_release_without_global_backend_flag() {
-        let source = include_str!("lib.rs");
-        let readiness_start = source
-            .find("fn offline_kagemusha_readiness_snapshot")
-            .expect("offline readiness snapshot");
-        let tests_start = source
-            .find("mod offline_kagemusha_readiness_tests")
-            .expect("offline readiness tests");
-        let readiness_implementation = &source[readiness_start..tests_start];
-        assert!(
-            !readiness_implementation.contains("KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE"),
-            "readiness must authenticate a concrete release instead of treating compile capability as runtime readiness",
-        );
-        assert!(readiness_implementation.contains("offline_kagemusha_readiness_capability_flags"));
-    }
-
-    #[test]
-    fn recursive_capabilities_survive_unrelated_readiness_blockers() {
-        let blockers = vec![offline_readiness_blocker(
-            "issuer_unavailable",
-            "The offline command issuer is unavailable.",
-        )];
-        assert_eq!(
-            offline_kagemusha_readiness_capability_flags(true, true, true, true, &blockers),
-            (true, true, false),
-            "an unrelated issuer blocker must not erase authenticated backend or lineage facts",
-        );
-        assert_eq!(
-            offline_kagemusha_readiness_capability_flags(true, true, true, true, &[]),
-            (true, true, true),
-        );
-
-        let lineage_blockers = vec![
-            offline_readiness_blocker("proof_backend_unavailable", "unavailable"),
-            offline_readiness_blocker("recursive_lineage_unavailable", "unavailable"),
-        ];
-        assert_eq!(
-            offline_kagemusha_readiness_capability_flags(
-                false,
-                true,
-                true,
-                true,
-                &lineage_blockers,
-            ),
-            (false, false, false),
-        );
-    }
-
-    #[test]
-    fn offline_command_body_limits_are_protocol_specific_and_never_raise_the_tx_cap() {
-        let top_up_max =
+    fn command_body_limits_remain_protocol_specific() {
+        let top_up_protocol_max =
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4;
-        let redeem_max =
+        let redeem_protocol_max =
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4;
-
-        assert_eq!(offline_top_up_body_limit(1), 1);
-        assert_eq!(offline_top_up_body_limit(top_up_max), top_up_max);
-        assert_eq!(offline_top_up_body_limit(usize::MAX), top_up_max);
-        assert_eq!(offline_redeem_body_limit(1), 1);
-        assert_eq!(offline_redeem_body_limit(redeem_max), redeem_max);
-        assert_eq!(offline_redeem_body_limit(usize::MAX), redeem_max);
-    }
-
-    fn projected_verifier(
-        role: &str,
-        circuit_id: &str,
-        commitment_byte: u8,
-        schema_byte: u8,
-    ) -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
-        iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
-            id: iroha_torii_shared::offline_api::OfflineVerifierId {
-                backend: "halo2/ipa".to_owned(),
-                name: role.to_owned(),
-            },
-            version: 1,
-            circuit_id: circuit_id.to_owned(),
-            commitment: hex::encode([commitment_byte; 32]),
-            public_inputs_schema_hash: hex::encode([schema_byte; 32]),
-            max_proof_bytes: 4096,
-            activation_height: 1,
-            withdrawal_height: None,
-        }
-    }
-
-    fn transfer_verifier_state(
-        record_version: u32,
-        indexed_version: u32,
-        max_proof_bytes: u32,
-        activation_height: Option<u64>,
-        withdrawal_height: Option<u64>,
-    ) -> iroha_core::state::State {
-        use iroha_data_model::{
-            confidential::ConfidentialStatus,
-            proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
-            zk::BackendTag,
-        };
-
-        let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
-        let id = VerifyingKeyId::new(
-            "halo2/ipa",
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
-        );
-        let verifier_key = VerifyingKeyBox::new("halo2/ipa".into(), vec![0x44; 64]);
-        let commitment = iroha_core::zk::hash_vk(&verifier_key);
-        let public_inputs_schema_hash: [u8; 32] = iroha_crypto::Hash::new(
-            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
-        )
-        .into();
-        let mut record = VerifyingKeyRecord::new_with_owner(
-            record_version,
-            circuit_id,
-            Some("offline-cash".to_owned()),
-            iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
-            BackendTag::Halo2IpaPasta,
-            "pallas",
-            public_inputs_schema_hash,
-            commitment,
-        );
-        record.status = ConfidentialStatus::Active;
-        record.activation_height = activation_height;
-        record.withdraw_height = withdrawal_height;
-        record.vk_len = u32::try_from(verifier_key.bytes.len()).expect("fixture key length fits");
-        record.key = Some(verifier_key);
-        record.max_proof_bytes = max_proof_bytes;
-
-        let world = iroha_core::state::World::new();
-        let mut block = world.block();
-        block
-            .verifying_keys_mut_for_testing()
-            .insert(id.clone(), record);
-        block
-            .verifying_keys_by_circuit_mut_for_testing()
-            .insert((circuit_id.to_owned(), indexed_version), id);
-        block.commit();
-        iroha_core::state::State::new_for_testing(
-            world,
-            iroha_core::kura::Kura::blank_kura_for_testing(),
-            iroha_core::query::store::LiveQueryStore::start_test(),
-        )
-    }
-
-    fn readiness_transfer_verifier_record(
-        world: &impl iroha_core::state::WorldReadOnly,
-        block_height: u64,
-    ) -> Result<Option<iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>, super::Error>
-    {
-        offline_kagemusha_readiness_verifier_record(
-            world,
-            block_height,
-            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
-            "pallas",
-            iroha_crypto::Hash::new(
-                iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
-            )
-            .into(),
-            iroha_core::zk::confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES,
-        )
-    }
-
-    fn resolved_recursive_v4(
-        proof_backend_error: Option<&str>,
-    ) -> iroha_core::smartcontracts::isi::offline::KagemushaRecursiveReadinessV4 {
-        use iroha_core::smartcontracts::isi::offline::{
-            KagemushaAuthenticatedArtifactSetReadinessV4, KagemushaRecursiveReadinessV4,
-            KagemushaRecursiveVerifierReadinessV4,
-        };
-        use iroha_data_model::proof::VerifyingKeyId;
-
-        let verifier = |name: &str, circuit_id: &str, commitment, schema| {
-            KagemushaRecursiveVerifierReadinessV4 {
-                id: VerifyingKeyId::new("halo2/ipa", name),
-                version: 4,
-                circuit_id: circuit_id.to_owned(),
-                commitment: [commitment; 32],
-                public_inputs_schema_hash: [schema; 32],
-                max_proof_bytes: 65_536,
-                activation_height: 40,
-                withdrawal_height: Some(80),
-            }
-        };
-        KagemushaRecursiveReadinessV4 {
-            step_eq: verifier(
-                iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-                0x14,
-                0x24,
-            ),
-            step_ep: verifier(
-                iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-                0x15,
-                0x25,
-            ),
-            artifact_set: KagemushaAuthenticatedArtifactSetReadinessV4 {
-                generation: "release-v4".to_owned(),
-                manifest_sha256: [0x56; 32],
-                release_policy_sha256: [0x67; 32],
-                release_attestation_sha256: [0x78; 32],
-                activation_height: 40,
-                withdrawal_height: 80,
-                max_proof_bytes: 65_536,
-                asset_scale: 9,
-            },
-            proof_backend_error: proof_backend_error.map(str::to_owned),
-        }
-    }
-
-    #[test]
-    fn readiness_blockers_have_stable_codes() {
-        let blocker = offline_readiness_blocker("proof_backend_unavailable", "unavailable");
-        assert_eq!(blocker.code, "proof_backend_unavailable");
-        assert_eq!(blocker.message, "unavailable");
-    }
-
-    #[test]
-    fn readiness_projects_exact_abi21_five_role_registry_and_artifact_set() {
-        let transfer = projected_verifier("transfer", "transfer-circuit", 0x11, 0x21);
-        let topup = projected_verifier("topup", "topup-circuit", 0x12, 0x22);
-        let unshield = projected_verifier("unshield", "unshield-circuit", 0x13, 0x23);
-        let recursive = offline_kagemusha_recursive_v4_evaluation_from_resolution(Ok(Some(
-            resolved_recursive_v4(None),
-        )));
-
-        assert!(recursive.proof_backend_available);
-        assert!(recursive.blockers.is_empty());
-        let step_eq = recursive.step_eq.expect("authenticated Eq projection");
-        let step_ep = recursive.step_ep.expect("authenticated Ep projection");
-        ensure_offline_readiness_verifier_roles_are_distinct([
-            ("transfer", Some(&transfer)),
-            ("topup", Some(&topup)),
-            ("unshield", Some(&unshield)),
-            ("step_eq", Some(&step_eq)),
-            ("step_ep", Some(&step_ep)),
-        ])
-        .expect("the exact ABI-21 readiness projection has five distinct roles");
-        let artifact_set = recursive.artifact_set.expect("authenticated artifact set");
-        assert_eq!(artifact_set.generation, "release-v4");
-        assert_eq!(artifact_set.manifest_sha256, "56".repeat(32));
-        assert_eq!(artifact_set.release_policy_sha256, "67".repeat(32));
-        assert_eq!(artifact_set.release_attestation_sha256, "78".repeat(32));
-        assert_eq!(artifact_set.asset_scale, 9);
-
-        let payload = iroha_torii_shared::offline_api::OfflineReadiness {
-            cash_handoff_capability:
-                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
-            required_bridge_abi_version:
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-            max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-            asset_definition_id: "xor#wonderland".to_owned(),
-            asset_scale: Some(9),
-            evaluated_block_height: 40,
-            evaluated_block_hash: "ab".repeat(32),
-            active_transfer_verifier: Some(transfer),
-            active_topup_shield_verifier: Some(topup),
-            active_unshield_verifier: Some(unshield),
-            active_recursive_step_eq_verifier: Some(step_eq),
-            active_recursive_step_ep_verifier: Some(step_ep),
-            artifact_set: Some(artifact_set),
-            proof_backend_available: true,
-            recursive_lineage_supported: true,
-            ready: true,
-            blockers: Vec::new(),
-        };
-        let json = norito::json::to_vec(&payload).expect("encode ABI-21 readiness JSON");
-        let decoded: iroha_torii_shared::offline_api::OfflineReadiness =
-            norito::json::from_slice(&json).expect("decode ABI-21 readiness JSON");
-        assert_eq!(decoded, payload);
-    }
-
-    #[test]
-    fn readiness_reports_unavailable_v4_registry_without_fallback() {
-        let recursive = offline_kagemusha_recursive_v4_evaluation_from_resolution(Ok(None));
-
-        assert!(recursive.step_eq.is_none());
-        assert!(recursive.step_ep.is_none());
-        assert!(recursive.artifact_set.is_none());
-        assert!(!recursive.proof_backend_available);
-        assert_eq!(
-            recursive
-                .blockers
-                .iter()
-                .map(|blocker| blocker.code.as_str())
-                .collect::<Vec<_>>(),
-            [
-                "recursive_v4_registry_unavailable",
-                "recursive_step_eq_verifier_unavailable",
-                "recursive_step_ep_verifier_unavailable",
-                "proof_backend_unavailable",
-                "recursive_lineage_unavailable",
-            ]
-        );
-    }
-
-    #[test]
-    fn readiness_reports_malformed_v4_registry_without_fallback() {
-        let recursive = offline_kagemusha_recursive_v4_evaluation_from_resolution(Err(
-            "release attestation digest mismatch".to_owned(),
-        ));
-
-        assert!(recursive.step_eq.is_none());
-        assert!(recursive.step_ep.is_none());
-        assert!(recursive.artifact_set.is_none());
-        assert!(!recursive.proof_backend_available);
-        assert_eq!(
-            recursive
-                .blockers
-                .iter()
-                .map(|blocker| blocker.code.as_str())
-                .collect::<Vec<_>>(),
-            [
-                "recursive_v4_registry_malformed",
-                "recursive_step_eq_verifier_unavailable",
-                "recursive_step_ep_verifier_unavailable",
-                "proof_backend_unavailable",
-                "recursive_lineage_unavailable",
-            ]
-        );
-        assert!(
-            recursive.blockers[0]
-                .message
-                .contains("release attestation digest mismatch")
-        );
-    }
-
-    #[test]
-    fn readiness_preserves_authenticated_v4_identity_when_backend_construction_fails() {
-        let recursive = offline_kagemusha_recursive_v4_evaluation_from_resolution(Ok(Some(
-            resolved_recursive_v4(Some("processed verifier key is malformed")),
-        )));
-
-        assert!(recursive.step_eq.is_some());
-        assert!(recursive.step_ep.is_some());
-        assert!(recursive.artifact_set.is_some());
-        assert!(!recursive.proof_backend_available);
-        assert_eq!(recursive.blockers.len(), 2);
-        assert_eq!(recursive.blockers[0].code, "proof_backend_unavailable");
-        assert_eq!(recursive.blockers[1].code, "recursive_lineage_unavailable");
-        assert!(
-            recursive.blockers[0]
-                .message
-                .contains("processed verifier key is malformed")
-        );
-    }
-
-    #[test]
-    fn readiness_rejects_cross_role_id_commitment_and_schema_reuse() {
-        let transfer = projected_verifier("transfer", "transfer-circuit", 0x11, 0x21);
-        let topup = projected_verifier("topup", "topup-circuit", 0x12, 0x22);
-        let unshield = projected_verifier("unshield", "unshield-circuit", 0x13, 0x23);
-        let step_eq = projected_verifier("step-eq", "step-eq-circuit", 0x14, 0x24);
-        let step_ep = projected_verifier("step-ep", "step-ep-circuit", 0x15, 0x25);
-
-        ensure_offline_readiness_verifier_roles_are_distinct([
-            ("transfer", Some(&transfer)),
-            ("topup", Some(&topup)),
-            ("unshield", Some(&unshield)),
-            ("step_eq", Some(&step_eq)),
-            ("step_ep", Some(&step_ep)),
-        ])
-        .expect("five distinct verifier roles are valid");
-
-        let mut reused_id = step_ep.clone();
-        reused_id.id = transfer.id.clone();
-        let error = ensure_offline_readiness_verifier_roles_are_distinct([
-            ("transfer", Some(&transfer)),
-            ("topup", Some(&topup)),
-            ("unshield", Some(&unshield)),
-            ("step_eq", Some(&step_eq)),
-            ("step_ep", Some(&reused_id)),
-        ])
-        .expect_err("cross-role verifier id reuse fails closed");
-        assert!(format!("{error:?}").contains("registry id"));
-
-        let mut reused_commitment = step_ep.clone();
-        reused_commitment
-            .commitment
-            .clone_from(&transfer.commitment);
-        let error = ensure_offline_readiness_verifier_roles_are_distinct([
-            ("transfer", Some(&transfer)),
-            ("topup", Some(&topup)),
-            ("unshield", Some(&unshield)),
-            ("step_eq", Some(&step_eq)),
-            ("step_ep", Some(&reused_commitment)),
-        ])
-        .expect_err("cross-role verifier commitment reuse fails closed");
-        assert!(format!("{error:?}").contains("key commitment"));
-
-        let mut reused_schema = step_ep;
-        reused_schema
-            .public_inputs_schema_hash
-            .clone_from(&transfer.public_inputs_schema_hash);
-        let error = ensure_offline_readiness_verifier_roles_are_distinct([
-            ("transfer", Some(&transfer)),
-            ("topup", Some(&topup)),
-            ("unshield", Some(&unshield)),
-            ("step_eq", Some(&step_eq)),
-            ("step_ep", Some(&reused_schema)),
-        ])
-        .expect_err("cross-role public-input schema reuse fails closed");
-        assert!(format!("{error:?}").contains("public-input schema hash"));
-    }
-
-    #[test]
-    fn readiness_etag_hashes_the_exact_selected_representation() {
-        let payload = iroha_torii_shared::offline_api::OfflineReadiness {
-            cash_handoff_capability:
-                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
-            required_bridge_abi_version: 21,
-            max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-            asset_definition_id: "xor#wonderland".to_owned(),
-            asset_scale: Some(9),
-            evaluated_block_height: 7,
-            evaluated_block_hash: "11".repeat(32),
-            active_transfer_verifier: None,
-            active_topup_shield_verifier: None,
-            active_unshield_verifier: None,
-            active_recursive_step_eq_verifier: None,
-            active_recursive_step_ep_verifier: None,
-            artifact_set: None,
-            proof_backend_available: false,
-            recursive_lineage_supported: false,
-            ready: false,
-            blockers: vec![
-                offline_readiness_blocker(
-                    "transfer_verifier_unavailable",
-                    "The transfer verifier is unavailable.",
-                ),
-                offline_readiness_blocker(
-                    "topup_shield_verifier_unavailable",
-                    "The top-up shield verifier is unavailable.",
-                ),
-                offline_readiness_blocker(
-                    "unshield_verifier_unavailable",
-                    "The unshield verifier is unavailable.",
-                ),
-                offline_readiness_blocker(
-                    "recursive_v4_registry_unavailable",
-                    "The authenticated V4 registry is unavailable.",
-                ),
-                offline_readiness_blocker(
-                    "recursive_step_eq_verifier_unavailable",
-                    "The recursive StepEq verifier is unavailable.",
-                ),
-                offline_readiness_blocker(
-                    "recursive_step_ep_verifier_unavailable",
-                    "The recursive StepEp verifier is unavailable.",
-                ),
-                offline_readiness_blocker(
-                    "proof_backend_unavailable",
-                    "The proof backend is unavailable.",
-                ),
-                offline_readiness_blocker(
-                    "recursive_lineage_unavailable",
-                    "Recursive lineage is unavailable.",
-                ),
-            ],
-        };
-        let (json_content_type, json) =
-            encode_offline_readiness_representation(&payload, crate::utils::ResponseFormat::Json)
-                .expect("encode JSON");
-        let (norito_content_type, norito) =
-            encode_offline_readiness_representation(&payload, crate::utils::ResponseFormat::Norito)
-                .expect("encode Norito");
-        assert_eq!(json_content_type, "application/json");
-        assert_eq!(norito_content_type, crate::utils::NORITO_MIME_TYPE);
-        assert_ne!(json, norito);
-        assert_ne!(
-            strong_etag_for_representation(&json),
-            strong_etag_for_representation(&norito)
-        );
-
-        let mut changed_json = json.clone();
-        changed_json.push(b' ');
-        assert_ne!(
-            strong_etag_for_representation(&json),
-            strong_etag_for_representation(&changed_json),
-            "a strong validator must change whenever representation octets change"
-        );
-    }
-
-    #[test]
-    fn readiness_exposes_the_exact_active_transfer_verifier_window() {
-        let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
-        let state = transfer_verifier_state(7, 7, 4096, Some(5), Some(10));
-        let view = state.view();
-
-        let selected = readiness_transfer_verifier_record(&view.world, 9)
-            .expect("evaluate transfer verifier")
-            .expect("verifier is active before withdrawal");
-        assert_eq!(selected.id.backend, "halo2/ipa");
-        assert_eq!(
-            selected.id.name,
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2
-        );
-        assert_eq!(selected.version, 7);
-        assert_eq!(selected.circuit_id, circuit_id);
-        let expected_key =
-            iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vec![0x44; 64]);
-        assert_eq!(
-            selected.commitment,
-            hex::encode(iroha_core::zk::hash_vk(&expected_key))
-        );
-        assert_eq!(
-            selected.public_inputs_schema_hash,
-            hex::encode(<iroha_crypto::Hash as AsRef<
-                [u8; iroha_crypto::Hash::LENGTH],
-            >>::as_ref(&iroha_crypto::Hash::new(
-                iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
-            )),)
-        );
-        assert_eq!(selected.max_proof_bytes, 4096);
-        assert_eq!(selected.activation_height, 5);
-        assert_eq!(selected.withdrawal_height, Some(10));
-
-        assert!(
-            readiness_transfer_verifier_record(&view.world, 10)
-                .expect("evaluate at the exclusive withdrawal bound")
-                .is_none(),
-            "the registry withdrawal height is exclusive"
-        );
-    }
-
-    #[test]
-    fn readiness_does_not_substitute_a_global_verifier_for_the_asset_binding() {
-        let state = transfer_verifier_state(7, 7, 4096, None, None);
-        let view = state.view();
-        let asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("canonical asset definition id");
-
-        assert!(
-            offline_kagemusha_asset_transfer_verifier_record(&view.world, &asset, 9)
-                .expect("evaluate asset-bound transfer verifier")
-                .is_none(),
-            "a globally active circuit is not the verifier selected by an unbound asset"
-        );
-    }
-
-    #[test]
-    fn readiness_rejects_a_stale_verifier_index_version() {
-        let state = transfer_verifier_state(7, 8, 4096, None, None);
-        let view = state.view();
-
-        let error = readiness_transfer_verifier_record(&view.world, 9)
-            .expect_err("a stale index must fail closed instead of hiding the inconsistency");
-        assert!(format!("{error:?}").contains("record version 7"));
-    }
-
-    #[test]
-    fn readiness_rejects_an_active_verifier_without_proof_metadata() {
-        let state = transfer_verifier_state(7, 7, 0, None, None);
-        let view = state.view();
-
-        let error = readiness_transfer_verifier_record(&view.world, 9)
-            .expect_err("an unusable active verifier record must fail closed");
-        assert!(format!("{error:?}").contains("missing required proof metadata"));
+        assert_eq!(offline_top_up_body_limit(usize::MAX), top_up_protocol_max);
+        assert_eq!(offline_redeem_body_limit(usize::MAX), redeem_protocol_max);
+        assert_eq!(offline_top_up_body_limit(1024), 1024);
+        assert_eq!(offline_redeem_body_limit(1024), 1024);
     }
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_offline_redeem(
@@ -14203,40 +13009,6 @@ fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitio
         routing::asset_alias_observation_time_ms(app.state.as_ref()),
         raw,
     )
-}
-
-#[cfg(feature = "app_api")]
-fn parse_offline_readiness_asset_definition_id(
-    world: &impl WorldReadOnly,
-    alias_observation_time_ms: u64,
-    raw: &str,
-) -> Result<AssetDefinitionId, Error> {
-    if raw.is_empty() || raw.trim() != raw {
-        return Err(Error::AppQueryValidation {
-            code: "asset_definition_id_invalid",
-            message: "asset_definition_id must use an exact canonical asset address or alias spelling without surrounding whitespace."
-                .to_owned(),
-        });
-    }
-
-    match parse_asset_definition_id_in_world(world, alias_observation_time_ms, raw) {
-        Ok(id) => Ok(id),
-        Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)) => {
-            Err(Error::AppQueryValidation {
-                code: "asset_definition_id_invalid",
-                message: "asset_definition_id is not a valid canonical asset address or alias."
-                    .to_owned(),
-            })
-        }
-        Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound,
-        ))) => Err(Error::AppNotFound {
-            code: "asset_definition_not_found",
-            message: "The requested asset definition is not registered at the evaluated block."
-                .to_owned(),
-        }),
-        Err(error) => Err(error),
-    }
 }
 
 #[cfg(feature = "app_api")]
@@ -23505,6 +22277,99 @@ where
 }
 
 #[cfg(feature = "app_api")]
+async fn collect_torii_paginated_list_json_payloads<F, Fut>(
+    routes: &[RoutingDecision],
+    page_limit: u64,
+    mut fetch: F,
+) -> Result<ToriiFanoutRoutedJsonPayloads, Response>
+where
+    F: FnMut(RoutingDecision, u64, u64) -> Fut,
+    Fut: std::future::Future<Output = Response>,
+{
+    let mut payloads = Vec::with_capacity(routes.len());
+    let mut diagnostics = ToriiFanoutDiagnostics::default();
+    let mut last_not_found = None;
+    let mut last_route_unavailable = None;
+
+    for route in routes {
+        diagnostics.record_attempt();
+        let mut route_offset = 0_u64;
+        let mut route_total = None;
+        let mut route_succeeded = false;
+
+        loop {
+            let response = fetch(*route, route_offset, page_limit).await;
+            if response.status() == StatusCode::NOT_FOUND {
+                diagnostics.record_skipped_response(&response);
+                if route_succeeded {
+                    return Err(with_torii_fanout_headers(response, diagnostics));
+                }
+                last_not_found = Some(response);
+                break;
+            }
+            if torii_response_has_reject_code(&response, "route_unavailable") {
+                diagnostics.record_skipped_response(&response);
+                if route_succeeded {
+                    return Err(with_torii_fanout_headers(response, diagnostics));
+                }
+                last_route_unavailable = Some(response);
+                break;
+            }
+
+            let payload = match torii_json_body_value(response).await {
+                Ok(payload) => payload,
+                Err(response) => {
+                    diagnostics.record_skipped_response(&response);
+                    return Err(with_torii_fanout_headers(response, diagnostics));
+                }
+            };
+            let page = match validate_torii_exact_list_page(
+                &payload,
+                route_offset,
+                page_limit,
+                route_total,
+            ) {
+                Ok(page) => page,
+                Err(response) => {
+                    diagnostics.record_skipped_response(&response);
+                    return Err(with_torii_fanout_headers(response, diagnostics));
+                }
+            };
+            route_total = Some(page.total);
+            route_succeeded = true;
+            payloads.push((*route, payload));
+
+            if !page.has_more {
+                break;
+            }
+            route_offset = route_offset.saturating_add(page.item_count);
+        }
+
+        if route_succeeded {
+            diagnostics.record_success();
+        }
+    }
+
+    if payloads.is_empty() {
+        let response = last_not_found.unwrap_or_else(|| {
+            last_route_unavailable.unwrap_or_else(|| {
+                torii_proxy_error_response(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "no dataspace returned a matching result",
+                )
+            })
+        });
+        return Err(with_torii_fanout_headers(response, diagnostics));
+    }
+
+    Ok(ToriiFanoutRoutedJsonPayloads {
+        payloads,
+        diagnostics,
+    })
+}
+
+#[cfg(feature = "app_api")]
 async fn collect_torii_alias_json_payloads<F, Fut>(
     routes: &[RoutingDecision],
     denied_routes: usize,
@@ -25225,6 +24090,78 @@ fn list_items_from_payload<'a>(
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ToriiExactListPage {
+    item_count: u64,
+    total: u64,
+    has_more: bool,
+}
+
+#[cfg(feature = "app_api")]
+fn validate_torii_exact_list_page(
+    payload: &Value,
+    page_offset: u64,
+    page_limit: u64,
+    expected_total: Option<u64>,
+) -> Result<ToriiExactListPage, Response> {
+    let object = payload.as_object().ok_or_else(|| {
+        torii_internal_json_error("routed account-list page must be a JSON object")
+    })?;
+    let items = object
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            torii_internal_json_error("routed account-list page must include an `items` array")
+        })?;
+    let total = object.get("total").and_then(Value::as_u64).ok_or_else(|| {
+        torii_internal_json_error("routed account-list page must include an exact `total`")
+    })?;
+    let has_more = object
+        .get("has_more")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            torii_internal_json_error("routed account-list page must include boolean `has_more`")
+        })?;
+    if object.get("count_mode").and_then(Value::as_str) != Some("exact") {
+        return Err(torii_internal_json_error(
+            "routed account-list page must report `count_mode` as `exact`",
+        ));
+    }
+
+    let item_count = u64::try_from(items.len()).unwrap_or(u64::MAX);
+    if item_count > page_limit {
+        return Err(torii_internal_json_error(format!(
+            "routed account-list page returned {item_count} items for limit {page_limit}"
+        )));
+    }
+    if expected_total.is_some_and(|expected| expected != total) {
+        return Err(torii_internal_json_error(
+            "routed account-list total changed while draining pages",
+        ));
+    }
+    let page_end = page_offset
+        .checked_add(item_count)
+        .ok_or_else(|| torii_internal_json_error("routed account-list page offset overflowed"))?;
+    if page_end > total {
+        return Err(torii_internal_json_error(
+            "routed account-list page extends beyond its exact total",
+        ));
+    }
+    let expected_has_more = page_end < total;
+    if has_more != expected_has_more || (has_more && item_count == 0) {
+        return Err(torii_internal_json_error(
+            "routed account-list page has inconsistent pagination metadata",
+        ));
+    }
+
+    Ok(ToriiExactListPage {
+        item_count,
+        total,
+        has_more,
+    })
+}
+
+#[cfg(feature = "app_api")]
 fn merged_list_response(
     payloads: Vec<Value>,
     routed_by: &'static str,
@@ -25247,6 +24184,55 @@ fn merged_list_response(
     let mut root = norito::json::Map::new();
     root.insert("total".into(), Value::from(merged_items.len() as u64));
     root.insert("items".into(), Value::Array(merged_items));
+    let mut response =
+        crate::utils::respond_value_with_format(Value::Object(root), ResponseFormat::Json);
+    insert_routed_by_header(&mut response, routed_by);
+    Ok(response)
+}
+
+#[cfg(feature = "app_api")]
+fn merged_paginated_list_response(
+    payloads: Vec<Value>,
+    page_offset: u64,
+    page_limit: u64,
+    count_mode_label: &'static str,
+    routed_by: &'static str,
+) -> Result<Response, Response> {
+    let mut seen = BTreeSet::<Vec<u8>>::new();
+    let mut merged_items = Vec::new();
+    for payload in payloads {
+        let payload_items = list_items_from_payload(
+            &payload,
+            "expected JSON object with `items` while merging routed account list",
+        )?;
+        for item in payload_items {
+            let key = canonical_json_bytes(item)?;
+            if seen.insert(key) {
+                merged_items.push(item.clone());
+            }
+        }
+    }
+
+    let total = merged_items.len();
+    let start = usize::try_from(page_offset)
+        .unwrap_or(usize::MAX)
+        .min(total);
+    let limit = usize::try_from(page_limit).unwrap_or(usize::MAX);
+    let end = start.saturating_add(limit).min(total);
+    let has_more = end < total;
+    let items = merged_items
+        .into_iter()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .collect::<Vec<_>>();
+
+    let mut root = norito::json::Map::new();
+    root.insert("items".into(), Value::Array(items));
+    if count_mode_label == "exact" {
+        root.insert("total".into(), Value::from(total as u64));
+    }
+    root.insert("has_more".into(), Value::from(has_more));
+    root.insert("count_mode".into(), Value::from(count_mode_label));
     let mut response =
         crate::utils::respond_value_with_format(Value::Object(root), ResponseFormat::Json);
     insert_routed_by_header(&mut response, routed_by);
@@ -29691,6 +28677,99 @@ async fn execute_torii_fanout_json_payloads_resolved_routes(
 }
 
 #[cfg(feature = "app_api")]
+async fn execute_torii_accounts_list_fanout_for_resolved_routes(
+    app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
+    query_string: Option<String>,
+) -> Response {
+    if routes.is_empty() {
+        return with_torii_fanout_headers(
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "no Nexus dataspace routes are configured",
+            ),
+            ToriiFanoutDiagnostics::default(),
+        );
+    }
+
+    let mut params =
+        match decode_torii_proxy_query::<routing::ListFilterParams>(query_string.as_deref()) {
+            Ok(params) => params,
+            Err(response) => return response,
+        };
+    let limits = routing::app_query_limits();
+    let page_limit = match limits.clamp_page_limit(params.limit) {
+        Ok(0) => {
+            return Error::AppQueryValidation {
+                code: "invalid_pagination",
+                message: format!(
+                    "limit must be between 1 and {} for /v1/accounts",
+                    limits.max_page_limit
+                ),
+            }
+            .into_response();
+        }
+        Ok(limit) => limit,
+        Err(error) => return error.into_response(),
+    };
+    let page_offset = params.offset;
+    let count_mode_label = account_history_count_mode_label(params.count_mode.as_deref());
+    let routed_by = routed_by_for_routes(app, &routes);
+    params.offset = 0;
+    params.limit = Some(limits.max_page_limit.max(1));
+    params.count_mode = Some("exact".to_owned());
+
+    let collected = match collect_torii_paginated_list_json_payloads(
+        &routes,
+        limits.max_page_limit.max(1),
+        |route, route_offset, route_limit| {
+            let mut page_params = params.clone();
+            page_params.offset = route_offset;
+            page_params.limit = Some(route_limit);
+            async move {
+                let query_string = match encode_torii_proxy_query(&page_params) {
+                    Ok(query_string) => query_string,
+                    Err(error) => return error.into_response(),
+                };
+                execute_torii_read_for_route(
+                    app,
+                    route,
+                    torii_read_request(
+                        ToriiReadEndpointV1::AccountsList,
+                        route,
+                        Vec::new(),
+                        query_string,
+                        Vec::new(),
+                    ),
+                )
+                .await
+            }
+        },
+    )
+    .await
+    {
+        Ok(collected) => collected,
+        Err(response) => return response,
+    };
+    let payloads = collected
+        .payloads
+        .into_iter()
+        .map(|(_, payload)| payload)
+        .collect();
+
+    merge_with_torii_fanout_headers(collected.diagnostics, || {
+        merged_paginated_list_response(
+            payloads,
+            page_offset,
+            page_limit,
+            count_mode_label,
+            routed_by,
+        )
+    })
+}
+
+#[cfg(feature = "app_api")]
 fn merge_with_torii_fanout_headers<F>(diagnostics: ToriiFanoutDiagnostics, merge: F) -> Response
 where
     F: FnOnce() -> Result<Response, Response>,
@@ -30353,6 +29432,14 @@ async fn execute_torii_read_fanout_for_resolved_routes(
 ) -> Response {
     match merge {
         ToriiReadFanoutMergeV1::List => {
+            if endpoint == ToriiReadEndpointV1::AccountsList {
+                return execute_torii_accounts_list_fanout_for_resolved_routes(
+                    app,
+                    routes,
+                    query_string,
+                )
+                .await;
+            }
             match execute_torii_fanout_json_payloads_resolved_routes(
                 app,
                 routes,

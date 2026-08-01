@@ -100,23 +100,17 @@ validate_production_assets() {
     local require_image_reference="${2:-1}"
     local config_root
     local runtime_dir
-    local policy_dir
     local onboarding_signer
     local faucet_signer
-    local release_policy
-    local artifact_dir
     local admission_dir
     local manifest_dir
     local cache_dir
-    local canonical_artifact_dir
 
     if [[ "$require_image_reference" == "1" ]]; then
         require_immutable_image_reference
     fi
     config_root="$(dirname "$config_path")"
     runtime_dir="$config_root/runtime"
-    policy_dir="$config_root/kagemusha"
-    canonical_artifact_dir="${IROHA_TAIRA_KAGEMUSHA_ARTIFACT_DIR:-/var/lib/iroha/taira-validator/kagemusha/v4}"
     onboarding_signer="$(
         configured_path \
             "$config_path" \
@@ -130,20 +124,6 @@ validate_production_assets() {
             "[torii.faucet]" \
             "private_key_file" \
             "Taira faucet signer path"
-    )"
-    release_policy="$(
-        configured_path \
-            "$config_path" \
-            "[settlement.offline]" \
-            "kagemusha_release_policy_path" \
-            "Taira Kagemusha release policy path"
-    )"
-    artifact_dir="$(
-        configured_path \
-            "$config_path" \
-            "[settlement.offline]" \
-            "kagemusha_artifact_dir" \
-            "Taira Kagemusha artifact directory"
     )"
     admission_dir="$(
         configured_path \
@@ -169,23 +149,18 @@ validate_production_assets() {
 
     if [[ "$onboarding_signer" != "$config_root/runtime/onboarding-signer.key" ]] \
         || [[ "$faucet_signer" != "$config_root/runtime/faucet-signer.key" ]] \
-        || [[ "$release_policy" != "$config_root/kagemusha/release-policy.norito" ]] \
         || [[ "$admission_dir" != "$config_root/sorafs_admission" ]] \
         || [[ "$manifest_dir" != "$config_root/manifests" ]] \
-        || [[ "$cache_dir" != "$manifest_dir" ]] \
-        || [[ "$artifact_dir" != "$canonical_artifact_dir" ]]; then
+        || [[ "$cache_dir" != "$manifest_dir" ]]; then
         printf '%s\n' \
-            'production Taira config paths must match the canonical mounted bundle and artifact roots' >&2
+            'production Taira config paths must match the canonical mounted bundle' >&2
         exit 1
     fi
 
     require_directory "Taira config bundle directory" "$config_root"
     require_directory "Taira runtime directory" "$runtime_dir"
-    require_directory "Taira Kagemusha policy directory" "$policy_dir"
     require_file "Taira onboarding signer" "$onboarding_signer"
     require_file "Taira faucet signer" "$faucet_signer"
-    require_file "Taira Kagemusha release policy" "$release_policy"
-    require_directory "Taira Kagemusha artifact directory" "$artifact_dir"
     require_directory "Taira SoraFS admission directory" "$admission_dir"
     require_directory "Taira governance manifest directory" "$manifest_dir"
     require_file \

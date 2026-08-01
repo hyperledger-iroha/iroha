@@ -884,14 +884,13 @@ impl AccountAddressParseScope {
 }
 
 impl Root {
-    /// Read the root configuration after canonicalizing disabled optional
-    /// service subtrees across all ordered TOML sources.
+    /// Read the root configuration after canonicalizing explicitly disabled
+    /// optional service subtrees across all ordered TOML sources.
     ///
-    /// Offline cash defaults to disabled. When the effective switch is false,
-    /// its dormant subtree and command-service subtree are replaced by the
-    /// canonical disabled representation before typed deserialization. A
-    /// higher-precedence `enabled = true` value, or a malformed effective
-    /// switch, remains strict and is not rewritten.
+    /// `torii.kagemusha_commands` is an optional online command-submission
+    /// service. Its own explicit `enabled = false` switch makes subordinate
+    /// values dormant. Offline application support has no node enable switch
+    /// and is never inspected or rewritten here.
     ///
     /// # Errors
     ///
@@ -925,58 +924,9 @@ impl Root {
             }
         }
 
-        fn insert_disabled_table(table: &mut toml::Table, path: &[&str]) {
-            let Some((segment, tail)) = path.split_first() else {
-                return;
-            };
-            if tail.is_empty() {
-                table.insert(
-                    (*segment).to_owned(),
-                    toml::Value::Table(toml::Table::from_iter([(
-                        "enabled".to_owned(),
-                        toml::Value::Boolean(false),
-                    )])),
-                );
-                return;
-            }
-            let child = table
-                .entry((*segment).to_owned())
-                .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-            if !child.is_table() {
-                *child = toml::Value::Table(toml::Table::new());
-            }
-            insert_disabled_table(
-                child
-                    .as_table_mut()
-                    .expect("canonicalized TOML parent is a table"),
-                tail,
-            );
-        }
-
         let reader = reader.rewrite_toml_sources(|sources| {
-            const OFFLINE: &[&str] = &["settlement", "offline"];
-            const OFFLINE_ENABLED: &[&str] = &["settlement", "offline", "enabled"];
             const COMMANDS: &[&str] = &["torii", "kagemusha_commands"];
             const COMMANDS_ENABLED: &[&str] = &["torii", "kagemusha_commands", "enabled"];
-
-            let effective_offline = effective_bool_source(sources, OFFLINE_ENABLED);
-            let offline_disabled = match effective_offline {
-                Some((_, Some(enabled))) => !enabled,
-                Some((_, None)) => false,
-                None => true,
-            };
-
-            if offline_disabled {
-                let target = effective_offline.map(|(index, _)| index);
-                for source in sources.iter_mut() {
-                    remove_path(source.table_mut(), OFFLINE);
-                    remove_path(source.table_mut(), COMMANDS);
-                }
-                if let Some(index) = target {
-                    insert_disabled_table(sources[index].table_mut(), OFFLINE);
-                }
-                return;
-            }
 
             if let Some((_, Some(false))) = effective_bool_source(sources, COMMANDS_ENABLED) {
                 for source in sources.iter_mut() {
@@ -8015,7 +7965,9 @@ impl Queue {
 /// User-level configuration container for `Settlement`.
 #[derive(Debug, ReadConfig, Clone, Default)]
 pub struct Settlement {
-    /// Offline settlement configuration.
+    /// Optional Kagemusha proof-release cache controls.
+    ///
+    /// This is not offline enablement and is never node readiness.
     #[config(nested)]
     pub offline: Offline,
     /// Router configuration (shadow price, buffers).
@@ -8023,7 +7975,7 @@ pub struct Settlement {
     pub router: Router,
 }
 
-/// User-level Kagemusha escrow and execution configuration.
+/// User-level optional Kagemusha proof-release cache configuration.
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Offline {
     /// Canonical Norito policy authenticating promoted Kagemusha releases.
@@ -8220,7 +8172,7 @@ impl Settlement {
 }
 
 impl Offline {
-    /// Convert Kagemusha escrow policy into runtime parameters.
+    /// Convert optional Kagemusha proof-release cache controls into runtime parameters.
     pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Offline {
         let Offline {
             kagemusha_release_policy_path,
@@ -32228,8 +32180,43 @@ policy_digest_hex = "{policy_digest_hex}"
 
             let error = actual::Root::from_toml_source(TomlSource::inline(table))
                 .expect_err("retired offline enablement keys must be rejected");
-            assert!(format!("{error:?}").contains(key), "unexpected error: {error:?}");
+            assert!(
+                format!("{error:?}").contains(key),
+                "unexpected error: {error:?}"
+            );
         }
+    }
+
+    #[test]
+    fn absent_offline_switch_preserves_kagemusha_command_middleware() {
+        let mut table = base_table();
+        let key_pair = KeyPair::try_from_seed(
+            b"iroha:config:test:offline-independent-command-service".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("fixture seed derives command-service keypair");
+        let private_key = ExposedPrivateKey(key_pair.private_key().clone())
+            .try_to_multihash_string()
+            .expect("encode command-service private key");
+        let torii = table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table");
+        torii.insert(
+            "kagemusha_commands".into(),
+            Value::Table(Table::from_iter([
+                ("enabled".into(), Value::Boolean(true)),
+                ("private_key".into(), Value::String(private_key)),
+                ("minimum_xor_balance".into(), Value::String("1".into())),
+                ("max_tx_value".into(), Value::String("1000000000".into())),
+                ("operation_registry_max_entries".into(), Value::Integer(4096)),
+                ("operation_registry_max_bytes".into(), Value::Integer(524288)),
+            ])),
+        );
+
+        let actual = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect("offline-independent command middleware must remain configured");
+        assert!(actual.torii.kagemusha_commands.is_some());
     }
 
     #[test]
@@ -32288,7 +32275,7 @@ policy_digest_hex = "{policy_digest_hex}"
     }
 
     #[test]
-    fn disabled_kagemusha_commands_ignore_malformed_subordinates_when_offline_is_active() {
+    fn disabled_kagemusha_command_middleware_ignores_dormant_subordinates() {
         let mut table = base_table();
         let torii = table
             .get_mut("torii")
@@ -32328,7 +32315,7 @@ policy_digest_hex = "{policy_digest_hex}"
             ])),
         );
 
-        actual::Root::from_toml_source(TomlSource::inline(table))
+        let _ = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("enabled command service must validate subordinate types");
     }
 

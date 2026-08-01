@@ -442,50 +442,6 @@ fileprivate func normalizeToriiAssetSelectorQueryValue(_ raw: String, field: Str
     return try normalizeToriiAssetAliasLiteral(trimmed, field: field)
 }
 
-fileprivate func isCanonicalKagemushaAliasLabel(_ raw: Substring,
-                                                 separators: Set<UInt8>) -> Bool {
-    guard !raw.isEmpty else { return false }
-    var requiresAlphaNumeric = true
-    for byte in raw.utf8 {
-        let isAlphaNumeric = (byte >= 0x61 && byte <= 0x7A)
-            || (byte >= 0x30 && byte <= 0x39)
-        if isAlphaNumeric {
-            requiresAlphaNumeric = false
-        } else if separators.contains(byte), !requiresAlphaNumeric {
-            requiresAlphaNumeric = true
-        } else {
-            return false
-        }
-    }
-    return !requiresAlphaNumeric
-}
-
-fileprivate func normalizeKagemushaReadinessAssetSelector(_ raw: String,
-                                                         field: String) throws -> String {
-    guard !raw.isEmpty,
-          raw == raw.trimmingCharacters(in: .whitespacesAndNewlines) else {
-        throw ToriiClientError.invalidPayload("\(field) must be exact non-empty text.")
-    }
-    if AssetDefinitionAddress.decode(raw) != nil {
-        return try normalizeToriiAssetDefinitionIdValue(raw, field: field)
-    }
-    let components = raw.split(separator: "#", omittingEmptySubsequences: false)
-    let scopeComponents = components.count == 2
-        ? components[1].split(separator: ".", omittingEmptySubsequences: false)
-        : []
-    guard components.count == 2,
-          isCanonicalKagemushaAliasLabel(components[0], separators: [0x2E, 0x5F, 0x2D]),
-          (1...2).contains(scopeComponents.count),
-          scopeComponents.allSatisfy({
-              isCanonicalKagemushaAliasLabel($0, separators: [0x2D])
-          }) else {
-        throw ToriiClientError.invalidPayload(
-            "\(field) must be a canonical unprefixed Base58 asset definition id or lowercase scoped asset alias."
-        )
-    }
-    return raw
-}
-
 fileprivate func canonicalPublicAssetDefinitionLiteral(_ raw: String?) -> String? {
     let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     guard !trimmed.isEmpty else {
@@ -10748,6 +10704,116 @@ public struct ToriiKagemushaAuthenticatedArtifactSet: Decodable, Sendable, Equat
     }
 }
 
+/// Asset-neutral offline protocol capability advertised by every app-api node.
+///
+/// This is deliberately not a service-readiness or settlement projection. A
+/// conforming node always exposes the ABI-21 `cash_handoff_v1` application
+/// interface, independent of assets and dataspaces.
+public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
+    public let mandatory: Bool
+    public let cashHandoffCapability: String
+    public let requiredBridgeAbiVersion: UInt32
+    public let maxHops: UInt32
+    public let ready: Bool
+    public let assets: [ToriiJSONValue]
+    public let blockers: [ToriiKagemushaReadinessBlocker]
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case mandatory
+        case cashHandoffCapability = "cash_handoff_capability"
+        case requiredBridgeAbiVersion = "required_bridge_abi_version"
+        case maxHops = "max_hops"
+        case ready
+        case assets
+        case blockers
+    }
+
+    public init(from decoder: Decoder) throws {
+        try ToriiKagemushaReadinessValidation.rejectUnknownFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            context: "offline capability"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedMandatory = try container.decode(Bool.self, forKey: .mandatory)
+        let decodedCapability = try container.decode(
+            String.self,
+            forKey: .cashHandoffCapability
+        )
+        let decodedABI = try container.decode(
+            UInt32.self,
+            forKey: .requiredBridgeAbiVersion
+        )
+        let decodedMaxHops = try container.decode(UInt32.self, forKey: .maxHops)
+        let decodedReady = try container.decode(Bool.self, forKey: .ready)
+        let decodedAssets = try container.decode([ToriiJSONValue].self, forKey: .assets)
+        let decodedBlockers = try container.decode(
+            [ToriiKagemushaReadinessBlocker].self,
+            forKey: .blockers
+        )
+
+        guard !decodedMandatory else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .mandatory,
+                in: container,
+                debugDescription: "mandatory must be false for universal offline capability"
+            )
+        }
+        guard decodedCapability == KagemushaRecursiveSpend.cashHandoffCapabilityV1 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .cashHandoffCapability,
+                in: container,
+                debugDescription: "cash_handoff_capability must be cash_handoff_v1"
+            )
+        }
+        guard decodedABI == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .requiredBridgeAbiVersion,
+                in: container,
+                debugDescription: "required_bridge_abi_version must be 21"
+            )
+        }
+        guard decodedMaxHops == KagemushaRecursiveSpend.maximumPeerHops else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .maxHops,
+                in: container,
+                debugDescription: "max_hops does not match the cash_handoff_v1 bound"
+            )
+        }
+        guard decodedReady else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .ready,
+                in: container,
+                debugDescription: "ready must be true for universal offline capability"
+            )
+        }
+        guard decodedAssets.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .assets,
+                in: container,
+                debugDescription: "assets must be empty because capability is asset-neutral"
+            )
+        }
+        guard decodedBlockers.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .blockers,
+                in: container,
+                debugDescription: "blockers must be empty for universal offline capability"
+            )
+        }
+
+        mandatory = decodedMandatory
+        cashHandoffCapability = decodedCapability
+        requiredBridgeAbiVersion = decodedABI
+        maxHops = decodedMaxHops
+        ready = decodedReady
+        assets = decodedAssets
+        blockers = decodedBlockers
+    }
+}
+
+/// Legacy asset-specific command diagnostics retained for persisted ABI-21
+/// artifacts. It is not returned by the universal discovery endpoint.
 public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
     public let cashHandoffCapability: String
     public let requiredBridgeAbiVersion: UInt32
@@ -26304,13 +26370,19 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func getKagemushaReadiness(
-        assetDefinitionId: String,
-        completion: @escaping (Result<ToriiKagemushaReadiness, Swift.Error>) -> Void
+    public func getOfflineCapability(
+        completion: @escaping (Result<ToriiOfflineStatus, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.getKagemushaReadiness(assetDefinitionId: assetDefinitionId)
-        }
+        runTask(completion) { try await self.getOfflineCapability() }
+    }
+
+    @available(*, deprecated, message: "Offline capability is asset-neutral; use getOfflineCapability().")
+    @discardableResult
+    public func getKagemushaReadiness(
+        assetDefinitionId _: String,
+        completion: @escaping (Result<ToriiOfflineStatus, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) { try await self.getOfflineCapability() }
     }
 
     @discardableResult
@@ -29787,18 +29859,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeUTF8String(from: data, context: "health")
     }
 
-    public func getKagemushaReadiness(assetDefinitionId: String) async throws -> ToriiKagemushaReadiness {
-        let exactAssetSelector = try normalizeKagemushaReadinessAssetSelector(
-            assetDefinitionId,
-            field: "assetDefinitionId"
-        )
+    public func getOfflineCapability() async throws -> ToriiOfflineStatus {
         let request = try makeRequest(path: "/v1/offline/readiness",
-                                      queryItems: [
-                                        URLQueryItem(
-                                            name: "asset_definition_id",
-                                            value: exactAssetSelector
-                                        )
-                                      ],
                                       headers: ["Accept": "application/json"])
         let (data, response) = try await send(request)
         try ensureStatus(response, equals: 200, responseBody: data)
@@ -29810,17 +29872,17 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: data)
         } catch {
             throw ToriiClientError.invalidPayload(
-                "Kagemusha readiness response must be valid UTF-8 JSON without duplicate object keys"
+                "Offline capability response must be valid UTF-8 JSON without duplicate object keys"
             )
         }
-        let readiness = try decodeJSON(ToriiKagemushaReadiness.self, from: data)
-        if let canonicalRequestedID = canonicalPublicAssetDefinitionLiteral(exactAssetSelector),
-           readiness.assetDefinitionId != canonicalRequestedID {
-            throw ToriiClientError.invalidPayload(
-                "Kagemusha readiness response is not bound to the requested asset definition"
-            )
-        }
-        return readiness
+        return try decodeJSON(ToriiOfflineStatus.self, from: data)
+    }
+
+    @available(*, deprecated, message: "Offline capability is asset-neutral; use getOfflineCapability().")
+    public func getKagemushaReadiness(
+        assetDefinitionId _: String
+    ) async throws -> ToriiOfflineStatus {
+        try await getOfflineCapability()
     }
 
     public func getKagemushaRecipientRegistrationLineage(

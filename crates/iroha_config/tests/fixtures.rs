@@ -4636,15 +4636,12 @@ fn taira_config_enables_untrusted_cid_hosting() {
     let raw = fs::read_to_string(&config_path).expect("Taira config should exist");
     let doc: TomlValue = toml::from_str(&raw).expect("Taira config should be valid TOML");
 
-    assert_eq!(
+    assert!(
         doc.get("settlement")
             .and_then(TomlValue::as_table)
             .and_then(|settlement| settlement.get("offline"))
-            .and_then(TomlValue::as_table)
-            .and_then(|offline| offline.get("enabled"))
-            .and_then(TomlValue::as_bool),
-        Some(true),
-        "Taira must explicitly enable mandatory offline cash"
+            .is_none(),
+        "Taira must not model universal offline-wallet support as backend configuration"
     );
 
     let dataspaces = doc
@@ -4667,6 +4664,20 @@ fn taira_config_enables_untrusted_cid_hosting() {
         Some(6_647_857_470_246_403_404),
         "external dataspace id should match its manifest hash"
     );
+    let mobile_dataspace = dataspaces
+        .iter()
+        .find(|entry| {
+            entry
+                .get("alias")
+                .and_then(TomlValue::as_str)
+                .is_some_and(|alias| alias == "is2")
+        })
+        .expect("Taira profile should include the mobile `is2` dataspace");
+    assert_eq!(
+        mobile_dataspace.get("id").and_then(TomlValue::as_integer),
+        Some(8_477_022_798_449_861_195),
+        "mobile dataspace id should match its manifest hash"
+    );
 
     let nexus = doc
         .get("nexus")
@@ -4674,8 +4685,8 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .expect("nexus should be configured");
     assert_eq!(
         nexus.get("lane_count").and_then(TomlValue::as_integer),
-        Some(4),
-        "Taira profile should reserve a lane for the external dataspace"
+        Some(5),
+        "Taira profile should reserve routes for both BOI dataspaces"
     );
     let lanes = nexus
         .get("lane_catalog")
@@ -4691,7 +4702,19 @@ fn taira_config_enables_untrusted_cid_hosting() {
                     .and_then(TomlValue::as_str)
                     .is_some_and(|dataspace| dataspace == "is")
         }),
-        "Taira profile should bind the external dataspace to a lane"
+        "Taira profile should bind the external `is` dataspace to its routing container"
+    );
+    assert!(
+        lanes.iter().any(|lane| {
+            lane.get("alias")
+                .and_then(TomlValue::as_str)
+                .is_some_and(|alias| alias == "boi-mobile")
+                && lane
+                    .get("dataspace")
+                    .and_then(TomlValue::as_str)
+                    .is_some_and(|dataspace| dataspace == "is2")
+        }),
+        "Taira profile should bind the mobile dataspace to its dedicated route"
     );
     let routing_rules = nexus
         .get("routing_policy")
@@ -4719,7 +4742,7 @@ fn taira_config_enables_untrusted_cid_hosting() {
     ] {
         assert!(
             has_is_instruction_route(instruction),
-            "Taira profile should route {instruction} to the external `is` lane"
+            "Taira profile should route {instruction} to the external `is` dataspace routing container"
         );
     }
 

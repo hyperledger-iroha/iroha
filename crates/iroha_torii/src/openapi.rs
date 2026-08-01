@@ -1395,7 +1395,7 @@ fn offline_readiness_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Report the offline-wallet protocol interface implemented by every Iroha app-api deployment. cash_handoff_v1 and native bridge ABI 21 are universally available to applications and do not require settlement flags, escrow catalogs, asset metadata, or dataspace enrollment. This capability response is deliberately asset-neutral: mandatory is false, ready is true, and assets and blockers are empty. It does not claim that any particular asset has server-managed top-up, redemption, proof, or escrow material."
+            "Report the offline-wallet protocol interface implemented by every Iroha app-api deployment. cash_handoff_v1 and native bridge ABI 21 are universally available to applications and do not require settlement flags, escrow catalogs, asset metadata, or dataspace enrollment. This capability response is deliberately asset-neutral: mandatory is false, ready is true, and assets and blockers are empty. Wallets must not gate offline UI or peer handoff on this discovery call; those flows continue without network connectivity. It does not claim that any particular asset has server-managed top-up, redemption, proof, or escrow material."
                 .to_owned(),
         ),
     );
@@ -1424,14 +1424,14 @@ fn offline_readiness_operation() -> Map {
     responses.insert(
         "304".to_owned(),
         norito::json!({
-            "description": "The previously returned readiness representation is still current.",
+            "description": "The previously returned capability representation is still current.",
             "headers": {
                 "ETag": {
-                    "description": "Strong validator for the selected readiness representation.",
+                    "description": "Strong validator for the selected capability representation.",
                     "schema": { "type": "string" }
                 },
                 "Cache-Control": {
-                    "description": "Readiness revalidation policy.",
+                    "description": "Capability revalidation policy.",
                     "schema": { "type": "string", "example": "private, max-age=0, must-revalidate" }
                 },
                 "Vary": {
@@ -1446,7 +1446,7 @@ fn offline_readiness_operation() -> Map {
     responses.insert(
         "429".to_owned(),
         retryable_error_response(
-            "The readiness request was rejected by an ingress or route rate limit.",
+            "The capability request was rejected by an ingress or route rate limit.",
             &[],
         ),
     );
@@ -32308,7 +32308,8 @@ mod tests {
     fn openapi_always_contains_the_universal_offline_interface() {
         use iroha_torii_shared::route_catalog::offline;
 
-        let paths = generate_spec()
+        let document = generate_spec();
+        let paths = document
             .get("paths")
             .and_then(Value::as_object)
             .expect("OpenAPI paths");
@@ -36638,7 +36639,7 @@ mod tests {
                 .and_then(Value::as_str);
             assert_eq!(schema_ref, Some("#/components/schemas/ErrorEnvelope"));
 
-            for status in ["429", "503"] {
+            for status in ["429"] {
                 let headers = responses
                     .get(status)
                     .and_then(Value::as_object)
@@ -36654,6 +36655,34 @@ mod tests {
             }
         }
 
+        for path in [
+            "/v1/offline/receiver-lineage",
+            "/v1/offline/top-up",
+            "/v1/offline/redeem",
+            "/v1/offline/operations/{operation_id}",
+        ] {
+            let responses = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|item| item.values().next())
+                .and_then(Value::as_object)
+                .and_then(|operation| operation.get("responses"))
+                .and_then(Value::as_object)
+                .expect("offline operation responses");
+            let headers = responses
+                .get("503")
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("headers"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("offline 503 response headers: {path}"));
+            for header in ["Retry-After", "Cache-Control", "Vary"] {
+                assert!(
+                    headers.contains_key(header),
+                    "offline 503 must document {header}: {path}"
+                );
+            }
+        }
+
         let readiness_responses = paths
             .get("/v1/offline/readiness")
             .and_then(Value::as_object)
@@ -36662,18 +36691,12 @@ mod tests {
             .and_then(|operation| operation.get("responses"))
             .and_then(Value::as_object)
             .expect("offline readiness responses");
-        assert_eq!(
-            documented_reject_codes(readiness_responses, "400"),
-            ["asset_definition_id_invalid"]
-        );
-        assert_eq!(
-            documented_reject_codes(readiness_responses, "404"),
-            ["asset_definition_not_found"]
-        );
-        assert_eq!(
-            documented_reject_codes(readiness_responses, "503"),
-            ["readiness_unavailable"]
-        );
+        for status in ["400", "404", "503"] {
+            assert!(
+                !readiness_responses.contains_key(status),
+                "universal capability discovery must not document {status} backend evaluation"
+            );
+        }
         assert!(
             !response_documents_reject_code(readiness_responses, "429"),
             "generic readiness ingress throttling must not advertise an application reject code"
