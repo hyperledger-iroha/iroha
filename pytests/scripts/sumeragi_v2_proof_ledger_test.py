@@ -33688,6 +33688,12 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
             "StrictSameRoundTcUpgrade must equal only",
         ),
         (
+            "TimeoutReceiptAdmitted",
+            "  /\\ vote.view <= nodeView[node] + 1\n",
+            "  /\\ vote.view <= nodeView[node] + 2\n",
+            "TimeoutReceiptAdmitted must equal only",
+        ),
+        (
             "ProposalJustified",
             "     /\\ proposal.justifyRank < proposal.view\n",
             "     /\\ proposal.justifyRank <= proposal.view\n",

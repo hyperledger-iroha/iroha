@@ -225,6 +225,20 @@ impl<F: ScalarField> BaseCircuitBuilder<F> {
         self.assigned_instances.iter_mut().for_each(|c| c.clear());
     }
 
+    /// Clear physical cell coordinates created by a completed synthesis pass.
+    ///
+    /// The virtual advice, selector, lookup, equality, and breakpoint graph is
+    /// retained. This permits a fixed-shape circuit to measure that graph with
+    /// the V1 floor planner and then rebuild physical coordinates during the
+    /// assignment pass without cloning the entire virtual circuit.
+    pub fn reset_synthesis_state(&self) {
+        self.core
+            .copy_manager
+            .lock()
+            .unwrap()
+            .reset_physical_assignments();
+    }
+
     /// Returns a mutable reference to the [Context] of a gate thread. Spawns a new thread for the given phase, if none exists.
     /// * `phase`: The challenge phase (as an index) of the gate thread.
     pub fn main(&mut self, phase: usize) -> &mut Context<F> {

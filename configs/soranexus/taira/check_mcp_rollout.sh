@@ -1793,8 +1793,17 @@ height = payload.get("evaluated_block_height")
 block_hash = payload.get("evaluated_block_hash")
 if not is_positive_int(height):
     fail("evaluated_block_height is not positive")
-if not isinstance(block_hash, str) or re.fullmatch(r"[0-9a-f]{64}", block_hash) is None:
-    fail("evaluated_block_hash is not canonical lowercase SHA-256")
+block_hash_match = (
+    re.fullmatch(
+        r"(?:hash:)?([0-9A-Fa-f]{64})(?:#[0-9A-Fa-f]{4})?",
+        block_hash,
+    )
+    if isinstance(block_hash, str)
+    else None
+)
+if block_hash_match is None:
+    fail("evaluated_block_hash is not a canonical Iroha block hash")
+block_hash = block_hash_match.group(1).lower()
 
 artifact = payload.get("artifact_set")
 validate_artifact(artifact, context="live")
@@ -1961,11 +1970,18 @@ if offline_height != status["last_committed_height"]:
     )
 committed_subject = status.get("last_committed_subject")
 committed_hash = committed_subject.get("block_hash") if isinstance(committed_subject, dict) else None
-if isinstance(committed_hash, str) and committed_hash.lower().startswith("hash:"):
-    committed_hash = committed_hash[5:]
-if not isinstance(committed_hash, str) or re.fullmatch(r"[0-9A-Fa-f]{64}", committed_hash) is None:
+committed_hash_match = (
+    re.fullmatch(
+        r"(?:hash:)?([0-9A-Fa-f]{64})(?:#[0-9A-Fa-f]{4})?",
+        committed_hash,
+    )
+    if isinstance(committed_hash, str)
+    else None
+)
+if committed_hash_match is None:
     raise SystemExit(f"validator {label}: durable committed subject omitted a canonical block hash")
-if offline_hash != committed_hash.lower():
+committed_hash = committed_hash_match.group(1).lower()
+if offline_hash != committed_hash:
     raise SystemExit(
         f"validator {label}: offline readiness block hash does not match the durable committed subject"
     )

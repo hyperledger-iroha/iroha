@@ -43,10 +43,31 @@ use super::kagemusha_accumulation::{
 use super::kagemusha_dense_msm::{KagemushaDenseMsmJobsV5, KagemushaDenseMsmSourceV5};
 use super::kagemusha_sha256_v4::KagemushaSha256ByteV4;
 
-/// Domain separator for the transcript-challenged deferred-equation audit.
-pub(super) const KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V5: &[u8] = b"iroha:kagemusha:deferred-audit:v5";
-/// Version encoded in every transcript-challenged deferred-audit preimage.
-pub(super) const KAGEMUSHA_DEFERRED_AUDIT_VERSION_V5: u32 = 5;
+/// Domain absorbed by the compact deferred-audit Poseidon sponge.
+pub(super) const KAGEMUSHA_DEFERRED_AUDIT_POSEIDON_DOMAIN_V6: &[u8] =
+    b"iroha:kagemusha:deferred-audit-poseidon:v6";
+/// Domain of the short SHA-256 wrapper around the deferred-audit Poseidon digest.
+pub(super) const KAGEMUSHA_DEFERRED_AUDIT_SHA256_DOMAIN_V6: &[u8] = b"kg-audit-sha-v6!";
+/// Version encoded in both compact deferred-audit commitment layers.
+pub(super) const KAGEMUSHA_DEFERRED_AUDIT_VERSION_V6: u32 = 6;
+
+/// Encode a Poseidon domain and version injectively as native field elements.
+pub(super) fn kagemusha_poseidon_domain_elements<F: ff::PrimeField>(
+    domain: &[u8],
+    version: u32,
+) -> Vec<F> {
+    let mut elements = Vec::with_capacity(domain.len().div_ceil(16) + 2);
+    elements.push(F::from(
+        u64::try_from(domain.len()).expect("fixed Kagemusha Poseidon domain length fits u64"),
+    ));
+    elements.extend(domain.chunks(16).map(|chunk| {
+        let mut packed = [0_u8; 16];
+        packed[..chunk.len()].copy_from_slice(chunk);
+        F::from_u128(u128::from_le_bytes(packed))
+    }));
+    elements.push(F::from(u64::from(version)));
+    elements
+}
 
 /// Limb width chosen so products of three-limb Pasta integers retain
 /// ample native-field headroom in either parity.
@@ -513,6 +534,26 @@ pub(super) fn compressed_point_bytes<F: BigPrimeField>(
     encoded
 }
 
+/// Pack at most sixteen proven little-endian bytes into one native field cell.
+fn pack_constrained_bytes_u128<F: BigPrimeField>(
+    ctx: &mut halo2_base::Context<F>,
+    gate: &GateChip<F>,
+    bytes: &[KagemushaSha256ByteV4<F>],
+) -> AssignedValue<F> {
+    assert!(
+        bytes.len() <= 16,
+        "u128 packing accepts at most sixteen bytes"
+    );
+    gate.inner_product(
+        ctx,
+        bytes
+            .iter()
+            .copied()
+            .map(KagemushaSha256ByteV4::quantum_cell),
+        (0..bytes.len()).map(|index| Constant(F::from_u128(1_u128 << (8 * index)))),
+    )
+}
+
 /// One exact curve source consumed by the deferred point half.
 ///
 /// Coordinates are represented in canonical non-native limbs in the scalar
@@ -536,6 +577,9 @@ where
     /// The cache is indexed only by this source's fixed namespace position;
     /// witness values are never deduplicated.
     pub(super) transcript_encoding: Option<[AssignedValue<Inner<C>>; 2]>,
+    /// Lazily assigned injective compressed-point chunks used by compact
+    /// protocol and deferred-audit commitments.
+    pub(super) commitment_encoding: Option<[AssignedValue<Inner<C>>; 2]>,
 }
 
 /// One source-indexed coefficient in a constrained deferred curve equation.
@@ -565,9 +609,9 @@ where
 /// Host witness passed from a native-scalar half to the reciprocal point half.
 ///
 /// This value has no authority by itself.  Both half circuits recompute the
-/// same constrained SHA-256 join over its canonical coordinates, source
-/// indices, and coefficients; the point half additionally constrains every
-/// source on-curve and evaluates every equation.
+/// same compact Poseidon-then-SHA commitment over injective compressed
+/// sources, source indices, and coefficients; the point half additionally
+/// constrains every source on-curve and evaluates every equation.
 #[derive(Clone, Debug)]
 pub(super) struct DeferredEquationWitness<C>
 where
@@ -592,6 +636,50 @@ where
     pub(super) sources: Vec<Point<C>>,
     /// Canonical non-native scalar coefficients, grouped by equation.
     pub(super) equations: Vec<Vec<(usize, Integer<C>)>>,
+}
+
+/// Source-indexed reciprocal encodings shared by V6 audit and V2 protocol identity.
+#[derive(Clone, Debug)]
+pub(super) struct AssignedDeferredSourceEncodingsV6<C>
+where
+    C: CurveAffineExt,
+    Outer<C>: BigPrimeField,
+{
+    source_values: Vec<C>,
+    pub(super) poseidon_elements: Vec<[Integer<C>; 2]>,
+}
+
+impl<C> AssignedDeferredSourceEncodingsV6<C>
+where
+    C: CurveAffineExt,
+    Outer<C>: BigPrimeField,
+    Inner<C>: BigPrimeField,
+{
+    /// Select exact cached point chunks by a strictly increasing source map.
+    pub(super) fn mapped_poseidon_elements_v2(
+        &self,
+        points: &[C],
+        source_indices: &[usize],
+    ) -> Result<Vec<Integer<C>>, String> {
+        if points.len() != source_indices.len()
+            || self.source_values.len() != self.poseidon_elements.len()
+        {
+            return Err("Kagemusha V6-to-V2 source map shape mismatch".to_owned());
+        }
+        let mut previous = None;
+        let mut mapped = Vec::with_capacity(points.len() * 2);
+        for (point, source_index) in points.iter().zip(source_indices.iter().copied()) {
+            if source_index >= self.source_values.len()
+                || previous.is_some_and(|previous| previous >= source_index)
+                || point.to_bytes().as_ref() != self.source_values[source_index].to_bytes().as_ref()
+            {
+                return Err("Kagemusha V6-to-V2 source map is invalid".to_owned());
+            }
+            previous = Some(source_index);
+            mapped.extend(self.poseidon_elements[source_index].iter().cloned());
+        }
+        Ok(mapped)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -713,94 +801,70 @@ where
         self.scalar_integer.range
     }
 
-    /// Constrain the V5 selector-bound deferred-audit preimage.
-    ///
-    /// `gate_tags` and `selectors` have one entry per equation in audit order.
-    /// Gate tags describe the statically compiled stage while every selector is
-    /// a Boolean derived from the current Step's public parent count.  Encoding
-    /// both prevents the reciprocal half from accepting the same equation
-    /// vector under a different enable schedule.
-    pub(super) fn assigned_equation_bytes_v5(
+    /// Constrain the complete V6 selector-bound deferred audit for Poseidon.
+    pub(super) fn assigned_equation_poseidon_elements_v6(
         &self,
         ctx: &mut ScalarContext<C>,
         gate_tags: &[u32],
         selectors: &[AssignedValue<Inner<C>>],
-    ) -> Result<Vec<KagemushaSha256ByteV4<Inner<C>>>, Error> {
-        fn push_constant_bytes<F: BigPrimeField>(
-            output: &mut Vec<KagemushaSha256ByteV4<F>>,
-            bytes: &[u8],
-        ) {
-            output.extend(bytes.iter().copied().map(KagemushaSha256ByteV4::constant));
-        }
+    ) -> Result<Vec<AssignedValue<Inner<C>>>, Error> {
+        let (source_count, equations) = {
+            let state = self.state.borrow();
+            if gate_tags.len() != state.equations.len() || selectors.len() != state.equations.len()
+            {
+                return Err(Error::InvalidInstances);
+            }
+            (state.sources.len(), state.equations.clone())
+        };
 
-        fn push_u32<F: BigPrimeField>(output: &mut Vec<KagemushaSha256ByteV4<F>>, value: u32) {
-            push_constant_bytes(output, &value.to_le_bytes());
+        let mut elements = kagemusha_poseidon_domain_elements::<Inner<C>>(
+            KAGEMUSHA_DEFERRED_AUDIT_POSEIDON_DOMAIN_V6,
+            KAGEMUSHA_DEFERRED_AUDIT_VERSION_V6,
+        )
+        .into_iter()
+        .map(|value| ctx.main().load_constant(value))
+        .collect::<Vec<_>>();
+        elements.push(ctx.main().load_constant(Inner::<C>::from(
+            u64::try_from(source_count).expect("fixed source count fits u64"),
+        )));
+        elements.push(ctx.main().load_constant(Inner::<C>::from(
+            u64::try_from(equations.len()).expect("fixed equation count fits u64"),
+        )));
+        for source_index in 0..source_count {
+            elements.extend(self.source_commitment_encoding(ctx, source_index));
         }
-
-        let state = self.state.borrow();
-        if gate_tags.len() != state.equations.len() || selectors.len() != state.equations.len() {
-            return Err(Error::InvalidInstances);
-        }
-        let ctx = ctx.main();
-        let mut output = Vec::new();
-        push_constant_bytes(&mut output, KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V5);
-        push_constant_bytes(&mut output, &[0]);
-        push_u32(&mut output, KAGEMUSHA_DEFERRED_AUDIT_VERSION_V5);
-        push_u32(
-            &mut output,
-            u32::try_from(state.sources.len()).expect("fixed source count fits u32"),
-        );
-        push_u32(
-            &mut output,
-            u32::try_from(state.equations.len()).expect("fixed equation count fits u32"),
-        );
-        for source in &state.sources {
-            output.extend(proper_uint_le_bytes(
-                ctx,
-                self.coordinate.range,
-                source.x.integer(),
-            ));
-            output.extend(proper_uint_le_bytes(
-                ctx,
-                self.coordinate.range,
-                source.y.integer(),
-            ));
-        }
-        for ((equation, gate_tag), selector) in state
-            .equations
+        for (((equation, gate_tag), selector), equation_index) in equations
             .iter()
             .zip(gate_tags)
             .zip(selectors.iter().copied())
+            .zip(0_usize..)
         {
-            push_u32(&mut output, *gate_tag);
-            output.push(KagemushaSha256ByteV4::from_boolean(
-                ctx,
-                &self.scalar,
-                selector,
-            ));
-            push_u32(
-                &mut output,
-                u32::try_from(equation.terms.len()).expect("fixed term count fits u32"),
+            self.scalar.assert_bit(ctx.main(), selector);
+            elements.push(
+                ctx.main()
+                    .load_constant(Inner::<C>::from(u64::from(*gate_tag))),
+            );
+            elements.push(selector);
+            elements.push(
+                ctx.main().load_constant(Inner::<C>::from(
+                    u64::try_from(equation.terms.len())
+                        .expect("fixed deferred equation term count fits u64"),
+                )),
             );
             for term in &equation.terms {
-                push_u32(
-                    &mut output,
-                    u32::try_from(term.source_index).expect("fixed source index fits u32"),
-                );
-                let scalar: AssignedCoordinate<C> = self
-                    .scalar_integer
-                    .load_private(ctx, *term.coefficient.value());
-                let scalar: AssignedCoordinate<C> =
-                    self.scalar_integer.enforce_less_than(ctx, scalar).into();
-                ctx.constrain_equal(scalar.native(), &term.coefficient);
-                output.extend(proper_uint_le_bytes(
-                    ctx,
-                    self.scalar_integer.range,
-                    &scalar,
-                ));
+                if term.source_index >= source_count {
+                    return Err(Error::Transcript(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Kagemusha V6 equation {equation_index} source index is invalid"),
+                    ));
+                }
+                elements.push(ctx.main().load_constant(Inner::<C>::from(
+                    u64::try_from(term.source_index).expect("fixed deferred source index fits u64"),
+                )));
+                elements.push(term.coefficient);
             }
         }
-        Ok(output)
+        Ok(elements)
     }
 
     /// Constrain the exact canonical bytes of one native scalar cell.
@@ -818,6 +882,48 @@ where
             .into();
         ctx.main().constrain_equal(scalar_integer.native(), &scalar);
         proper_uint_le_bytes(ctx.main(), self.scalar_integer.range, &scalar_integer)
+    }
+
+    /// Return the stable deferred-source index carried by one assigned point.
+    pub(super) fn assigned_point_source_index(
+        &self,
+        point: &DeferredScalarPoint<C>,
+    ) -> Result<usize, Error> {
+        if bool::from(point.value.is_identity()) {
+            return Err(Error::InvalidInstances);
+        }
+        point.source_index.ok_or(Error::InvalidInstances)
+    }
+
+    /// Constrain the injective two-`u128` encoding of one symbolic point.
+    pub(super) fn assigned_point_poseidon_elements_v2(
+        &self,
+        ctx: &mut ScalarContext<C>,
+        point: &DeferredScalarPoint<C>,
+    ) -> Result<[AssignedValue<Inner<C>>; 2], Error> {
+        if bool::from(point.value.is_identity()) {
+            return Err(Error::Transcript(
+                std::io::ErrorKind::InvalidData,
+                "identity point cannot enter a Kagemusha commitment".to_owned(),
+            ));
+        }
+        let source_index = if let Some(source_index) = point.source_index {
+            source_index
+        } else {
+            let source_index = self.assign_source(ctx, point.value, false);
+            let mut relation = self.one_term(ctx, source_index);
+            relation.extend(point.terms.iter().cloned().map(|mut term| {
+                term.coefficient = <GateChip<Inner<C>> as GateInstructions<Inner<C>>>::neg(
+                    &self.scalar,
+                    ctx.main(),
+                    Existing(term.coefficient),
+                );
+                term
+            }));
+            self.record_equation(ctx, relation);
+            source_index
+        };
+        Ok(self.source_commitment_encoding(ctx, source_index))
     }
 
     /// Constrain the exact canonical compressed bytes of one symbolic point.
@@ -1009,6 +1115,7 @@ where
             x,
             y,
             transcript_encoding: None,
+            commitment_encoding: None,
         });
         if let Some(key) = constant_key {
             let previous = state.constant_sources.insert(key, source_index);
@@ -1060,6 +1167,55 @@ where
         debug_assert!(
             previous.is_none(),
             "single-threaded deferred encoding cache was populated twice"
+        );
+        encoding
+    }
+
+    /// Return the exact compressed-point chunks for one fixed source,
+    /// assigning and caching them only on first use.
+    fn source_commitment_encoding(
+        &self,
+        ctx: &mut ScalarContext<C>,
+        source_index: usize,
+    ) -> [AssignedValue<Inner<C>>; 2] {
+        if let Some(encoding) = self
+            .state
+            .borrow()
+            .sources
+            .get(source_index)
+            .and_then(|source| source.commitment_encoding)
+        {
+            return encoding;
+        }
+
+        let (x, y) = {
+            let state = self.state.borrow();
+            let source = state
+                .sources
+                .get(source_index)
+                .expect("deferred source index was assigned by this chip");
+            (source.x.clone(), source.y.clone())
+        };
+        let bytes =
+            compressed_point_bytes(ctx.main(), self.coordinate.range, x.integer(), y.integer());
+        let encoding = std::array::from_fn(|half| {
+            pack_constrained_bytes_u128(
+                ctx.main(),
+                &self.scalar,
+                &bytes[half * 16..(half + 1) * 16],
+            )
+        });
+        let previous = self
+            .state
+            .borrow_mut()
+            .sources
+            .get_mut(source_index)
+            .expect("deferred source index was assigned by this chip")
+            .commitment_encoding
+            .replace(encoding);
+        debug_assert!(
+            previous.is_none(),
+            "single-threaded deferred commitment cache was populated twice"
         );
         encoding
     }
@@ -1552,9 +1708,10 @@ where
     /// Assign and canonicalize every deferred source and coefficient.
     ///
     /// Assignment is deliberately separate from enforcement. The complete
-    /// assigned audit must first be serialized and committed with SHA-256;
-    /// only then may [`Self::constrain_deferred_equation_batch_v5`] derive its
-    /// unpredictable batching challenge from that digest.
+    /// assigned audit must first be committed with the compact V6
+    /// Poseidon-then-SHA construction; only then may
+    /// [`Self::constrain_deferred_equation_batch_v5`] derive its unpredictable
+    /// batching challenge from that digest.
     pub(super) fn assign_deferred_equations_with_selectors(
         &self,
         ctx: &mut SinglePhaseCoreManager<Outer<C>>,
@@ -1635,7 +1792,7 @@ where
             let digits = fe_to_biguint(word.value()).to_u32_digits();
             if digits.len() > 1 {
                 return Err(format!(
-                    "Kagemusha V5 deferred-audit digest word {index} exceeds u32"
+                    "Kagemusha V5 batch-challenge digest word {index} exceeds u32"
                 ));
             }
             challenge_integer +=
@@ -1654,7 +1811,7 @@ where
 
         let maximum = BigUint::from(1_u8) << 224;
         if challenge_integer > maximum {
-            return Err("Kagemusha V5 deferred-audit challenge exceeds 2^224".to_owned());
+            return Err("Kagemusha V5 batch challenge exceeds 2^224".to_owned());
         }
         let challenge = self
             .scalar
@@ -1780,51 +1937,92 @@ where
         Ok(())
     }
 
-    /// Constrain the reciprocal V5 selector-bound audit preimage.
-    ///
-    /// This is byte-for-byte identical to
-    /// [`DeferredScalarEccChip::assigned_equation_bytes_v5`]. Selectors are
-    /// independently derived from this circuit's public parent-count cell;
-    /// they are not copied from the scalar-half witness.
-    pub(super) fn assigned_equation_bytes_v5(
+    /// Convert one assigned outer-field value below `2^bit_len` into the exact
+    /// non-native scalar integer used by the reciprocal Poseidon sponge.
+    fn assigned_native_as_scalar_integer(
+        &self,
+        ctx: &mut SinglePhaseCoreManager<Outer<C>>,
+        value: AssignedValue<Outer<C>>,
+        bit_len: usize,
+    ) -> Result<Integer<C>, String> {
+        let integer = fe_to_biguint(value.value());
+        if integer.bits() > u64::try_from(bit_len).expect("fixed bit length fits u64") {
+            return Err("Kagemusha compact Poseidon element exceeds its bound".to_owned());
+        }
+        let assigned = self
+            .scalar
+            .field
+            .load_private(ctx.main(), biguint_to_fe::<Inner<C>>(&integer));
+        self.scalar
+            .field
+            .range_check(ctx.main(), assigned.clone(), bit_len);
+        ctx.main().constrain_equal(assigned.native(), &value);
+        Ok(assigned)
+    }
+
+    /// Constrain the injective two-`u128` compressed encoding of one point.
+    pub(super) fn assigned_point_poseidon_elements_v2(
+        &self,
+        ctx: &mut SinglePhaseCoreManager<Outer<C>>,
+        point: &Point<C>,
+    ) -> Result<[Integer<C>; 2], String> {
+        let bytes = self.assigned_point_bytes(ctx, point);
+        let packed: [AssignedValue<Outer<C>>; 2] = std::array::from_fn(|half| {
+            pack_constrained_bytes_u128(
+                ctx.main(),
+                self.base.gate(),
+                &bytes[half * 16..(half + 1) * 16],
+            )
+        });
+        Ok([
+            self.assigned_native_as_scalar_integer(ctx, packed[0], 128)?,
+            self.assigned_native_as_scalar_integer(ctx, packed[1], 128)?,
+        ])
+    }
+
+    /// Constrain the complete reciprocal V6 audit Poseidon input and retain
+    /// its source encodings for the V2 protocol-identity commitment.
+    pub(super) fn assigned_equation_poseidon_elements_v6(
         &self,
         ctx: &mut SinglePhaseCoreManager<Outer<C>>,
         audit: &AssignedDeferredPointAudit<C>,
         gate_tags: &[u32],
         selectors: &[AssignedValue<Outer<C>>],
-    ) -> Result<Vec<KagemushaSha256ByteV4<Outer<C>>>, String> {
-        fn push_constant_bytes<F: BigPrimeField>(
-            output: &mut Vec<KagemushaSha256ByteV4<F>>,
-            bytes: &[u8],
-        ) {
-            output.extend(bytes.iter().copied().map(KagemushaSha256ByteV4::constant));
+    ) -> Result<(Vec<Integer<C>>, AssignedDeferredSourceEncodingsV6<C>), String> {
+        if audit.sources.is_empty()
+            || audit.source_values.len() != audit.sources.len()
+            || audit.equations.is_empty()
+            || gate_tags.len() != audit.equations.len()
+            || selectors.len() != audit.equations.len()
+        {
+            return Err("Kagemusha V6 deferred-audit selector shape mismatch".to_owned());
         }
 
-        fn push_u32<F: BigPrimeField>(output: &mut Vec<KagemushaSha256ByteV4<F>>, value: u32) {
-            push_constant_bytes(output, &value.to_le_bytes());
-        }
+        let mut elements = kagemusha_poseidon_domain_elements::<Inner<C>>(
+            KAGEMUSHA_DEFERRED_AUDIT_POSEIDON_DOMAIN_V6,
+            KAGEMUSHA_DEFERRED_AUDIT_VERSION_V6,
+        )
+        .into_iter()
+        .map(|value| self.scalar.field.load_constant(ctx.main(), value))
+        .collect::<Vec<_>>();
+        elements.push(self.scalar.field.load_constant(
+            ctx.main(),
+            Inner::<C>::from(
+                u64::try_from(audit.sources.len()).expect("fixed source count fits u64"),
+            ),
+        ));
+        elements.push(self.scalar.field.load_constant(
+            ctx.main(),
+            Inner::<C>::from(
+                u64::try_from(audit.equations.len()).expect("fixed equation count fits u64"),
+            ),
+        ));
 
-        if gate_tags.len() != audit.equations.len() || selectors.len() != audit.equations.len() {
-            return Err("Kagemusha V5 deferred-audit selector shape mismatch".to_owned());
-        }
-        let ctx = ctx.main();
-        let mut output = Vec::new();
-        push_constant_bytes(&mut output, KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V5);
-        push_constant_bytes(&mut output, &[0]);
-        push_u32(&mut output, KAGEMUSHA_DEFERRED_AUDIT_VERSION_V5);
-        push_u32(
-            &mut output,
-            u32::try_from(audit.sources.len()).expect("fixed source count fits u32"),
-        );
-        push_u32(
-            &mut output,
-            u32::try_from(audit.equations.len()).expect("fixed equation count fits u32"),
-        );
+        let mut poseidon_elements = Vec::with_capacity(audit.sources.len());
         for source in &audit.sources {
-            let x = self.canonical_coordinate(ctx, source.x);
-            let y = self.canonical_coordinate(ctx, source.y);
-            output.extend(proper_uint_le_bytes(ctx, self.base.range, &x));
-            output.extend(proper_uint_le_bytes(ctx, self.base.range, &y));
+            let encoding = self.assigned_point_poseidon_elements_v2(ctx, source)?;
+            elements.extend(encoding.iter().cloned());
+            poseidon_elements.push(encoding);
         }
         for ((equation, gate_tag), selector) in audit
             .equations
@@ -1832,29 +2030,37 @@ where
             .zip(gate_tags)
             .zip(selectors.iter().copied())
         {
-            push_u32(&mut output, *gate_tag);
-            output.push(KagemushaSha256ByteV4::from_boolean(
-                ctx,
-                self.base.gate(),
-                selector,
-            ));
-            push_u32(
-                &mut output,
-                u32::try_from(equation.len()).expect("fixed term count fits u32"),
+            self.base.gate().assert_bit(ctx.main(), selector);
+            elements.push(
+                self.scalar
+                    .field
+                    .load_constant(ctx.main(), Inner::<C>::from(u64::from(*gate_tag))),
             );
+            elements.push(self.assigned_native_as_scalar_integer(ctx, selector, 1)?);
+            elements.push(self.scalar.field.load_constant(
+                ctx.main(),
+                Inner::<C>::from(u64::try_from(equation.len()).expect("fixed term count fits u64")),
+            ));
             for (source_index, coefficient) in equation {
-                push_u32(
-                    &mut output,
-                    u32::try_from(*source_index).expect("fixed source index fits u32"),
-                );
-                output.extend(proper_uint_le_bytes(
-                    ctx,
-                    self.scalar.field.range,
-                    coefficient,
+                if *source_index >= audit.sources.len() {
+                    return Err("Kagemusha V6 deferred-audit source index is invalid".to_owned());
+                }
+                elements.push(self.scalar.field.load_constant(
+                    ctx.main(),
+                    Inner::<C>::from(
+                        u64::try_from(*source_index).expect("fixed source index fits u64"),
+                    ),
                 ));
+                elements.push(coefficient.clone());
             }
         }
-        Ok(output)
+        Ok((
+            elements,
+            AssignedDeferredSourceEncodingsV6 {
+                source_values: audit.source_values.clone(),
+                poseidon_elements,
+            },
+        ))
     }
 
     /// Constrain the canonical bytes of a reciprocal non-native scalar.
@@ -2087,12 +2293,23 @@ mod tests {
             pasta::{EpAffine, EqAffine, Fp, Fq},
         },
     };
-    use sha2::{Digest as _, Sha256};
     use snark_verifier::{loader::halo2::EccInstructions, util::arithmetic::PrimeCurveAffine as _};
 
     use super::*;
+    use crate::zk::{
+        kagemusha_recursion_adapter::constrain_reciprocal_poseidon_v6,
+        kagemusha_sha256_v4::KagemushaSha256JobsV4,
+    };
 
     const TEST_K: usize = 17;
+
+    fn assigned_preimage_bytes<F: BigPrimeField>(bytes: &[KagemushaSha256ByteV4<F>]) -> Vec<u8> {
+        bytes
+            .iter()
+            .copied()
+            .map(KagemushaSha256ByteV4::test_value)
+            .collect()
+    }
 
     fn reciprocal_builder<C>(
         witness: &DeferredEquationWitness<C>,
@@ -2120,18 +2337,26 @@ mod tests {
             .assign_deferred_equations_with_selectors(&mut ctx, witness, &selectors)
             .expect("fixed reciprocal witness shape");
         let gate_tags = vec![0_u32; witness.equations.len()];
-        let bytes = chip
-            .assigned_equation_bytes_v5(&mut ctx, &audit, &gate_tags, &selectors)
-            .expect("fixed reciprocal V5 preimage");
-        let digest = Sha256::digest(assigned_preimage_bytes(&bytes));
-        let digest_words = std::array::from_fn(|index| {
-            let word = u32::from_be_bytes(
-                digest[index * 4..index * 4 + 4]
-                    .try_into()
-                    .expect("fixed SHA-256 word"),
-            );
-            ctx.main().load_witness(Outer::<C>::from(u64::from(word)))
-        });
+        let (elements, _) = chip
+            .assigned_equation_poseidon_elements_v6(&mut ctx, &audit, &gate_tags, &selectors)
+            .expect("fixed reciprocal V6 audit");
+        let poseidon = constrain_reciprocal_poseidon_v6::<C>(&mut ctx, &base, &scalar, elements);
+        let mut bytes = KAGEMUSHA_DEFERRED_AUDIT_SHA256_DOMAIN_V6
+            .iter()
+            .copied()
+            .map(KagemushaSha256ByteV4::constant)
+            .collect::<Vec<_>>();
+        bytes.push(KagemushaSha256ByteV4::constant(0));
+        bytes.extend(
+            KAGEMUSHA_DEFERRED_AUDIT_VERSION_V6
+                .to_le_bytes()
+                .into_iter()
+                .map(KagemushaSha256ByteV4::constant),
+        );
+        bytes.extend(chip.assigned_scalar_bytes(&mut ctx, &poseidon));
+        let digest_words = KagemushaSha256JobsV4::default()
+            .digest_constrained(ctx.main(), &bytes)
+            .expect("fixed reciprocal V6 digest");
         chip.constrain_deferred_equation_batch_generic_v5(
             &mut ctx,
             &audit,
@@ -2142,6 +2367,41 @@ mod tests {
         *builder.pool(0) = ctx;
         builder.calculate_params(Some(9));
         builder
+    }
+
+    fn reciprocal_source_encoding_fixture<C>(
+        sources: Vec<C>,
+    ) -> (
+        BaseCircuitBuilder<Outer<C>>,
+        AssignedDeferredSourceEncodingsV6<C>,
+    )
+    where
+        C: CurveAffineExt,
+        Outer<C>: BigPrimeField,
+        Inner<C>: BigPrimeField,
+    {
+        let mut builder = BaseCircuitBuilder::<Outer<C>>::new(false)
+            .use_k(TEST_K)
+            .use_lookup_bits(TEST_K - 1);
+        let range = builder.range_chip();
+        let base = FpChip::<Outer<C>, Outer<C>>::new(&range, LIMB_BITS, LIMBS);
+        let scalar = FpChip::<Outer<C>, Inner<C>>::new(&range, LIMB_BITS, LIMBS);
+        let chip = PastaCycleEccChip::<C>::new(&base, &scalar);
+        let mut ctx = mem::take(builder.pool(0));
+        let witness = DeferredEquationWitness {
+            sources,
+            equations: vec![vec![(0, Inner::<C>::ZERO)]],
+        };
+        let selector = ctx.main().load_witness(Outer::<C>::ONE);
+        let audit = chip
+            .assign_deferred_equations_with_selectors(&mut ctx, &witness, &[selector])
+            .expect("fixed reciprocal source assignment");
+        let (_, source_encodings) = chip
+            .assigned_equation_poseidon_elements_v6(&mut ctx, &audit, &[0], &[selector])
+            .expect("fixed reciprocal V6 source encodings");
+        *builder.pool(0) = ctx;
+        builder.calculate_params(Some(9));
+        (builder, source_encodings)
     }
 
     fn native_curve_arithmetic_builder<C>() -> BaseCircuitBuilder<Outer<C>>
@@ -2232,71 +2492,6 @@ mod tests {
         *builder.pool(0) = ctx;
         builder.calculate_params(Some(9));
         builder
-    }
-
-    fn assigned_preimage_bytes<F: BigPrimeField>(cells: &[KagemushaSha256ByteV4<F>]) -> Vec<u8> {
-        cells
-            .iter()
-            .copied()
-            .map(|byte| byte.test_value())
-            .collect()
-    }
-
-    #[test]
-    fn selector_bound_v5_preimage_is_identical_in_both_halves_and_has_one_domain() {
-        let generator = EqAffine::generator();
-        let doubled = (generator.to_curve() + generator.to_curve()).to_affine();
-        let gate_tags = [0x0102_0304];
-
-        let mut scalar_builder = BaseCircuitBuilder::<Fp>::new(false)
-            .use_k(TEST_K)
-            .use_lookup_bits(TEST_K - 1);
-        let scalar_range = scalar_builder.range_chip();
-        let coordinate = FpChip::<Fp, Fq>::new(&scalar_range, LIMB_BITS, LIMBS);
-        let scalar_integer = FpChip::<Fp, Fp>::new(&scalar_range, LIMB_BITS, LIMBS);
-        let scalar_chip = DeferredScalarEccChip::<EqAffine>::new(&coordinate, &scalar_integer);
-        let mut scalar_ctx = mem::take(scalar_builder.pool(0));
-        let when_true = scalar_chip.assign_point(&mut scalar_ctx, generator);
-        let when_false = scalar_chip.assign_point(&mut scalar_ctx, doubled);
-        let scalar_selector = scalar_ctx.main().load_witness(Fp::ONE);
-        let _selected =
-            scalar_chip.select_point(&mut scalar_ctx, &when_true, &when_false, scalar_selector);
-        let witness = scalar_chip.witness();
-        assert_eq!(witness.equations.len(), 1);
-        let scalar_preimage = scalar_chip
-            .assigned_equation_bytes_v5(&mut scalar_ctx, &gate_tags, &[scalar_selector])
-            .expect("canonical scalar-half V5 preimage");
-        let scalar_preimage = assigned_preimage_bytes(&scalar_preimage);
-
-        let mut point_builder = BaseCircuitBuilder::<Fq>::new(false)
-            .use_k(TEST_K)
-            .use_lookup_bits(TEST_K - 1);
-        let point_range = point_builder.range_chip();
-        let base = FpChip::<Fq, Fq>::new(&point_range, LIMB_BITS, LIMBS);
-        let scalar = FpChip::<Fq, Fp>::new(&point_range, LIMB_BITS, LIMBS);
-        let point_chip = PastaCycleEccChip::<EqAffine>::new(&base, &scalar);
-        let mut point_ctx = mem::take(point_builder.pool(0));
-        let point_selector = point_ctx.main().load_witness(Fq::ONE);
-        let point_audit = point_chip
-            .assign_deferred_equations_with_selectors(&mut point_ctx, &witness, &[point_selector])
-            .expect("canonical reciprocal V5 audit");
-        let point_preimage = point_chip
-            .assigned_equation_bytes_v5(&mut point_ctx, &point_audit, &gate_tags, &[point_selector])
-            .expect("canonical reciprocal V5 preimage");
-        let point_preimage = assigned_preimage_bytes(&point_preimage);
-
-        assert_eq!(scalar_preimage, point_preimage);
-        let mut expected_prefix = KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V5.to_vec();
-        expected_prefix.push(0);
-        expected_prefix.extend_from_slice(&KAGEMUSHA_DEFERRED_AUDIT_VERSION_V5.to_le_bytes());
-        assert_eq!(
-            &scalar_preimage[..expected_prefix.len()],
-            expected_prefix.as_slice(),
-            "V5 preimage must contain exactly domain, NUL, and version once"
-        );
-        let mut duplicated_prefix = KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V5.to_vec();
-        duplicated_prefix.extend_from_slice(KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V5);
-        assert!(!scalar_preimage.starts_with(&duplicated_prefix));
     }
 
     #[test]
@@ -2452,6 +2647,94 @@ mod tests {
         }
         check::<EqAffine>();
         check::<EpAffine>();
+    }
+
+    #[test]
+    fn reciprocal_v6_source_map_reuses_native_chunks_in_both_pasta_parities() {
+        fn check<C>()
+        where
+            C: CurveAffineExt,
+            Outer<C>: BigPrimeField,
+            Inner<C>: BigPrimeField,
+        {
+            let generator = C::generator();
+            let doubled = (generator.to_curve() + generator.to_curve()).to_affine();
+            let tripled = (doubled.to_curve() + generator.to_curve()).to_affine();
+            let (builder, source_encodings) =
+                reciprocal_source_encoding_fixture(vec![generator, doubled, tripled]);
+            let mapped = source_encodings
+                .mapped_poseidon_elements_v2(&[generator, tripled], &[0, 2])
+                .expect("strict V6-to-V2 source map");
+            assert_eq!(mapped.len(), 4);
+
+            for (mapped_point, (source_index, point)) in
+                mapped.chunks_exact(2).zip([(0, generator), (2, tripled)])
+            {
+                let encoded = point.to_bytes();
+                for (half, actual) in mapped_point.iter().enumerate() {
+                    let expected = u128::from_le_bytes(
+                        encoded.as_ref()[half * 16..(half + 1) * 16]
+                            .try_into()
+                            .expect("compressed point half has sixteen bytes"),
+                    );
+                    assert_eq!(actual.value(), BigUint::from(expected));
+                    assert_eq!(
+                        actual.native().cell,
+                        source_encodings.poseidon_elements[source_index][half]
+                            .native()
+                            .cell,
+                        "V2 must retain the exact V6-assigned chunk cell"
+                    );
+                }
+            }
+
+            MockProver::run(builder.config_params.k as u32, &builder, vec![])
+                .expect("V6-to-V2 source reuse mock prover")
+                .assert_satisfied();
+        }
+
+        check::<EqAffine>();
+        check::<EpAffine>();
+    }
+
+    #[test]
+    fn reciprocal_v6_source_map_rejects_ambiguous_or_mismatched_indices() {
+        let generator = EqAffine::generator();
+        let doubled = (generator.to_curve() + generator.to_curve()).to_affine();
+        let tripled = (doubled.to_curve() + generator.to_curve()).to_affine();
+        let (_, source_encodings) =
+            reciprocal_source_encoding_fixture(vec![generator, doubled, tripled]);
+
+        assert!(
+            source_encodings
+                .mapped_poseidon_elements_v2(&[tripled, generator], &[2, 0])
+                .is_err(),
+            "reordered source indices must fail"
+        );
+        assert!(
+            source_encodings
+                .mapped_poseidon_elements_v2(&[generator, generator], &[0, 0])
+                .is_err(),
+            "duplicate source indices must fail"
+        );
+        assert!(
+            source_encodings
+                .mapped_poseidon_elements_v2(&[generator, tripled], &[0, 3])
+                .is_err(),
+            "out-of-range source indices must fail"
+        );
+        assert!(
+            source_encodings
+                .mapped_poseidon_elements_v2(&[generator, doubled], &[0, 2])
+                .is_err(),
+            "host points must match their V6 audit sources"
+        );
+        assert!(
+            source_encodings
+                .mapped_poseidon_elements_v2(&[generator, tripled], &[0])
+                .is_err(),
+            "point/index shape mismatches must fail"
+        );
     }
 
     #[test]

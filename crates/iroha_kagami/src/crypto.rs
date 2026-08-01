@@ -290,7 +290,9 @@ mod tests {
     // Bring `ValueEnum` into scope so `AlgorithmArg::value_variants()` is callable in this module.
     use clap::ValueEnum;
 
-    use super::{Algorithm, AlgorithmArg, Args, ExposedPrivateKey, KeyPair, RunArgs};
+    use super::{
+        Algorithm, AlgorithmArg, Args, ExposedPrivateKey, KeyPair, RunArgs, parse_keygen_seed_hex,
+    };
 
     #[test]
     fn algorithm_arg_displays_as_algorithm() {

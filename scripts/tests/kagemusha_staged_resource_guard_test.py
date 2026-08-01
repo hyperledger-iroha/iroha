@@ -22,6 +22,16 @@ import kagemusha_staged_resource_guard as guard  # noqa: E402
 class KagemushaStagedResourceGuardTests(unittest.TestCase):
     """Exercise accounting, handshake, and owned-child termination."""
 
+    def test_physical_footprint_is_diagnostic_not_enforced(self) -> None:
+        sample = guard.MemorySample(
+            monotonic_seconds=1.0,
+            process_tree_rss_bytes=13,
+            process_tree_footprint_bytes=72,
+            available_memory_bytes=100,
+        )
+
+        self.assertEqual(sample.guarded_memory_bytes, 13)
+
     def test_owned_process_ids_include_descendants_and_process_group(self) -> None:
         rows = [
             (100, 1, 100, 10),
@@ -57,22 +67,43 @@ class KagemushaStagedResourceGuardTests(unittest.TestCase):
     def test_supervisor_only_stop_leaves_three_gib_termination_margin(self) -> None:
         gib = guard.BYTES_PER_GIB
         self.assertEqual(
-            guard.soft_stop_bytes(16 * gib, kernel_limit_enforced=False), 13 * gib
+            guard.soft_stop_bytes(64 * gib, kernel_limit_enforced=False), 61 * gib
         )
         self.assertEqual(
-            guard.soft_stop_bytes(16 * gib, kernel_limit_enforced=True), 15 * gib
+            guard.soft_stop_bytes(64 * gib, kernel_limit_enforced=True), 63 * gib
         )
 
     def test_memory_limit_cannot_raise_reviewed_ceiling(self) -> None:
-        guard.validate_memory_limit_gib(16)
+        self.assertEqual(guard.DEFAULT_MAX_MEMORY_GIB, 64.0)
+        self.assertEqual(guard.MAXIMUM_MEMORY_GIB, 64.0)
+        guard.validate_memory_limit_gib(64)
         with self.assertRaisesRegex(ValueError, "must not exceed"):
-            guard.validate_memory_limit_gib(16.01)
+            guard.validate_memory_limit_gib(64.01)
         for non_finite in (float("nan"), float("inf"), float("-inf")):
             with self.subTest(non_finite=non_finite):
                 with self.assertRaisesRegex(ValueError, "finite"):
                     guard.validate_memory_limit_gib(non_finite)
         with self.assertRaisesRegex(ValueError, "too large"):
             guard.gib_to_bytes(1e308)
+
+    def test_reviewed_limit_is_capped_at_half_physical_memory(self) -> None:
+        gib = guard.BYTES_PER_GIB
+        self.assertEqual(
+            guard.physical_memory_capped_limit_bytes(64 * gib, 128 * gib),
+            64 * gib,
+        )
+        self.assertEqual(
+            guard.physical_memory_capped_limit_bytes(64 * gib, 96 * gib),
+            48 * gib,
+        )
+        self.assertEqual(
+            guard.physical_memory_capped_limit_bytes(16 * gib, 128 * gib),
+            16 * gib,
+        )
+        self.assertEqual(
+            guard.physical_memory_capped_limit_bytes(128 * gib, 512 * gib),
+            64 * gib,
+        )
 
     def test_minimum_headroom_must_be_finite_and_non_negative(self) -> None:
         guard.validate_minimum_headroom_gib(0)
@@ -261,6 +292,22 @@ class KagemushaStagedResourceGuardTests(unittest.TestCase):
             self.assertEqual(result.exit_code, 0)
             self.assertEqual(result.report["last_stage"], "stage=test-handshake")
             self.assertEqual(result.report["child_guard_handshake_received"], True)
+            self.assertEqual(
+                result.report["absolute_memory_ceiling_bytes"],
+                64 * guard.BYTES_PER_GIB,
+            )
+            self.assertEqual(
+                result.report["physical_half_limit_bytes"],
+                result.report["total_physical_memory_bytes"] // 2,
+            )
+            self.assertLessEqual(
+                result.report["reviewed_limit_bytes"],
+                result.report["physical_half_limit_bytes"],
+            )
+            self.assertEqual(
+                result.report["memory_accounting_mode"],
+                guard.MEMORY_ACCOUNTING_MODE,
+            )
             self.assertEqual(json.loads(report.read_text())["completed"], True)
             self.assertEqual(report.stat().st_mode & 0o777, 0o600)
 

@@ -60,6 +60,12 @@ const LOCAL_MULTI_PEER_POW_PUZZLE_MEMORY_KIB: i64 = 4_096;
 const LOCAL_MULTI_PEER_POW_PUZZLE_TIME_COST: i64 = 1;
 const LOCAL_MULTI_PEER_POW_PUZZLE_LANES: i64 = 1;
 const LOCAL_MULTI_PEER_POW_DIFFICULTY: i64 = 1;
+const MANAGED_RANS_TABLE_RELATIVE_PATH: &str = "codec/rans/tables/rans_seed0.toml";
+const MANAGED_RANS_SEED0_TABLE: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../codec/rans/tables/rans_seed0.toml"
+));
+
 fn timestamp_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1325,7 +1331,12 @@ impl SupervisorBuilder {
                 "genesis_profile requires consensus_mode npos".to_owned(),
             ));
         }
-        let paths = NetworkPaths::from_root(&self.data_root, &self.profile);
+        // Peer processes run from their managed peer directory so upstream
+        // relative defaults cannot collide. Resolve a caller-supplied relative
+        // data root before deriving any paths; otherwise the rendered paths
+        // would become relative to that peer directory at startup.
+        let data_root = resolve_data_root(&self.data_root)?;
+        let paths = NetworkPaths::from_root(data_root, &self.profile);
         paths.ensure()?;
         let mut binaries = self.binaries.allow_auto_builds(self.auto_build_binaries);
         let chain_id = if let Some(profile) = self.genesis_profile {
@@ -1446,6 +1457,42 @@ fn merge_table(target: &mut toml::Table, overlay: &toml::Table) {
     for (key, value) in overlay {
         target.insert(key.clone(), value.clone());
     }
+}
+
+fn restore_streaming_soranet_defaults(table: &mut toml::Table) {
+    // `StreamingSoranet` is read as one nested value. Once Mochi emits that
+    // table to manage its spool, it must remain structurally complete instead
+    // of relying on defaults that apply only when the whole table is absent.
+    table
+        .entry("enabled")
+        .or_insert(toml::Value::Boolean(false));
+    table
+        .entry("exit_multiaddr")
+        .or_insert_with(|| toml::Value::String("/dns/torii/udp/9443/quic".to_owned()));
+    table
+        .entry("padding_budget_ms")
+        .or_insert(toml::Value::Integer(25));
+    table
+        .entry("access_kind")
+        .or_insert_with(|| toml::Value::String("authenticated".to_owned()));
+    table
+        .entry("channel_salt")
+        .or_insert_with(|| toml::Value::String("iroha.soranet.channel.seed.v1".to_owned()));
+    table
+        .entry("provision_spool_max_bytes")
+        .or_insert(toml::Value::Integer(0));
+    table
+        .entry("provision_window_segments")
+        .or_insert(toml::Value::Integer(4));
+    table
+        .entry("provision_queue_capacity")
+        .or_insert(toml::Value::Integer(256));
+}
+
+fn restore_streaming_soravpn_defaults(table: &mut toml::Table) {
+    table
+        .entry("provision_spool_max_bytes")
+        .or_insert(toml::Value::Integer(0));
 }
 
 fn lane_aliases(nexus: Option<&toml::Table>) -> BTreeMap<u32, String> {
@@ -2751,9 +2798,21 @@ impl PeerHandle {
         self.log_file = Some(log_file.clone());
 
         let mut command = Command::new(irohad);
+        let config_path = self.spec.config_path.canonicalize()?;
+        let peer_dir = config_path.parent().ok_or_else(|| {
+            SupervisorError::Config(format!(
+                "managed peer config `{}` has no parent directory",
+                config_path.display()
+            ))
+        })?;
         command
+            // A managed peer must never inherit Mochi's launcher directory.
+            // Keeping relative upstream defaults inside the peer directory is
+            // the final containment boundary for state paths not yet rendered
+            // explicitly by Mochi.
+            .current_dir(peer_dir)
             .arg("--config")
-            .arg(&self.spec.config_path)
+            .arg(config_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -3075,6 +3134,24 @@ where
     })
 }
 
+fn stage_managed_rans_tables(peer_dir: &Path) -> Result<PathBuf> {
+    let peer_dir = peer_dir.canonicalize()?;
+    let destination = peer_dir.join(MANAGED_RANS_TABLE_RELATIVE_PATH);
+    let parent = destination.parent().ok_or_else(|| {
+        SupervisorError::Config("managed rANS table path has no parent directory".to_owned())
+    })?;
+    fs::create_dir_all(parent)?;
+    fs::write(&destination, MANAGED_RANS_SEED0_TABLE)?;
+    let destination = destination.canonicalize()?;
+    if !destination.starts_with(&peer_dir) {
+        return Err(SupervisorError::Config(format!(
+            "managed rANS table escaped peer directory `{}`",
+            peer_dir.display()
+        )));
+    }
+    Ok(destination)
+}
+
 #[derive(Debug, Clone)]
 struct PeerSpec {
     alias: String,
@@ -3086,6 +3163,7 @@ struct PeerSpec {
     storage_dir: PathBuf,
     kura_dir: PathBuf,
     snapshot_dir: PathBuf,
+    rans_tables_path: PathBuf,
     keys: PeerKeys,
 }
 
@@ -3109,6 +3187,7 @@ impl PeerSpec {
         fs::create_dir_all(snapshot_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME))?;
 
         let config_path = peer_dir.join("config.toml");
+        let rans_tables_path = stage_managed_rans_tables(&peer_dir)?;
 
         let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let (public_key, private_key) = key_pair.into_parts();
@@ -3127,6 +3206,7 @@ impl PeerSpec {
             storage_dir,
             kura_dir,
             snapshot_dir,
+            rans_tables_path,
             keys: PeerKeys {
                 public_key,
                 private_key: ExposedPrivateKey(private_key),
@@ -3264,6 +3344,13 @@ impl PeerSpec {
         }
         root.insert("torii".into(), toml::Value::Table(torii));
 
+        // Streaming components persist sessions and provisioned routes even
+        // when a developer does not exercise streaming. Give every peer its
+        // own absolute state tree instead of inheriting process-wide relative
+        // defaults from Mochi's launcher directory.
+        let streaming_dir = self.storage_dir.canonicalize()?.join("streaming");
+        let soranet_spool_dir = streaming_dir.join("soranet_routes");
+        let soravpn_spool_dir = streaming_dir.join("soravpn_routes");
         let mut streaming = toml::Table::new();
         streaming.insert(
             "identity_public_key".into(),
@@ -3273,6 +3360,33 @@ impl PeerSpec {
             "identity_private_key".into(),
             toml::Value::String(self.keys.identity_private_key.to_string()),
         );
+        streaming.insert(
+            "session_store_dir".into(),
+            toml::Value::String(streaming_dir.display().to_string()),
+        );
+        let mut codec = toml::Table::new();
+        codec.insert(
+            "rans_tables_path".into(),
+            toml::Value::String(self.rans_tables_path.display().to_string()),
+        );
+        streaming.insert("codec".into(), toml::Value::Table(codec));
+        let mut soranet = toml::Table::new();
+        // Automatic route provisioning is optional and unused by Mochi's
+        // local/NEVO profile. An explicit overlay can opt in without changing
+        // ownership of the provision spool.
+        restore_streaming_soranet_defaults(&mut soranet);
+        soranet.insert(
+            "provision_spool_dir".into(),
+            toml::Value::String(soranet_spool_dir.display().to_string()),
+        );
+        streaming.insert("soranet".into(), toml::Value::Table(soranet));
+        let mut soravpn = toml::Table::new();
+        restore_streaming_soravpn_defaults(&mut soravpn);
+        soravpn.insert(
+            "provision_spool_dir".into(),
+            toml::Value::String(soravpn_spool_dir.display().to_string()),
+        );
+        streaming.insert("soravpn".into(), toml::Value::Table(soravpn));
         root.insert("streaming".into(), toml::Value::Table(streaming));
 
         let mut genesis_table = toml::Table::new();
@@ -3308,6 +3422,41 @@ impl PeerSpec {
         confidential.insert("enabled".into(), toml::Value::Boolean(true));
         root.insert("confidential".into(), toml::Value::Table(confidential));
 
+        // The embedded SoraFS runtime persists transaction-forwarder
+        // checkpoints even when provider storage and its worker loops are
+        // disabled. Do not let multiple managed peers inherit the process-wide
+        // `./storage/sorafs` default and contend for one checkpoint lock.
+        let sorafs_dir = self.storage_dir.join("sorafs");
+        let mut sorafs_storage = toml::Table::new();
+        sorafs_storage.insert(
+            "data_dir".into(),
+            toml::Value::String(sorafs_dir.display().to_string()),
+        );
+        let mut sorafs = toml::Table::new();
+        sorafs.insert("storage".into(), toml::Value::Table(sorafs_storage));
+        root.insert("sorafs".into(), toml::Value::Table(sorafs));
+
+        // Mochi's generated chain is a local development profile and does not
+        // opt into Taira's offline-cash service. Declare that explicitly so a
+        // new Iroha default cannot accidentally turn an unconfigured optional
+        // service into a node-startup failure. A caller can still supply a
+        // complete settlement overlay for offline-cash testing, while Iroha's
+        // public-Taira chain gate continues to reject disabling the service.
+        let mut offline = toml::Table::new();
+        offline.insert("enabled".into(), toml::Value::Boolean(false));
+        offline.insert("escrow_required".into(), toml::Value::Boolean(true));
+        offline.insert(
+            "escrow_accounts".into(),
+            toml::Value::Table(toml::Table::new()),
+        );
+        offline.insert(
+            "kagemusha_max_decoded_bytes".into(),
+            toml::Value::Integer(268_435_456),
+        );
+        let mut settlement = toml::Table::new();
+        settlement.insert("offline".into(), toml::Value::Table(offline));
+        root.insert("settlement".into(), toml::Value::Table(settlement));
+
         if let Some(table) = config_overrides.sumeragi.as_ref()
             && !table.is_empty()
         {
@@ -3335,6 +3484,137 @@ impl PeerSpec {
                 "temporary config overlays must preserve Mochi's managed Kura root `{expected_kura_dir}`"
             )));
         }
+
+        let expected_sorafs_dir = sorafs_dir.display().to_string();
+        let sorafs = root
+            .entry("sorafs")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| SupervisorError::Config("sorafs must be a table".to_owned()))?;
+        let sorafs_storage = sorafs
+            .entry("storage")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| SupervisorError::Config("sorafs.storage must be a table".to_owned()))?;
+        if let Some(configured) = sorafs_storage.get("data_dir")
+            && configured.as_str() != Some(expected_sorafs_dir.as_str())
+        {
+            return Err(SupervisorError::Config(format!(
+                "temporary config overlays must preserve Mochi's managed SoraFS root `{expected_sorafs_dir}`"
+            )));
+        }
+        // A shallow top-level overlay such as `[sorafs.storage] enabled = true`
+        // replaces the generated table. Restore the launcher-owned path after
+        // validating that the overlay did not try to redirect it.
+        sorafs_storage.insert("data_dir".into(), toml::Value::String(expected_sorafs_dir));
+
+        let expected_streaming_dir = streaming_dir.display().to_string();
+        let expected_soranet_spool_dir = soranet_spool_dir.display().to_string();
+        let expected_soravpn_spool_dir = soravpn_spool_dir.display().to_string();
+        let streaming = root
+            .entry("streaming")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| SupervisorError::Config("streaming must be a table".to_owned()))?;
+        if let Some(configured) = streaming.get("session_store_dir")
+            && configured.as_str() != Some(expected_streaming_dir.as_str())
+        {
+            return Err(SupervisorError::Config(format!(
+                "temporary config overlays must preserve Mochi's managed streaming session root `{expected_streaming_dir}`"
+            )));
+        }
+        streaming.insert(
+            "session_store_dir".into(),
+            toml::Value::String(expected_streaming_dir),
+        );
+        // A shallow `[streaming.soranet]` overlay replaces the generated
+        // top-level streaming table. Restore required peer identity fields
+        // only when absent, while retaining any explicit overlay values.
+        streaming
+            .entry("identity_public_key")
+            .or_insert_with(|| toml::Value::String(self.keys.identity_public_key.to_string()));
+        streaming
+            .entry("identity_private_key")
+            .or_insert_with(|| toml::Value::String(self.keys.identity_private_key.to_string()));
+
+        let expected_rans_tables_path = self.rans_tables_path.display().to_string();
+        let codec = streaming
+            .entry("codec")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| SupervisorError::Config("streaming.codec must be a table".to_owned()))?;
+        // `StreamingCodec` is read as one nested value. Mochi creates
+        // `[streaming.codec]` for its managed rANS table, so keep the generated
+        // object structurally complete while retaining explicit overlay values.
+        codec
+            .entry("cabac_mode")
+            .or_insert_with(|| toml::Value::String("disabled".to_owned()));
+        codec
+            .entry("trellis_blocks")
+            .or_insert_with(|| toml::Value::Array(Vec::new()));
+        codec
+            .entry("entropy_mode")
+            .or_insert_with(|| toml::Value::String("rans_bundled".to_owned()));
+        codec
+            .entry("bundle_width")
+            .or_insert(toml::Value::Integer(2));
+        codec
+            .entry("bundle_accel")
+            .or_insert_with(|| toml::Value::String("none".to_owned()));
+        if let Some(configured) = codec.get("rans_tables_path")
+            && configured.as_str() != Some(expected_rans_tables_path.as_str())
+        {
+            return Err(SupervisorError::Config(format!(
+                "temporary config overlays must preserve Mochi's managed rANS table `{expected_rans_tables_path}`"
+            )));
+        }
+        codec.insert(
+            "rans_tables_path".into(),
+            toml::Value::String(expected_rans_tables_path),
+        );
+
+        let soranet = streaming
+            .entry("soranet")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| {
+                SupervisorError::Config("streaming.soranet must be a table".to_owned())
+            })?;
+        if let Some(configured) = soranet.get("provision_spool_dir")
+            && configured.as_str() != Some(expected_soranet_spool_dir.as_str())
+        {
+            return Err(SupervisorError::Config(format!(
+                "temporary config overlays must preserve Mochi's managed SoraNet provision spool `{expected_soranet_spool_dir}`"
+            )));
+        }
+        soranet.insert(
+            "provision_spool_dir".into(),
+            toml::Value::String(expected_soranet_spool_dir),
+        );
+        soranet
+            .entry("enabled")
+            .or_insert(toml::Value::Boolean(false));
+        restore_streaming_soranet_defaults(soranet);
+
+        let soravpn = streaming
+            .entry("soravpn")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| {
+                SupervisorError::Config("streaming.soravpn must be a table".to_owned())
+            })?;
+        if let Some(configured) = soravpn.get("provision_spool_dir")
+            && configured.as_str() != Some(expected_soravpn_spool_dir.as_str())
+        {
+            return Err(SupervisorError::Config(format!(
+                "temporary config overlays must preserve Mochi's managed SoraVPN provision spool `{expected_soravpn_spool_dir}`"
+            )));
+        }
+        soravpn.insert(
+            "provision_spool_dir".into(),
+            toml::Value::String(expected_soravpn_spool_dir),
+        );
+        restore_streaming_soravpn_defaults(soravpn);
 
         let header = Self::config_header(
             chain_id,
@@ -3877,6 +4157,14 @@ fn default_data_root() -> PathBuf {
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| std::env::temp_dir().join("mochi"))
+}
+
+fn resolve_data_root(data_root: &Path) -> io::Result<PathBuf> {
+    if data_root.is_absolute() {
+        Ok(data_root.to_path_buf())
+    } else {
+        Ok(env::current_dir()?.join(data_root))
+    }
 }
 
 fn default_snapshot_slug() -> String {
@@ -4927,6 +5215,31 @@ esac
                 .and_then(toml::Value::as_bool),
             Some(true)
         );
+        let offline = value
+            .get("settlement")
+            .and_then(toml::Value::as_table)
+            .and_then(|table| table.get("offline"))
+            .and_then(toml::Value::as_table)
+            .expect("local settlement.offline config");
+        assert_eq!(
+            offline.get("enabled").and_then(toml::Value::as_bool),
+            Some(false),
+            "Mochi local chains must not opt into Taira's offline-cash service"
+        );
+        assert_eq!(
+            offline
+                .get("escrow_required")
+                .and_then(toml::Value::as_bool),
+            Some(true),
+            "the escrow invariant remains mandatory whenever offline cash is enabled"
+        );
+        assert!(
+            offline
+                .get("escrow_accounts")
+                .and_then(toml::Value::as_table)
+                .is_some_and(toml::Table::is_empty),
+            "the disabled local service must not fabricate an asset escrow binding"
+        );
         assert_eq!(
             value
                 .get("torii")
@@ -5073,6 +5386,138 @@ esac
                 assert!(
                     seen_ports.insert(port),
                     "port {port} should be unique across Torii and P2P assignments"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn relative_data_root_renders_cwd_independent_peer_paths() {
+        fn configured_path<'a>(config: &'a toml::Table, keys: &[&str]) -> &'a Path {
+            let label = keys.join(".");
+            let mut value = config
+                .get(keys[0])
+                .unwrap_or_else(|| panic!("missing `{label}`"));
+            for key in &keys[1..] {
+                value = value
+                    .as_table()
+                    .and_then(|table| table.get(*key))
+                    .unwrap_or_else(|| panic!("missing `{label}`"));
+            }
+            Path::new(
+                value
+                    .as_str()
+                    .unwrap_or_else(|| panic!("`{label}` must be a path string")),
+            )
+        }
+
+        fn resolve_from_peer_cwd(peer_cwd: &Path, path: &Path) -> PathBuf {
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                peer_cwd.join(path)
+            }
+        }
+
+        if !ports_available("relative_data_root_renders_cwd_independent_peer_paths") {
+            return;
+        }
+        let _env = env_lock().lock().expect("env lock");
+        let caller_cwd = env::current_dir().expect("caller current directory");
+        let data_root = tempfile::Builder::new()
+            .prefix(".mochi-relative-data-root-")
+            .tempdir_in(&caller_cwd)
+            .expect("relative data-root fixture");
+        let relative_data_root = data_root
+            .path()
+            .strip_prefix(&caller_cwd)
+            .expect("fixture must be beneath caller cwd");
+        assert!(relative_data_root.is_relative());
+        assert_eq!(
+            resolve_data_root(relative_data_root).expect("resolve relative data root"),
+            data_root.path()
+        );
+        assert_eq!(
+            resolve_data_root(data_root.path()).expect("preserve absolute data root"),
+            data_root.path()
+        );
+
+        let _stub = KagamiStub::install(data_root.path());
+        let profile = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
+        let expected_network_root = data_root.path().join(profile.slug());
+        let supervisor = SupervisorBuilder::with_profile(profile)
+            .data_root(relative_data_root)
+            .torii_base_port(30_000)
+            .p2p_base_port(31_000)
+            .build()
+            .expect("build supervisor from relative data root");
+
+        assert_eq!(supervisor.paths().root(), expected_network_root);
+        assert!(supervisor.genesis_manifest().is_absolute());
+        assert!(supervisor.genesis_manifest().is_file());
+        assert!(supervisor.genesis_block_file().is_absolute());
+        assert!(supervisor.genesis_block_file().is_file());
+
+        for peer in supervisor.peers() {
+            assert!(peer.config_path().is_absolute());
+            assert!(peer.config_path().is_file());
+            assert!(peer.log_path().is_absolute());
+            let peer_cwd = peer
+                .config_path()
+                .parent()
+                .expect("peer config parent is the isolated child cwd");
+            let config: toml::Table = toml::from_str(
+                &fs::read_to_string(peer.config_path()).expect("read generated peer config"),
+            )
+            .expect("parse generated peer config");
+
+            let genesis_file = configured_path(&config, &["genesis", "file"]);
+            let genesis_manifest = configured_path(&config, &["genesis", "manifest_json"]);
+            let rans_tables = configured_path(&config, &["streaming", "codec", "rans_tables_path"]);
+            for file in [genesis_file, genesis_manifest, rans_tables] {
+                assert!(file.is_absolute(), "{} must be absolute", file.display());
+                let resolved = resolve_from_peer_cwd(peer_cwd, file);
+                assert_eq!(resolved, file);
+                assert!(
+                    resolved.is_file(),
+                    "{} must remain readable from peer cwd {}",
+                    resolved.display(),
+                    peer_cwd.display()
+                );
+            }
+            assert_eq!(genesis_file, supervisor.genesis_block_file());
+            assert_eq!(genesis_manifest, supervisor.genesis_manifest());
+            assert!(rans_tables.starts_with(peer_cwd));
+
+            for keys in [
+                &["kura", "store_dir"][..],
+                &["snapshot", "store_dir"][..],
+                &["sorafs", "storage", "data_dir"][..],
+                &["streaming", "session_store_dir"][..],
+                &["streaming", "soranet", "provision_spool_dir"][..],
+                &["streaming", "soravpn", "provision_spool_dir"][..],
+                &["torii", "data_dir"][..],
+                &["torii", "da_ingest", "replay_cache_store_dir"][..],
+                &["torii", "da_ingest", "manifest_store_dir"][..],
+                &[
+                    "network",
+                    "soranet_handshake",
+                    "pow",
+                    "revocation_store_path",
+                ][..],
+            ] {
+                let state_path = configured_path(&config, keys);
+                assert!(
+                    state_path.is_absolute(),
+                    "{} must be absolute",
+                    keys.join(".")
+                );
+                assert_eq!(resolve_from_peer_cwd(peer_cwd, state_path), state_path);
+                assert!(
+                    state_path.starts_with(peer_cwd),
+                    "{} must remain private to {}",
+                    state_path.display(),
+                    peer.alias()
                 );
             }
         }
@@ -6680,6 +7125,506 @@ esac
     }
 
     #[test]
+    fn peer_specs_write_distinct_managed_sorafs_state_roots() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let profile = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
+        let paths = NetworkPaths::from_root(temp.path(), &profile);
+        paths.ensure().expect("paths");
+        let specs = (0_u16..4)
+            .map(|index| {
+                PeerSpec::new(&paths, format!("peer{index}"), 8_080 + index, 1_337 + index)
+                    .expect("peer spec")
+            })
+            .collect::<Vec<_>>();
+        let genesis = test_genesis_material(&paths);
+
+        for spec in &specs {
+            spec.write_config(
+                "demo-chain",
+                &genesis,
+                &specs,
+                &PeerConfigOverrides::default(),
+                &[],
+            )
+            .expect("write config");
+        }
+
+        let mut configured_roots = HashSet::new();
+        for spec in &specs {
+            let contents = fs::read_to_string(&spec.config_path).expect("read config");
+            let value: toml::Table = toml::from_str(&contents).expect("parse config");
+            let configured = value
+                .get("sorafs")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("storage"))
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("data_dir"))
+                .and_then(toml::Value::as_str)
+                .expect("managed SoraFS data directory");
+            let expected = spec.storage_dir.join("sorafs").display().to_string();
+            assert_eq!(configured, expected);
+            assert!(
+                configured_roots.insert(configured.to_owned()),
+                "each peer must own a distinct SoraFS checkpoint root"
+            );
+        }
+        assert_eq!(configured_roots.len(), specs.len());
+    }
+
+    #[test]
+    fn peer_spec_preserves_managed_sorafs_root_when_overlay_enables_storage() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let profile = NetworkProfile::default();
+        let paths = NetworkPaths::from_root(temp.path(), &profile);
+        paths.ensure().expect("paths");
+        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let genesis = test_genesis_material(&paths);
+        let mut storage = toml::Table::new();
+        storage.insert("enabled".into(), toml::Value::Boolean(true));
+        let mut sorafs = toml::Table::new();
+        sorafs.insert("storage".into(), toml::Value::Table(storage));
+        let mut overlay = toml::Table::new();
+        overlay.insert("sorafs".into(), toml::Value::Table(sorafs));
+
+        spec.write_config(
+            "demo-chain",
+            &genesis,
+            std::slice::from_ref(&spec),
+            &PeerConfigOverrides::default(),
+            &[overlay],
+        )
+        .expect("write config");
+
+        let contents = fs::read_to_string(&spec.config_path).expect("read config");
+        let value: toml::Table = toml::from_str(&contents).expect("parse config");
+        let storage = value
+            .get("sorafs")
+            .and_then(toml::Value::as_table)
+            .and_then(|table| table.get("storage"))
+            .and_then(toml::Value::as_table)
+            .expect("SoraFS storage config");
+        assert_eq!(
+            storage.get("enabled").and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        let expected = spec.storage_dir.join("sorafs").display().to_string();
+        assert_eq!(
+            storage.get("data_dir").and_then(toml::Value::as_str),
+            Some(expected.as_str())
+        );
+    }
+
+    #[test]
+    fn peer_spec_rejects_sorafs_state_root_override() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let profile = NetworkProfile::default();
+        let paths = NetworkPaths::from_root(temp.path(), &profile);
+        paths.ensure().expect("paths");
+        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let genesis = test_genesis_material(&paths);
+        let mut storage = toml::Table::new();
+        storage.insert(
+            "data_dir".into(),
+            toml::Value::String("/tmp/shared-sorafs".to_owned()),
+        );
+        let mut sorafs = toml::Table::new();
+        sorafs.insert("storage".into(), toml::Value::Table(storage));
+        let mut overlay = toml::Table::new();
+        overlay.insert("sorafs".into(), toml::Value::Table(sorafs));
+
+        let err = spec
+            .write_config(
+                "demo-chain",
+                &genesis,
+                std::slice::from_ref(&spec),
+                &PeerConfigOverrides::default(),
+                &[overlay],
+            )
+            .expect_err("SoraFS root override must fail closed");
+        match err {
+            SupervisorError::Config(message) => assert!(
+                message.contains("must preserve Mochi's managed SoraFS root")
+                    && message.contains(spec.storage_dir.to_string_lossy().as_ref()),
+                "unexpected error: {message}"
+            ),
+            other => panic!("expected SupervisorError::Config, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn peer_specs_write_distinct_managed_streaming_state_roots() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let profile = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
+        let paths = NetworkPaths::from_root(temp.path(), &profile);
+        paths.ensure().expect("paths");
+        let specs = (0_u16..4)
+            .map(|index| {
+                PeerSpec::new(&paths, format!("peer{index}"), 8_080 + index, 1_337 + index)
+                    .expect("peer spec")
+            })
+            .collect::<Vec<_>>();
+        let genesis = test_genesis_material(&paths);
+
+        for spec in &specs {
+            spec.write_config(
+                "demo-chain",
+                &genesis,
+                &specs,
+                &PeerConfigOverrides::default(),
+                &[],
+            )
+            .expect("write config");
+        }
+
+        let mut session_roots = HashSet::new();
+        let mut soranet_roots = HashSet::new();
+        let mut soravpn_roots = HashSet::new();
+        for spec in &specs {
+            let contents = fs::read_to_string(&spec.config_path).expect("read config");
+            let value: toml::Table = toml::from_str(&contents).expect("parse config");
+            let streaming = value
+                .get("streaming")
+                .and_then(toml::Value::as_table)
+                .expect("streaming config");
+            let session = streaming
+                .get("session_store_dir")
+                .and_then(toml::Value::as_str)
+                .expect("managed streaming session directory");
+            let soranet = streaming
+                .get("soranet")
+                .and_then(toml::Value::as_table)
+                .expect("SoraNet streaming config");
+            let soranet_spool = soranet
+                .get("provision_spool_dir")
+                .and_then(toml::Value::as_str)
+                .expect("managed SoraNet spool directory");
+            let soravpn_spool = streaming
+                .get("soravpn")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("provision_spool_dir"))
+                .and_then(toml::Value::as_str)
+                .expect("managed SoraVPN spool directory");
+            let expected = spec
+                .storage_dir
+                .canonicalize()
+                .expect("storage root")
+                .join("streaming");
+            assert_eq!(Path::new(session), expected);
+            assert_eq!(Path::new(soranet_spool), expected.join("soranet_routes"));
+            assert_eq!(Path::new(soravpn_spool), expected.join("soravpn_routes"));
+            assert!(Path::new(session).is_absolute());
+            assert!(Path::new(soranet_spool).is_absolute());
+            assert!(Path::new(soravpn_spool).is_absolute());
+            assert_eq!(
+                soranet.get("enabled").and_then(toml::Value::as_bool),
+                Some(false)
+            );
+            for required in [
+                "exit_multiaddr",
+                "padding_budget_ms",
+                "access_kind",
+                "channel_salt",
+                "provision_spool_max_bytes",
+                "provision_window_segments",
+                "provision_queue_capacity",
+            ] {
+                assert!(
+                    soranet.contains_key(required),
+                    "generated streaming.soranet is missing required field {required}"
+                );
+            }
+            let soravpn = streaming
+                .get("soravpn")
+                .and_then(toml::Value::as_table)
+                .expect("SoraVPN streaming config");
+            assert!(soravpn.contains_key("provision_spool_max_bytes"));
+            assert!(session_roots.insert(session.to_owned()));
+            assert!(soranet_roots.insert(soranet_spool.to_owned()));
+            assert!(soravpn_roots.insert(soravpn_spool.to_owned()));
+        }
+        assert_eq!(session_roots.len(), specs.len());
+        assert_eq!(soranet_roots.len(), specs.len());
+        assert_eq!(soravpn_roots.len(), specs.len());
+    }
+
+    #[test]
+    fn peer_specs_stage_distinct_rans_tables_and_write_absolute_paths() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let profile = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
+        let paths = NetworkPaths::from_root(temp.path(), &profile);
+        paths.ensure().expect("paths");
+        let specs = (0_u16..4)
+            .map(|index| {
+                PeerSpec::new(&paths, format!("peer{index}"), 8_080 + index, 1_337 + index)
+                    .expect("peer spec")
+            })
+            .collect::<Vec<_>>();
+        let genesis = test_genesis_material(&paths);
+
+        for spec in &specs {
+            spec.write_config(
+                "demo-chain",
+                &genesis,
+                &specs,
+                &PeerConfigOverrides::default(),
+                &[],
+            )
+            .expect("write config");
+        }
+
+        let mut configured_paths = HashSet::new();
+        for spec in &specs {
+            let contents = fs::read_to_string(&spec.config_path).expect("read config");
+            let value: toml::Table = toml::from_str(&contents).expect("parse config");
+            let codec = value
+                .get("streaming")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("codec"))
+                .and_then(toml::Value::as_table)
+                .expect("streaming codec config");
+            assert_eq!(
+                codec.get("cabac_mode").and_then(toml::Value::as_str),
+                Some("disabled")
+            );
+            assert!(
+                codec
+                    .get("trellis_blocks")
+                    .and_then(toml::Value::as_array)
+                    .is_some_and(|blocks| blocks.is_empty())
+            );
+            assert_eq!(
+                codec.get("entropy_mode").and_then(toml::Value::as_str),
+                Some("rans_bundled")
+            );
+            assert_eq!(
+                codec.get("bundle_width").and_then(toml::Value::as_integer),
+                Some(2)
+            );
+            assert_eq!(
+                codec.get("bundle_accel").and_then(toml::Value::as_str),
+                Some("none")
+            );
+            let configured = codec
+                .get("rans_tables_path")
+                .and_then(toml::Value::as_str)
+                .expect("managed rANS tables path");
+            let configured = Path::new(configured);
+
+            assert!(configured.is_absolute());
+            assert_eq!(configured, spec.rans_tables_path);
+            assert!(configured.is_file());
+            assert_eq!(
+                fs::read(configured).expect("read staged rANS tables"),
+                MANAGED_RANS_SEED0_TABLE
+            );
+            let tables = norito::streaming::codec::load_bundle_tables_from_toml(configured)
+                .expect("parse staged SignedRansTablesV1");
+            assert!(tables.max_width() >= 2);
+            assert!(
+                configured_paths.insert(configured.to_path_buf()),
+                "each peer must reference a distinct staged rANS table"
+            );
+        }
+        assert_eq!(configured_paths.len(), specs.len());
+    }
+
+    #[test]
+    fn peer_spec_preserves_managed_streaming_roots_with_shallow_opt_in_overlay() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let profile = NetworkProfile::default();
+        let paths = NetworkPaths::from_root(temp.path(), &profile);
+        paths.ensure().expect("paths");
+        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let genesis = test_genesis_material(&paths);
+
+        let mut soranet = toml::Table::new();
+        soranet.insert("enabled".into(), toml::Value::Boolean(true));
+        soranet.insert(
+            "exit_multiaddr".into(),
+            toml::Value::String("/dns/example.test/tcp/443".to_owned()),
+        );
+        let mut soravpn = toml::Table::new();
+        soravpn.insert(
+            "provision_spool_max_bytes".into(),
+            toml::Value::Integer(4096),
+        );
+        let mut codec = toml::Table::new();
+        codec.insert(
+            "cabac_mode".into(),
+            toml::Value::String("adaptive".to_owned()),
+        );
+        codec.insert(
+            "trellis_blocks".into(),
+            toml::Value::Array(vec![toml::Value::Integer(16), toml::Value::Integer(32)]),
+        );
+        codec.insert(
+            "entropy_mode".into(),
+            toml::Value::String("rans-bundled".to_owned()),
+        );
+        codec.insert("bundle_width".into(), toml::Value::Integer(3));
+        codec.insert(
+            "bundle_accel".into(),
+            toml::Value::String("cpu_simd".to_owned()),
+        );
+        let mut streaming = toml::Table::new();
+        streaming.insert("feature_bits".into(), toml::Value::Integer(7));
+        streaming.insert("codec".into(), toml::Value::Table(codec));
+        streaming.insert("soranet".into(), toml::Value::Table(soranet));
+        streaming.insert("soravpn".into(), toml::Value::Table(soravpn));
+        let mut overlay = toml::Table::new();
+        overlay.insert("streaming".into(), toml::Value::Table(streaming));
+
+        spec.write_config(
+            "demo-chain",
+            &genesis,
+            std::slice::from_ref(&spec),
+            &PeerConfigOverrides::default(),
+            &[overlay],
+        )
+        .expect("write config");
+
+        let contents = fs::read_to_string(&spec.config_path).expect("read config");
+        let value: toml::Table = toml::from_str(&contents).expect("parse config");
+        let streaming = value
+            .get("streaming")
+            .and_then(toml::Value::as_table)
+            .expect("streaming config");
+        let expected = spec
+            .storage_dir
+            .canonicalize()
+            .expect("storage root")
+            .join("streaming");
+        assert_eq!(
+            streaming
+                .get("session_store_dir")
+                .and_then(toml::Value::as_str),
+            Some(expected.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            streaming
+                .get("feature_bits")
+                .and_then(toml::Value::as_integer),
+            Some(7)
+        );
+        assert!(streaming.contains_key("identity_public_key"));
+        assert!(streaming.contains_key("identity_private_key"));
+        let codec = streaming
+            .get("codec")
+            .and_then(toml::Value::as_table)
+            .expect("streaming codec config");
+        assert_eq!(
+            codec.get("cabac_mode").and_then(toml::Value::as_str),
+            Some("adaptive")
+        );
+        let trellis_blocks = codec
+            .get("trellis_blocks")
+            .and_then(toml::Value::as_array)
+            .expect("trellis block override");
+        assert_eq!(trellis_blocks.len(), 2);
+        assert_eq!(trellis_blocks[0].as_integer(), Some(16));
+        assert_eq!(trellis_blocks[1].as_integer(), Some(32));
+        assert_eq!(
+            codec.get("entropy_mode").and_then(toml::Value::as_str),
+            Some("rans-bundled")
+        );
+        assert_eq!(
+            codec.get("bundle_width").and_then(toml::Value::as_integer),
+            Some(3)
+        );
+        assert_eq!(
+            codec.get("bundle_accel").and_then(toml::Value::as_str),
+            Some("cpu_simd")
+        );
+        let soranet = streaming
+            .get("soranet")
+            .and_then(toml::Value::as_table)
+            .expect("SoraNet config");
+        assert_eq!(
+            soranet.get("enabled").and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            soranet.get("exit_multiaddr").and_then(toml::Value::as_str),
+            Some("/dns/example.test/tcp/443")
+        );
+        assert_eq!(
+            soranet
+                .get("provision_spool_dir")
+                .and_then(toml::Value::as_str),
+            Some(expected.join("soranet_routes").to_string_lossy().as_ref())
+        );
+        let soravpn = streaming
+            .get("soravpn")
+            .and_then(toml::Value::as_table)
+            .expect("SoraVPN config");
+        assert_eq!(
+            soravpn
+                .get("provision_spool_max_bytes")
+                .and_then(toml::Value::as_integer),
+            Some(4096)
+        );
+        assert_eq!(
+            soravpn
+                .get("provision_spool_dir")
+                .and_then(toml::Value::as_str),
+            Some(expected.join("soravpn_routes").to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn peer_spec_rejects_managed_streaming_state_redirects() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let profile = NetworkProfile::default();
+        let paths = NetworkPaths::from_root(temp.path(), &profile);
+        paths.ensure().expect("paths");
+        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        let genesis = test_genesis_material(&paths);
+
+        for (key, nested, expected_error) in [
+            ("session_store_dir", None, "managed streaming session root"),
+            (
+                "provision_spool_dir",
+                Some("soranet"),
+                "managed SoraNet provision spool",
+            ),
+            (
+                "provision_spool_dir",
+                Some("soravpn"),
+                "managed SoraVPN provision spool",
+            ),
+        ] {
+            let redirect = toml::Value::String("/tmp/shared-streaming-state".to_owned());
+            let mut streaming = toml::Table::new();
+            if let Some(section) = nested {
+                let mut table = toml::Table::new();
+                table.insert(key.into(), redirect);
+                streaming.insert(section.into(), toml::Value::Table(table));
+            } else {
+                streaming.insert(key.into(), redirect);
+            }
+            let mut overlay = toml::Table::new();
+            overlay.insert("streaming".into(), toml::Value::Table(streaming));
+            let err = spec
+                .write_config(
+                    "demo-chain",
+                    &genesis,
+                    std::slice::from_ref(&spec),
+                    &PeerConfigOverrides::default(),
+                    &[overlay],
+                )
+                .expect_err("managed streaming redirect must be rejected");
+            match err {
+                SupervisorError::Config(message) => assert!(
+                    message.contains(expected_error)
+                        && message.contains(spec.storage_dir.to_string_lossy().as_ref()),
+                    "unexpected error: {message}"
+                ),
+                other => panic!("expected SupervisorError::Config, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn peer_spec_config_honors_torii_da_ingest_overrides() {
         let temp = tempfile::tempdir().expect("temp dir");
         let profile = NetworkProfile::default();
@@ -6952,6 +7897,52 @@ esac
         let policy = RestartPolicy::default();
         assert!(!policy.should_retry(0));
         assert_eq!(policy.backoff_for(0), Duration::ZERO);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_peer_process_uses_its_peer_directory_as_cwd() {
+        let _env = env_lock().lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let profile = NetworkProfile::default();
+        let paths = NetworkPaths::from_root(temp.path(), &profile);
+        paths.ensure().expect("paths");
+        let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+        fs::write(&spec.config_path, "chain = \"cwd-test\"\n").expect("write config");
+
+        let cwd_capture = temp.path().join("peer-cwd.txt");
+        let stub = temp.path().join("irohad-cwd-stub.sh");
+        fs::write(
+            &stub,
+            "#!/bin/sh\n/bin/pwd > \"$MOCHI_TEST_PEER_CWD\"\nexit 0\n",
+        )
+        .expect("write irohad stub");
+        let mut perms = fs::metadata(&stub).expect("stub metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&stub, perms).expect("set stub permissions");
+        let _capture_guard = EnvVarGuard::set("MOCHI_TEST_PEER_CWD", cwd_capture.as_os_str());
+
+        let expected = spec
+            .config_path
+            .canonicalize()
+            .expect("canonical config")
+            .parent()
+            .expect("peer directory")
+            .to_path_buf();
+        let logs_dir = temp.path().join("logs");
+        let mut peer = PeerHandle::prepared(spec, logs_dir, RestartPolicy::Never);
+        peer.start(&stub, StartReason::Manual).expect("start peer");
+        for _ in 0..50 {
+            if cwd_capture.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let captured = fs::read_to_string(&cwd_capture).expect("captured peer cwd");
+        assert_eq!(Path::new(captured.trim()), expected);
+        if let Some(child) = peer.process.as_mut() {
+            child.wait().expect("wait for peer stub");
+        }
     }
 
     #[test]

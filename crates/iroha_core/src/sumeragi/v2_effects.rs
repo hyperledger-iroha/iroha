@@ -1434,6 +1434,18 @@ pub(crate) enum AuthenticatedChunkDisposition {
     Rejected,
 }
 
+/// Executor authority for retiring or retaining one exact leader-wire chunk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PayloadChunkLifecycleDisposition {
+    /// Independently durable body bytes make the chunk restart-stably terminal.
+    Durable(DurableBodyReceipt),
+    /// Process-local body ownership or certified obsolescence makes the chunk
+    /// terminal for this process; an exact retry reopens after a crash.
+    Volatile,
+    /// The exact bytes may still be needed by a current or protected fetch.
+    Retain,
+}
+
 /// Local resource whose retirement failed after Kura-authorized finality.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PostFinalityCleanupTarget {
@@ -2282,8 +2294,9 @@ pub(crate) trait EffectRuntime {
     fn take_leader_wire_runtime_terminals(
         &mut self,
     ) -> Result<Vec<LeaderWireRuntimeTerminal>, String>;
-    /// Publish the bounded owners retained outside runtime ingress before the
-    /// next clock arbitration.
+    /// Publish the bounded runnable owners retained outside runtime ingress
+    /// before the next clock arbitration. Passive network fetches rejoin only
+    /// through their exact completion owner.
     fn set_external_lifecycle_owners(
         &mut self,
         owners: Vec<RuntimeLifecycleOwner>,
@@ -3055,6 +3068,25 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         self.runtime.arm_live_clocks(now)
     }
 
+    /// Whether production may consume and register another local proposal.
+    ///
+    /// Capacity alone is insufficient after a Proposal has reached guarded
+    /// fanout: that transition consumes the armed view's one-shot producer.
+    /// A same-view lock update can retire the runner's prior candidate owner,
+    /// so consult the serialized reservation before consuming replacement
+    /// bytes. A clean `false` leaves the pacemaker free to enter the next view;
+    /// invalid reservation evidence remains a runtime error.
+    pub(crate) fn can_schedule_local_proposal(&mut self) -> Result<bool, EffectExecutorError> {
+        self.ensure_open()?;
+        if !self.can_admit_local_proposal() {
+            return Ok(false);
+        }
+        let tag = self.current_tag();
+        self.runtime
+            .local_proposal_admission_available(tag)
+            .map_err(EffectExecutorError::Runtime)
+    }
+
     /// Prepare the reducer status installed only when this height's live
     /// activation boundary succeeds.
     pub(crate) fn successor_activation_status_snapshot(
@@ -3549,11 +3581,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
 
     /// Whether a new local proposal can reserve its first exact-body work owner.
     ///
-    /// The runner checks this before consuming a prepared candidate or
-    /// registering outbound payload bytes. Reducer retransmission and local
-    /// completions continue while admission is deferred. This capacity rule is
-    /// runtime-independent so production and deterministic executor tests use
-    /// the same admission boundary.
+    /// The production preflight combines this capacity check with the
+    /// serialized active-view producer reservation before consuming a prepared
+    /// candidate or registering outbound payload bytes. Reducer retransmission
+    /// and local completions continue while admission is deferred. This
+    /// capacity rule remains runtime-independent so deterministic executor
+    /// tests can exercise the same resource boundary.
     pub(crate) fn can_admit_local_proposal(&self) -> bool {
         self.fatal_reason.is_none()
             && !self.output_guard.restart_required()
@@ -4170,12 +4203,20 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(())
     }
 
-    /// Snapshot every lifecycle owner retained beyond runtime ingress.
+    /// Snapshot every runnable lifecycle owner retained beyond runtime ingress.
     ///
     /// The executor's maps and retained effect batch are already bounded by
     /// the configured pending-work/completion capacities. Deduplicating by the
     /// immutable ordinal keeps a fan-out lifecycle constant-size for clock
     /// arbitration; two different owners claiming one ordinal fail closed.
+    ///
+    /// A pending `FetchBody` is deliberately absent. Once its request has been
+    /// admitted it is passive network acquisition, not runnable actor work. Its
+    /// exact lifecycle owner remains in `pending_fetches` and is transferred to
+    /// the reserved `BodyAvailable` completion before the fetch is retired. The
+    /// completion therefore re-enters the scheduler at the original ordinal,
+    /// while a missing response cannot become a global-minimum barrier to the
+    /// timeout, proposal, QC, or retransmit which can resolve that acquisition.
     fn external_lifecycle_owners(&self) -> Result<Vec<RuntimeLifecycleOwner>, EffectExecutorError> {
         let mut owners = BTreeMap::<u128, RuntimeLifecycleOwner>::new();
         let mut insert = |ownership: &RuntimeEffectOwnership| {
@@ -4198,9 +4239,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         for pending in self.pending_signatures.values() {
             insert(&pending.ownership)?;
-        }
-        for pending in self.pending_fetches.values() {
-            insert(pending.task.ownership())?;
         }
         for pending in self.pending_stores.values() {
             insert(pending.task.ownership())?;
@@ -5284,6 +5322,178 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         services: &mut S,
     ) -> EffectExecutorError {
         self.close(EffectExecutorError::Service(reason.to_string()), services)
+    }
+
+    /// Classify one exact productive chunk after the service has established
+    /// that no active manifest fetch can consume it immediately.
+    ///
+    /// The executor is the sole authority for current-view and protected-lock
+    /// ownership. Durable receipts take precedence over process-local stages;
+    /// otherwise exact retained bytes make a chunk volatile-terminal. A
+    /// strictly older unprotected chunk is obsolete even when its body was
+    /// never retained. Current, future, protected, and still-fetching bodies
+    /// remain retryable.
+    pub(crate) fn classify_payload_chunk_lifecycle(
+        &self,
+        manifest_hash: HashOf<wire::PayloadManifest>,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> Result<PayloadChunkLifecycleDisposition, EffectExecutorError> {
+        if !ingress_ownership.validate_exact() {
+            return Err(EffectExecutorError::Contract(
+                "payload chunk lifecycle classification received invalid ingress ownership"
+                    .to_owned(),
+            ));
+        }
+        let runtime = ingress_ownership
+            .leader_wire_runtime_receipt()
+            .ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "productive payload chunk lost its leader-wire runtime receipt".to_owned(),
+                )
+            })?;
+        let token = runtime.token();
+        if !token.matches_chunk_manifest(manifest_hash) {
+            return Err(EffectExecutorError::Contract(
+                "payload chunk lifecycle classification changed its exact manifest".to_owned(),
+            ));
+        }
+
+        let mut durable = None::<DurableBodyReceipt>;
+        let mut observe_durable =
+            |candidate: &DurableBodyReceipt| -> Result<(), EffectExecutorError> {
+                if !token.matches_exact_body(
+                    candidate.round(),
+                    candidate.subject(),
+                    candidate.manifest_hash(),
+                ) {
+                    return Ok(());
+                }
+                if let Some(existing) = durable.as_ref()
+                    && existing != candidate
+                {
+                    return Err(EffectExecutorError::Contract(
+                        "payload chunk matched conflicting durable body receipts".to_owned(),
+                    ));
+                }
+                durable.get_or_insert_with(|| candidate.clone());
+                Ok(())
+            };
+
+        // Recovery receipts are authoritative before FetchBody promotes them
+        // into the live durable catalogue. Later pipeline stages also carry
+        // the same non-forgeable receipt and therefore provide stable terminal
+        // evidence even if an internal catalogue projection is temporarily
+        // sparse.
+        for (manifest, receipt) in self.recovered_bodies.values() {
+            if token.matches_exact_body(receipt.round(), receipt.subject(), receipt.manifest_hash())
+                && (manifest.round != receipt.round()
+                    || manifest.subject != receipt.subject()
+                    || HashOf::new(manifest) != receipt.manifest_hash())
+            {
+                return Err(EffectExecutorError::Contract(
+                    "recovered payload body differs from its durable receipt".to_owned(),
+                ));
+            }
+            observe_durable(receipt)?;
+        }
+        for receipt in self.durable_bodies.values() {
+            observe_durable(receipt)?;
+        }
+        for pending in self.pending_validations.values() {
+            observe_durable(pending.task.durable_receipt())?;
+        }
+        for receipt in self.validated_bodies.values() {
+            observe_durable(receipt.durable())?;
+        }
+        for receipt in self.rejected_bodies.values() {
+            observe_durable(receipt)?;
+        }
+        for pending in self.pending_applications.values() {
+            observe_durable(pending.task.validated_receipt.durable())?;
+        }
+        if let Some(receipt) = durable {
+            return Ok(PayloadChunkLifecycleDisposition::Durable(receipt));
+        }
+
+        let exact_ready = self.ready_bodies.values().any(|ready| {
+            token.matches_exact_body(
+                ready.manifest.round,
+                ready.manifest.subject,
+                HashOf::new(&ready.manifest),
+            )
+        });
+        let exact_store = self.pending_stores.values().any(|pending| {
+            token.matches_exact_body(
+                pending.task.manifest.round,
+                pending.task.manifest.subject,
+                HashOf::new(&pending.task.manifest),
+            )
+        });
+        if exact_ready || exact_store {
+            return Ok(PayloadChunkLifecycleDisposition::Volatile);
+        }
+
+        // A pipeline owner can also denote acquisition which has not produced
+        // bytes yet. Preserve that case for the active-fetch replay below;
+        // never turn ownership alone into evidence that the bytes exist.
+        let exact_pending_fetch = self.pending_fetches.values().any(|pending| {
+            token.matches_body_coordinates(pending.task.round, pending.task.subject)
+                && pending
+                    .task
+                    .manifest
+                    .as_ref()
+                    .is_none_or(|manifest| HashOf::new(manifest) == manifest_hash)
+        });
+        if exact_pending_fetch {
+            return Ok(PayloadChunkLifecycleDisposition::Retain);
+        }
+        let exact_pipeline_owner = self.body_pipeline_owners.iter().any(|(key, owner)| {
+            token.matches_body_coordinates(key.0, key.1)
+                && owner
+                    .manifest_hash
+                    .is_some_and(|owner_hash| owner_hash == manifest_hash)
+        });
+        if exact_pipeline_owner {
+            return Err(EffectExecutorError::Contract(
+                "payload chunk pipeline owner has no exact retained body stage".to_owned(),
+            ));
+        }
+
+        let installed_protected = self
+            .protected_lock
+            .is_some_and(|key| token.matches_body_coordinates(key.0, key.1));
+        // The serialized runtime publishes its new tag before the executor
+        // dispatches the retained EnterView effect. Preserve that effect's
+        // exact protected body across this bounded pre-dispatch seam without
+        // duplicating protection state in the service.
+        let mut retained_protected = None;
+        if let Some(batch) = &self.retained_effect_batch {
+            for owned in &batch.effects {
+                let AdapterEffect::EnterView { protected_body, .. } = &owned.effect else {
+                    continue;
+                };
+                let Some(candidate) = *protected_body else {
+                    continue;
+                };
+                if retained_protected.is_some_and(|existing| existing != candidate) {
+                    return Err(EffectExecutorError::Contract(
+                        "retained EnterView effects claimed conflicting protected bodies"
+                            .to_owned(),
+                    ));
+                }
+                retained_protected = Some(candidate);
+            }
+        }
+        let pending_protected =
+            retained_protected.is_some_and(|key| token.matches_body_coordinates(key.0, key.1));
+        let is_older_view = self
+            .runtime
+            .authoritative_tag()
+            .is_some_and(|tag| token.view() < tag.view());
+        if is_older_view && !installed_protected && !pending_protected {
+            return Ok(PayloadChunkLifecycleDisposition::Volatile);
+        }
+        Ok(PayloadChunkLifecycleDisposition::Retain)
     }
 
     /// Authenticate a chunk before handing it to the reconstruction adapter,
@@ -6621,16 +6831,18 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .get(&existing_id)
                 .expect("pending fetch ID came from this map")
                 .clone();
-            if existing.task.ownership != ownership {
-                return Err(EffectExecutorError::Contract(
-                    "body-fetch retry changed its causal lifecycle owner".to_owned(),
-                ));
-            }
+            let same_lifecycle = existing.task.ownership == ownership;
             if existing.task.tag != tag {
                 return Err(EffectExecutorError::Contract(
                     "conflicting retransmission for one body-fetch round/subject".to_owned(),
                 ));
             }
+            // A periodic producer can rediscover the same exact acquisition
+            // through a different runtime lifecycle while the first fetch is
+            // still live. The immutable tag, round, subject, manifest, and
+            // certified authority below define the operation; retain the
+            // incumbent task's owner so its completion still releases exactly
+            // the service owner that was originally admitted.
             let merged_manifest = match (&existing.task.manifest, manifest) {
                 (Some(existing), Some(incoming)) if existing != &incoming => {
                     return Err(EffectExecutorError::Contract(
@@ -6673,8 +6885,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     Ok(plan) => plan,
                     Err(EffectExecutorError::CertifiedRequestCapacity { capacity }) => {
                         // The existing acquisition and this exact owned upgrade remain live.
-                        // The retained effect FIFO retries the same owner after request capacity
-                        // changes; a periodic tick must not mint a replacement lifecycle.
+                        // The retained effect FIFO retries the incoming owner after request
+                        // capacity changes; a periodic lifecycle may coalesce here but cannot
+                        // replace the incumbent service owner's admission age.
                         iroha_logger::debug!(
                             height = round.height,
                             view = round.view,
@@ -6725,12 +6938,24 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ));
             }
             if merged == existing.task {
-                // The retained FIFO head already materialized this exact service owner.
-                // Keep the admission barrier until its completion releases the lifecycle,
-                // but do not submit duplicate service work on every executor poll.
-                return Err(EffectExecutorError::PendingWorkCapacity {
-                    capacity: self.config.max_pending_work,
-                });
+                if same_lifecycle {
+                    // The retained FIFO head already materialized this exact service owner.
+                    // Keep that admission barrier until its completion releases the
+                    // lifecycle, but do not submit duplicate service work on every poll.
+                    return Err(EffectExecutorError::PendingWorkCapacity {
+                        capacity: self.config.max_pending_work,
+                    });
+                }
+                // A later periodic lifecycle rediscovered an acquisition already owned by
+                // the live service task. Re-enter the idempotent service seam so an exact
+                // request whose prior fanout was source-retained gets another opportunity
+                // to cross the bounded output corridor. The service coalesces the existing
+                // task ID and preserves the incumbent owner. Consume the younger effect
+                // after that retry; retaining it at the FIFO head would prevent the runtime
+                // from processing the body response or timeout/signature completion that
+                // releases the incumbent fetch, creating a causal self-deadlock.
+                services.enqueue_body_fetch(merged).map_err(service_error)?;
+                return Ok(());
             }
             services
                 .enqueue_body_fetch(merged.clone())
@@ -6745,9 +6970,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .expect("serialized body-fetch owner remains present after admission");
             pending.task = merged;
             pending.request_hash = request_hash;
-            return Err(EffectExecutorError::PendingWorkCapacity {
-                capacity: self.config.max_pending_work,
-            });
+            return if same_lifecycle {
+                Err(EffectExecutorError::PendingWorkCapacity {
+                    capacity: self.config.max_pending_work,
+                })
+            } else {
+                // The service upgrade is bound to the incumbent task owner. The younger
+                // periodic lifecycle has coalesced and must not become dispatch debt.
+                Ok(())
+            };
         }
 
         let mut staged_release = None;
@@ -6991,7 +7222,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 Ok(plan) => Some(plan),
                 Err(EffectExecutorError::CertifiedRequestCapacity { capacity }) => {
                     // Retain and retry this exact owned request after capacity release. A later
-                    // periodic producer may coalesce with it but cannot mint a younger owner.
+                    // periodic producer may coalesce with it but cannot replace the incumbent
+                    // service owner's admission age.
                     iroha_logger::debug!(
                         height = round.height,
                         view = round.view,
@@ -8299,13 +8531,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Some(existing) = self.pending_applications.values().next() {
             let exact = existing.task.tag == tag
                 && existing.task.subject == subject
-                && existing.task.certificate == certificate
-                && existing.task.ownership == ownership;
+                && existing.task.certificate == certificate;
             if !exact {
                 return Err(EffectExecutorError::Contract(
                     "conflicting Apply retransmission for one height".to_owned(),
                 ));
             }
+            // A periodic retransmit can rediscover the exact durable Apply
+            // through a different runtime lifecycle while the first task is
+            // still in flight. Coalesce on immutable application authority
+            // and retain the incumbent task and owner; transient ingress or
+            // timer ownership is not part of the decided block's identity.
             if self.deferred_merge_work.contains_key(&existing.task.id()) {
                 return Ok(());
             }
@@ -9438,6 +9674,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         reason: impl fmt::Display,
         services: &mut S,
     ) -> EffectTransportError {
+        // The retained relay may terminate the process as soon as the guard
+        // closes, so preserve the precise reason before publishing that edge.
+        iroha_logger::error!(%reason, "Sumeragi v2 effect transport failed closed");
         self.output_guard.activate_restart_required();
         let reason = self
             .fatal_reason
@@ -9461,6 +9700,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         error: EffectExecutorError,
         services: &mut S,
     ) -> EffectExecutorError {
+        // Log before guard activation. The retained relay observes that state
+        // concurrently and may exit before `services.fail_closed` can report
+        // the originating executor error.
+        iroha_logger::error!(%error, "Sumeragi v2 effect executor failed closed");
         self.output_guard.activate_restart_required();
         let reason = self
             .fatal_reason
@@ -12158,7 +12401,7 @@ mod tests {
     }
 
     #[test]
-    fn serialized_runtime_emits_proposal_a_prepare_qc_b_timeout_capacity_trace() {
+    fn passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime() {
         let ProductionTransportFixture {
             context,
             validator_keys,
@@ -12263,6 +12506,14 @@ mod tests {
             }
         }
         assert_eq!(executor.pending_fetches.len(), 1);
+        executor
+            .publish_external_lifecycle_owners()
+            .expect("publish runnable asynchronous ownership");
+        assert_eq!(
+            executor.runtime.external_lifecycle_owner_count(),
+            0,
+            "a passive network fetch must not become the actor-global scheduler minimum"
+        );
         let proposal_a_work = services.fetch_tasks[0].id();
 
         let body_b = b"distinct certified subject B".to_vec();
@@ -21386,23 +21637,17 @@ mod tests {
         executor
             .consume_effects(vec![effect.clone()], &mut services)
             .expect("admit the exact certified fetch");
+        executor.runtime.effect_owners.clear();
+        let lifecycle_ordinal_after_first = executor.runtime.next_lifecycle_ordinal;
         assert_eq!(
             executor
                 .consume_effects(vec![effect], &mut services)
-                .expect("coalesce one retransmission into the admitted lifecycle"),
-            0
+                .expect("coalesce one retransmission from a distinct runtime lifecycle"),
+            1
         );
-        for _ in 0..6 {
-            assert_eq!(
-                executor
-                    .step(Instant::now(), &mut services)
-                    .expect("retry the retained certified-fetch lifecycle"),
-                EffectExecutorStep::Idle
-            );
-        }
         assert_eq!(executor.pending_fetches.len(), 1);
         assert_eq!(executor.outstanding_requests.len(), 1);
-        assert_eq!(services.fetch_tasks.len(), 8);
+        assert_eq!(services.fetch_tasks.len(), 2);
         let first_id = services.fetch_tasks[0].id();
         let first_request = services.fetch_tasks[0]
             .certified_request()
@@ -21413,8 +21658,21 @@ mod tests {
                 && task.certified_request() == Some(&first_request)
                 && task.sources() == sources.as_slice()
         }));
-        assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
-        assert!(executor.retained_effect_batch.is_some());
+        let first_lifecycle_ordinal = services.fetch_tasks[0].lifecycle_ordinal();
+        assert!(
+            services
+                .fetch_tasks
+                .iter()
+                .all(|task| task.lifecycle_ordinal() == first_lifecycle_ordinal),
+            "every retry must retain the incumbent fetch's original owner"
+        );
+        assert_eq!(
+            executor.runtime.next_lifecycle_ordinal,
+            lifecycle_ordinal_after_first + 1,
+            "the regression must exercise a distinct incoming owner"
+        );
+        assert_eq!(executor.status().effect_dispatch_queue.depth, 0);
+        assert!(executor.retained_effect_batch.is_none());
     }
 
     #[test]
@@ -21470,15 +21728,52 @@ mod tests {
             subject: fixture.manifest.subject,
             certificate: fixture.qc(wire::GlobalPhase::Commit),
         };
+        executor.runtime.effect_owners.clear();
+        let lifecycle_ordinal_before = executor.runtime.next_lifecycle_ordinal;
         for _ in 0..8 {
+            // Production can rediscover the same durable Apply from an
+            // independent periodic-timer lifecycle while application is in
+            // flight. Force that ownership shape instead of relying on the
+            // fake runtime's semantic-effect owner cache.
+            executor.runtime.effect_owners.clear();
             executor
                 .consume_effects(vec![effect.clone()], &mut services)
-                .expect("retransmit exact apply");
+                .expect("coalesce the exact Apply across runtime lifecycles");
         }
         assert_eq!(executor.pending_applications.len(), 1);
         assert_eq!(services.apply_tasks.len(), 8);
         let id = services.apply_tasks[0].id();
         assert!(services.apply_tasks.iter().all(|task| task.id() == id));
+        let lifecycle_ordinal = services.apply_tasks[0].lifecycle_ordinal();
+        assert!(
+            services
+                .apply_tasks
+                .iter()
+                .all(|task| task.lifecycle_ordinal() == lifecycle_ordinal),
+            "every retry must retain the incumbent task's original owner"
+        );
+        assert_eq!(
+            executor.runtime.next_lifecycle_ordinal,
+            lifecycle_ordinal_before + 8,
+            "the regression must exercise eight distinct incoming owners"
+        );
+
+        let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
+        conflicting.aggregate_signature = vec![2];
+        executor.runtime.effect_owners.clear();
+        assert!(matches!(
+            executor.consume_effects(
+                vec![AdapterEffect::Apply {
+                    tag: tag(0),
+                    subject: fixture.manifest.subject,
+                    certificate: conflicting,
+                }],
+                &mut services,
+            ),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("conflicting Apply retransmission")
+        ));
+        assert_eq!(services.apply_tasks.len(), 8);
     }
 
     #[test]

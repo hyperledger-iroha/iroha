@@ -17,9 +17,7 @@ fn capability_role_decodes_via_slice_adapter() {
     let original = CapabilityRole::Publisher;
     let bytes = to_bytes(&original).expect("encode capability role");
     let view = from_bytes_view(&bytes).expect("view");
-    let decoded = view
-        .decode_exact::<CapabilityRole>()
-        .expect("decode role");
+    let decoded = view.decode_exact::<CapabilityRole>().expect("decode role");
     assert_eq!(decoded, original);
 }
 

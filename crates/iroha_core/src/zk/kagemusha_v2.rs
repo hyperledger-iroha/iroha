@@ -21,6 +21,8 @@ use iroha_data_model::offline::{
 use norito::codec::Encode;
 use sha2::{Digest as _, Sha256};
 
+#[cfg(feature = "kagemusha-generation-memory-lab")]
+pub use super::kagemusha_recursion_adapter::run_kagemusha_k17_shape_probe_v5;
 pub use super::kagemusha_recursion_adapter::{
     KagemushaGeneratedArtifactSpoolV4, KagemushaGeneratedParityArtifactsV4,
     KagemushaGeneratedParityProfileV4, KagemushaGeneratedPastaCycleArtifactsV4,

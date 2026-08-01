@@ -5749,12 +5749,15 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         Ok(())
     }
 
-    /// Replace the bounded set of owners currently held by retained executor
-    /// effects or asynchronous Sign/Fetch/Store/Validate/Apply tasks.
+    /// Replace the bounded set of runnable owners currently held by retained
+    /// executor effects or asynchronous Sign/Store/Validate/Apply tasks.
     ///
     /// The executor derives this set from its existing bounded maps before
     /// each runtime step. Supplying a forged carrier or exceeding the existing
     /// pending-work plus one retained-batch bound fails closed.
+    /// A network-waiting Fetch remains executor-owned but is intentionally
+    /// passive here; its exact owner returns with `BodyAvailable` so the wait
+    /// itself cannot block the control traffic needed to finish or supersede it.
     pub(crate) fn set_external_lifecycle_owners(
         &mut self,
         owners: Vec<RuntimeLifecycleOwner>,
@@ -5767,6 +5770,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         self.external_lifecycle_owners = owners;
         Ok(())
+    }
+
+    /// Return the number of runnable external owners published to the runtime.
+    #[cfg(test)]
+    pub(crate) fn external_lifecycle_owner_count(&self) -> usize {
+        self.external_lifecycle_owners.len()
     }
 
     /// Bind external lifecycle capacity to the effect executor's existing
@@ -5844,6 +5853,39 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             owner,
             RuntimeFreshRootKind::LocalProposalAdmission,
         ))
+    }
+
+    /// Return whether the runner may begin one local proposal for this view.
+    ///
+    /// An armed leader reservation is deliberately one-shot: guarded Proposal
+    /// fanout consumes it, while a later timeout or `EnterView` owns the next
+    /// progress transition. A same-view lock update may make the runner's
+    /// candidate state eligible again, but it must not turn that scheduling
+    /// churn into a second Proposal. Report the consumed reservation as
+    /// ordinary backpressure so the pacemaker can advance the view. Corrupt or
+    /// mismatched reservations remain fatal, and the actual admission path
+    /// below still fails closed if a caller bypasses this preflight.
+    pub(crate) fn local_proposal_admission_available(
+        &mut self,
+        tag: EventTag,
+    ) -> Result<bool, String> {
+        if self.fail_closed {
+            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
+        }
+        if tag != self.round_tag {
+            self.latch_fail_closed(
+                "local proposal admission preflight changed the authoritative tag",
+            );
+            return Err("Sumeragi v2 local proposal preflight tag was invalid".to_owned());
+        }
+        let Some(reservation) = self.active_view_producer.as_ref() else {
+            return Ok(!self.clocks_armed);
+        };
+        if reservation.tag != tag || !reservation.ownership.validate_exact() {
+            self.latch_fail_closed("local proposal admission preflight changed its producer");
+            return Err("Sumeragi v2 local proposal preflight producer was invalid".to_owned());
+        }
+        Ok(true)
     }
 
     /// Retain or release the scheduler-visible producer for the authoritative
@@ -10685,6 +10727,11 @@ mod tests {
         runtime
             .arm_live_clocks(start)
             .expect("arm clocks after producer reservation");
+        assert!(
+            runtime
+                .local_proposal_admission_available(initial)
+                .expect("armed reservation is eligible")
+        );
 
         let ownership = runtime
             .mint_local_proposal_effect_ownership(initial, &proposal.manifest)
@@ -10704,11 +10751,58 @@ mod tests {
             .complete_active_view_producer_after_proposal_fanout(proposal.round, &ownership)
             .expect("guarded fanout retires the inherited producer");
         assert!(runtime.active_view_producer.is_none());
+        assert!(
+            !runtime
+                .local_proposal_admission_available(initial)
+                .expect("consumed same-view reservation becomes retryable backpressure")
+        );
+        assert!(
+            !runtime.fail_closed,
+            "same-view scheduling churn must leave timeout recovery live"
+        );
         assert!(matches!(
             runtime.step_and_take_scheduler_ownership_for_test(deadline),
             Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
         ));
         assert_eq!(runtime.driver.timeouts, vec![initial]);
+    }
+
+    #[test]
+    fn armed_proposal_admission_cannot_bypass_the_active_view_reservation() {
+        let (context, keys) = authenticated_runtime_context();
+        let message = signed_runtime_proposal(&context, &keys, 0xA9);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = message.payload else {
+            panic!("runtime fixture must produce a Proposal")
+        };
+        let initial = EventTag::new(context.height, 0, Generation::new(1));
+        let start = Instant::now();
+        let (mut runtime, _) = SerializedV2Runtime::with_driver(
+            FakeDriver::new(initial),
+            start,
+            Duration::from_secs(10),
+            RuntimeQueueConfig::new(8, 2, 2),
+            Vec::new(),
+        )
+        .expect("construct unarmed runtime");
+        runtime
+            .reconcile_active_view_producer(initial, false)
+            .expect("nonleader has no proposal reservation");
+        runtime
+            .arm_live_clocks(start)
+            .expect("arm runtime without a producer reservation");
+
+        assert!(
+            !runtime
+                .local_proposal_admission_available(initial)
+                .expect("scheduler observes an unavailable one-shot producer")
+        );
+        assert!(
+            runtime
+                .mint_local_proposal_effect_ownership(initial, &proposal.manifest)
+                .is_err(),
+            "the admission invariant remains fail-closed if preflight is bypassed"
+        );
+        assert!(runtime.fail_closed);
     }
 
     #[test]

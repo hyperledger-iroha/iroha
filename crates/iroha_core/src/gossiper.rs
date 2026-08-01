@@ -3727,8 +3727,7 @@ mod tests {
         let (signed, _accepted) = build_transaction("framed-entrypoint-alternate-layout");
         let entrypoint = TransactionEntrypoint::External(signed);
         let canonical = encode_transaction_entrypoint(&entrypoint);
-        let alternate_flags =
-            ncore::default_encode_flags() ^ ncore::header_flags::COMPACT_LEN;
+        let alternate_flags = ncore::default_encode_flags() ^ ncore::header_flags::COMPACT_LEN;
         let alternate = {
             let _alternate = ncore::DecodeFlagsGuard::enter(alternate_flags);
             ncore::to_bytes(&entrypoint).expect("encode alternate-layout entrypoint")

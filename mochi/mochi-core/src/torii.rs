@@ -424,6 +424,39 @@ pub struct ReadinessSmokePlan {
     pub backoff: Duration,
     /// Transactions to try in order (one per attempt).
     pub transactions: Vec<SignedTransaction>,
+    /// Recipe used to renew Mochi-generated transactions after genesis readiness.
+    ///
+    /// Callers that provide pre-signed transactions through [`Self::new`] retain
+    /// exact-envelope semantics and are never re-signed.
+    factory: Option<ReadinessSmokeFactory>,
+}
+
+#[derive(Debug, Clone)]
+struct ReadinessSmokeFactory {
+    chain_id: String,
+    signer: SigningAuthority,
+    attempts: usize,
+    nonce_offset: usize,
+}
+
+impl ReadinessSmokeFactory {
+    fn build_transactions(
+        &self,
+        creation_time: Duration,
+        ttl: Duration,
+    ) -> Result<Vec<SignedTransaction>, ReadinessSmokeBuildError> {
+        (0..self.attempts)
+            .map(|attempt| {
+                build_readiness_smoke_transaction_at(
+                    &self.chain_id,
+                    &self.signer,
+                    attempt + self.nonce_offset,
+                    creation_time,
+                    ttl,
+                )
+            })
+            .collect()
+    }
 }
 
 impl ReadinessSmokePlan {
@@ -435,6 +468,7 @@ impl ReadinessSmokePlan {
             commit_options: SmokeCommitOptions::default(),
             backoff: Duration::from_millis(400),
             transactions,
+            factory: None,
         }
     }
 
@@ -457,12 +491,17 @@ impl ReadinessSmokePlan {
         nonce_offset: usize,
     ) -> Result<Self, ReadinessSmokeBuildError> {
         let attempts = attempts.max(1);
-        let mut transactions = Vec::with_capacity(attempts);
-        for attempt in 0..attempts {
-            let tx = build_readiness_smoke_transaction(chain_id, signer, attempt + nonce_offset)?;
-            transactions.push(tx);
-        }
-        Ok(Self::new(transactions))
+        let factory = ReadinessSmokeFactory {
+            chain_id: chain_id.to_owned(),
+            signer: signer.clone(),
+            attempts,
+            nonce_offset,
+        };
+        let transactions = factory.build_transactions(unix_time_now(), SMOKE_TTL)?;
+        Ok(Self {
+            factory: Some(factory),
+            ..Self::new(transactions)
+        })
     }
 
     /// Build a single-attempt plan using the bundled development signer.
@@ -476,6 +515,42 @@ impl ReadinessSmokePlan {
     /// Iterator over the hashes of the configured smoke transactions.
     pub fn tx_hashes(&self) -> impl Iterator<Item = HashOf<SignedTransaction>> + '_ {
         self.transactions.iter().map(SignedTransaction::hash)
+    }
+
+    fn renew_generated_transactions_if_needed(
+        &mut self,
+        now: Duration,
+    ) -> Result<(), ReadinessSmokeBuildError> {
+        let Some(factory) = &self.factory else {
+            return Ok(());
+        };
+
+        let required_lifetime = self.required_submission_lifetime();
+        let required_ttl = required_lifetime.max(SMOKE_TTL);
+        let renew_before = now.saturating_add(required_lifetime);
+        let remains_fresh = self.transactions.iter().all(|transaction| {
+            transaction
+                .time_to_live()
+                .and_then(|ttl| transaction.creation_time().checked_add(ttl))
+                .is_some_and(|expires_at| expires_at >= renew_before)
+        });
+        if remains_fresh {
+            return Ok(());
+        }
+
+        self.transactions = factory.build_transactions(now, required_ttl)?;
+        Ok(())
+    }
+
+    fn required_submission_lifetime(&self) -> Duration {
+        let attempts = u32::try_from(self.transactions.len().max(1)).unwrap_or(u32::MAX);
+        let mut lifetime = self.commit_options.timeout.saturating_mul(attempts);
+        let mut backoff = self.backoff.max(Duration::from_millis(50)).min(MAX_BACKOFF);
+        for _ in 1..attempts {
+            lifetime = lifetime.saturating_add(backoff);
+            backoff = backoff.saturating_mul(2).min(MAX_BACKOFF);
+        }
+        lifetime.saturating_add(SMOKE_SUBMISSION_MARGIN)
     }
 }
 
@@ -592,6 +667,13 @@ impl LocalMcpProbeResult {
 }
 
 const SMOKE_TTL: Duration = Duration::from_secs(30);
+const SMOKE_SUBMISSION_MARGIN: Duration = Duration::from_secs(5);
+
+fn unix_time_now() -> Duration {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+}
 
 fn build_lane_lifecycle_transaction(
     chain_id: &str,
@@ -633,18 +715,17 @@ fn build_lane_lifecycle_transaction(
         })
 }
 
-fn build_readiness_smoke_transaction(
+fn build_readiness_smoke_transaction_at(
     chain_id: &str,
     signer: &SigningAuthority,
     attempt: usize,
+    creation_time: Duration,
+    ttl: Duration,
 ) -> Result<SignedTransaction, ReadinessSmokeBuildError> {
     let chain_id = chain_id
         .parse::<ChainId>()
         .map_err(|_| ReadinessSmokeBuildError::InvalidChainId(chain_id.to_owned()))?;
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_millis();
+    let now_ms = creation_time.as_millis();
     let domain_id = DomainId::try_new("wonderland", "universal")
         .map_err(|_| ReadinessSmokeBuildError::InvalidDomain("wonderland.universal".to_owned()))?;
     let key = "mochi_smoke"
@@ -662,7 +743,8 @@ fn build_readiness_smoke_transaction(
     if let Some(nonce) = NonZeroU32::new(quantity) {
         builder.set_nonce(nonce);
     }
-    builder.set_ttl(SMOKE_TTL);
+    builder.set_creation_time(creation_time);
+    builder.set_ttl(ttl);
 
     builder
         .try_sign(signer.key_pair().private_key())
@@ -2459,11 +2541,54 @@ impl ToriiClient {
         }
     }
 
+    /// Probe `/status` until the chain has committed its genesis block.
+    ///
+    /// A responsive height-zero peer is still bootstrapping and cannot yet
+    /// admit transactions against committed validator authority. Transient
+    /// status failures and height-zero responses share one bounded
+    /// [`ReadinessOptions`] deadline and exponential backoff.
+    pub async fn wait_for_genesis_commit(
+        &self,
+        options: ReadinessOptions,
+    ) -> ToriiResult<ToriiStatusSnapshot> {
+        let mut backoff = options
+            .poll_interval
+            .max(Duration::from_millis(10))
+            .min(MAX_BACKOFF);
+        let start = Instant::now();
+        let deadline = start
+            .checked_add(options.timeout)
+            .unwrap_or_else(|| start + options.timeout);
+
+        loop {
+            let poll_error = match self.fetch_status_snapshot().await {
+                Ok(snapshot) if snapshot.status.blocks > 0 => return Ok(snapshot),
+                Ok(_) => None,
+                Err(err) => Some(err),
+            };
+
+            let now = Instant::now();
+            if now >= deadline {
+                return match poll_error {
+                    Some(err) => Err(err),
+                    None => Err(ToriiError::Timeout {
+                        context: "genesis commitment (status remained at zero committed blocks)"
+                            .to_owned(),
+                    }),
+                };
+            }
+
+            let remaining = deadline.saturating_duration_since(now);
+            sleep(backoff.min(remaining)).await;
+            backoff = (backoff.saturating_mul(2)).min(MAX_BACKOFF);
+        }
+    }
+
     /// Run a readiness smoke probe that waits for `/status`, submits a smoke transaction,
     /// and observes its commitment with retries/backoff.
     pub async fn wait_for_readiness_smoke(
         &self,
-        plan: ReadinessSmokePlan,
+        mut plan: ReadinessSmokePlan,
     ) -> ToriiResult<ReadinessSmokeOutcome> {
         if plan.transactions.is_empty() {
             return Err(ToriiError::Decode(
@@ -2471,7 +2596,13 @@ impl ToriiClient {
             ));
         }
 
-        self.wait_for_ready(plan.status_options).await?;
+        self.wait_for_genesis_commit(plan.status_options).await?;
+        plan.renew_generated_transactions_if_needed(unix_time_now())
+            .map_err(|err| {
+                ToriiError::Decode(format!(
+                    "failed to renew readiness smoke transactions after genesis commitment: {err}"
+                ))
+            })?;
 
         let attempts = plan.transactions.len();
         let started = Instant::now();
@@ -6182,6 +6313,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn generated_readiness_transactions_renew_for_the_full_retry_budget() {
+        let signer = crate::compose::development_signing_authorities()
+            .first()
+            .expect("development signer available");
+        let mut plan = ReadinessSmokePlan::for_signer_with_attempts("mochi-smoke", signer, 3)
+            .expect("build readiness smoke plan");
+        let old_hashes = plan.tx_hashes().collect::<Vec<_>>();
+        let creation_time = plan.transactions[0].creation_time();
+        let required_lifetime = plan.required_submission_lifetime();
+
+        assert!(
+            required_lifetime > SMOKE_TTL,
+            "the default three-attempt commit budget intentionally exceeds the base TTL"
+        );
+        plan.renew_generated_transactions_if_needed(creation_time)
+            .expect("renew generated smoke transactions");
+
+        assert_ne!(plan.tx_hashes().collect::<Vec<_>>(), old_hashes);
+        for transaction in &plan.transactions {
+            assert_eq!(transaction.creation_time(), creation_time);
+            assert!(
+                transaction
+                    .time_to_live()
+                    .is_some_and(|ttl| { ttl >= required_lifetime && ttl >= SMOKE_TTL })
+            );
+            transaction
+                .verify_signature()
+                .expect("renewed smoke transaction signature verifies");
+        }
+    }
+
+    #[test]
+    fn caller_supplied_readiness_transactions_keep_the_exact_signed_envelope() {
+        let signer = crate::compose::development_signing_authorities()
+            .first()
+            .expect("development signer available");
+        let generated = ReadinessSmokePlan::for_signer("mochi-smoke", signer)
+            .expect("build readiness smoke plan");
+        let transaction = generated.transactions[0].clone();
+        let hash = transaction.hash();
+        let mut exact = ReadinessSmokePlan::new(vec![transaction]);
+        let after_expiry = exact.transactions[0]
+            .creation_time()
+            .saturating_add(SMOKE_TTL)
+            .saturating_add(Duration::from_secs(1));
+
+        exact
+            .renew_generated_transactions_if_needed(after_expiry)
+            .expect("exact plan does not require renewal");
+
+        assert_eq!(exact.transactions[0].hash(), hash);
+    }
+
     const BLOCK_WIRE_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/canonical_block_wire.bin");
     const EVENT_MESSAGE_FIXTURE: &[u8] =
         include_bytes!("../tests/fixtures/canonical_event_message.bin");
@@ -7670,6 +7855,64 @@ mod tests {
                 assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
             }
             Err(other) => panic!("unexpected readiness error: {other:?}"),
+        }
+
+        let _ = shutdown.send(());
+        let _ = handle.join();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn wait_for_genesis_commit_retries_zero_height_until_committed() {
+        let zero_height = TelemetryStatus {
+            blocks: 0,
+            ..TelemetryStatus::default()
+        };
+        let committed = TelemetryStatus {
+            blocks: 1,
+            ..TelemetryStatus::default()
+        };
+        let Some((addr, shutdown, handle)) = spawn_status_stub(vec![
+            (200, encode_status_payload(&zero_height)),
+            (200, encode_status_payload(&committed)),
+        ]) else {
+            return;
+        };
+
+        let client = ToriiClient::new(format!("http://{addr}")).expect("client");
+        let options = ReadinessOptions::new(Duration::from_millis(400))
+            .with_poll_interval(Duration::from_millis(20));
+        let snapshot = client
+            .wait_for_genesis_commit(options)
+            .await
+            .expect("committed genesis snapshot");
+
+        assert_eq!(snapshot.status.blocks, 1);
+        let _ = shutdown.send(());
+        let _ = handle.join();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn wait_for_genesis_commit_times_out_at_persistent_zero_height() {
+        let zero_height = TelemetryStatus {
+            blocks: 0,
+            ..TelemetryStatus::default()
+        };
+        let Some((addr, shutdown, handle)) =
+            spawn_status_stub(vec![(200, encode_status_payload(&zero_height))])
+        else {
+            return;
+        };
+
+        let client = ToriiClient::new(format!("http://{addr}")).expect("client");
+        let options = ReadinessOptions::new(Duration::from_millis(120))
+            .with_poll_interval(Duration::from_millis(15));
+
+        match client.wait_for_genesis_commit(options).await {
+            Ok(_) => panic!("expected genesis commitment timeout"),
+            Err(ToriiError::Timeout { context }) => {
+                assert!(context.contains("zero committed blocks"));
+            }
+            Err(other) => panic!("unexpected genesis readiness error: {other:?}"),
         }
 
         let _ = shutdown.send(());

@@ -1078,13 +1078,13 @@ pub(crate) struct DeferredServiceEvidence {
     pub(crate) eligible_skips_before: u64,
     /// Service retires the selected owner's debt.
     pub(crate) eligible_skips_after: u64,
-    /// All class lengths before selection.
+    /// Eligible class lengths before selection.
     pub(crate) queue_lengths_before: DeferredQueueLengths,
-    /// All class lengths after selection.
+    /// Eligible class lengths after selection.
     pub(crate) queue_lengths_after: DeferredQueueLengths,
-    /// Redundant exact total before selection.
+    /// Redundant exact eligible total before selection.
     pub(crate) total_len_before: u64,
-    /// Redundant exact total after selection.
+    /// Redundant exact eligible total after selection.
     pub(crate) total_len_after: u64,
     /// Three-class service cursor before selection.
     pub(crate) service_cursor_before: DeferredPriority,
@@ -2276,7 +2276,9 @@ const fn deferred_progress_capacity(roster_len: usize) -> usize {
 }
 
 const fn semantic_ingress_capacity(roster_len: usize) -> usize {
-    MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(2))
+    // One exact locked Commit set plus current and adjacent-future TimeoutVote
+    // sets bypass the ordinary semantic table.
+    MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(3))
 }
 
 /// Maximum distinct service stages which one immutable lifecycle can cross.
@@ -3922,7 +3924,7 @@ impl SumeragiV2Adapter {
                 )
             }
             wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
-                if vote.round.view != current_view {
+                if !reducer::timeout_vote_view_is_admissible(current_view, vote.round.view) {
                     return Ok((
                         Some(Self::ignored_outcome(reducer::IgnoreReason::IrrelevantView)),
                         None,
@@ -4023,7 +4025,7 @@ impl SumeragiV2Adapter {
         if capacity_bypass && !protected_capacity_bypass {
             // This is bounded backpressure for ordinary semantic traffic. QCs
             // and TCs do not consume this table. The at-most-roster-sized exact
-            // locked Commit and current-view TimeoutVote sets bypass ordinary
+            // locked Commit and bounded current/future TimeoutVote sets bypass ordinary
             // capacity and use their independent reserved progress partitions.
             return Ok((
                 Some(Self::ignored_outcome(reducer::IgnoreReason::Busy)),
@@ -4091,16 +4093,17 @@ impl SumeragiV2Adapter {
                     && execution_commitment == locked_execution_commitment
             )
         };
-        let matches_current_timeout = |key: IngressSemanticKey| {
+        let matches_retained_timeout = |key: IngressSemanticKey| {
             matches!(
                 key,
                 IngressSemanticKey::TimeoutVote { round, .. }
-                    if round.height == current_height && round.view == current_view
+                    if round.height == current_height
+                        && reducer::timeout_vote_view_is_admissible(current_view, round.view)
             )
         };
         self.ingress_equivocations.retain(|key, record| {
             if record.capacity_bypass {
-                matches_current_lock(*key, record.fingerprint) || matches_current_timeout(*key)
+                matches_current_lock(*key, record.fingerprint) || matches_retained_timeout(*key)
             } else {
                 key.round().view >= oldest_retained_view
                     || matches_current_lock(*key, record.fingerprint)
@@ -6295,6 +6298,28 @@ impl SumeragiV2Adapter {
         &mut self,
         candidate: Option<(ServicedCandidateKey, wire::View, ServicedCandidatePolicy)>,
     ) -> Result<Option<ProducerReservationToken>, AdapterError> {
+        if self.reducer.durable_state().decision().is_some() {
+            // The durable Decision is the sole restart owner for the rest of
+            // this height. Reclamation publishes an empty owner epoch before
+            // any post-Decision application, timer, or queued ingress can be
+            // serviced. Reserving another producer here would persist a live
+            // owner beside `decision_reclaimed = true`, contradicting that
+            // durable boundary before the reducer can discard the occurrence.
+            if !self.serviced_candidates_decision_reclaimed
+                || !self.serviced_candidates.is_empty()
+                || !self.durable_serviced_candidates.is_empty()
+                || !self.producer_continuations.is_empty()
+                || !self.durable_producer_continuations.is_empty()
+                || !self.restored_dormant_producer_continuations.is_empty()
+                || !self.deferred_producer_continuations.is_empty()
+                || !self.pending_producer_handoffs.is_empty()
+            {
+                return Err(self.fail_serviced_candidate_store(
+                    "durable Decision did not retain canonical reclaimed producer state".to_owned(),
+                ));
+            }
+            return Ok(None);
+        }
         let (Some((candidate, _, _)), Some(selected)) =
             (candidate, self.selected_producer_lifecycle.clone())
         else {
@@ -7779,7 +7804,7 @@ impl SumeragiV2Adapter {
                 })
             }
             wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
-                if vote.round.view != current_view {
+                if !reducer::timeout_vote_view_is_admissible(current_view, vote.round.view) {
                     return false;
                 }
                 Some(IngressSemanticKey::TimeoutVote {
@@ -8059,14 +8084,28 @@ impl SumeragiV2Adapter {
         AdapterError::DeferredServiceContractViolation
     }
 
-    fn deferred_queue_lengths(&self) -> DeferredQueueLengths {
+    /// Snapshot only the lifecycle-minimal candidates the runtime authorized
+    /// for this service turn.
+    ///
+    /// The runtime may deliberately exclude an older queue class whose
+    /// physical lifecycle is not yet serviceable.  The deferred-service proof
+    /// must therefore describe the same eligible projection used by class
+    /// rotation; using global queue lengths makes a valid filtered selection
+    /// prove a different class and reject its own one-shot ownership token.
+    fn eligible_deferred_queue_lengths(&self, eligible: &BTreeSet<u128>) -> DeferredQueueLengths {
+        let count = |queue: &VecDeque<DeferredInput>| {
+            u64::try_from(
+                queue
+                    .iter()
+                    .filter(|input| eligible.contains(&input.admission_ordinal))
+                    .count(),
+            )
+            .expect("bounded eligible deferred queue length fits u64")
+        };
         DeferredQueueLengths {
-            completion: u64::try_from(self.deferred_completions.len())
-                .expect("bounded completion queue length fits u64"),
-            progress: u64::try_from(self.deferred_progress_inputs.len())
-                .expect("bounded progress queue length fits u64"),
-            normal: u64::try_from(self.deferred_inputs.len())
-                .expect("bounded normal queue length fits u64"),
+            completion: count(&self.deferred_completions),
+            progress: count(&self.deferred_progress_inputs),
+            normal: count(&self.deferred_inputs),
         }
     }
 
@@ -8080,7 +8119,7 @@ impl SumeragiV2Adapter {
         &mut self,
         eligible: &BTreeSet<u128>,
     ) -> Result<Option<DeferredServiceSelection>, AdapterError> {
-        let queue_lengths_before = self.deferred_queue_lengths();
+        let queue_lengths_before = self.eligible_deferred_queue_lengths(eligible);
         let service_cursor_before = self.next_deferred_priority;
         for _ in 0..3 {
             let priority = self.next_deferred_priority;
@@ -8153,7 +8192,7 @@ impl SumeragiV2Adapter {
             } else {
                 DeferredRetagRelation::Unchanged
             };
-            let queue_lengths_after = self.deferred_queue_lengths();
+            let queue_lengths_after = self.eligible_deferred_queue_lengths(eligible);
             let mut evidence = DeferredServiceEvidence {
                 admission_ordinal: input.admission_ordinal,
                 priority,
@@ -12714,29 +12753,10 @@ mod tests {
             .expect("bind post-Decision completion");
         let completion_reservation = replayed_again
             .reserve_selected_producer_continuation(Some(completion_candidate))
-            .expect("reserve post-Decision completion")
-            .expect("tracked completion reserves");
-        let completion_handoff = replayed_again
-            .record_serviced_candidate(
-                Some(completion_candidate),
-                true,
-                true,
-                Some(completion_reservation.clone()),
-            )
-            .expect("Decision retires process-local completion");
-        assert!(completion_handoff.is_none());
-        assert!(
-            !replayed_again
-                .durable_producer_continuations
-                .contains_key(&completion_reservation.address),
-            "Decision early return cannot publish an orphan producer terminal"
-        );
-        assert!(
-            !replayed_again
-                .producer_continuations
-                .contains_key(&completion_reservation.address),
-            "Decision early return cannot retain a process-local producer ghost"
-        );
+            .expect("suppress post-Decision producer reservation");
+        assert!(completion_reservation.is_none());
+        assert!(replayed_again.durable_producer_continuations.is_empty());
+        assert!(replayed_again.producer_continuations.is_empty());
         replayed_again.clear_selected_producer_lifecycle();
         let post_replay = unowned_body_event(&replayed_again, marker);
         replayed_again
@@ -14176,6 +14196,95 @@ mod tests {
     }
 
     #[test]
+    fn post_decision_selected_lifecycles_cannot_reopen_the_reclaimed_owner_epoch() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
+        assert!(startup.is_empty());
+
+        let decided_subject = subject(0x7c);
+        let leader = adapter.wire_context.leader(0);
+        let proposal = proposal(&adapter.wire_context, leader, decided_subject);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+            unreachable!("proposal helper returns a proposal")
+        };
+        let manifest = proposal.manifest;
+        let (durable, validated) =
+            validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+        let decision = wire::QuorumCertificate {
+            round: manifest.round,
+            proposal_round: manifest.round,
+            phase: wire::GlobalPhase::Commit,
+            subject: decided_subject,
+            execution_commitment: validated.execution_commitment(),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0x7c; 96],
+        };
+        let decided = adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                    decision.clone(),
+                )),
+            ))
+            .expect("install the exact durable Decision");
+        assert!(matches!(
+            decided.effects(),
+            [AdapterEffect::FetchBody { .. }]
+        ));
+        assert!(adapter.serviced_candidates_decision_reclaimed);
+        assert!(adapter.serviced_candidates.is_empty());
+        assert!(adapter.durable_serviced_candidates.is_empty());
+        assert!(adapter.producer_continuations.is_empty());
+        assert!(adapter.durable_producer_continuations.is_empty());
+        let reclaimed_snapshot = std::fs::read(adapter.serviced_candidate_store_path_for_test())
+            .expect("read reclaimed owner snapshot");
+
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"post-Decision validated body"), 1)
+            .expect("bind post-Decision validation lifecycle");
+        let applied = adapter
+            .local_proposal_ready(adapter.current_tag(), manifest, &durable, &validated)
+            .expect("service selected post-Decision validation without a producer owner");
+        adapter.clear_selected_producer_lifecycle();
+        let apply_tag = match applied.effects() {
+            [
+                AdapterEffect::Apply {
+                    tag,
+                    subject,
+                    certificate,
+                },
+            ] if *subject == decided_subject && certificate == &decision => *tag,
+            effects => panic!("unexpected exact Decision application effects: {effects:?}"),
+        };
+        assert!(applied.producer_handoff().is_none());
+
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"post-Decision application"), 2)
+            .expect("bind post-Decision application lifecycle");
+        let completed = adapter
+            .application_completed(apply_tag, decided_subject)
+            .expect("service selected post-Decision application completion");
+        adapter.clear_selected_producer_lifecycle();
+        assert_eq!(completed.disposition(), reducer::StepDisposition::Applied);
+        assert!(completed.effects().is_empty());
+        assert!(completed.producer_handoff().is_none());
+
+        assert!(adapter.serviced_candidates_decision_reclaimed);
+        assert!(adapter.serviced_candidates.is_empty());
+        assert!(adapter.durable_serviced_candidates.is_empty());
+        assert!(adapter.producer_continuations.is_empty());
+        assert!(adapter.durable_producer_continuations.is_empty());
+        assert!(adapter.restored_dormant_producer_continuations.is_empty());
+        assert!(adapter.deferred_producer_continuations.is_empty());
+        assert!(adapter.pending_producer_handoffs.is_empty());
+        assert_eq!(
+            std::fs::read(adapter.serviced_candidate_store_path_for_test())
+                .expect("reread reclaimed owner snapshot"),
+            reclaimed_snapshot,
+            "post-Decision service cannot republish or mutate the reclaimed owner epoch"
+        );
+    }
+
+    #[test]
     fn exact_local_completion_after_decision_reports_body_validated_progress() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
@@ -15156,7 +15265,7 @@ mod tests {
                     });
                     let (outcome, admission) = adapter
                         .admit_authenticated_payload(&payload)
-                        .expect("current TimeoutVote bypasses ordinary capacity");
+                        .expect("retained TimeoutVote bypasses ordinary capacity");
                     assert!(outcome.is_none());
                     let admission = admission.expect("TimeoutVote owns a capacity-bypass record");
                     assert!(
@@ -15190,10 +15299,15 @@ mod tests {
         admit_locked_roster(&mut adapter, first_lock.0, first_lock.1, first_lock.2);
         let roster_len = adapter.wire_context.roster.len();
         admit_timeout_roster(&mut adapter, first_lock.0);
+        let adjacent_timeout_round = wire::ConsensusRound {
+            view: first_lock.0.view + reducer::FUTURE_TIMEOUT_VOTE_LOOKAHEAD,
+            ..first_lock.0
+        };
+        admit_timeout_roster(&mut adapter, adjacent_timeout_round);
         assert_eq!(
             adapter.ingress_equivocations.len(),
             semantic_ingress_capacity(roster_len),
-            "ordinary, exact-lock, and current TimeoutVote owners realize the complete live semantic bound"
+            "ordinary, exact-lock, and bounded TimeoutVote owners realize the complete live semantic bound"
         );
         let ingress = adapter
             .adapter_queue_statuses()
@@ -15214,7 +15328,7 @@ mod tests {
                 .values()
                 .filter(|record| record.capacity_bypass)
                 .count(),
-            roster_len * 2
+            roster_len * 3
         );
         let same_view_equivocations = adapter.ingress_equivocations.clone();
         let same_view_deliveries = adapter.ingress_deliveries.clone();
@@ -16157,6 +16271,26 @@ mod tests {
             .expect("the runtime-minimal deferred owner is present");
         assert_eq!(selection.evidence.admission_ordinal, 1);
         assert_eq!(selection.evidence.priority, DeferredPriority::Normal);
+        assert!(
+            selection.evidence.validate_exact(),
+            "lifecycle-filtered selection must produce an ownership proof over the same eligible projection"
+        );
+        assert_eq!(
+            selection.evidence.queue_lengths_before,
+            DeferredQueueLengths {
+                completion: 0,
+                progress: 0,
+                normal: 1,
+            }
+        );
+        assert_eq!(
+            selection.evidence.queue_lengths_after,
+            DeferredQueueLengths {
+                completion: 0,
+                progress: 0,
+                normal: 0,
+            }
+        );
         assert_eq!(adapter.deferred_completions[0].admission_ordinal, 10);
         assert_eq!(adapter.deferred_inputs[0].admission_ordinal, 11);
         assert_eq!(adapter.deferred_completions[0].eligible_skips, 0);
@@ -16686,7 +16820,7 @@ mod tests {
             "invalid oversized rosters cannot expand the static adapter bound"
         );
         assert_eq!(semantic_ingress_capacity(0), MAX_INGRESS_SEMANTIC_KEYS);
-        assert_eq!(semantic_ingress_capacity(4), MAX_INGRESS_SEMANTIC_KEYS + 8);
+        assert_eq!(semantic_ingress_capacity(4), MAX_INGRESS_SEMANTIC_KEYS + 12);
         assert_eq!(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE, 11);
         assert_eq!(
             BTreeSet::from(ServicedCandidateStage::ALL.map(|stage| stage as u8)).len(),
@@ -16696,7 +16830,7 @@ mod tests {
         assert_eq!(
             serviced_candidate_capacity(4),
             (MAX_INGRESS_SEMANTIC_KEYS
-                + 8
+                + 12
                 + MAX_DEFERRED_INPUTS * 2
                 + 11
                 + MAX_DEFERRED_INPUTS * 4
@@ -17199,6 +17333,142 @@ mod tests {
         assert_eq!(
             adapter.ingress_equivocations.len(),
             MAX_INGRESS_SEMANTIC_KEYS
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn adjacent_future_timeout_vote_remains_retryable_until_current_view_advances() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let current_tag = adapter.current_tag();
+        let current_round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: current_tag.view(),
+        };
+
+        let local_timeout = adapter
+            .timeout_elapsed(current_tag)
+            .expect("start the local TimeoutVote signature fence");
+        let sign_tag = match local_timeout.effects() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(_),
+                },
+            ] => *tag,
+            effects => panic!("unexpected timeout effects: {effects:?}"),
+        };
+
+        let timeout_certificate = wire::TimeoutCertificate {
+            round: current_round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xC1; 96],
+            }],
+        };
+        let deferred_tc = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
+            ))
+            .expect("defer the current-view TC behind the signature fence");
+        assert_eq!(
+            deferred_tc.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        );
+
+        let current_vote = wire::TimeoutVote {
+            round: current_round,
+            highest_prepare_qc: None,
+            signer: 1,
+            signature: vec![0xC2],
+        };
+        let current_key = IngressSemanticKey::TimeoutVote {
+            round: current_round,
+            signer: 1,
+        };
+        let deferred_current = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(current_vote),
+            ))
+            .expect("defer one current-view owner for the signer");
+        assert_eq!(
+            deferred_current.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        );
+        assert!(adapter.ingress_deliveries.contains_key(&current_key));
+        assert_eq!(adapter.deferred_progress_inputs.len(), 2);
+
+        let adjacent_round = wire::ConsensusRound {
+            view: current_round
+                .view
+                .saturating_add(reducer::FUTURE_TIMEOUT_VOTE_LOOKAHEAD),
+            ..current_round
+        };
+        let adjacent_vote = wire::TimeoutVote {
+            round: adjacent_round,
+            highest_prepare_qc: None,
+            signer: 1,
+            signature: vec![0xC3],
+        };
+        let adjacent_key = IngressSemanticKey::TimeoutVote {
+            round: adjacent_round,
+            signer: 1,
+        };
+        for attempt in 0..2 {
+            let busy = adapter
+                .receive_verified(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::TimeoutVote(adjacent_vote.clone()),
+                ))
+                .expect("adjacent TimeoutVote remains retryable behind its current owner");
+            assert_eq!(
+                busy.disposition(),
+                reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy),
+                "pre-advance attempt {attempt} must remain retryable"
+            );
+            assert_eq!(
+                adapter.deferred_progress_inputs.len(),
+                2,
+                "one signer cannot consume both retained timeout-round partitions"
+            );
+            assert!(adapter.ingress_equivocations.contains_key(&adjacent_key));
+            assert!(
+                !adapter.ingress_deliveries.contains_key(&adjacent_key),
+                "unowned adjacent traffic must not be poisoned as delivered"
+            );
+        }
+
+        adapter
+            .signature_completed(sign_tag, vec![0xC4; 96])
+            .expect("complete the local TimeoutVote signature");
+        let enter_view = adapter
+            .drain_deferred()
+            .expect("install the deferred TC in its own macro-step");
+        assert!(enter_view.iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::EnterView { tag, .. } if tag.view() == adjacent_round.view
+        )));
+        assert_eq!(adapter.current_tag().view(), adjacent_round.view);
+
+        let applied = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(adjacent_vote.clone()),
+            ))
+            .expect("apply the adjacent vote after its view becomes current");
+        assert_eq!(applied.disposition(), reducer::StepDisposition::Applied);
+        assert!(adapter.ingress_deliveries.contains_key(&adjacent_key));
+
+        let duplicate = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(adjacent_vote),
+            ))
+            .expect("coalesce the delivered adjacent TimeoutVote");
+        assert_eq!(
+            duplicate.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
         );
     }
 

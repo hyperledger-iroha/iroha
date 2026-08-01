@@ -4,7 +4,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     net::SocketAddr,
     sync::{
-        Arc, Mutex, Weak,
+        Arc, LazyLock, Mutex, Weak,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::SystemTime,
@@ -147,9 +147,41 @@ static HANDSHAKE_BUCKET_COUNTS: [AtomicU64; HN] = [
 static HANDSHAKE_MS_SUM: AtomicU64 = AtomicU64::new(0);
 static HANDSHAKE_MS_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Process-wide admission for the memory-hard SoraNet client puzzle.
+///
+/// Every outbound full-mesh dial used to run the Argon2 search inline on its
+/// async executor thread. Besides blocking unrelated network progress, a
+/// reconnect fanout could run several 64 MiB searches concurrently and make
+/// every ticket spend most (or all) of its authenticated lifetime before it
+/// reached the remote verifier. One permit keeps that resource use bounded
+/// across compatible config reloads; `spawn_blocking` keeps the async network
+/// executor available while the admitted search runs.
+static SORANET_PUZZLE_MINT_GATE: LazyLock<Arc<Semaphore>> =
+    LazyLock::new(|| Arc::new(Semaphore::new(1)));
+
 fn soranet_handshake_rng() -> Result<StdRng, Error> {
     StdRng::try_from_os_rng()
         .map_err(|err| Error::HandshakeSoranet(format!("SoraNet OS RNG failed: {err}")))
+}
+
+async fn run_serialized_soranet_puzzle_work<T, F>(gate: Arc<Semaphore>, work: F) -> Result<T, Error>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, Error> + Send + 'static,
+{
+    let permit = gate.acquire_owned().await.map_err(|error| {
+        Error::HandshakeSoranet(format!("SoraNet puzzle mint gate closed: {error}"))
+    })?;
+    tokio::task::spawn_blocking(move || {
+        // Keep the permit inside the blocking task. If the surrounding
+        // handshake times out, Tokio cannot cancel already-running blocking
+        // work; retaining the permit prevents a retry from creating a second
+        // concurrent Argon2 search.
+        let _permit = permit;
+        work()
+    })
+    .await
+    .map_err(|error| Error::HandshakeSoranet(format!("SoraNet puzzle mint task failed: {error}")))?
 }
 
 /// Runtime configuration shared across `SoraNet` handshake attempts.
@@ -599,6 +631,30 @@ pub struct MintedChallenge {
     pub ticket: Option<Vec<u8>>,
     /// Admission policy applied when minting the ticket.
     pub admission: Option<ChallengeAdmission>,
+}
+
+async fn mint_handshake_challenge(
+    config: Arc<SoranetHandshakeConfig>,
+    transcript_hash: [u8; 32],
+    mut rng: StdRng,
+) -> Result<(Option<MintedChallenge>, StdRng), Error> {
+    // The ordinary hashcash loop is cheap and preserves the existing direct
+    // path. Only the configured memory-hard Argon2 puzzle needs blocking-pool
+    // isolation and process-wide serialization.
+    if !config.pow_required() || config.puzzle_params.is_none() {
+        let minted = config
+            .mint_challenge_ticket(&transcript_hash, &mut rng)
+            .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
+        return Ok((minted, rng));
+    }
+
+    run_serialized_soranet_puzzle_work(Arc::clone(&SORANET_PUZZLE_MINT_GATE), move || {
+        let minted = config
+            .mint_challenge_ticket(&transcript_hash, &mut rng)
+            .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
+        Ok((minted, rng))
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -1325,6 +1381,68 @@ mod handshake_config_tests {
             err,
             ChallengeVerifyError::Pow(pow::Error::TranscriptMismatch)
         ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellation() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc as std_mpsc,
+        };
+
+        let gate = Arc::new(Semaphore::new(1));
+        let first_started = Arc::new(AtomicBool::new(false));
+        let second_started = Arc::new(AtomicBool::new(false));
+        let (release_first, wait_for_release) = std_mpsc::channel();
+
+        let first_started_by_work = Arc::clone(&first_started);
+        let first = tokio::spawn(run_serialized_soranet_puzzle_work(
+            Arc::clone(&gate),
+            move || {
+                first_started_by_work.store(true, Ordering::Release);
+                wait_for_release
+                    .recv_timeout(Duration::from_secs(2))
+                    .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
+                Ok(1_u8)
+            },
+        ));
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !first_started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("blocking puzzle work must not stall the current-thread async executor");
+
+        // Dropping the handshake future cannot cancel spawn_blocking. The
+        // blocking task must therefore retain the sole permit until it really
+        // exits, or a reconnect would recreate the original puzzle storm.
+        first.abort();
+        let _ = first.await;
+
+        let second_started_by_work = Arc::clone(&second_started);
+        let second = tokio::spawn(run_serialized_soranet_puzzle_work(
+            Arc::clone(&gate),
+            move || {
+                second_started_by_work.store(true, Ordering::Release);
+                Ok(2_u8)
+            },
+        ));
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(
+            !second_started.load(Ordering::Acquire),
+            "a retry cannot overlap uncancellable blocking puzzle work"
+        );
+
+        release_first.send(()).expect("release first puzzle work");
+        let result = tokio::time::timeout(Duration::from_secs(1), second)
+            .await
+            .expect("serialized retry should start after the first task exits")
+            .expect("retry task should not panic")
+            .expect("retry puzzle work should succeed");
+        assert_eq!(result, 2);
+        assert!(second_started.load(Ordering::Acquire));
     }
 }
 
@@ -15441,10 +15559,11 @@ mod state {
             let (client_hello, client_state) = build_client_hello(&runtime_params, &mut rng)
                 .map_err(|err| Error::HandshakeSoranet(err.to_string()))?;
             let admission_transcript = pow::derive_admission_transcript(&client_hello);
-            if let Some(minted) = soranet_handshake
-                .mint_challenge_ticket(&admission_transcript, &mut rng)
-                .map_err(|err| Error::HandshakeSoranet(err.to_string()))?
-            {
+            let (minted, resumed_rng) =
+                mint_handshake_challenge(Arc::clone(&soranet_handshake), admission_transcript, rng)
+                    .await?;
+            rng = resumed_rng;
+            if let Some(minted) = minted {
                 for frame in &minted.frames {
                     write_handshake_frame(&mut connection.write, frame).await?;
                 }

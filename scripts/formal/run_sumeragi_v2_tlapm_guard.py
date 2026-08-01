@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import ctypes
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import errno
@@ -28,19 +29,25 @@ from typing import Callable, Iterator, Mapping, Sequence
 MAX_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 MAX_CONFIGURABLE_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
 SAMPLE_INTERVAL_SECONDS = 0.25
-# `footprint` suspends each inspected task while collecting its stronger macOS
-# accounting. Probing a just-execed task in dyld at the RSS cadence can prevent
-# it from completing loader startup. Keep cheap `ps` RSS sampling frequent and
-# run the intrusive footprint measurement on the same reviewed cadence used by
-# the Kagemusha staged-resource guard.
+# Generic TLAPS runs retain a slower physical-footprint cadence. The Kagemusha
+# release runner explicitly selects the RSS cadence because Darwin libproc
+# exposes physical footprint without suspending the inspected process.
 PHYSICAL_FOOTPRINT_INTERVAL_SECONDS = 5.0
+MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT = "max_rss_physical_footprint"
+MEMORY_ENFORCEMENT_PROCESS_TREE_RSS = "process_tree_rss"
+MEMORY_ENFORCEMENT_MODES = frozenset(
+    {
+        MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT,
+        MEMORY_ENFORCEMENT_PROCESS_TREE_RSS,
+    }
+)
 CONTROL_RECORD_TIMEOUT_SECONDS = 0.2
-# macOS does not provide a sub-200 ms completion guarantee for ``ps`` or
-# ``footprint``, even when the host is otherwise idle. Keep the probes bounded
-# and fail closed, but allow enough time to avoid scheduler-jitter false
-# positives during long-running release ceremonies.
-PROCESS_INSPECTION_TIMEOUT_SECONDS = 2.0
+# macOS does not provide a short completion guarantee for ``ps`` under
+# proof-generation memory and APFS write pressure. Keep full-host admission and
+# final probes bounded while using scoped process-group inspection at runtime.
+PROCESS_INSPECTION_TIMEOUT_SECONDS = 10.0
 TERM_GRACE_SECONDS = 2.0
+WRAPPER_REAP_TIMEOUT_SECONDS = 30.0
 SESSION_READY_TIMEOUT_SECONDS = 2.0
 MEMORY_LIMIT_EXIT_CODE = 75
 LOCK_UNAVAILABLE_EXIT_CODE = 73
@@ -57,14 +64,14 @@ PS = next(
     ),
     "ps",
 )
-FOOTPRINT = next(
-    (
-        str(candidate)
-        for candidate in (Path("/usr/bin/footprint"), Path("/bin/footprint"))
-        if candidate.is_file()
-    ),
-    None,
-)
+DARWIN_LIBPROC = "/usr/lib/libproc.dylib"
+DARWIN_RUSAGE_INFO_V4 = 4
+DARWIN_PROC_PIDTBSDINFO = 3
+# The Kagemusha body is one Rayon process and TLAPS has only a small backend
+# tree. Treat reaching this fixed buffer as an accounting failure rather than
+# silently omitting a newly forked process.
+DARWIN_PROCESS_GROUP_PID_CAPACITY = 256
+DARWIN_STABLE_SNAPSHOT_ATTEMPTS = 3
 LOCK_PATH = Path("/tmp") / f"iroha-sumeragi-v2-tlapm-{os.getuid()}.lock"
 HEAVY_JOB_LOCK_PATH = Path("/tmp") / f"iroha-memory-heavy-{os.getuid()}.lock"
 
@@ -79,7 +86,7 @@ class LockUnavailable(GuardError):
 
 @dataclass(frozen=True)
 class ProcessRow:
-    """One process snapshot returned by ``ps``."""
+    """One process snapshot returned by host or scoped kernel accounting."""
 
     pid: int
     parent_pid: int
@@ -87,6 +94,40 @@ class ProcessRow:
     uid: int
     rss_bytes: int
     command: str
+    physical_footprint_bytes: int | None = None
+
+
+@dataclass(frozen=True)
+class DarwinProcessIdentity:
+    """Stable Darwin identity used to reject PID and process-group reuse."""
+
+    pid: int
+    parent_pid: int
+    process_group_id: int
+    effective_uid: int
+    real_uid: int
+    start_time_seconds: int
+    start_time_microseconds: int
+    command: str
+
+    def stable_key(self) -> tuple[int, int, int, int, int]:
+        """Return fields which cannot change during one process lifetime."""
+
+        return (
+            self.pid,
+            self.process_group_id,
+            self.real_uid,
+            self.start_time_seconds,
+            self.start_time_microseconds,
+        )
+
+
+@dataclass(frozen=True)
+class DarwinProcessMemory:
+    """One Darwin task's kernel-accounted resident and footprint evidence."""
+
+    rss_bytes: int
+    physical_footprint_bytes: int
 
 
 @dataclass(frozen=True)
@@ -98,6 +139,86 @@ class MemorySample:
     physical_footprint_bytes: int
     process_count: int
     accounting_method: str
+
+
+class _DarwinRusageInfoV4(ctypes.Structure):
+    """Darwin ``rusage_info_v4`` layout from ``sys/resource.h``."""
+
+    _fields_ = [
+        ("ri_uuid", ctypes.c_uint8 * 16),
+        *[
+            (name, ctypes.c_uint64)
+            for name in (
+                "ri_user_time",
+                "ri_system_time",
+                "ri_pkg_idle_wkups",
+                "ri_interrupt_wkups",
+                "ri_pageins",
+                "ri_wired_size",
+                "ri_resident_size",
+                "ri_phys_footprint",
+                "ri_proc_start_abstime",
+                "ri_proc_exit_abstime",
+                "ri_child_user_time",
+                "ri_child_system_time",
+                "ri_child_pkg_idle_wkups",
+                "ri_child_interrupt_wkups",
+                "ri_child_pageins",
+                "ri_child_elapsed_abstime",
+                "ri_diskio_bytesread",
+                "ri_diskio_byteswritten",
+                "ri_cpu_time_qos_default",
+                "ri_cpu_time_qos_maintenance",
+                "ri_cpu_time_qos_background",
+                "ri_cpu_time_qos_utility",
+                "ri_cpu_time_qos_legacy",
+                "ri_cpu_time_qos_user_initiated",
+                "ri_cpu_time_qos_user_interactive",
+                "ri_billed_system_time",
+                "ri_serviced_system_time",
+                "ri_logical_writes",
+                "ri_lifetime_max_phys_footprint",
+                "ri_instructions",
+                "ri_cycles",
+                "ri_billed_energy",
+                "ri_serviced_energy",
+                "ri_interval_max_phys_footprint",
+                "ri_runnable_time",
+            )
+        ],
+    ]
+
+
+class _DarwinProcBsdInfo(ctypes.Structure):
+    """Darwin ``proc_bsdinfo`` layout from ``sys/proc_info.h``."""
+
+    _fields_ = [
+        ("pbi_flags", ctypes.c_uint32),
+        ("pbi_status", ctypes.c_uint32),
+        ("pbi_xstatus", ctypes.c_uint32),
+        ("pbi_pid", ctypes.c_uint32),
+        ("pbi_ppid", ctypes.c_uint32),
+        ("pbi_uid", ctypes.c_uint32),
+        ("pbi_gid", ctypes.c_uint32),
+        ("pbi_ruid", ctypes.c_uint32),
+        ("pbi_rgid", ctypes.c_uint32),
+        ("pbi_svuid", ctypes.c_uint32),
+        ("pbi_svgid", ctypes.c_uint32),
+        ("rfu_1", ctypes.c_uint32),
+        ("pbi_comm", ctypes.c_char * 16),
+        ("pbi_name", ctypes.c_char * 32),
+        ("pbi_nfiles", ctypes.c_uint32),
+        ("pbi_pgid", ctypes.c_uint32),
+        ("pbi_pjobc", ctypes.c_uint32),
+        ("e_tdev", ctypes.c_uint32),
+        ("e_tpgid", ctypes.c_uint32),
+        ("pbi_nice", ctypes.c_int32),
+        ("pbi_start_tvsec", ctypes.c_uint64),
+        ("pbi_start_tvusec", ctypes.c_uint64),
+    ]
+
+
+_darwin_libproc: ctypes.CDLL | None = None
 
 
 class SessionControl:
@@ -149,6 +270,7 @@ class GuardedSession:
     process_group_id: int
     lifeline_writer: int
     control: SessionControl
+    body_identity: DarwinProcessIdentity | None = None
 
     def close(self) -> None:
         """Release the supervisor ends of the session control pipes."""
@@ -157,11 +279,12 @@ class GuardedSession:
             os.close(self.lifeline_writer)
             self.lifeline_writer = -1
         try:
-            self.wrapper.wait(timeout=TERM_GRACE_SECONDS * 2 + 1)
-        except subprocess.TimeoutExpired:
-            _signal_process_group(self.wrapper.pid, signal.SIGKILL)
-            self.wrapper.wait(timeout=TERM_GRACE_SECONDS)
-        self.control.close()
+            try:
+                self.wrapper.wait(timeout=WRAPPER_REAP_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                _terminate_owned_group(self.wrapper, self.process_group_id)
+        finally:
+            self.control.close()
 
 
 def _read_guarded_exit(session: GuardedSession) -> tuple[int, bool, int]:
@@ -364,6 +487,287 @@ def _process_rows() -> list[ProcessRow]:
     return rows
 
 
+def _darwin_libproc_handle() -> ctypes.CDLL:
+    """Load and type Darwin's scoped process-accounting entry points."""
+
+    global _darwin_libproc
+    try:
+        if _darwin_libproc is None:
+            _darwin_libproc = ctypes.CDLL(DARWIN_LIBPROC, use_errno=True)
+        _darwin_libproc.proc_listpgrppids.argtypes = (
+            ctypes.c_int,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        )
+        _darwin_libproc.proc_listpgrppids.restype = ctypes.c_int
+        _darwin_libproc.proc_pidinfo.argtypes = (
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint64,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        )
+        _darwin_libproc.proc_pidinfo.restype = ctypes.c_int
+        _darwin_libproc.proc_pid_rusage.argtypes = (
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_void_p,
+        )
+        _darwin_libproc.proc_pid_rusage.restype = ctypes.c_int
+    except (AttributeError, OSError) as error:
+        raise GuardError("could not load Darwin process accounting") from error
+    return _darwin_libproc
+
+
+def _darwin_list_process_group_pids(process_group_id: int) -> tuple[int, ...]:
+    """Enumerate one PGID into a fixed buffer, rejecting any truncation."""
+
+    if process_group_id <= 1:
+        raise GuardError("refusing to inspect an invalid owned process group")
+    pid_buffer = (ctypes.c_int * DARWIN_PROCESS_GROUP_PID_CAPACITY)()
+    libproc = _darwin_libproc_handle()
+    ctypes.set_errno(0)
+    count = libproc.proc_listpgrppids(
+        process_group_id,
+        pid_buffer,
+        ctypes.sizeof(pid_buffer),
+    )
+    if count < 0:
+        error_number = ctypes.get_errno()
+        detail = os.strerror(error_number) if error_number else "unknown error"
+        raise GuardError(
+            "could not enumerate owned Darwin process group "
+            f"{process_group_id}: {detail}"
+        )
+    if count >= DARWIN_PROCESS_GROUP_PID_CAPACITY:
+        raise GuardError(
+            "owned Darwin process-group PID buffer saturated; refusing "
+            "incomplete accounting"
+        )
+    process_ids = tuple(sorted(int(pid_buffer[index]) for index in range(count)))
+    if any(process_id <= 1 for process_id in process_ids):
+        raise GuardError("owned Darwin process-group enumeration returned an invalid PID")
+    if len(set(process_ids)) != len(process_ids):
+        raise GuardError("owned Darwin process-group enumeration returned duplicate PIDs")
+    return process_ids
+
+
+def _darwin_process_identity(process_id: int) -> DarwinProcessIdentity:
+    """Read one process's real ownership, grouping, and start identity."""
+
+    if process_id <= 1:
+        raise GuardError("refusing to inspect an invalid process identifier")
+    info = _DarwinProcBsdInfo()
+    libproc = _darwin_libproc_handle()
+    ctypes.set_errno(0)
+    result = libproc.proc_pidinfo(
+        process_id,
+        DARWIN_PROC_PIDTBSDINFO,
+        0,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    )
+    if result != ctypes.sizeof(info):
+        error_number = ctypes.get_errno()
+        detail = os.strerror(error_number) if error_number else "short result"
+        raise GuardError(
+            f"could not inspect Darwin identity for pid {process_id}: {detail}"
+        )
+    command_bytes = bytes(info.pbi_name) or bytes(info.pbi_comm)
+    command = command_bytes.split(b"\0", 1)[0].decode("utf-8", errors="replace")
+    return DarwinProcessIdentity(
+        pid=int(info.pbi_pid),
+        parent_pid=int(info.pbi_ppid),
+        process_group_id=int(info.pbi_pgid),
+        effective_uid=int(info.pbi_uid),
+        real_uid=int(info.pbi_ruid),
+        start_time_seconds=int(info.pbi_start_tvsec),
+        start_time_microseconds=int(info.pbi_start_tvusec),
+        command=command,
+    )
+
+
+def _validate_darwin_process_identity(
+    identity: DarwinProcessIdentity,
+    *,
+    requested_process_id: int,
+    process_group_id: int,
+) -> None:
+    """Reject foreign, reused, or malformed entries from a scoped PID list."""
+
+    if identity.pid != requested_process_id or identity.pid <= 1:
+        raise GuardError("Darwin process identity did not match the enumerated PID")
+    if identity.parent_pid < 0 or identity.start_time_seconds <= 0:
+        raise GuardError("Darwin process identity was malformed")
+    if identity.process_group_id != process_group_id:
+        raise GuardError(
+            "Darwin process-group enumeration contained a foreign process group"
+        )
+    if identity.real_uid != os.getuid():
+        raise GuardError("Darwin process-group enumeration contained a foreign real UID")
+    if identity.effective_uid != os.geteuid():
+        raise GuardError(
+            "Darwin process-group enumeration contained a foreign effective UID"
+        )
+
+
+def _capture_darwin_body_identity(
+    process_group_id: int, wrapper_process_id: int
+) -> DarwinProcessIdentity:
+    """Pin the body leader identity before runtime accounting begins."""
+
+    identity = _darwin_process_identity(process_group_id)
+    _validate_darwin_process_identity(
+        identity,
+        requested_process_id=process_group_id,
+        process_group_id=process_group_id,
+    )
+    if identity.parent_pid != wrapper_process_id:
+        raise GuardError("Darwin guarded body was not owned by its lifeline wrapper")
+    return identity
+
+
+def _darwin_process_memory(process_id: int) -> DarwinProcessMemory:
+    """Read one task's resident bytes and physical-footprint high water."""
+
+    if process_id <= 1:
+        raise GuardError("refusing to inspect an invalid process identifier")
+    usage = _DarwinRusageInfoV4()
+    libproc = _darwin_libproc_handle()
+    ctypes.set_errno(0)
+    result = libproc.proc_pid_rusage(
+        process_id,
+        DARWIN_RUSAGE_INFO_V4,
+        ctypes.byref(usage),
+    )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        detail = os.strerror(error_number) if error_number else "unknown error"
+        raise GuardError(
+            f"could not inspect Darwin resource usage for pid {process_id}: {detail}"
+        )
+    return DarwinProcessMemory(
+        rss_bytes=max(0, int(usage.ri_resident_size)),
+        physical_footprint_bytes=max(
+            0,
+            int(usage.ri_phys_footprint),
+            int(usage.ri_lifetime_max_phys_footprint),
+            int(usage.ri_interval_max_phys_footprint),
+        ),
+    )
+
+
+def _darwin_process_group_rows(
+    process_group_id: int,
+    *,
+    expected_body_identity: DarwinProcessIdentity | None = None,
+) -> list[ProcessRow]:
+    """Return a stable, real-UID-checked libproc snapshot of one owned PGID."""
+
+    if process_group_id <= 1:
+        raise GuardError("refusing to inspect an invalid owned process group")
+    if (
+        expected_body_identity is not None
+        and expected_body_identity.pid != process_group_id
+    ):
+        raise GuardError("expected Darwin body identity does not lead the owned group")
+
+    last_race_error: GuardError | None = None
+    for attempt in range(DARWIN_STABLE_SNAPSHOT_ATTEMPTS):
+        process_ids = _darwin_list_process_group_pids(process_group_id)
+        if not process_ids:
+            if _process_group_exists(process_group_id):
+                raise GuardError(
+                    "Darwin scoped accounting omitted an existing process group"
+                )
+            return []
+        if process_group_id not in process_ids:
+            raise GuardError("Darwin scoped accounting omitted the guarded body leader")
+
+        identities: dict[int, DarwinProcessIdentity] = {}
+        memory_by_pid: dict[int, DarwinProcessMemory] = {}
+        try:
+            for process_id in process_ids:
+                identity = _darwin_process_identity(process_id)
+                _validate_darwin_process_identity(
+                    identity,
+                    requested_process_id=process_id,
+                    process_group_id=process_group_id,
+                )
+                identities[process_id] = identity
+                memory_by_pid[process_id] = _darwin_process_memory(process_id)
+        except GuardError as error:
+            # A normal fork/exit race changes the scoped membership. Retry only
+            # for a small fixed count. Darwin can retain a just-exited PID in
+            # proc_listpgrppids for one turn after proc_pidinfo stops exposing
+            # it; persistent errors still fail closed.
+            last_race_error = error
+            refreshed_process_ids = _darwin_list_process_group_pids(
+                process_group_id
+            )
+            if not refreshed_process_ids and not _process_group_exists(
+                process_group_id
+            ):
+                return []
+            if attempt + 1 < DARWIN_STABLE_SNAPSHOT_ATTEMPTS:
+                continue
+            raise
+
+        final_process_ids = _darwin_list_process_group_pids(process_group_id)
+        if final_process_ids != process_ids:
+            continue
+        final_identities: dict[int, DarwinProcessIdentity] = {}
+        try:
+            for process_id in process_ids:
+                final_identities[process_id] = _darwin_process_identity(process_id)
+        except GuardError as error:
+            last_race_error = error
+            refreshed_process_ids = _darwin_list_process_group_pids(
+                process_group_id
+            )
+            if not refreshed_process_ids and not _process_group_exists(
+                process_group_id
+            ):
+                return []
+            if attempt + 1 < DARWIN_STABLE_SNAPSHOT_ATTEMPTS:
+                continue
+            raise
+        for process_id, final_identity in final_identities.items():
+            _validate_darwin_process_identity(
+                final_identity,
+                requested_process_id=process_id,
+                process_group_id=process_group_id,
+            )
+            if final_identity.stable_key() != identities[process_id].stable_key():
+                raise GuardError(
+                    f"Darwin PID {process_id} changed identity during accounting"
+                )
+
+        body_identity = identities[process_group_id]
+        if expected_body_identity is not None:
+            if body_identity.stable_key() != expected_body_identity.stable_key():
+                raise GuardError("Darwin guarded body identity changed during supervision")
+            if body_identity.parent_pid != expected_body_identity.parent_pid:
+                raise GuardError("Darwin guarded body changed lifeline parent")
+
+        return [
+            ProcessRow(
+                pid=process_id,
+                parent_pid=identities[process_id].parent_pid,
+                process_group_id=process_group_id,
+                uid=identities[process_id].real_uid,
+                rss_bytes=memory_by_pid[process_id].rss_bytes,
+                command=identities[process_id].command,
+                physical_footprint_bytes=(
+                    memory_by_pid[process_id].physical_footprint_bytes
+                ),
+            )
+            for process_id in process_ids
+        ]
+
+    raise GuardError("Darwin process-group membership did not stabilize") from last_race_error
+
+
 def _is_formal_heavy_process(row: ProcessRow) -> bool:
     """Return whether a row is a known formal or Kagemusha heavy process."""
 
@@ -427,9 +831,16 @@ def _record_foreign_heavy_job(
 def _group_rows(
     process_group_id: int,
     rows: Sequence[ProcessRow] | None = None,
+    *,
+    expected_body_identity: DarwinProcessIdentity | None = None,
 ) -> list[ProcessRow]:
     """Return all current members of the owned process group."""
 
+    if rows is None and sys.platform == "darwin":
+        return _darwin_process_group_rows(
+            process_group_id,
+            expected_body_identity=expected_body_identity,
+        )
     snapshot = _process_rows() if rows is None else rows
     return [
         row
@@ -438,46 +849,21 @@ def _group_rows(
     ]
 
 
-def _physical_footprint_bytes(process_ids: Sequence[int]) -> int:
-    """Return summed macOS physical footprint, or zero when unavailable."""
+def _darwin_process_physical_footprint_bytes(process_id: int) -> int:
+    """Return one process's kernel-accounted footprint high water."""
 
-    if sys.platform != "darwin" or FOOTPRINT is None or not process_ids:
+    return _darwin_process_memory(process_id).physical_footprint_bytes
+
+
+def _physical_footprint_bytes(process_ids: Sequence[int]) -> int:
+    """Return the summed fail-closed Darwin physical-footprint high water."""
+
+    if sys.platform != "darwin" or not process_ids:
         return 0
-    try:
-        completed = subprocess.run(
-            [
-                FOOTPRINT,
-                "--format",
-                "bytes",
-                "--noCategories",
-                *[str(pid) for pid in sorted(set(process_ids))],
-            ],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=PROCESS_INSPECTION_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as error:
-        raise GuardError(
-            "macOS physical-footprint inspection exceeded "
-            f"{PROCESS_INSPECTION_TIMEOUT_SECONDS:g} s"
-        ) from error
-    except OSError as error:
-        raise GuardError("could not start macOS physical-footprint inspection") from error
-    if completed.returncode != 0:
-        return 0
-    total = 0
-    for line in completed.stdout.splitlines():
-        fields = line.strip().split()
-        if len(fields) == 3 and fields[0] == "phys_footprint:" and fields[2] == "B":
-            try:
-                total += max(0, int(fields[1]))
-            except ValueError:
-                continue
-    return total
+    return sum(
+        _darwin_process_physical_footprint_bytes(process_id)
+        for process_id in sorted(set(process_ids))
+    )
 
 
 def _sample_group(
@@ -485,19 +871,45 @@ def _sample_group(
     rows: Sequence[ProcessRow] | None = None,
     *,
     include_physical_footprint: bool = True,
+    memory_enforcement_mode: str = MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT,
+    expected_body_identity: DarwinProcessIdentity | None = None,
 ) -> MemorySample:
-    """Measure the larger aggregate RSS or macOS physical footprint."""
+    """Measure RSS and footprint, selecting the configured enforcement value."""
 
-    group_rows = _group_rows(process_group_id, rows)
+    if memory_enforcement_mode not in MEMORY_ENFORCEMENT_MODES:
+        raise GuardError("unknown memory enforcement mode")
+
+    if expected_body_identity is None:
+        group_rows = _group_rows(process_group_id, rows)
+    else:
+        group_rows = _group_rows(
+            process_group_id,
+            rows,
+            expected_body_identity=expected_body_identity,
+        )
     rss_bytes = sum(row.rss_bytes for row in group_rows)
-    footprint_bytes = (
-        _physical_footprint_bytes([row.pid for row in group_rows])
-        if include_physical_footprint
-        else 0
-    )
-    if footprint_bytes > 0:
+    scoped_footprints_available = all(
+        row.physical_footprint_bytes is not None for row in group_rows
+    ) and bool(group_rows)
+    if scoped_footprints_available:
+        # proc_pid_rusage supplies resident size and footprint together. Darwin
+        # therefore enforces the footprint on every cheap scoped sample rather
+        # than deferring data already obtained from the kernel.
+        footprint_bytes = sum(
+            int(row.physical_footprint_bytes or 0) for row in group_rows
+        )
+    elif include_physical_footprint:
+        footprint_bytes = _physical_footprint_bytes(
+            [row.pid for row in group_rows]
+        )
+    else:
+        footprint_bytes = 0
+    if memory_enforcement_mode == MEMORY_ENFORCEMENT_PROCESS_TREE_RSS:
+        memory_bytes = rss_bytes
+        method = MEMORY_ENFORCEMENT_PROCESS_TREE_RSS
+    elif footprint_bytes > 0:
         memory_bytes = max(rss_bytes, footprint_bytes)
-        method = "max_rss_physical_footprint"
+        method = MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT
     else:
         memory_bytes = rss_bytes
         method = "rss"
@@ -533,9 +945,62 @@ def _signal_process_group(process_group_id: int, signum: int) -> None:
     except ProcessLookupError:
         return
     except OSError as error:
+        # The group can exit between the supervisor's last existence check and
+        # this signal. Swallow the signal error only after a fresh probe proves
+        # that the exact group is gone; every other error remains fail-closed.
+        if not _process_group_exists(process_group_id):
+            return
         raise GuardError(
             f"could not signal owned process group {process_group_id}"
         ) from error
+
+
+def _wait_for_process_group_absence(
+    process_group_id: int, timeout_seconds: float
+) -> bool:
+    """Wait a bounded interval for one exact process group to disappear."""
+
+    deadline = time.monotonic() + timeout_seconds
+    while _process_group_exists(process_group_id):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
+def _reap_after_owned_group_absence(
+    process: subprocess.Popen[bytes], process_group_id: int
+) -> None:
+    """Reap the body owner after its group is absent, killing a wedged wrapper."""
+
+    try:
+        process.wait(timeout=WRAPPER_REAP_TIMEOUT_SECONDS)
+        return
+    except subprocess.TimeoutExpired:
+        # The public supervisor passes the lifeline wrapper here while the
+        # wrapper owns a separately sessioned body. Do not repeatedly signal
+        # the already-terminated body PGID when it is the wrapper that wedged.
+        if process.pid != process_group_id:
+            _signal_process_group(process.pid, signal.SIGKILL)
+        else:
+            _signal_process_group(process_group_id, signal.SIGKILL)
+    try:
+        process.wait(timeout=TERM_GRACE_SECONDS)
+    except subprocess.TimeoutExpired as error:
+        raise GuardError(
+            f"owned process wrapper {process.pid} could not be reaped"
+        ) from error
+
+
+def _require_owned_group_absent(process_group_id: int) -> None:
+    """Fail if a KILLed owned group does not disappear within the bound."""
+
+    if not _wait_for_process_group_absence(
+        process_group_id, WRAPPER_REAP_TIMEOUT_SECONDS
+    ):
+        raise GuardError(
+            f"owned TLAPS process group {process_group_id} is still present"
+        )
 
 
 def _terminate_owned_group(
@@ -546,25 +1011,12 @@ def _terminate_owned_group(
     if process_group_id <= 1:
         raise GuardError("refusing to signal an invalid owned process group")
     _signal_process_group(process_group_id, signal.SIGTERM)
-    deadline = time.monotonic() + TERM_GRACE_SECONDS
-    while time.monotonic() < deadline:
-        if not _process_group_exists(process_group_id):
-            break
-        time.sleep(0.05)
-    if _process_group_exists(process_group_id):
+    if not _wait_for_process_group_absence(
+        process_group_id, TERM_GRACE_SECONDS
+    ):
         _signal_process_group(process_group_id, signal.SIGKILL)
-    try:
-        process.wait(timeout=TERM_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        _signal_process_group(process_group_id, signal.SIGKILL)
-        process.wait(timeout=TERM_GRACE_SECONDS)
-    final_deadline = time.monotonic() + TERM_GRACE_SECONDS
-    while time.monotonic() < final_deadline:
-        if not _process_group_exists(process_group_id):
-            return
-        _signal_process_group(process_group_id, signal.SIGKILL)
-        time.sleep(0.05)
-    raise GuardError(f"owned TLAPS process group {process_group_id} is still present")
+    _require_owned_group_absent(process_group_id)
+    _reap_after_owned_group_absence(process, process_group_id)
 
 
 def _kill_owned_group_immediately(
@@ -575,18 +1027,27 @@ def _kill_owned_group_immediately(
     if process_group_id <= 1:
         raise GuardError("refusing to signal an invalid owned process group")
     _signal_process_group(process_group_id, signal.SIGKILL)
+    _require_owned_group_absent(process_group_id)
+    _reap_after_owned_group_absence(process, process_group_id)
+
+
+def _stop_remeasure_then_kill_owned_group(
+    process: subprocess.Popen[bytes],
+    process_group_id: int,
+    remeasure: Callable[[], MemorySample],
+) -> MemorySample:
+    """Freeze allocation, take one bounded kernel sample, then KILL and reap."""
+
+    if process_group_id <= 1:
+        raise GuardError("refusing to signal an invalid owned process group")
+    _signal_process_group(process_group_id, signal.SIGSTOP)
     try:
-        process.wait(timeout=TERM_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        _signal_process_group(process_group_id, signal.SIGKILL)
-        process.wait(timeout=TERM_GRACE_SECONDS)
-    final_deadline = time.monotonic() + TERM_GRACE_SECONDS
-    while time.monotonic() < final_deadline:
-        if not _process_group_exists(process_group_id):
-            return
-        _signal_process_group(process_group_id, signal.SIGKILL)
-        time.sleep(0.05)
-    raise GuardError(f"owned TLAPS process group {process_group_id} is still present")
+        # One synchronous libproc/process snapshot is the entire bound. There
+        # is no external ps/footprint subprocess that can stall while the body
+        # is stopped, and no retry can let allocation resume.
+        return remeasure()
+    finally:
+        _kill_owned_group_immediately(process, process_group_id)
 
 
 def _exit_status(returncode: int) -> int:
@@ -875,7 +1336,30 @@ def _spawn_guarded_session(
         process_group_id = int(fields[1])
         if process_group_id <= 1 or process_group_id == wrapper.pid:
             raise GuardError("lifeline wrapper reported an invalid body process group")
-        session = GuardedSession(wrapper, process_group_id, lifeline_writer, control)
+        body_identity: DarwinProcessIdentity | None = None
+        if sys.platform == "darwin":
+            try:
+                body_identity = _capture_darwin_body_identity(
+                    process_group_id, wrapper.pid
+                )
+            except GuardError:
+                # A very short command may disappear between READY and this
+                # identity read. Accept only a kernel-confirmed absent group;
+                # alternatively, accept an authenticated wrapper which exits
+                # within the existing control-record bound. A live but
+                # unidentifiable body is never supervised.
+                if _process_group_exists(process_group_id):
+                    try:
+                        wrapper.wait(timeout=CONTROL_RECORD_TIMEOUT_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        raise
+        session = GuardedSession(
+            wrapper,
+            process_group_id,
+            lifeline_writer,
+            control,
+            body_identity,
+        )
         lifeline_writer = -1
         control = None
         return session
@@ -918,6 +1402,7 @@ def _run_guarded(
     physical_footprint_interval_seconds: float = (
         PHYSICAL_FOOTPRINT_INTERVAL_SECONDS
     ),
+    memory_enforcement_mode: str = MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT,
     held_lock_descriptors: Sequence[int] = (),
     child_directory_descriptors: Sequence[int] = (),
     post_run_cleanup: Callable[[], int | None] | None = None,
@@ -942,6 +1427,8 @@ def _run_guarded(
         raise GuardError("sample interval must be positive")
     if physical_footprint_interval_seconds <= 0:
         raise GuardError("physical-footprint interval must be positive")
+    if memory_enforcement_mode not in MEMORY_ENFORCEMENT_MODES:
+        raise GuardError("unknown memory enforcement mode")
     frozen_context: dict[str, object] | None = None
     if report_context is not None:
         try:
@@ -985,6 +1472,26 @@ def _run_guarded(
         if received_signal == 0:
             received_signal = signum
 
+    def record_wrapper_completion(completed_session: GuardedSession) -> None:
+        """Consume authenticated body status after the wrapper has exited."""
+
+        nonlocal child_exit_code
+        nonlocal exit_reason
+        nonlocal final_status
+        nonlocal kernel_peak_rss_bytes
+        child_exit_code, lingering, kernel_peak_rss_bytes = _read_guarded_exit(
+            completed_session
+        )
+        if lingering:
+            exit_reason = "lingering_process_group"
+            final_status = 1
+        else:
+            exit_reason = "completed" if child_exit_code == 0 else "child_exit"
+            final_status = _exit_status(child_exit_code)
+        if kernel_peak_rss_bytes > memory_limit_bytes:
+            exit_reason = "kernel_memory_limit"
+            final_status = MEMORY_LIMIT_EXIT_CODE
+
     watched_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
     previous_handlers = {
         signum: signal.getsignal(signum) for signum in watched_signals
@@ -997,6 +1504,7 @@ def _run_guarded(
             {
                 "event": "start",
                 "memory_limit_bytes": memory_limit_bytes,
+                "memory_enforcement_mode": memory_enforcement_mode,
                 "physical_footprint_interval_seconds": (
                     physical_footprint_interval_seconds
                 ),
@@ -1055,38 +1563,63 @@ def _run_guarded(
                 ) = _read_guarded_exit(session)
                 break
 
+            if session.wrapper.poll() is not None:
+                record_wrapper_completion(session)
+                break
+
             now = time.monotonic()
             if now >= next_sample:
-                process_rows = _process_rows()
-                foreign = _foreign_heavy_jobs(
-                    process_rows,
-                    owned_process_group_id=session.process_group_id,
-                )
-                if foreign:
-                    first = foreign[0]
-                    exit_reason = "foreign_heavy_job"
-                    final_status = FOREIGN_JOB_EXIT_CODE
-                    _kill_owned_group_immediately(
-                        session.wrapper, session.process_group_id
-                    )
-                    (
-                        child_exit_code,
-                        _lingering,
-                        kernel_peak_rss_bytes,
-                    ) = _read_guarded_exit(session)
-                    _record_foreign_heavy_job(
-                        report,
-                        first,
-                        phase="runtime",
+                # A global Darwin ``ps -axo`` can block for seconds under the
+                # generator's APFS write pressure. The held host lock already
+                # excludes cooperating heavy jobs, so use a kernel-scoped PGID
+                # selector in the hot loop. Admission and final success remain
+                # guarded by full-host snapshots.
+                process_rows: Sequence[ProcessRow] | None = None
+                if sys.platform != "darwin":
+                    process_rows = _process_rows()
+                    foreign = _foreign_heavy_jobs(
+                        process_rows,
                         owned_process_group_id=session.process_group_id,
                     )
-                    break
+                    if foreign:
+                        first = foreign[0]
+                        exit_reason = "foreign_heavy_job"
+                        final_status = FOREIGN_JOB_EXIT_CODE
+                        _kill_owned_group_immediately(
+                            session.wrapper, session.process_group_id
+                        )
+                        (
+                            child_exit_code,
+                            _lingering,
+                            kernel_peak_rss_bytes,
+                        ) = _read_guarded_exit(session)
+                        _record_foreign_heavy_job(
+                            report,
+                            first,
+                            phase="runtime",
+                            owned_process_group_id=session.process_group_id,
+                        )
+                        break
                 include_physical_footprint = now >= next_physical_footprint
-                sample = _sample_group(
-                    session.process_group_id,
-                    process_rows,
-                    include_physical_footprint=include_physical_footprint,
-                )
+                try:
+                    sample = _sample_group(
+                        session.process_group_id,
+                        process_rows,
+                        include_physical_footprint=include_physical_footprint,
+                        memory_enforcement_mode=memory_enforcement_mode,
+                        expected_body_identity=session.body_identity,
+                    )
+                except GuardError:
+                    # The body can exit between the readiness record and a
+                    # libproc identity read. Trust that race only when the
+                    # authenticated lifeline wrapper finishes within the
+                    # existing bounded control-record deadline.
+                    try:
+                        session.wrapper.wait(timeout=CONTROL_RECORD_TIMEOUT_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        raise
+                    record_wrapper_completion(session)
+                    break
                 if include_physical_footprint:
                     next_physical_footprint = (
                         time.monotonic() + physical_footprint_interval_seconds
@@ -1115,8 +1648,43 @@ def _run_guarded(
                 if sample.memory_bytes > memory_limit_bytes:
                     exit_reason = "memory_limit"
                     final_status = MEMORY_LIMIT_EXIT_CODE
-                    _kill_owned_group_immediately(
-                        session.wrapper, session.process_group_id
+                    stopped_sample = _stop_remeasure_then_kill_owned_group(
+                        session.wrapper,
+                        session.process_group_id,
+                        lambda: _sample_group(
+                            session.process_group_id,
+                            include_physical_footprint=True,
+                            memory_enforcement_mode=memory_enforcement_mode,
+                            expected_body_identity=session.body_identity,
+                        ),
+                    )
+                    sample_count += 1
+                    peak_memory_bytes = max(
+                        peak_memory_bytes, stopped_sample.memory_bytes
+                    )
+                    peak_rss_bytes = max(peak_rss_bytes, stopped_sample.rss_bytes)
+                    peak_footprint_bytes = max(
+                        peak_footprint_bytes,
+                        stopped_sample.physical_footprint_bytes,
+                    )
+                    report.write(
+                        {
+                            "accounting_method": stopped_sample.accounting_method,
+                            "elapsed_seconds": round(
+                                time.monotonic() - started_monotonic, 6
+                            ),
+                            "event": "memory_limit_remeasure",
+                            "memory_bytes": stopped_sample.memory_bytes,
+                            "memory_limit_bytes": memory_limit_bytes,
+                            "physical_footprint_bytes": (
+                                stopped_sample.physical_footprint_bytes
+                            ),
+                            "process_count": stopped_sample.process_count,
+                            "process_group_id": session.process_group_id,
+                            "rss_bytes": stopped_sample.rss_bytes,
+                            "schema_version": 1,
+                            "timestamp_utc": _utc_now(),
+                        }
                     )
                     (
                         child_exit_code,
@@ -1131,20 +1699,7 @@ def _run_guarded(
 
             wrapper_returncode = session.wrapper.poll()
             if wrapper_returncode is not None:
-                child_exit_code, lingering, kernel_peak_rss_bytes = (
-                    _read_guarded_exit(session)
-                )
-                if lingering:
-                    exit_reason = "lingering_process_group"
-                    final_status = 1
-                else:
-                    exit_reason = (
-                        "completed" if child_exit_code == 0 else "child_exit"
-                    )
-                    final_status = _exit_status(child_exit_code)
-                if kernel_peak_rss_bytes > memory_limit_bytes:
-                    exit_reason = "kernel_memory_limit"
-                    final_status = MEMORY_LIMIT_EXIT_CODE
+                record_wrapper_completion(session)
                 break
             time.sleep(min(0.05, max(0.0, next_sample - time.monotonic())))
     except BaseException as error:
@@ -1233,6 +1788,7 @@ def _run_guarded(
             ),
             "kernel_peak_rss_scope": "direct_guarded_body",
             "memory_limit_bytes": memory_limit_bytes,
+            "memory_enforcement_mode": memory_enforcement_mode,
             "physical_footprint_interval_seconds": (
                 physical_footprint_interval_seconds
             ),

@@ -6,6 +6,14 @@ use super::{Quorum, QuorumError};
 pub const PROTOCOL_VERSION_V3: u16 = 3;
 /// Maximum voting validators accepted by a frozen v2 height context.
 pub const MAX_VOTING_ROSTER_LEN: usize = 128;
+/// Adjacent future timeout rounds retained for bounded pacemaker catch-up.
+pub(crate) const FUTURE_TIMEOUT_VOTE_LOOKAHEAD: u64 = 1;
+
+/// Whether a timeout-vote view belongs to the bounded current/future window.
+pub(crate) const fn timeout_vote_view_is_admissible(current_view: u64, vote_view: u64) -> bool {
+    vote_view >= current_view
+        && vote_view <= current_view.saturating_add(FUTURE_TIMEOUT_VOTE_LOOKAHEAD)
+}
 
 macro_rules! fixed_id {
     ($name:ident, $doc:literal) => {

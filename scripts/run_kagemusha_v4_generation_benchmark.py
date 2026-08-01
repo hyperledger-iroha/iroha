@@ -22,9 +22,13 @@ from scripts import run_kagemusha_v4_generation as candidate_guard
 
 resource_guard = candidate_guard.resource_guard
 BENCHMARK_EXECUTABLE = "kagemusha_recursive_spend_v4_memory_benchmark"
-BENCHMARK_SUBCOMMAND = "measure-compact-k16"
+BENCHMARK_SUBCOMMAND = "measure-compact-k17"
+K17_SHAPE_PROBE_SUBCOMMAND = "probe-compact-k17-shape"
+BENCHMARK_SUBCOMMANDS = frozenset(
+    {BENCHMARK_SUBCOMMAND, K17_SHAPE_PROBE_SUBCOMMAND}
+)
 SCRATCH_PREFIX = ".kagemusha-v4-benchmark-scratch-"
-MINIMUM_SCRATCH_FREE_BYTES = 256 * 1024 * 1024
+MINIMUM_SCRATCH_FREE_BYTES = candidate_guard.MINIMUM_OUTPUT_FREE_BYTES
 DISK_BACKED_FILESYSTEM_TYPES = frozenset(
     {
         "apfs",
@@ -39,6 +43,15 @@ DISK_BACKED_FILESYSTEM_TYPES = frozenset(
         "zfs",
     }
 )
+
+
+def _benchmark_memory_enforcement_mode(platform: str | None = None) -> str:
+    """Match production footprint enforcement on Darwin and retain RSS elsewhere."""
+
+    selected_platform = sys.platform if platform is None else platform
+    if selected_platform == "darwin":
+        return resource_guard.MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT
+    return resource_guard.MEMORY_ENFORCEMENT_PROCESS_TREE_RSS
 
 
 @dataclass(frozen=True)
@@ -204,7 +217,7 @@ def _prepare_scratch_directory(parent: Path) -> ScratchDirectory:
     if free_bytes < MINIMUM_SCRATCH_FREE_BYTES:
         os.close(parent_descriptor)
         raise resource_guard.GuardError(
-            "benchmark scratch parent has less than 256 MiB available"
+            "benchmark scratch parent has less than 16 GiB available"
         )
     run_name = f"{SCRATCH_PREFIX}{secrets.token_hex(16)}"
     run_path = resolved / run_name
@@ -306,7 +319,7 @@ def _cleanup_scratch_directory(scratch: ScratchDirectory) -> int:
 
 
 def _validate_benchmark_command(command: Sequence[str]) -> None:
-    """Admit only the prebuilt benchmark's single non-shipping operation."""
+    """Admit only the prebuilt benchmark's two exact non-shipping operations."""
 
     executable = Path(command[0]).name
     if executable.endswith(".exe"):
@@ -316,10 +329,11 @@ def _validate_benchmark_command(command: Sequence[str]) -> None:
             "Kagemusha benchmark guard requires the prebuilt "
             f"{BENCHMARK_EXECUTABLE} executable"
         )
-    if len(command) != 2 or command[1] != BENCHMARK_SUBCOMMAND:
+    if len(command) != 2 or command[1] not in BENCHMARK_SUBCOMMANDS:
+        admitted = "|".join(sorted(BENCHMARK_SUBCOMMANDS))
         raise resource_guard.GuardError(
             "Kagemusha benchmark guard supervises only the exact "
-            f"{BENCHMARK_SUBCOMMAND} operation with no extra arguments"
+            f"<{admitted}> operations with no extra arguments"
         )
 
 
@@ -424,9 +438,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         absolute_memory_ceiling_bytes=(
                             candidate_guard.ABSOLUTE_MAX_MEMORY_BYTES
                         ),
+                        memory_enforcement_mode=_benchmark_memory_enforcement_mode(),
                         held_lock_descriptors=(heavy_lock, kagemusha_lock),
                         child_directory_descriptors=(scratch.run_descriptor,),
                         sample_interval_seconds=(
+                            candidate_guard.SAMPLE_INTERVAL_SECONDS
+                        ),
+                        physical_footprint_interval_seconds=(
                             candidate_guard.SAMPLE_INTERVAL_SECONDS
                         ),
                         post_run_cleanup=cleanup_scratch,

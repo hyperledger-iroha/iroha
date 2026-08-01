@@ -6012,11 +6012,10 @@ fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
         || read_bool(&merged, &["sorafs", "repair", "enabled"]).unwrap_or(false);
     let raw_sorafs_gc = read_bool(&merged, &["torii", "sorafs", "gc", "enabled"]).unwrap_or(false)
         || read_bool(&merged, &["sorafs", "gc", "enabled"]).unwrap_or(false);
-    let config = match ConfigReader::new()
+    let reader = ConfigReader::new()
         .with_env(MockEnv::default())
-        .with_toml_source(TomlSource::inline(merged.clone()))
-        .read_and_complete::<iroha_config::parameters::user::Root>()
-    {
+        .with_toml_source(TomlSource::inline(merged.clone()));
+    let config = match iroha_config::parameters::user::Root::read_and_complete(reader) {
         Ok(user) => match user.parse() {
             Ok(parsed) => Some(parsed),
             Err(err) => {
@@ -6099,11 +6098,10 @@ fn parse_actual_config_for_genesis(
     merged: Table,
     config_layers: &[Table],
 ) -> Option<iroha_config::parameters::actual::Root> {
-    let user = match ConfigReader::new()
+    let reader = ConfigReader::new()
         .with_env(MockEnv::default())
-        .with_toml_source(TomlSource::inline(merged))
-        .read_and_complete::<iroha_config::parameters::user::Root>()
-    {
+        .with_toml_source(TomlSource::inline(merged));
+    let user = match iroha_config::parameters::user::Root::read_and_complete(reader) {
         Ok(user) => user,
         Err(err) => {
             warn!(?err, "failed to read merged config for genesis config");

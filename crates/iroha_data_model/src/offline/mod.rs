@@ -283,24 +283,24 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_LIMBS_V4: usize =
     KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_FIELD_ELEMENTS_V4 * 8;
 /// Minimum number of `u32` values in the ABI-21/V4 single-column Step ABI.
 ///
-/// This is the exact layout at the authenticated compact degree (`k = 16`).
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_MIN_PUBLIC_INPUT_LIMBS_V4: usize = 64;
+/// This is the exact layout at the authenticated compact degree (`k = 17`).
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_MIN_PUBLIC_INPUT_LIMBS_V4: usize = 66;
 /// Maximum number of `u32` values in the ABI-21/V4 single-column Step ABI.
 ///
-/// This is the exact layout at the authenticated compact degree (`k = 16`).
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_MAX_PUBLIC_INPUT_LIMBS_V4: usize = 64;
+/// This is the exact layout at the authenticated compact degree (`k = 17`).
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_MAX_PUBLIC_INPUT_LIMBS_V4: usize = 66;
 /// Canonical ABI-21/V4 field-neutral public inputs for the EqAffine/Vesta step circuit.
 ///
 /// The embedded `operation_protocol_v2` label versions the subordinate, field-neutral
 /// operation-vector layout. It is not a release or chain-wire version and cannot select
 /// a V2/V3 executor. The operation row remains V2, while the compact V5 recursive-state
 /// layout deliberately changes the V4 circuit identity and invalidates earlier candidates.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V4: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_compact_v5","layout":"single_column_field","elements":64,"ipa_round_count":16,"semantic_authority":"step_eq","semantic_header":{"elements":20,"encoding":"canonical_u128_chunks","fields":["compact_profile_version","parent_count","proof_step_count","public_statement_digest[2]","operation_poseidon_fp[2]","parent_state_poseidon_fp[2][2]","result_state_poseidon_fp[2]","manifest_sha256[2]","step_eq_protocol_sha256[2]","step_ep_protocol_sha256[2]","live_selector"]},"ipa_accumulator":{"wire_version":5,"elements":36,"formula":"2*ipa_round_count+4","encoding":"canonical_u128_chunks"},"reciprocal_audits":{"hash":"sha256","digests":4,"elements_per_digest":2},"private_witness":{"state_layout_version":5,"state_limbs":138,"parent_slots":2,"operation_field_elements":135,"operation_limbs":1080}}"#;
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V4: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_compact_v5","layout":"single_column_field","elements":66,"ipa_round_count":17,"semantic_authority":"step_eq","semantic_header":{"elements":20,"encoding":"canonical_u128_chunks","fields":["compact_profile_version","parent_count","proof_step_count","public_statement_digest[2]","operation_poseidon_fp[2]","parent_state_poseidon_fp[2][2]","result_state_poseidon_fp[2]","manifest_sha256[2]","step_eq_protocol_sha256[2]","step_ep_protocol_sha256[2]","live_selector"]},"ipa_accumulator":{"wire_version":5,"elements":38,"formula":"2*ipa_round_count+4","encoding":"canonical_u128_chunks"},"reciprocal_audits":{"hash":"sha256","digests":4,"elements_per_digest":2},"private_witness":{"state_layout_version":5,"state_limbs":138,"parent_slots":2,"operation_field_elements":135,"operation_limbs":1080}}"#;
 /// Canonical ABI-21/V4 field-neutral public inputs for the EpAffine/Pallas step circuit.
 ///
 /// As with the Eq schema, `operation_protocol_v2` is the subordinate operation-vector
 /// ABI version, not permission to enter a historical Kagemusha execution path.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V4: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_ep_compact_v5","layout":"single_column_field","elements":64,"ipa_round_count":16,"semantic_authority":"step_eq","role":"lineage_and_reciprocal_wrapper","semantic_header":{"elements":20,"encoding":"canonical_u128_chunks","fields":["compact_profile_version","parent_count","proof_step_count","public_statement_digest[2]","operation_poseidon_fp[2]","parent_state_poseidon_fp[2][2]","result_state_poseidon_fp[2]","manifest_sha256[2]","step_eq_protocol_sha256[2]","step_ep_protocol_sha256[2]","live_selector"]},"ipa_accumulator":{"wire_version":5,"elements":36,"formula":"2*ipa_round_count+4","encoding":"canonical_u128_chunks"},"reciprocal_audits":{"hash":"sha256","digests":4,"elements_per_digest":2}}"#;
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V4: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_ep_compact_v5","layout":"single_column_field","elements":66,"ipa_round_count":17,"semantic_authority":"step_eq","role":"lineage_and_reciprocal_wrapper","semantic_header":{"elements":20,"encoding":"canonical_u128_chunks","fields":["compact_profile_version","parent_count","proof_step_count","public_statement_digest[2]","operation_poseidon_fp[2]","parent_state_poseidon_fp[2][2]","result_state_poseidon_fp[2]","manifest_sha256[2]","step_eq_protocol_sha256[2]","step_ep_protocol_sha256[2]","live_selector"]},"ipa_accumulator":{"wire_version":5,"elements":38,"formula":"2*ipa_round_count+4","encoding":"canonical_u128_chunks"},"reciprocal_audits":{"hash":"sha256","digests":4,"elements_per_digest":2}}"#;
 /// Version of the compact canonical cross-field state boundary.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5: u16 = 5;
 /// Version stored in limb zero of the compact cross-field recursive state.
@@ -384,10 +384,10 @@ pub const KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4: u16 = 5;
 /// Lowest degree admitted for the complete fixed-shape V4 Step circuit.
 ///
 /// This is the authenticated fixed degree of the compact V5 profile.
-pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4: u32 = 16;
+pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4: u32 = 17;
 /// Highest degree whose serialized Pasta parameters fit the release artifact
 /// corridor with a conservative margin.
-pub const KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4: u32 = 16;
+pub const KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4: u32 = 17;
 /// Minimum unusable-row reservation required by the Halo2 base circuit.
 pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4: u32 = 9;
 /// Exact supported advice challenge-phase vector length.
@@ -399,16 +399,16 @@ pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4: u32 = 9;
 /// constrained instead of reserving speculative future phases.
 pub const KAGEMUSHA_STEP_CIRCUIT_MAX_PHASES_V4: usize = 1;
 /// Maximum configured columns of any one class in a phase.
-pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 443;
-/// Reviewed first-release advice-column profile for compact degree-16 generation.
+pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 220;
+/// Reviewed first-release advice-column profile for compact degree-17 generation.
 ///
-pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4: [u32; 1] = [443];
-/// Reviewed first-release lookup-column profile for compact degree-16 generation.
+pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4: [u32; 1] = [220];
+/// Reviewed first-release lookup-column profile for compact degree-17 generation.
 ///
 /// `BaseCircuitBuilder` reports the two unused challenge phases explicitly as
 /// zero-width suffixes even though the authenticated advice profile has only
 /// the populated phase-zero entry.
-pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4: [u32; 3] = [47, 0, 0];
+pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4: [u32; 3] = [25, 0, 0];
 /// Domain separator for canonical V4 circuit-parameter identities.
 pub const KAGEMUSHA_STEP_CIRCUIT_PARAMS_SHA256_DOMAIN_V4: &[u8] =
     b"iroha:kagemusha:step-circuit-params:compact-v5";
@@ -427,18 +427,24 @@ pub const KAGEMUSHA_PASTA_PUBLIC_BOOTSTRAP_SELECTOR_V4: u32 = 0;
 pub const KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4: u32 = 1;
 /// Absolute defensive ceiling for one measured V4 Step proof transcript.
 ///
-/// The reviewed compact composite profile is preflighted at roughly 148 KiB.
+/// The reviewed compact composite profile is exactly 93,120 bytes.
 /// The 192 KiB bound leaves explicit evolution headroom while still rejecting
 /// unbounded or profile-incompatible proof payloads. Release promotion
 /// separately pins the candidate's exact transcript size.
 pub const KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4: u32 = 192 * 1024;
+/// Exact transcript bytes for one Step proof in the reviewed release profile.
+pub const KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4: u32 = 93_120;
 /// Absolute defensive ceiling for one canonical V4 Eq/Ep proof-pair payload.
 ///
 /// A recursive pair carries two Step transcripts, two parent lineages, and two
 /// fixed accumulation transcripts. The 384 KiB bound admits the reviewed
-/// roughly 301 KiB recursive shape; release promotion pins its exact canonical
+/// 191,862-byte recursive shape; release promotion pins its exact canonical
 /// maximum rather than the smaller initialization-pair measurement.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 384 * 1024;
+/// Exact initialization-pair bytes for the reviewed release profile.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4: u32 = 186_852;
+/// Exact maximum recursive-pair bytes for the reviewed release profile.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4: u32 = 191_862;
 /// Maximum processed proving-key payload admitted by the compact V5 profile.
 ///
 /// The first-release circuit includes five authenticated Table16 SHA lanes.
@@ -446,7 +452,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 384 
 /// from the much smaller decoded verifier-resident budget.
 pub const KAGEMUSHA_COMPACT_PROVING_KEY_MAX_BYTES_V5: u64 = 5 * 1024 * 1024 * 1024;
 /// Maximum serialized `ParamsIPA` payload admitted by the compact V5 profile.
-pub const KAGEMUSHA_COMPACT_PARAMS_IPA_MAX_BYTES_V5: u64 = 8 * 1024 * 1024;
+pub const KAGEMUSHA_COMPACT_PARAMS_IPA_MAX_BYTES_V5: u64 = 9 * 1024 * 1024;
 /// Exact cryptographic profile embedded inside the ABI-21/V4 lifecycle.
 pub const KAGEMUSHA_COMPACT_PROFILE_VERSION_V5: u32 = 5;
 /// Maximum canonical recipient-only ABI-21 peer-payment archive.
@@ -4892,7 +4898,7 @@ impl KagemushaPastaPublicLayoutV4 {
                 field: "pasta_cycle.v4.public_layout.accumulator_limbs",
             })?;
         // Nineteen common-header cells precede the parity-local accumulator;
-        // the common live/bootstrap selector remains the final (64th) cell so
+        // the common live/bootstrap selector remains the final (66th) cell so
         // recursive parent loading cannot confuse it with lineage material.
         let parent_eq_accumulator_offset = 19_u32;
         let parent_ep_accumulator_offset = parent_eq_accumulator_offset;
@@ -4989,6 +4995,7 @@ impl KagemushaStepCircuitParamsV4 {
             || self.num_fixed != 1
             || self.lookup_bits != self.k - 1
             || self.minimum_unusable_rows != KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4
+            || self.max_parent_proof_bytes != KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "pasta_cycle.v4.circuit_params.release_generation_profile",
@@ -7273,7 +7280,7 @@ mod kagemusha_v4_artifact_contract_tests {
             num_instance_columns: 1,
             public_input_limbs: layout.instance_column_limbs,
             minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-            max_parent_proof_bytes: 8_192,
+            max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
         }
     }
 
@@ -7753,7 +7760,18 @@ mod kagemusha_v4_artifact_contract_tests {
         let reviewed = circuit_params();
         reviewed
             .validate_release_generation_profile()
-            .expect("reviewed compact degree-16 generation profile");
+            .expect("reviewed compact degree-17 generation profile");
+        assert_eq!(reviewed.max_parent_proof_bytes, 93_120);
+        assert_eq!(
+            KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4,
+            186_852
+        );
+        assert_eq!(
+            KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4,
+            191_862
+        );
+        assert_eq!(KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4, [220]);
+        assert_eq!(KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4, [25, 0, 0]);
 
         let mut uncalibrated = reviewed.clone();
         uncalibrated.num_advice_per_phase = vec![1];
@@ -7762,6 +7780,16 @@ mod kagemusha_v4_artifact_contract_tests {
         assert!(
             uncalibrated.validate_release_generation_profile().is_err(),
             "uncalibrated geometry must not authorize release generation"
+        );
+
+        let mut uncalibrated_proof = reviewed.clone();
+        uncalibrated_proof.max_parent_proof_bytes += 1;
+        assert!(uncalibrated_proof.validate().is_ok());
+        assert!(
+            uncalibrated_proof
+                .validate_release_generation_profile()
+                .is_err(),
+            "uncalibrated proof length must not authorize release generation"
         );
 
         let mut phantom_phase = reviewed.clone();
@@ -7796,9 +7824,9 @@ mod kagemusha_v4_artifact_contract_tests {
         let maximum_layout =
             KagemushaPastaPublicLayoutV4::for_ipa_round_count(KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4)
                 .expect("maximum V4 public layout");
-        assert_eq!(minimum_layout.accumulator_limbs, 36);
-        assert_eq!(minimum_layout.live_selector_offset, 63);
-        assert_eq!(minimum_layout.instance_column_limbs, 64);
+        assert_eq!(minimum_layout.accumulator_limbs, 38);
+        assert_eq!(minimum_layout.live_selector_offset, 65);
+        assert_eq!(minimum_layout.instance_column_limbs, 66);
         assert_eq!(maximum_layout, minimum_layout);
         assert_eq!(
             usize::try_from(minimum_layout.instance_column_limbs)
@@ -7823,12 +7851,12 @@ mod kagemusha_v4_artifact_contract_tests {
         let mut below_minimum = circuit_params();
         below_minimum.k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4 - 1;
         below_minimum.lookup_bits = below_minimum.k - 1;
-        below_minimum.public_input_limbs = 64;
+        below_minimum.public_input_limbs = 66;
         assert!(below_minimum.validate().is_err());
         let mut above_maximum = circuit_params();
         above_maximum.k = KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4 + 1;
         above_maximum.lookup_bits = above_maximum.k - 1;
-        above_maximum.public_input_limbs = 64;
+        above_maximum.public_input_limbs = 66;
         assert!(above_maximum.validate().is_err());
 
         for schema in [
@@ -7836,12 +7864,12 @@ mod kagemusha_v4_artifact_contract_tests {
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V4,
         ] {
             let schema = core::str::from_utf8(schema).expect("static schema is UTF-8");
-            assert!(schema.contains("\"elements\":64"));
-            assert!(schema.contains("\"ipa_round_count\":16"));
+            assert!(schema.contains("\"elements\":66"));
+            assert!(schema.contains("\"ipa_round_count\":17"));
             assert!(schema.contains("\"semantic_authority\":\"step_eq\""));
             assert!(!schema.contains("\"state_layout_version\":2"));
             assert!(!schema.contains("\"state_limbs\":890"));
-            assert!(schema.contains("\"ipa_accumulator\":{\"wire_version\":5,\"elements\":36"));
+            assert!(schema.contains("\"ipa_accumulator\":{\"wire_version\":5,\"elements\":38"));
             assert!(schema.contains("\"live_selector\""));
             assert!(!schema.contains("4156"));
             assert!(!schema.contains("4172"));

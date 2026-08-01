@@ -16441,7 +16441,7 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
 def _timeout_vote_semantic_capacity_source_fidelity_errors(
     repo_root: Path,
 ) -> list[str]:
-    """Seal exact current-view TimeoutVote capacity and pruning ownership."""
+    """Seal exact current/adjacent TimeoutVote capacity and pruning ownership."""
 
     path = (
         repo_root
@@ -16484,10 +16484,149 @@ def _timeout_vote_semantic_capacity_source_fidelity_errors(
     _require_rust_token_sequence(
         path,
         capacity,
-        "MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(2))",
-        "semantic capacity must reserve the two roster-bounded protected sets",
+        "MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(3))",
+        "semantic capacity must reserve the three roster-bounded protected sets",
         errors,
     )
+
+    types_path = path.with_name("v2_core") / "types.rs"
+    if not types_path.is_file() or types_path.is_symlink():
+        errors.append(
+            f"{types_path}: bounded TimeoutVote view predicate source must be "
+            "a regular file"
+        )
+    else:
+        types_source = types_path.read_text(encoding="utf-8")
+        view_window = _require_rust_item(
+            types_path,
+            types_source,
+            "timeout_vote_view_is_admissible",
+            errors,
+        )
+        _require_rust_item_context(
+            types_path,
+            view_window,
+            (),
+            "bounded TimeoutVote view predicate",
+            errors,
+        )
+        _require_rust_item_token_sha256(
+            types_path,
+            view_window,
+            _TIMEOUT_VOTE_VIEW_WINDOW_ITEM_SHA256[
+                "timeout_vote_view_is_admissible"
+            ],
+            "bounded TimeoutVote view predicate",
+            errors,
+        )
+        _require_rust_source_token_sequence(
+            types_path,
+            types_source,
+            "pub(crate) const FUTURE_TIMEOUT_VOTE_LOOKAHEAD: u64 = 1;",
+            "TimeoutVote lookahead must remain exactly one view",
+            errors,
+        )
+        _require_rust_token_sequence(
+            types_path,
+            view_window,
+            """
+vote_view >= current_view
+    && vote_view <= current_view.saturating_add(FUTURE_TIMEOUT_VOTE_LOOKAHEAD)
+""",
+            "TimeoutVote predicate must enforce the lower bound and "
+            "saturating one-view upper bound",
+            errors,
+        )
+
+    reducer_path = path.with_name("v2_core") / "reducer.rs"
+    if not reducer_path.is_file() or reducer_path.is_symlink():
+        errors.append(
+            f"{reducer_path}: bounded TimeoutVote reducer source must be a "
+            "regular file"
+        )
+    else:
+        reducer_source = reducer_path.read_text(encoding="utf-8")
+        timeout_admission = _require_qualified_rust_item(
+            reducer_path,
+            reducer_source,
+            "Reducer",
+            "on_timeout_vote",
+            errors,
+            "bounded reducer TimeoutVote admission",
+        )
+        _require_rust_token_sequence(
+            reducer_path,
+            timeout_admission,
+            """
+if !timeout_vote_view_is_admissible(
+    self.durable.current_view(),
+    vote.round().view()
+) {
+    return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
+}
+""",
+            "reducer TimeoutVote admission must use the bounded current/adjacent predicate",
+            errors,
+        )
+        persisted = _require_qualified_rust_item(
+            reducer_path,
+            reducer_source,
+            "Reducer",
+            "on_persisted",
+            errors,
+            "bounded TimeoutVote install retention",
+        )
+        _require_rust_token_sequence(
+            reducer_path,
+            persisted,
+            """
+let current_view = self.durable.current_view();
+self.timeout_votes.retain(|round, _| {
+    round.height() == self.context.height()
+        && timeout_vote_view_is_admissible(current_view, round.view())
+});
+self.formed_timeouts.retain(|round| {
+    round.height() == self.context.height()
+        && timeout_vote_view_is_admissible(current_view, round.view())
+});
+""",
+            "Timeout install must retain exactly the current/adjacent vote "
+            "and formed-certificate pools",
+            errors,
+        )
+
+    reducer_tests_path = path.with_name("v2_core") / "tests.rs"
+    if not reducer_tests_path.is_file() or reducer_tests_path.is_symlink():
+        errors.append(
+            f"{reducer_tests_path}: bounded TimeoutVote reducer regressions "
+            "must be a regular file"
+        )
+    else:
+        reducer_tests_source = reducer_tests_path.read_text(encoding="utf-8")
+        for name, expected_sha256 in (
+            _TIMEOUT_VOTE_VIEW_WINDOW_REGRESSION_TEST_SHA256.items()
+        ):
+            item = _require_rust_item(
+                reducer_tests_path,
+                reducer_tests_source,
+                name,
+                errors,
+            )
+            _require_rust_item_context(
+                reducer_tests_path,
+                item,
+                (),
+                f"bounded TimeoutVote reducer regression {name}",
+                errors,
+                expected_attributes=("#[test]",),
+            )
+            _require_rust_item_token_sha256(
+                reducer_tests_path,
+                item,
+                expected_sha256,
+                f"bounded TimeoutVote reducer regression {name}",
+                errors,
+            )
 
     admission = _require_qualified_rust_item(
         path,
@@ -16504,7 +16643,7 @@ def _timeout_vote_semantic_capacity_source_fidelity_errors(
         "SumeragiV2Adapter",
         "prune_ingress_records",
         errors,
-        "authenticated TimeoutVote current-view pruning",
+        "authenticated TimeoutVote current/adjacent-view pruning",
     )
     for name, item in (
         ("admit_authenticated_payload", admission),
@@ -16519,12 +16658,26 @@ def _timeout_vote_semantic_capacity_source_fidelity_errors(
                     "authenticated TimeoutVote protected-capacity admission"
                 ),
                 "prune_ingress_records": (
-                    "authenticated TimeoutVote current-view pruning"
+                    "authenticated TimeoutVote current/adjacent-view pruning"
                 ),
             }[name],
             errors,
         )
 
+    _require_rust_token_sequence(
+        path,
+        admission,
+        """
+if !reducer::timeout_vote_view_is_admissible(current_view, vote.round.view) {
+    return Ok((
+        Some(Self::ignored_outcome(reducer::IgnoreReason::IrrelevantView)),
+        None,
+    ));
+}
+""",
+        "authenticated TimeoutVote admission must accept only the current/adjacent view window",
+        errors,
+    )
     _require_rust_token_sequence(
         path,
         admission,
@@ -16565,15 +16718,17 @@ if capacity_bypass && !protected_capacity_bypass {
         path,
         prune,
         """
-let matches_current_timeout = |key: IngressSemanticKey| {
+let matches_retained_timeout = |key: IngressSemanticKey| {
     matches!(
         key,
         IngressSemanticKey::TimeoutVote { round, .. }
-            if round.height == current_height && round.view == current_view
+            if round.height == current_height
+                && reducer::timeout_vote_view_is_admissible(current_view, round.view)
     )
 };
 """,
-        "capacity-bypass TimeoutVotes must be retained only at the current height and view",
+        "capacity-bypass TimeoutVotes must be retained only at the current "
+        "height and current/adjacent view",
         errors,
     )
     _require_rust_token_sequence(
@@ -16581,10 +16736,10 @@ let matches_current_timeout = |key: IngressSemanticKey| {
         prune,
         """
 if record.capacity_bypass {
-    matches_current_lock(*key, record.fingerprint) || matches_current_timeout(*key)
+    matches_current_lock(*key, record.fingerprint) || matches_retained_timeout(*key)
 } else {
 """,
-        "capacity-bypass pruning must preserve either the exact lock or current TimeoutVote",
+        "capacity-bypass pruning must preserve either the exact lock or retained TimeoutVote",
         errors,
     )
     if prune is not None:
@@ -16592,7 +16747,7 @@ if record.capacity_bypass {
         ordered_sequences = (
             "let current_view = self.reducer.current_tag().view()",
             "let current_height = self.wire_context.height",
-            "let matches_current_timeout = |key: IngressSemanticKey|",
+            "let matches_retained_timeout = |key: IngressSemanticKey|",
             "self.ingress_equivocations.retain",
             "self.ingress_deliveries.retain",
         )
@@ -16615,6 +16770,7 @@ if record.capacity_bypass {
     )
     long_tests = {
         "capacity_bypass_records_follow_current_lock_and_timeout_view",
+        "adjacent_future_timeout_vote_remains_retryable_until_current_view_advances",
     }
     for name, expected_sha256 in (
         _TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256.items()
@@ -24850,7 +25006,8 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
             "TimeoutReceiptAdmitted": (
                 "/\\ NoDecisionForNode(node) "
-                "/\\ vote.view = nodeView[node] "
+                "/\\ vote.view >= nodeView[node] "
+                "/\\ vote.view <= nodeView[node] + 1 "
                 "/\\ ~TimeoutVoteSlotOccupied(node, vote)"
             ),
             "TimeoutReceiptsAfter": (
@@ -52109,13 +52266,15 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "DeliverTimeoutReady": "TimeoutDeliveryGuard(envelope)",
         "CurrentTimeoutControlFor": (
-            'LET currentClass == RetainedClassItems(items, node, "TimeoutVote") '
-            "exactCurrentClass == \\A item \\in currentClass: "
+            "LET installedView == "
+            "IF StrictSameRoundTcUpgrade(node, tc) "
+            "THEN nodeView[node] ELSE tc.view + 1 "
+            'IN {item \\in RetainedClassItems(items, node, "TimeoutVote"): '
             "/\\ item.envelope.vote.context = context "
             "/\\ item.envelope.vote.height = height "
-            "/\\ item.envelope.vote.view = nodeView[node] "
-            "/\\ item.envelope.vote.signer = node "
-            "IN IF exactCurrentClass THEN currentClass ELSE {}"
+            "/\\ item.envelope.vote.view >= installedView "
+            "/\\ item.envelope.vote.view <= installedView + 1 "
+            "/\\ item.envelope.vote.signer = node}"
         ),
         "InstalledControlAfterTC": (
             "LET withoutOwnTc == retained \\ RetainedClassItems("
@@ -52125,8 +52284,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "item.source # node \\/ ControlClass(item) "
             "\\in AsyncInstallRetainedControlKinds} "
             "withCurrentTimeout == installed \\cup "
-            "(IF StrictSameRoundTcUpgrade(node, tc) "
-            "THEN CurrentTimeoutControlFor(remembered, node) ELSE {}) "
+            "CurrentTimeoutControlFor(remembered, node, tc) "
             "IN ReseedExactHighestPrepareControl("
             "withCurrentTimeout, node, tc)"
         ),

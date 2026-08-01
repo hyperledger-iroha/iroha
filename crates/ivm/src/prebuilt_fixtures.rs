@@ -220,5 +220,4 @@ mod tests {
         assert_eq!(&output[8..8 + result.len()], result);
         assert!(output[8 + result.len()..].iter().all(|byte| *byte == 0));
     }
-
 }

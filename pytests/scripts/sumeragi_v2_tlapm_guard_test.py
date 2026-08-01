@@ -107,31 +107,224 @@ def test_process_inspection_is_bounded_and_timeout_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert guard.CONTROL_RECORD_TIMEOUT_SECONDS == 0.2
-    assert guard.PROCESS_INSPECTION_TIMEOUT_SECONDS == 2.0
+    assert guard.PROCESS_INSPECTION_TIMEOUT_SECONDS == 10.0
     assert guard.PHYSICAL_FOOTPRINT_INTERVAL_SECONDS == 5.0
 
     def timeout(*_args: object, **_kwargs: object) -> None:
         raise subprocess.TimeoutExpired([guard.PS], guard.PROCESS_INSPECTION_TIMEOUT_SECONDS)
 
     monkeypatch.setattr(guard.subprocess, "run", timeout)
-    with pytest.raises(guard.GuardError, match="exceeded 2 s"):
+    with pytest.raises(guard.GuardError, match="exceeded 10 s"):
         guard._process_rows()
 
 
-def test_macos_footprint_timeout_fails_closed(
+def test_process_inspection_tolerates_legacy_two_second_overrun(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def timeout(*_args: object, **_kwargs: object) -> None:
-        raise subprocess.TimeoutExpired(
-            ["/usr/bin/footprint"], guard.PROCESS_INSPECTION_TIMEOUT_SECONDS
+    observed_timeouts: list[float] = []
+
+    def completes_after_legacy_deadline(
+        command: list[str], **options: object
+    ) -> subprocess.CompletedProcess[str]:
+        timeout = options.get("timeout")
+        assert isinstance(timeout, float)
+        observed_timeouts.append(timeout)
+        if timeout <= 2.0:
+            raise subprocess.TimeoutExpired(command, timeout)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="11 1 11 501 64 /bin/example\n",
+            stderr="",
         )
 
-    monkeypatch.setattr(guard.sys, "platform", "darwin")
-    monkeypatch.setattr(guard, "FOOTPRINT", "/usr/bin/footprint")
-    monkeypatch.setattr(guard.subprocess, "run", timeout)
+    monkeypatch.setattr(guard.subprocess, "run", completes_after_legacy_deadline)
 
-    with pytest.raises(guard.GuardError, match="footprint inspection exceeded 2 s"):
+    assert guard._process_rows() == [
+        guard.ProcessRow(11, 1, 11, 501, 64 * 1024, "/bin/example")
+    ]
+    assert observed_timeouts == [10.0]
+
+
+def _darwin_identity(
+    process_id: int,
+    *,
+    process_group_id: int = 321,
+    parent_id: int = 900,
+    real_uid: int | None = None,
+    start_time: int | None = None,
+) -> guard.DarwinProcessIdentity:
+    uid = os.getuid() if real_uid is None else real_uid
+    return guard.DarwinProcessIdentity(
+        pid=process_id,
+        parent_pid=parent_id,
+        process_group_id=process_group_id,
+        effective_uid=os.geteuid(),
+        real_uid=uid,
+        start_time_seconds=process_id if start_time is None else start_time,
+        start_time_microseconds=17,
+        command=f"worker-{process_id}",
+    )
+
+
+def test_darwin_group_inspection_is_libproc_scoped_and_excludes_contaminant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enumerations: list[int] = []
+    identity_reads: list[int] = []
+    identities = {
+        321: _darwin_identity(321),
+        322: _darwin_identity(322, parent_id=321),
+        999: _darwin_identity(999, process_group_id=999),
+    }
+
+    def scoped_pids(process_group_id: int) -> tuple[int, ...]:
+        enumerations.append(process_group_id)
+        return (321, 322)
+
+    def identity(process_id: int) -> guard.DarwinProcessIdentity:
+        identity_reads.append(process_id)
+        return identities[process_id]
+
+    monkeypatch.setattr(guard, "_darwin_list_process_group_pids", scoped_pids)
+    monkeypatch.setattr(guard, "_darwin_process_identity", identity)
+    monkeypatch.setattr(
+        guard,
+        "_darwin_process_memory",
+        lambda pid: guard.DarwinProcessMemory(pid * 1024, pid * 2048),
+    )
+    monkeypatch.setattr(
+        guard.subprocess,
+        "run",
+        lambda *_args, **_options: (_ for _ in ()).throw(
+            AssertionError("Darwin scoped accounting invoked ps")
+        ),
+    )
+
+    rows = guard._darwin_process_group_rows(
+        321, expected_body_identity=identities[321]
+    )
+
+    assert enumerations == [321, 321]
+    assert [row.pid for row in rows] == [321, 322]
+    assert 999 not in identity_reads
+    assert sum(row.rss_bytes for row in rows) == (321 + 322) * 1024
+    assert sum(int(row.physical_footprint_bytes or 0) for row in rows) == (
+        321 + 322
+    ) * 2048
+
+
+@pytest.mark.parametrize(
+    ("identity", "message"),
+    [
+        (_darwin_identity(322, process_group_id=999), "foreign process group"),
+        (_darwin_identity(322, real_uid=os.getuid() + 1), "foreign real UID"),
+    ],
+)
+def test_darwin_group_inspection_rejects_contaminant_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    identity: guard.DarwinProcessIdentity,
+    message: str,
+) -> None:
+    identities = {321: _darwin_identity(321), 322: identity}
+    monkeypatch.setattr(
+        guard, "_darwin_list_process_group_pids", lambda _pgid: (321, 322)
+    )
+    monkeypatch.setattr(
+        guard, "_darwin_process_identity", lambda pid: identities[pid]
+    )
+    monkeypatch.setattr(
+        guard,
+        "_darwin_process_memory",
+        lambda _pid: guard.DarwinProcessMemory(1, 1),
+    )
+
+    with pytest.raises(guard.GuardError, match=message):
+        guard._darwin_process_group_rows(321)
+
+
+def test_darwin_group_inspection_requires_body_and_kernel_confirmed_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        guard, "_darwin_list_process_group_pids", lambda _pgid: (322,)
+    )
+    with pytest.raises(guard.GuardError, match="omitted the guarded body"):
+        guard._darwin_process_group_rows(321)
+
+    monkeypatch.setattr(
+        guard, "_darwin_list_process_group_pids", lambda _pgid: ()
+    )
+    monkeypatch.setattr(guard, "_process_group_exists", lambda _pgid: False)
+    assert guard._darwin_process_group_rows(321) == []
+
+    monkeypatch.setattr(guard, "_process_group_exists", lambda _pgid: True)
+    with pytest.raises(guard.GuardError, match="omitted an existing"):
+        guard._darwin_process_group_rows(321)
+
+
+@pytest.mark.parametrize("result", [-1, guard.DARWIN_PROCESS_GROUP_PID_CAPACITY])
+def test_darwin_group_pid_api_error_or_saturation_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, result: int
+) -> None:
+    class FakeLibproc:
+        @staticmethod
+        def proc_listpgrppids(
+            _pgid: int, _buffer: object, _buffer_size: int
+        ) -> int:
+            if result < 0:
+                guard.ctypes.set_errno(5)
+            return result
+
+    monkeypatch.setattr(guard, "_darwin_libproc_handle", lambda: FakeLibproc())
+    message = "could not enumerate" if result < 0 else "buffer saturated"
+    with pytest.raises(guard.GuardError, match=message):
+        guard._darwin_list_process_group_pids(321)
+
+
+def test_darwin_pid_reuse_during_sample_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity_reads = 0
+
+    def identity(_process_id: int) -> guard.DarwinProcessIdentity:
+        nonlocal identity_reads
+        identity_reads += 1
+        return _darwin_identity(321, start_time=1 if identity_reads == 1 else 2)
+
+    monkeypatch.setattr(
+        guard, "_darwin_list_process_group_pids", lambda _pgid: (321,)
+    )
+    monkeypatch.setattr(guard, "_darwin_process_identity", identity)
+    monkeypatch.setattr(
+        guard,
+        "_darwin_process_memory",
+        lambda _pid: guard.DarwinProcessMemory(1, 1),
+    )
+
+    with pytest.raises(guard.GuardError, match="changed identity"):
+        guard._darwin_process_group_rows(321)
+
+
+def test_macos_libproc_load_failure_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable(*_args: object, **_kwargs: object) -> None:
+        raise OSError("libproc unavailable")
+
+    monkeypatch.setattr(guard.sys, "platform", "darwin")
+    monkeypatch.setattr(guard, "_darwin_libproc", None)
+    monkeypatch.setattr(guard.ctypes, "CDLL", unavailable)
+
+    with pytest.raises(guard.GuardError, match="could not load Darwin"):
         guard._physical_footprint_bytes([123])
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Darwin libproc is required")
+def test_macos_libproc_reports_current_process_footprint() -> None:
+    footprint = guard._darwin_process_physical_footprint_bytes(os.getpid())
+
+    assert footprint > 0
 
 
 def test_sampler_uses_larger_rss_or_physical_footprint(
@@ -153,6 +346,113 @@ def test_sampler_uses_larger_rss_or_physical_footprint(
     assert sample.accounting_method == "max_rss_physical_footprint"
 
 
+def test_darwin_scoped_sample_enforces_already_available_footprint() -> None:
+    row = guard.ProcessRow(
+        11,
+        1,
+        11,
+        os.getuid(),
+        9,
+        "/bin/tool",
+        physical_footprint_bytes=72,
+    )
+
+    sample = guard._sample_group(
+        11,
+        [row],
+        include_physical_footprint=False,
+    )
+
+    assert sample.memory_bytes == 72
+    assert sample.rss_bytes == 9
+    assert sample.physical_footprint_bytes == 72
+    assert sample.accounting_method == guard.MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT
+
+
+def test_sampler_can_enforce_rss_while_retaining_footprint_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    uid = os.getuid()
+    monkeypatch.setattr(
+        guard,
+        "_group_rows",
+        lambda _pgid, _rows=None: [
+            guard.ProcessRow(11, 1, 11, uid, 9, "/bin/tool")
+        ],
+    )
+    monkeypatch.setattr(guard, "_physical_footprint_bytes", lambda _pids: 72)
+
+    sample = guard._sample_group(
+        11,
+        memory_enforcement_mode=guard.MEMORY_ENFORCEMENT_PROCESS_TREE_RSS,
+    )
+
+    assert sample.memory_bytes == 9
+    assert sample.rss_bytes == 9
+    assert sample.physical_footprint_bytes == 72
+    assert sample.accounting_method == guard.MEMORY_ENFORCEMENT_PROCESS_TREE_RSS
+
+
+def test_unknown_memory_enforcement_mode_is_rejected() -> None:
+    with pytest.raises(guard.GuardError, match="unknown memory enforcement mode"):
+        guard._sample_group(11, [], memory_enforcement_mode="unreviewed")
+
+
+def test_rss_enforcement_does_not_stop_on_diagnostic_footprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jsonl = tmp_path / "resource.jsonl"
+    summary = tmp_path / "summary.json"
+    diagnostic_footprint = 2 * 1024 * 1024 * 1024
+    monkeypatch.setattr(guard, "_foreign_heavy_jobs", lambda *_args, **_kwargs: [])
+    if sys.platform == "darwin":
+        process_memory = guard._darwin_process_memory
+
+        def diagnostic_process_memory(pid: int) -> guard.DarwinProcessMemory:
+            measured = process_memory(pid)
+            return guard.DarwinProcessMemory(
+                measured.rss_bytes, diagnostic_footprint
+            )
+
+        monkeypatch.setattr(
+            guard, "_darwin_process_memory", diagnostic_process_memory
+        )
+    else:
+        monkeypatch.setattr(
+            guard,
+            "_physical_footprint_bytes",
+            lambda _pids: diagnostic_footprint,
+        )
+
+    status = guard._run_guarded(
+        [sys.executable, "-c", "import time; time.sleep(0.1)"],
+        report_path=jsonl,
+        summary_path=summary,
+        memory_limit_bytes=1024 * 1024 * 1024,
+        sample_interval_seconds=0.01,
+        physical_footprint_interval_seconds=0.01,
+        memory_enforcement_mode=guard.MEMORY_ENFORCEMENT_PROCESS_TREE_RSS,
+    )
+
+    document = json.loads(summary.read_text(encoding="utf-8"))
+    footprint_samples = [
+        event
+        for event in _events(jsonl)
+        if event.get("physical_footprint_bytes") == diagnostic_footprint
+    ]
+    assert status == 0
+    assert document["exit_reason"] == "completed"
+    assert document["memory_enforcement_mode"] == (
+        guard.MEMORY_ENFORCEMENT_PROCESS_TREE_RSS
+    )
+    assert document["peak_physical_footprint_bytes"] == diagnostic_footprint
+    assert footprint_samples
+    assert all(
+        int(sample["memory_bytes"]) == int(sample["rss_bytes"])
+        for sample in footprint_samples
+    )
+
+
 def test_sample_group_reuses_supplied_process_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -171,7 +471,7 @@ def test_sample_group_reuses_supplied_process_snapshot(
     assert sample.process_count == 1
 
 
-def test_rss_sample_can_defer_intrusive_physical_footprint(
+def test_rss_sample_can_defer_physical_footprint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A loader-startup sample must not invoke macOS footprint eagerly."""
@@ -195,6 +495,100 @@ def test_rss_sample_can_defer_intrusive_physical_footprint(
     assert sample.accounting_method == "rss"
 
 
+def test_signal_race_is_benign_after_group_absence_is_verified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def raced_killpg(_process_group_id: int, _signum: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("process exited during signal")
+        raise ProcessLookupError
+
+    monkeypatch.setattr(guard.os, "killpg", raced_killpg)
+
+    guard._signal_process_group(12345, signal.SIGTERM)
+    assert calls == 2
+
+
+def test_signal_error_remains_fatal_while_group_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def failed_killpg(_process_group_id: int, _signum: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("signal failed")
+
+    monkeypatch.setattr(guard.os, "killpg", failed_killpg)
+
+    with pytest.raises(guard.GuardError, match="could not signal owned process group"):
+        guard._signal_process_group(12345, signal.SIGTERM)
+    assert calls == 2
+
+
+def test_delayed_distinct_wrapper_gets_long_reap_bound_without_extra_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waits: list[float] = []
+    signals: list[tuple[int, int]] = []
+
+    class DelayedWrapper:
+        pid = 111
+
+        def wait(self, *, timeout: float) -> int:
+            waits.append(timeout)
+            if timeout <= guard.TERM_GRACE_SECONDS:
+                raise subprocess.TimeoutExpired(self.pid, timeout)
+            return 0
+
+    monkeypatch.setattr(guard, "_process_group_exists", lambda _pgid: False)
+    monkeypatch.setattr(
+        guard,
+        "_signal_process_group",
+        lambda pgid, signum: signals.append((pgid, signum)),
+    )
+
+    guard._kill_owned_group_immediately(DelayedWrapper(), 222)
+
+    assert waits == [guard.WRAPPER_REAP_TIMEOUT_SECONDS]
+    assert signals == [(222, signal.SIGKILL)]
+
+
+def test_wedged_distinct_wrapper_is_killed_and_timeout_becomes_guard_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waits: list[float] = []
+    signals: list[tuple[int, int]] = []
+
+    class WedgedWrapper:
+        pid = 111
+
+        def wait(self, *, timeout: float) -> int:
+            waits.append(timeout)
+            raise subprocess.TimeoutExpired(self.pid, timeout)
+
+    monkeypatch.setattr(guard, "_process_group_exists", lambda _pgid: False)
+    monkeypatch.setattr(
+        guard,
+        "_signal_process_group",
+        lambda pgid, signum: signals.append((pgid, signum)),
+    )
+
+    with pytest.raises(guard.GuardError, match="wrapper 111 could not be reaped"):
+        guard._kill_owned_group_immediately(WedgedWrapper(), 222)
+
+    assert waits == [
+        guard.WRAPPER_REAP_TIMEOUT_SECONDS,
+        guard.TERM_GRACE_SECONDS,
+    ]
+    assert signals == [(222, signal.SIGKILL), (111, signal.SIGKILL)]
+
+
 def test_delayed_process_inspection_schedules_from_probe_completion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -211,6 +605,7 @@ def test_delayed_process_inspection_schedules_from_probe_completion(
         return []
 
     monkeypatch.setattr(guard, "_process_rows", delayed_process_rows)
+    monkeypatch.setattr(guard.sys, "platform", "linux")
     monkeypatch.setattr(guard.os, "fsync", lambda _descriptor: None)
 
     def unexpected_footprint(_pids: object) -> int:
@@ -239,6 +634,77 @@ def test_delayed_process_inspection_schedules_from_probe_completion(
     assert min(gaps_after_probe) >= sample_interval_seconds * 0.9
 
 
+def test_darwin_runtime_samples_never_request_a_global_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jsonl = tmp_path / "resource.jsonl"
+    summary = tmp_path / "summary.json"
+    global_inspections = 0
+    scoped_inspections: list[int] = []
+    expected_identities: list[guard.DarwinProcessIdentity | None] = []
+
+    def global_rows() -> list[guard.ProcessRow]:
+        nonlocal global_inspections
+        global_inspections += 1
+        if global_inspections > 2:
+            raise AssertionError("Darwin hot loop requested a global inventory")
+        return []
+
+    def capture_body(
+        process_group_id: int, wrapper_process_id: int
+    ) -> guard.DarwinProcessIdentity:
+        return _darwin_identity(
+            process_group_id,
+            process_group_id=process_group_id,
+            parent_id=wrapper_process_id,
+        )
+
+    def scoped_rows(
+        process_group_id: int,
+        *,
+        expected_body_identity: guard.DarwinProcessIdentity | None = None,
+    ) -> list[guard.ProcessRow]:
+        scoped_inspections.append(process_group_id)
+        expected_identities.append(expected_body_identity)
+        return [
+            guard.ProcessRow(
+                process_group_id,
+                1,
+                process_group_id,
+                os.getuid(),
+                1024,
+                "/bin/worker",
+                2048,
+            )
+        ]
+
+    monkeypatch.setattr(guard.sys, "platform", "darwin")
+    monkeypatch.setattr(guard, "_process_rows", global_rows)
+    monkeypatch.setattr(guard, "_capture_darwin_body_identity", capture_body)
+    monkeypatch.setattr(guard, "_darwin_process_group_rows", scoped_rows)
+    monkeypatch.setattr(
+        guard.subprocess,
+        "run",
+        lambda *_args, **_options: (_ for _ in ()).throw(
+            AssertionError("Darwin runtime invoked /bin/ps")
+        ),
+    )
+
+    status = guard._run_guarded(
+        [sys.executable, "-c", "import time; time.sleep(0.15)"],
+        report_path=jsonl,
+        summary_path=summary,
+        sample_interval_seconds=0.01,
+        physical_footprint_interval_seconds=60,
+    )
+
+    assert status == 0
+    assert global_inspections == 2
+    assert len(scoped_inspections) >= 2
+    assert len(set(scoped_inspections)) == 1
+    assert all(identity is not None for identity in expected_identities)
+
+
 def test_sampling_failure_terminates_known_group_and_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -246,7 +712,7 @@ def test_sampling_failure_terminates_known_group_and_fails_closed(
     summary = tmp_path / "summary.json"
 
     def fail_sample(
-        _pgid: int, _rows: object | None = None
+        _pgid: int, _rows: object | None = None, **_options: object
     ) -> guard.MemorySample:
         raise guard.GuardError("inspection timeout")
 
@@ -296,6 +762,7 @@ def test_foreign_job_started_after_spawn_kills_only_owned_group_and_exits_74(
         kill_owned_group(process, process_group_id)
 
     monkeypatch.setattr(guard, "_process_rows", process_rows)
+    monkeypatch.setattr(guard.sys, "platform", "linux")
     monkeypatch.setattr(guard, "_kill_owned_group_immediately", record_kill)
 
     status = guard._run_guarded(
@@ -344,6 +811,7 @@ def test_runtime_foreign_inspection_timeout_terminates_owned_group_and_fails_clo
         signal_process_group(process_group_id, signum)
 
     monkeypatch.setattr(guard, "_process_rows", process_rows)
+    monkeypatch.setattr(guard.sys, "platform", "linux")
     monkeypatch.setattr(guard, "_signal_process_group", record_signal)
 
     status = guard._run_guarded(
@@ -392,6 +860,7 @@ def test_foreign_job_at_final_success_gate_skips_finalize(
         return 1
 
     monkeypatch.setattr(guard, "_process_rows", process_rows)
+    monkeypatch.setattr(guard.sys, "platform", "linux")
 
     status = guard._run_guarded(
         ["/usr/bin/true"],
@@ -415,6 +884,41 @@ def test_foreign_job_at_final_success_gate_skips_finalize(
     assert conflict["phase"] == "final_success_gate"
     assert conflict["foreign_process_group_id"] == foreign.process_group_id
     assert conflict["owned_process_group_id"] is None
+
+
+def test_memory_limit_path_stops_remeasures_then_kills(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actions: list[object] = []
+
+    class FakeProcess:
+        pid = 111
+
+    monkeypatch.setattr(
+        guard,
+        "_signal_process_group",
+        lambda pgid, signum: actions.append(("signal", pgid, signum)),
+    )
+    monkeypatch.setattr(
+        guard,
+        "_kill_owned_group_immediately",
+        lambda _process, pgid: actions.append(("kill", pgid)),
+    )
+
+    def remeasure() -> guard.MemorySample:
+        actions.append("remeasure")
+        return guard.MemorySample(3, 2, 3, 1, "kernel")
+
+    sample = guard._stop_remeasure_then_kill_owned_group(
+        FakeProcess(), 222, remeasure
+    )
+
+    assert sample.memory_bytes == 3
+    assert actions == [
+        ("signal", 222, signal.SIGSTOP),
+        "remeasure",
+        ("kill", 222),
+    ]
 
 
 def test_memory_limit_terminates_owned_group_and_exits_75(
@@ -457,6 +961,9 @@ def test_memory_limit_terminates_owned_group_and_exits_75(
     assert document["peak_memory_bytes"] == 2
     assert document["kernel_peak_rss_bytes"] > 0
     assert immediate_kills == 1
+    assert any(
+        event["event"] == "memory_limit_remeasure" for event in _events(jsonl)
+    )
     spawn = next(event for event in _events(jsonl) if event["event"] == "spawn")
     _wait_for_process_group_exit(int(spawn["process_group_id"]))
 
@@ -834,7 +1341,7 @@ def test_runner_rejects_partial_or_forged_authorization_environment(
 def test_runner_executes_its_body_through_guard_with_one_thread(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     formal_scripts = repo / "scripts" / "formal"
-    formal_sources = repo / "docs" / "formal" / "sumeragi_v2"
+    formal_sources = repo / "formal" / "sumeragi_v2"
     formal_scripts.mkdir(parents=True)
     formal_sources.mkdir(parents=True)
     shutil.copy2(RUNNER_PATH, formal_scripts / RUNNER_PATH.name)

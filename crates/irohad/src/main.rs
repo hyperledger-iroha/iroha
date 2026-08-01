@@ -9943,14 +9943,15 @@ impl Iroha {
         supervisor.monitor(child);
 
         // Bootstrapper orchestrates request/response handling for genesis.
-        let bootstrap_genesis_config = if let Some(stored_hash) = stored_genesis_hash {
-            let mut cfg = config.genesis.clone();
-            cfg.public_key = effective_genesis_public_key.clone();
-            cfg.expected_hash = Some(stored_hash);
-            cfg
-        } else {
-            config.genesis.clone()
-        };
+        let bootstrap_genesis_config =
+            if let Some(stored_hash) = stored_genesis_block.as_ref().map(|block| block.0.hash()) {
+                let mut cfg = config.genesis.clone();
+                cfg.public_key = effective_genesis_public_key.clone();
+                cfg.expected_hash = Some(stored_hash);
+                cfg
+            } else {
+                config.genesis.clone()
+            };
         let bootstrapper = GenesisBootstrapper::new(
             &bootstrap_genesis_config,
             network.clone(),
@@ -11426,6 +11427,31 @@ impl Iroha {
         ensure_operator_node_key_allowlisted(&mut config);
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);
+        // Subscribe before Torii exposes the configuration update endpoint.
+        // A watch update published after Kiso starts is then retained even if
+        // the relay task has not begun polling yet.
+        let config_update_receivers = ConfigUpdateReceivers {
+            log_level: kiso.subscribe_on_logger_updates().await.map_err(|error| {
+                Report::new(StartError::StartTorii)
+                    .attach(format!("failed to subscribe to logger updates: {error}"))
+            })?,
+            acl: kiso
+                .subscribe_on_network_acl_updates()
+                .await
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii).attach(format!(
+                        "failed to subscribe to network ACL updates: {error}"
+                    ))
+                })?,
+            handshake: kiso
+                .subscribe_on_soranet_handshake_updates()
+                .await
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii).attach(format!(
+                        "failed to subscribe to SoraNet handshake updates: {error}"
+                    ))
+                })?,
+        };
 
         let receipt_signer = torii_receipt_signer_or_derived(
             config.torii.receipt_signer.clone(),
@@ -11662,8 +11688,14 @@ impl Iroha {
         // handshake policy and is therefore deliberately not recoverable.
         let confidential_gas = config.confidential.gas;
         supervisor.monitor(tokio::task::spawn(async move {
-            if let Err(err) =
-                config_updates_relay(kiso, logger, net_for_relay, confidential_gas).await
+            if let Err(err) = config_updates_relay(
+                kiso,
+                logger,
+                net_for_relay,
+                confidential_gas,
+                config_update_receivers,
+            )
+            .await
             {
                 iroha_logger::error!(?err, "Config updates relay exited");
             }
@@ -11892,19 +11924,26 @@ async fn start_telemetry(
 /// Security-sensitive handshake policy is never accepted from, or propagated
 /// to, remote peers. Every node derives it exclusively from its own
 /// operator-controlled configuration.
+struct ConfigUpdateReceivers {
+    log_level: tokio::sync::watch::Receiver<iroha_config::parameters::actual::Logger>,
+    acl: tokio::sync::watch::Receiver<iroha_config::client_api::NetworkAcl>,
+    handshake: tokio::sync::watch::Receiver<iroha_config::parameters::actual::SoranetHandshake>,
+}
+
 #[allow(clippy::too_many_lines)]
 async fn config_updates_relay(
-    kiso: KisoHandle,
+    _kiso: KisoHandle,
     logger: LoggerHandle,
     network: iroha_core::IrohaNetwork,
     confidential_gas: iroha_config::parameters::actual::ConfidentialGas,
+    config_update_receivers: ConfigUpdateReceivers,
 ) -> EyreResult<()> {
     #[cfg(not(feature = "telemetry"))]
     let _ = confidential_gas;
 
-    let mut log_level_update = kiso.subscribe_on_logger_updates().await?;
-    let mut acl_update = kiso.subscribe_on_network_acl_updates().await?;
-    let mut handshake_update = kiso.subscribe_on_soranet_handshake_updates().await?;
+    let mut log_level_update = config_update_receivers.log_level;
+    let mut acl_update = config_update_receivers.acl;
+    let mut handshake_update = config_update_receivers.handshake;
     #[cfg(feature = "telemetry")]
     let confidential_metrics_handle = iroha_telemetry::metrics::global().cloned();
     #[cfg(feature = "telemetry")]
@@ -11913,8 +11952,10 @@ async fn config_updates_relay(
         let digest = ivm::gas::schedule_hash();
         metrics.set_ivm_gas_schedule_hash(digest.as_ref());
     }
-    // Emit the current handshake configuration immediately so runtime components inherit puzzle settings.
-    network.update_soranet_handshake(handshake_update.borrow().clone());
+    // The network actor was constructed from this same current snapshot. Wait
+    // for an actual Kiso change before rebuilding the runtime handshake state;
+    // replaying the initial value would try to reopen its already-locked
+    // persistent ticket-revocation store.
 
     // See https://github.com/tokio-rs/tokio/issues/5616 and
     // https://github.com/rust-lang/rust-clippy/issues/10636
@@ -12466,8 +12507,7 @@ pub fn read_config_and_genesis(
         config.contains_toml_parameter(["sorafs", "storage", "enabled"]);
     let sorafs_discovery_enabled_is_explicit =
         config.contains_toml_parameter(["sorafs", "discovery", "discovery_enabled"]);
-    let mut config = config
-        .read_and_complete::<UserConfig>()
+    let mut config = UserConfig::read_and_complete(config)
         .change_context(ConfigError::ReadConfig)?
         .parse()
         .change_context(ConfigError::ParseConfig)?;
@@ -15837,11 +15877,12 @@ fn load_configured_kagemusha_release_catalog(
 ) -> Result<iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4, String> {
     let offline = &config.settlement.offline;
     if offline.enabled
+        && !offline.escrow_accounts.is_empty()
         && offline.kagemusha_release_policy_path.is_none()
         && offline.kagemusha_artifact_dir.is_none()
     {
         return Err(
-            "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory"
+            "offline-enabled assets cannot start without a Kagemusha V4 release policy and artifact directory"
                 .to_owned(),
         );
     }
@@ -20634,7 +20675,7 @@ mod tests {
         }
 
         #[test]
-        fn configured_kagemusha_catalog_loader_requires_both_paths() {
+        fn configured_kagemusha_catalog_loader_requires_paths_only_for_opted_in_assets() {
             let mut config = sample_config();
             config.settlement.offline.enabled = false;
             assert!(
@@ -20648,8 +20689,22 @@ mod tests {
             config.settlement.offline.kagemusha_artifact_dir = None;
             assert!(
                 load_configured_kagemusha_release_catalog(&config)
+                    .expect("enabled support with no opted-in assets uses an empty catalog")
+                    .is_empty()
+            );
+
+            config.settlement.offline.escrow_accounts.insert(
+                iroha_data_model::asset::AssetDefinitionId::new(
+                    iroha_data_model::domain::DomainId::try_new("offline", "universal")
+                        .expect("offline asset domain"),
+                    "cash".parse().expect("offline asset name"),
+                ),
+                iroha_test_samples::ALICE_ID.clone(),
+            );
+            assert!(
+                load_configured_kagemusha_release_catalog(&config)
                     .err()
-                    .expect("mandatory offline settlement requires catalog paths")
+                    .expect("an opted-in asset requires authenticated catalog paths")
                     .contains("cannot start without")
             );
 

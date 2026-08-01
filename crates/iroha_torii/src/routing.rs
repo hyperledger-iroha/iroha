@@ -244,8 +244,11 @@ pub const SORANET_PRIVACY_EVENT_ENDPOINT: &str = "/v1/soranet/privacy/event";
 #[cfg(feature = "telemetry")]
 pub const SORANET_PRIVACY_SHARE_ENDPOINT: &str = "/v1/soranet/privacy/share";
 
-pub async fn handler_openapi_spec(State(_state): State<crate::SharedAppState>) -> Response {
-    match norito::json::to_string_pretty(&crate::openapi::generate_spec()) {
+pub async fn handler_openapi_spec(State(state): State<crate::SharedAppState>) -> Response {
+    let offline_enabled = state.state.view().settlement.offline.enabled;
+    match norito::json::to_string_pretty(&crate::openapi::generate_spec_for_runtime(
+        offline_enabled,
+    )) {
         Ok(body) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/json")
@@ -75046,6 +75049,47 @@ fn normalize_status_block_visibility(status: &mut Status, authoritative_block_he
         .map_or(0, |sumeragi| sumeragi.commit_qc_height);
     status.blocks =
         authoritative_block_height.unwrap_or_else(|| status.blocks.max(telemetry_commit_height));
+}
+
+#[cfg(all(test, feature = "telemetry"))]
+mod status_block_visibility_tests {
+    use iroha_telemetry::metrics::SumeragiConsensusStatus;
+
+    use super::{Status, normalize_status_block_visibility};
+
+    #[test]
+    fn authoritative_state_height_replaces_lagging_and_leading_counters() {
+        for telemetry_height in [3, 19] {
+            let mut status = Status {
+                blocks: telemetry_height,
+                sumeragi: Some(SumeragiConsensusStatus {
+                    commit_qc_height: telemetry_height,
+                    ..SumeragiConsensusStatus::default()
+                }),
+                ..Status::default()
+            };
+
+            normalize_status_block_visibility(&mut status, Some(11));
+
+            assert_eq!(status.blocks, 11);
+        }
+    }
+
+    #[test]
+    fn missing_state_anchor_keeps_monotonic_commit_qc_fallback() {
+        let mut status = Status {
+            blocks: 5,
+            sumeragi: Some(SumeragiConsensusStatus {
+                commit_qc_height: 8,
+                ..SumeragiConsensusStatus::default()
+            }),
+            ..Status::default()
+        };
+
+        normalize_status_block_visibility(&mut status, None);
+
+        assert_eq!(status.blocks, 8);
+    }
 }
 
 #[cfg(feature = "telemetry")]

@@ -784,9 +784,8 @@ impl NexusProfile {
             );
             raw_table.insert("torii".to_string(), Value::Table(torii));
         }
-        let actual = ConfigReader::new()
-            .with_toml_source(TomlSource::inline(raw_table.clone()))
-            .read_and_complete::<iroha_config::parameters::user::Root>()
+        let reader = ConfigReader::new().with_toml_source(TomlSource::inline(raw_table.clone()));
+        let actual = iroha_config::parameters::user::Root::read_and_complete(reader)
             .map_err(|err| eyre!("failed to load embedded nexus config: {err:?}"))?
             .parse()
             .map_err(|err| eyre!("failed to parse embedded nexus config: {err:?}"))?;
