@@ -254,7 +254,7 @@ final class MusubiSdkV1Tests: XCTestCase {
             )
         case MusubiToriiClientV1.orderedPrefixPath:
             return try encodedObject(
-                decoder.decode(MusubiPageV1<MusubiOrderedPackageEntryV1>.self, from: data)
+                decoder.decode(MusubiOrderedPrefixPageV1.self, from: data)
             )
         default:
             throw MusubiV1Error.invalidValue("Unhandled Musubi fixture path \(path).")

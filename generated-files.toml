@@ -470,7 +470,10 @@ generator_sources = [
   "scripts/tests/consistency.sh",
   "crates/iroha_kagami/src/main.rs",
   "crates/iroha_kagami/src/swarm.rs",
-  "crates/iroha_swarm/src/*.rs",
+  "crates/iroha_swarm/src/lib.rs",
+  "crates/iroha_swarm/src/path.rs",
+  "crates/iroha_swarm/src/peer.rs",
+  "crates/iroha_swarm/src/schema.rs",
 ]
 inputs = [
   "defaults/*.json",

@@ -2155,12 +2155,22 @@ fn decode_pending_secret_v1(
         u32::try_from(BLIND_ISSUANCE_REQUEST_BYTES_V1).expect("fixed ILQ1 length fits u32"),
     )
     .map_err(|_| BootleLanternHolderStoreErrorV1::Corrupt)?;
-    if request.request_digest() != request_digest {
+    if request.request_digest() != request_digest
+        || request.issuance_authorization_digest_v1() != authorization_digest
+        || request.scope_digest_v1() != scope_digest
+        || request.policy_record_digest_v1() != policy_record_digest
+    {
         return Err(BootleLanternHolderStoreErrorV1::Corrupt);
     }
     if let Some(response) = &response_bytes {
-        BootleLanternBlindIssuanceResponseV1::decode_exact(response)
+        let response = BootleLanternBlindIssuanceResponseV1::decode_exact(response)
             .map_err(|_| BootleLanternHolderStoreErrorV1::Corrupt)?;
+        if response.request_digest_v1() != request_digest
+            || response.scope_digest_v1() != scope_digest
+            || response.policy_record_digest_v1() != policy_record_digest
+        {
+            return Err(BootleLanternHolderStoreErrorV1::Corrupt);
+        }
     }
     Ok(PendingSecretV1 {
         authorization_digest,

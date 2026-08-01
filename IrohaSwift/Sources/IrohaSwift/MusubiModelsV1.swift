@@ -1680,6 +1680,56 @@ public struct MusubiOrderedPackageEntryV1: Codable, Hashable, Sendable {
     }
 }
 
+/// Ordered-directory page carrying exact chain/genesis identity for lock creation.
+public struct MusubiOrderedPrefixPageV1: Codable, Hashable, Sendable {
+    public let chainId: String
+    public let genesisHash: [UInt8]
+    public let items: [MusubiOrderedPackageEntryV1]
+    public let nextCursor: MusubiFinalizedCursorV1?
+    public let snapshot: MusubiRegistrySnapshotV1
+
+    private enum CodingKeys: String, CodingKey {
+        case chainId = "chain_id"
+        case genesisHash = "genesis_hash"
+        case items
+        case nextCursor = "next_cursor"
+        case snapshot
+    }
+
+    public init(from decoder: Decoder) throws {
+        try musubiRequireExactKeys(
+            decoder, ["chain_id", "genesis_hash", "items", "next_cursor", "snapshot"]
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        chainId = try container.decode(String.self, forKey: .chainId)
+        try musubiRequireExactText(chainId, field: "Musubi directory chain ID")
+        genesisHash = try container.decode([UInt8].self, forKey: .genesisHash)
+        items = try container.decode([MusubiOrderedPackageEntryV1].self, forKey: .items)
+        nextCursor = try container.decodeIfPresent(MusubiFinalizedCursorV1.self, forKey: .nextCursor)
+        snapshot = try container.decode(MusubiRegistrySnapshotV1.self, forKey: .snapshot)
+        guard genesisHash.count == 32,
+              items.count <= 100,
+              nextCursor == nil || nextCursor?.snapshot == snapshot else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi ordered-prefix page has an invalid genesis hash, size, or cursor."
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard genesisHash.count == 32 else {
+            throw MusubiV1Error.invalidValue("Musubi genesis hash must contain 32 bytes.")
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(chainId, forKey: .chainId)
+        try container.encode(genesisHash, forKey: .genesisHash)
+        try container.encode(items, forKey: .items)
+        if let nextCursor { try container.encode(nextCursor, forKey: .nextCursor) }
+        else { try container.encodeNil(forKey: .nextCursor) }
+        try container.encode(snapshot, forKey: .snapshot)
+    }
+}
+
 /// Typed bounded page shared by all finalized Musubi list responses.
 public struct MusubiPageV1<Item: Codable & Hashable & Sendable>: Codable, Hashable, Sendable {
     public let items: [Item]

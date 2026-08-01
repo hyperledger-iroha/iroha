@@ -66748,6 +66748,16 @@ pub(crate) mod deserialize {
                 ));
             }
             if location.state == MusubiArchiveLocationStateV1::Retired {
+                if !by_pin.get(&location.pin_manifest).is_some_and(|reference| {
+                    !reference.active && reference.location == *key
+                }) || !by_order
+                    .get(&location.replication_order)
+                    .is_some_and(|reference| !reference.active && reference.location == *key)
+                {
+                    return Err(invalid(
+                        "retired archive location is missing an immutable reuse tombstone".into(),
+                    ));
+                }
                 continue;
             }
             if !by_pin

@@ -102,7 +102,7 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
     /// Scans the deterministic public package directory by byte prefix.
     public func findOrderedPrefix(
         _ request: MusubiOrderedPrefixQueryV1
-    ) async throws -> MusubiPageV1<MusubiOrderedPackageEntryV1> {
+    ) async throws -> MusubiOrderedPrefixPageV1 {
         try await post(Self.orderedPrefixPath, request: request)
     }
 
