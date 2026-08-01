@@ -16208,6 +16208,31 @@ pub mod tests {
     }
 
     #[test]
+    fn nexus_reconfiguration_revalidates_pending_transaction_without_relocking_transition_index() {
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let nexus = state.nexus_snapshot();
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue
+            .push(tx, state.view())
+            .expect("enqueue transaction before Nexus reconfiguration");
+
+        queue.reconfigure_nexus_with_state(&nexus, &state, None);
+
+        assert!(
+            queue.txs.contains_key(&hash),
+            "still-pending transaction must survive an unchanged Nexus reconfiguration"
+        );
+        assert_eq!(queue.active_len(), 1);
+    }
+
+    #[test]
     fn nexus_reconfigure_rebinds_frozen_manifests_without_reading_drifted_files() {
         let dir = tempdir().expect("manifest directory");
         let manifest_path = dir.path().join("future.manifest.json");
