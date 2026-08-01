@@ -716,6 +716,7 @@ impl PrivacyPgcPoolSnapshotV1 {
     }
 
     /// Return whether an exact historical epoch/root pair remains retained.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) fn contains_retained_root(&self, epoch: u64, root: PrivacyRootV1) -> bool {
         self.retained_roots
@@ -1833,6 +1834,7 @@ pub(crate) fn load_privacy_zk_x509_certificate_policy_v1(
 }
 
 /// Load the current self-chained signed-CRL record for one policy lineage.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn load_privacy_zk_x509_crl_v1(
     trust_anchor_id: PrivacyIssuerIdV1,
     policy_id: PrivacyPolicyIdV1,
@@ -6139,6 +6141,7 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Return the exact X.509 policy namespace and certificate nullifier.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) const fn zk_x509_certificate_identity(
         self,
@@ -6157,6 +6160,7 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Return the Orchard namespace, if this is an Orchard nullifier.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) const fn orchard_namespace(self) -> Option<PrivacyNamespaceV1> {
         match self {
@@ -6170,6 +6174,7 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Return the exact Orchard nullifier bytes, if present.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) const fn orchard_nullifier_bytes(self) -> Option<[u8; 32]> {
         match self {
@@ -6183,6 +6188,7 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Return the proof-managed pool namespace and nullifier, if present.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) const fn proof_managed_identity(
         self,
@@ -6201,6 +6207,7 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Return the exact FCMP++ namespace and typed key image, if present.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) const fn fcmp_identity(self) -> Option<(PrivacyNamespaceV1, PrivacyFcmpKeyImageV1)> {
         match self {
@@ -6244,6 +6251,7 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Ordered bounds covering consumed certificate nullifiers in one X.509 policy.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) fn zk_x509_certificate_nullifier_range(
         namespace: PrivacyNamespaceV1,
@@ -6542,6 +6550,7 @@ impl PrivacyCommitmentKeyV1 {
     }
 
     /// Ordered bounds covering every proof-managed pool configuration.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) fn proof_managed_pool_config_range() -> core::ops::RangeInclusive<Self> {
         let namespace = |protocol_id, pool_id| {
@@ -6673,6 +6682,7 @@ impl PrivacyCommitmentKeyV1 {
     }
 
     /// Return the proof-managed pool namespace, if this key belongs to one.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) const fn proof_managed_namespace(self) -> Option<PrivacyNamespaceV1> {
         match self {

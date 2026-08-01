@@ -658,6 +658,7 @@ impl fmt::Debug for ValidatedPrivateNoteRelationV1 {
 /// It deliberately carries no next root or next epoch. Core must derive those
 /// from the trusted compact frontier and these statement-owned outputs.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct VerifiedIvmPrivateNoteActionV1 {
     nullifiers: Vec<PrivacyNullifierV1>,
     output_commitments: Vec<PrivacyCommitmentV1>,
@@ -668,6 +669,7 @@ pub(crate) struct VerifiedIvmPrivateNoteActionV1 {
     value_balance: PrivacyValueBalanceV1,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl VerifiedIvmPrivateNoteActionV1 {
     pub(super) fn from_statement(statement: &IrohaIvmPrivateNoteStarkStatementV1) -> Self {
         Self {

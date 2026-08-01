@@ -3096,7 +3096,7 @@ pub enum BlockValidationError {
         /// Hash embedded in the incoming header.
         actual: Option<HashOf<DaProofPolicyBundle>>,
     },
-    /// DA proof-policy sidecar hash does not match the signed header.
+    /// DA proof-policy sidecar hash mismatch. Expected: {expected:?}, actual: {actual:?}
     DaProofPolicySidecarHashMismatch {
         /// Hash derived from the embedded policy sidecar.
         expected: Option<HashOf<DaProofPolicyBundle>>,
@@ -28529,6 +28529,21 @@ mod tests {
         state::{State, World},
         tx::AcceptedTransaction,
     };
+
+    #[test]
+    fn da_proof_policy_sidecar_hash_mismatch_reports_both_hashes() {
+        let expected = Some(HashOf::<DaProofPolicyBundle>::from_untyped_unchecked(
+            Hash::prehashed([0x11; Hash::LENGTH]),
+        ));
+        let actual = Some(HashOf::<DaProofPolicyBundle>::from_untyped_unchecked(
+            Hash::prehashed([0x22; Hash::LENGTH]),
+        ));
+        let message =
+            BlockValidationError::DaProofPolicySidecarHashMismatch { expected, actual }.to_string();
+
+        assert!(message.contains(&format!("{expected:?}")));
+        assert!(message.contains(&format!("{actual:?}")));
+    }
 
     fn install_test_lane_manifests(state: &State) {
         let statuses = state

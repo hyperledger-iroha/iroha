@@ -33,6 +33,7 @@ pub(crate) enum JindoGaussianWidthV1 {
 
 impl JindoGaussianWidthV1 {
     /// Every width in canonical profile order.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const ALL: [Self; 6] = [
         Self::Ecd,
         Self::EcdBlind,
@@ -55,6 +56,7 @@ impl JindoGaussianWidthV1 {
     }
 
     /// Integer proposal radius `ceil(14 * sigma)`.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn tail_radius(self) -> u64 {
         let scaled = self.sigma_q64().saturating_mul(14);
         let integer = scaled >> 64;

@@ -58,7 +58,9 @@ const Y4_MESSAGE_START_V1: usize = 4;
 const BETA_MESSAGE_INDEX_V1: usize = 8;
 const G_MESSAGE_START_V1: usize = 9;
 const LINEARIZATION_MESSAGE_INDEX_V1: usize = 11;
+#[cfg_attr(not(test), allow(dead_code))]
 const PROVER_PRECOMPUTED_QUADRATIC_EVALUATIONS_V1: usize = 2;
+#[cfg_attr(not(test), allow(dead_code))]
 const PROVER_QUADRATIC_EVALUATIONS_PER_MASK_RETRY_V1: usize = 3;
 const VERIFIER_QUADRATIC_EVALUATIONS_V1: usize = 3;
 
@@ -180,6 +182,7 @@ impl ProofRejectionBudgetV1 {
         true
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     const fn remaining(&self) -> u32 {
         self.remaining
     }
@@ -295,6 +298,7 @@ pub(crate) fn prove_blind_issuance_request_v1<R: CryptoRng + RngCore>(
     Ok(BootleLanternBlindIssuanceRequestProofV1::from_validated_body_v1(body))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn prove_presentation_with_rejection_limit_v1<R: CryptoRng + RngCore>(
     relation: &BootleLanternApplicationRelationV1,
     witness: &BootleLanternPresentationWitnessV1,

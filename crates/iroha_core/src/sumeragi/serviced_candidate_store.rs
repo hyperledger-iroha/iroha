@@ -177,6 +177,7 @@ impl ServicedCandidateKey {
     }
 
     /// Optional block subject projected by the serviced reducer occurrence.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn target(self) -> Option<[u8; 32]> {
         self.target
     }
@@ -192,6 +193,7 @@ impl ServicedCandidateKey {
     }
 
     /// Route-neutral semantic evidence hash for this exact occurrence.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn evidence(self) -> [u8; 32] {
         self.evidence
     }
@@ -374,6 +376,7 @@ impl ProducerContinuationHandoffToken {
     }
 
     /// Physical source class frozen before the source can retire.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn source_class(self) -> ProducerContinuationSourceClass {
         self.source_class
     }
@@ -412,6 +415,7 @@ impl ProducerContinuationTerminalToken {
     }
 
     /// Exact route-neutral serviced occurrence paired with this terminal.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn candidate(self) -> ServicedCandidateKey {
         self.identity.candidate()
     }
@@ -556,6 +560,7 @@ pub(crate) struct RestoredServicedCandidates {
 
 impl RestoredServicedCandidates {
     /// Canonical restart-stable producer terminals from the validated snapshot.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn producer_terminal_tokens(&self) -> Vec<ProducerContinuationTerminalToken> {
         self.producer_continuations
             .values()
@@ -1502,11 +1507,13 @@ impl LeaderWireLifecycleStoreGate {
     }
 
     /// Height context bound into every accepted token and persisted header.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn context_id(&self) -> wire::HeightContextId {
         self.context_id
     }
 
     /// Exact height bound into this per-height persistence gate.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn height(&self) -> wire::Height {
         self.height
     }

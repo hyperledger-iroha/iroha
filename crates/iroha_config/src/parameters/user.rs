@@ -1107,7 +1107,7 @@ impl Root {
     /// If any invalidity found.
     /// Convert this user configuration into the runtime representation.
     #[allow(clippy::too_many_lines)]
-    pub fn parse(mut self) -> Result<actual::Root, ParseError> {
+    pub fn parse(self) -> Result<actual::Root, ParseError> {
         let mut emitter = Emitter::new();
         let _account_address_scope = AccountAddressParseScope::enter(
             self.default_account_domain_label.value(),

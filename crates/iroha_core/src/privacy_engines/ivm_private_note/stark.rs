@@ -1643,6 +1643,7 @@ pub(super) fn prove_private_note_stark_v1_with_rng<R: TryRngCore>(
 }
 
 /// Construct the canonical private-note proof with operating-system entropy.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn prove_private_note_stark_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     consensus_binding: &PrivacyNativeConsensusBindingV1,

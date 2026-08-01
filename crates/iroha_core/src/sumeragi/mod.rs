@@ -1124,6 +1124,7 @@ impl FairV2IngressLeaderWireToken {
     }
 
     /// Immutable first reservation ordinal.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn admission_ordinal(&self) -> u64 {
         self.admission_ordinal
     }
@@ -1134,6 +1135,7 @@ impl FairV2IngressLeaderWireToken {
     }
 
     /// Closed productive source class.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn source_class(&self) -> FairV2IngressLeaderWireSourceClass {
         self.source_class
     }
@@ -1374,6 +1376,7 @@ enum FairV2IngressControlKind {
 }
 
 impl FairV2IngressControlKind {
+    #[cfg_attr(not(test), allow(dead_code))]
     const fn leader_wire_phase(self) -> FairV2IngressLeaderWirePhase {
         match self {
             Self::Proposal => FairV2IngressLeaderWirePhase::Proposal,
@@ -4808,6 +4811,7 @@ impl FairV2Ingress {
     }
 
     /// Prior exact runtime owner which a reopened Dormant token must reuse.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn restored_leader_wire_runtime_owner(
         &self,
         token: &FairV2IngressLeaderWireToken,
@@ -4824,6 +4828,7 @@ impl FairV2Ingress {
     }
 
     /// Durably transfer one physically drained token to its exact runtime owner.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn mark_leader_wire_runtime(
         &self,
         token: &FairV2IngressLeaderWireToken,
