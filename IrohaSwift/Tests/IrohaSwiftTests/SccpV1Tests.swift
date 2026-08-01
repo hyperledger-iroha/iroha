@@ -703,7 +703,7 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertEqual(finalityAnchor.checkpointFinalityArtifactHash, Data(repeating: 0xa3, count: 32))
         XCTAssertEqual(
             finalityAnchor.anchorHash,
-            Data(hexString: "EC6C821CAF5FA74368C08E9101AB310F132FB7F627A09F6F9481AA9484054BBA")
+            Data(hexString: "4410EE4CCFD06F2D0E3A658615D516AC8CF65255D8A8716CE511EA95E135C8C3")
         )
 
         let invalidFinalityAnchors: [(inout [String: Any]) -> Void] = [
@@ -1707,7 +1707,7 @@ final class SccpV1Tests: XCTestCase {
         let contextId = Data(repeating: 0xa2, count: 32)
         let artifactHash = Data(repeating: 0xa3, count: 32)
         var canonical = Data([1, SccpNetworkV1.soraTaira.tag])
-        appendUInt16LE(3, to: &canonical)
+        appendUInt16LE(4, to: &canonical)
         canonical.append(chainHash)
         appendUInt64LE(7, to: &canonical)
         canonical.append(checkpoint)
@@ -1942,7 +1942,7 @@ final class SccpV1Tests: XCTestCase {
         var creation = CompactNoritoWriter()
         creation.writeUInt64LE(creationTimeMs)
         var emptyMetadata = CompactNoritoWriter()
-        emptyMetadata.writeLength(0)
+        emptyMetadata.writeUInt64LE(0)
 
         var payload = CompactNoritoWriter()
         payload.writeField(chain.data)
@@ -1953,6 +1953,7 @@ final class SccpV1Tests: XCTestCase {
         payload.writeField(Data([0]))
         payload.writeField(rawFeePayment)
         payload.writeField(emptyMetadata.data)
+        payload.writeField(Data([0]))
         return payload.data
     }
 }

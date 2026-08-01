@@ -54,9 +54,6 @@ const UNIVERSAL_TAGS_V1: [u32; ZK_X509_DER_AIR_UNIVERSAL_SELECTORS_V1] = [
     1, 2, 3, 4, 5, 6, 10, 12, 16, 17, 18, 19, 20, 22, 23, 24, 26, 28, 30,
 ];
 
-/// Stable descriptor for the aggregate-registered strict-DER relation.
-pub(crate) const ZK_X509_DER_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-der-air-v2-incompatible:max-documents4:max-embedded-documents15:max-total-embedded-bytes65536:generic-oracle-max-document-bytes16384:rfc5280-proof-max-document-bytes4096:max-values2048:max-depth16:preorder-node-spans:exact-header-and-primitive-byte-cover:identifier-u32-base128-minimal:length-max16384-minimal:definite-only:universal-tag-form-one-hot:primitive-boolean-null-integer-enumerated-oid-bit-string:constructed-gap-free-stack:set-of-lexicographic-comparator:extension-octet-string-to-embedded-der-exact-copy:exhaustive-canonical-rfc5280-node-provenance:closed-rfc5280-certificate-crl-name-time-extension-path-state:crl-revoked-serials-strict-unsigned-magnitude-order:disclosed-attribute-content-octets:max-disclosed-content256:fixed-der-sha-p256-projection-ca-io-topology:three-certificate-tbs-slots:complete-signed-crl-sha-commitment:issuer-spki-sha:root-spki-ca-membership:four-lane-byte-copy-ready:owner-trace-complete:rfc5280-numeric-column-provider=complete-via-rfc5280-stark:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
-
 /// Fixed-width little-endian bit decomposition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerRangeWitnessV1<const BITS: usize> {
@@ -4642,7 +4639,6 @@ mod tests {
     }
 
     const CERT_NOT_BEFORE: u64 = 1_640_995_200;
-    const CERT_NOT_AFTER: u64 = 1_893_456_000;
     const CRL_THIS_UPDATE: u64 = 1_672_531_200;
     const CRL_NEXT_UPDATE: u64 = CRL_THIS_UPDATE + 300;
     const VALIDATION_TIME: u64 = CRL_THIS_UPDATE + 60;

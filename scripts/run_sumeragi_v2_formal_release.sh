@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Run and attest the complete strict Sumeragi v2 formal release gate.
+#
+# The canonical completion is published only after the proof checker derives,
+# archives, and revalidates the production trace-extraction theorem
+# certificate. Missing production theorem links therefore leave the useful
+# formal archive in place but cannot mint a release completion capability.
 
 set -euo pipefail
 
@@ -108,6 +113,7 @@ readonly evidence_copy="${invocation_dir}/proof_evidence.json"
 readonly verus_evidence_copy="${invocation_dir}/verus_evidence.json"
 readonly verus_log_copy="${invocation_dir}/verus.log"
 readonly cross_tool_evidence_copy="${invocation_dir}/cross_tool_evidence.json"
+readonly production_trace_extraction_evidence_copy="${invocation_dir}/production_trace_extraction_evidence.json"
 readonly multilane_apalache_evidence_copy="${invocation_dir}/multilane_apalache_evidence.tsv"
 readonly harness_lock_copy="${invocation_dir}/harness-Cargo.lock"
 readonly toolchain_copy="${invocation_dir}/formal-toolchain.tsv"
@@ -120,6 +126,7 @@ readonly source_evidence="target/formal/sumeragi_v2/proof_evidence.json"
 readonly source_verus_evidence="target/formal/sumeragi_v2/verus_evidence.json"
 readonly source_verus_log="target/formal/sumeragi_v2/verus.log"
 readonly source_cross_tool_evidence="target/formal/sumeragi_v2/cross_tool_evidence.json"
+readonly source_production_trace_extraction_evidence="target/formal/sumeragi_v2/production_trace_extraction_evidence.json"
 readonly source_multilane_apalache_evidence="target/formal/sumeragi_v2/multilane_apalache_evidence.tsv"
 readonly source_tlaps_resource_jsonl="target/formal/sumeragi_v2/tlaps_resource.jsonl"
 readonly source_tlaps_resource_summary="target/formal/sumeragi_v2/tlaps_resource_summary.json"
@@ -139,6 +146,7 @@ rm -f -- \
   "$source_verus_evidence" \
   "$source_verus_log" \
   "$source_cross_tool_evidence" \
+  "$source_production_trace_extraction_evidence" \
   "$source_multilane_apalache_evidence" \
   "$source_tlaps_resource_jsonl" \
   "$source_tlaps_resource_summary"
@@ -249,6 +257,36 @@ fi
 python3 scripts/formal/check_sumeragi_v2_proof_ledger.py "${archived_release_args[@]}"
 verify_identity "after archived proof validation"
 
+if [[ -z "$cross_tool_obligations" ]]; then
+  echo "production trace-extraction certification requires linked cross-tool evidence" >&2
+  exit 1
+fi
+python3 scripts/formal/check_sumeragi_v2_proof_ledger.py \
+  --ledger "$ledger_copy" \
+  --evidence "$evidence_copy" \
+  --verus-evidence "$verus_evidence_copy" \
+  --verus-log "$verus_log_copy" \
+  --cross-tool-evidence "$cross_tool_evidence_copy" \
+  --write-production-trace-extraction-evidence \
+  "$source_production_trace_extraction_evidence"
+if [[ ! -f "$source_production_trace_extraction_evidence" \
+  || -L "$source_production_trace_extraction_evidence" ]]; then
+  echo "production trace-extraction checker did not produce a regular certificate" >&2
+  exit 1
+fi
+cp -- "$source_production_trace_extraction_evidence" \
+  "${production_trace_extraction_evidence_copy}.partial"
+mv -- "${production_trace_extraction_evidence_copy}.partial" \
+  "$production_trace_extraction_evidence_copy"
+certificate_release_args=(
+  "${archived_release_args[@]}"
+  --production-trace-extraction-evidence
+  "$production_trace_extraction_evidence_copy"
+)
+python3 scripts/formal/check_sumeragi_v2_proof_ledger.py \
+  "${certificate_release_args[@]}"
+verify_identity "after production trace-extraction certification"
+
 gate_log_sha256="$(hash_file "$gate_log")"
 proof_coverage_sha256="$(hash_file "$ledger_copy")"
 proof_evidence_sha256="$(hash_file "$evidence_copy")"
@@ -259,9 +297,13 @@ harness_cargo_lock_sha256="$(hash_file "$harness_lock_copy")"
 formal_toolchain_sha256="$(hash_file "$toolchain_copy")"
 tlaps_resource_jsonl_sha256="$(hash_file "$tlaps_resource_jsonl_copy")"
 tlaps_resource_summary_sha256="$(hash_file "$tlaps_resource_summary_copy")"
+cross_tool_evidence_sha256="$(hash_file "$cross_tool_evidence_copy")"
+production_trace_extraction_evidence_sha256="$(
+  hash_file "$production_trace_extraction_evidence_copy"
+)"
 completion_tmp="${invocation_dir}/.COMPLETED.tsv.$$"
 printf '%s\t%s\n' \
-  schema_version 1 \
+  schema_version 2 \
   head_commit "$head_commit" \
   head_tree "$head_tree" \
   source_manifest_sha256 "$source_manifest_sha256" \
@@ -272,16 +314,14 @@ printf '%s\t%s\n' \
   verus_evidence_sha256 "$verus_evidence_sha256" \
   verus_log_sha256 "$verus_log_sha256" \
   multilane_apalache_evidence_sha256 "$multilane_apalache_evidence_sha256" \
+  cross_tool_evidence_sha256 "$cross_tool_evidence_sha256" \
+  production_trace_extraction_evidence_sha256 \
+    "$production_trace_extraction_evidence_sha256" \
   harness_cargo_lock_sha256 "$harness_cargo_lock_sha256" \
   formal_toolchain_sha256 "$formal_toolchain_sha256" \
   tlaps_resource_jsonl_sha256 "$tlaps_resource_jsonl_sha256" \
   tlaps_resource_summary_sha256 "$tlaps_resource_summary_sha256" \
   >"$completion_tmp"
-if [[ -n "$cross_tool_obligations" ]]; then
-  printf '%s\t%s\n' \
-    cross_tool_evidence_sha256 "$(hash_file "$cross_tool_evidence_copy")" \
-    >>"$completion_tmp"
-fi
 mv -- "$completion_tmp" "$completion_attestation"
 if ! verify_identity "after completion attestation"; then
   rm -f -- "$completion_attestation"

@@ -1133,11 +1133,6 @@ impl FairV2IngressLeaderWireToken {
         self.scheduler_ordinal
     }
 
-    /// Closed productive source class.
-    pub(crate) const fn source_class(&self) -> FairV2IngressLeaderWireSourceClass {
-        self.source_class
-    }
-
     /// Validate the complete context-bound token against configured geometry.
     pub(crate) fn validate_exact(
         &self,
@@ -1312,6 +1307,7 @@ enum FairV2IngressMessageKind {
     V2CommitCertificateResponse,
     V2VrfCommit,
     V2VrfReveal,
+    KuraReplicaAdvert,
     LaneBlockProposal,
     LaneExecutablePayload,
     LaneBlockNewViewVote,
@@ -1332,20 +1328,6 @@ enum FairV2IngressControlKind {
     CommitQc,
     TimeoutVote,
     TimeoutCertificate,
-}
-
-impl FairV2IngressControlKind {
-    const fn leader_wire_phase(self) -> FairV2IngressLeaderWirePhase {
-        match self {
-            Self::Proposal => FairV2IngressLeaderWirePhase::Proposal,
-            Self::PrepareVote => FairV2IngressLeaderWirePhase::PrepareVote,
-            Self::CommitVote => FairV2IngressLeaderWirePhase::CommitVote,
-            Self::PrepareQc => FairV2IngressLeaderWirePhase::PrepareQc,
-            Self::CommitQc => FairV2IngressLeaderWirePhase::CommitQc,
-            Self::TimeoutVote => FairV2IngressLeaderWirePhase::TimeoutVote,
-            Self::TimeoutCertificate => FairV2IngressLeaderWirePhase::TimeoutCertificate,
-        }
-    }
 }
 
 fn fair_v2_ingress_control_kind(message: &BlockMessage) -> Option<FairV2IngressControlKind> {
@@ -1831,6 +1813,7 @@ impl FairV2IngressMessageKind {
             BlockMessage::LaneHistoricalRecoveryResponse(_) => {
                 Some(Self::LaneHistoricalRecoveryResponse)
             }
+            BlockMessage::KuraReplicaAdvert(_) => Some(Self::KuraReplicaAdvert),
             _ => None,
         }
     }
@@ -2224,7 +2207,7 @@ impl FairV2IngressOwnershipEvidence {
     pub(crate) fn matches_message(&self, message: &BlockMessage) -> bool {
         let encoded = match message {
             BlockMessage::V2(message) => message.encode(),
-            message if message.is_lane_local() => message.encode(),
+            message if message.is_lane_local() || message.is_live_auxiliary() => message.encode(),
             _ => return false,
         };
         self.first.encoded_bytes.as_ref() == encoded.as_slice()
@@ -4123,7 +4106,8 @@ impl FairV2Ingress {
             fair_v2_ingress_required_lane_p2p_frame_bytes(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES);
         let required_consensus_frame_bytes =
             fair_v2_ingress_required_p2p_frame_bytes(required_recovery_request_bytes)
-                .max(required_lane_progress_frame_bytes);
+                .max(required_lane_progress_frame_bytes)
+                .max(crate::MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES);
         let required_control_frame_bytes =
             fair_v2_ingress_required_p2p_frame_bytes(required_control_message_bytes);
         let required_block_sync_frame_bytes =
@@ -4145,7 +4129,8 @@ impl FairV2Ingress {
             BODY_ENVELOPE_HEADROOM_BYTES
                 .max(required_control_message_bytes)
                 .max(required_recovery_request_bytes)
-                .max(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES),
+                .max(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES)
+                .max(crate::MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES),
             required_transport_completion_bytes,
             required_consensus_frame_bytes,
             required_control_frame_bytes,
@@ -4699,32 +4684,14 @@ impl FairV2Ingress {
         self.state.lock().open = false;
     }
 
-    /// Prior exact runtime owner which a reopened Dormant token must reuse.
-    pub(crate) fn restored_leader_wire_runtime_owner(
-        &self,
-        token: &FairV2IngressLeaderWireToken,
-    ) -> Result<Option<serviced_candidate_store::LeaderWireRuntimeOwner>, String> {
-        let state = self.state.lock();
-        let record = state
-            .leader_wire_lifecycles
-            .get(&token.slot)
-            .ok_or_else(|| "leader-wire token has no bound lifecycle record".to_owned())?;
-        if record.token != *token {
-            return Err("leader-wire runtime rebind changed immutable token".to_owned());
-        }
-        Ok(record.restored_runtime_owner)
-    }
-
-    /// Durably transfer one physically drained token to its exact runtime owner.
-    pub(crate) fn mark_leader_wire_runtime(
-        &self,
+    fn mark_leader_wire_runtime_locked(
+        state: &mut FairV2IngressState,
         token: &FairV2IngressLeaderWireToken,
         owner: serviced_candidate_store::LeaderWireRuntimeOwner,
     ) -> Result<serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt, String> {
         if owner.admission_ordinal() != token.scheduler_ordinal() {
             return Err("leader-wire runtime changed its shared scheduler ordinal".to_owned());
         }
-        let mut state = self.state.lock();
         let gate = state
             .leader_wire_lifecycle_gate
             .as_ref()
@@ -4750,13 +4717,11 @@ impl FairV2Ingress {
         record.status = FairV2IngressLeaderWireStatus::Runtime;
         record.restored_runtime_owner = Some(owner);
         record.ingress_predecessors.clear();
-        self.debug_assert_consistent(&state);
         Ok(receipt)
     }
 
-    /// Bind a drained productive carrier to its immutable generic runtime.
-    pub(crate) fn bind_leader_wire_runtime_ownership(
-        &self,
+    fn bind_leader_wire_runtime_ownership_locked(
+        state: &mut FairV2IngressState,
         ownership: &mut FairV2IngressOwnershipEvidence,
     ) -> Result<(), String> {
         if !ownership.validate_exact() {
@@ -4776,26 +4741,42 @@ impl FairV2Ingress {
             .then_some(())
             .ok_or_else(|| "leader-wire runtime receipt changed immutable ownership".to_owned());
         }
-        let owner = self
-            .restored_leader_wire_runtime_owner(&token)?
-            .map_or_else(
-                || {
-                    serviced_candidate_store::LeaderWireRuntimeOwner::new(
-                        token.identity_hash(),
-                        token.scheduler_ordinal(),
-                    )
-                },
-                Ok,
-            )?;
+        let record = state
+            .leader_wire_lifecycles
+            .get(&token.slot)
+            .ok_or_else(|| "leader-wire token has no bound lifecycle record".to_owned())?;
+        if record.token != token {
+            return Err("leader-wire runtime rebind changed immutable token".to_owned());
+        }
+        let owner = record.restored_runtime_owner.map_or_else(
+            || {
+                serviced_candidate_store::LeaderWireRuntimeOwner::new(
+                    token.identity_hash(),
+                    token.scheduler_ordinal(),
+                )
+            },
+            Ok,
+        )?;
         if owner.causal_lifecycle_key() != token.identity_hash()
             || owner.admission_ordinal() != token.scheduler_ordinal()
         {
             return Err("restored leader-wire runtime changed its token identity".to_owned());
         }
-        let receipt = self.mark_leader_wire_runtime(&token, owner)?;
+        let receipt = Self::mark_leader_wire_runtime_locked(state, &token, owner)?;
         if !ownership.install_leader_wire_runtime_receipt(receipt) {
             return Err("leader-wire runtime receipt could not bind ingress ownership".to_owned());
         }
+        Ok(())
+    }
+
+    /// Bind a drained productive carrier to its immutable generic runtime.
+    pub(crate) fn bind_leader_wire_runtime_ownership(
+        &self,
+        ownership: &mut FairV2IngressOwnershipEvidence,
+    ) -> Result<(), String> {
+        let mut state = self.state.lock();
+        Self::bind_leader_wire_runtime_ownership_locked(&mut state, ownership)?;
+        self.debug_assert_consistent(&state);
         Ok(())
     }
 
@@ -4877,47 +4858,6 @@ impl FairV2Ingress {
         Ok(())
     }
 
-    /// Publish a restart-stable terminal from independently durable body bytes.
-    pub(crate) fn mark_leader_wire_durable_body_terminal(
-        &self,
-        runtime: &serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt,
-        durable_body: &v2_body_store::DurableBodyReceipt,
-    ) -> Result<(), String> {
-        let token = runtime.token();
-        let mut state = self.state.lock();
-        let gate = state
-            .leader_wire_lifecycle_gate
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| {
-                "leader-wire body terminal crossed an unbound lifecycle gate".to_owned()
-            })?;
-        let record = state
-            .leader_wire_lifecycles
-            .get(&token.slot)
-            .ok_or_else(|| "leader-wire body terminal has no runtime record".to_owned())?;
-        if record.token != *token
-            || !matches!(
-                record.status,
-                FairV2IngressLeaderWireStatus::Runtime
-                    | FairV2IngressLeaderWireStatus::VolatileTerminal
-                    | FairV2IngressLeaderWireStatus::Terminal
-            )
-            || record.restored_runtime_owner != Some(runtime.owner())
-        {
-            return Err("leader-wire body terminal changed exact runtime ownership".to_owned());
-        }
-        gate.mark_durable_body_terminal(runtime, durable_body)?;
-        let record = state
-            .leader_wire_lifecycles
-            .get_mut(&token.slot)
-            .expect("validated leader-wire runtime record remains bound");
-        record.status = FairV2IngressLeaderWireStatus::Terminal;
-        record.ingress_predecessors.clear();
-        self.debug_assert_consistent(&state);
-        Ok(())
-    }
-
     /// Return whether one semantic peer belongs to the installed frozen roster.
     ///
     /// This is intentionally independent of the authenticated transport hop:
@@ -4974,6 +4914,19 @@ impl FairV2Ingress {
                     _ => MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES,
                 };
                 if encoded_len > lane_limit {
+                    return Err(FairV2IngressPushError::Rejected(inbound));
+                }
+                encoded
+            }
+            BlockMessage::KuraReplicaAdvert(advert) => {
+                if inbound.sender() != Some(&advert.keeper)
+                    || inbound.via() != Some(&advert.keeper)
+                    || advert.verify_keeper_signature().is_err()
+                {
+                    return Err(FairV2IngressPushError::Rejected(inbound));
+                }
+                let encoded = Arc::<[u8]>::from(inbound.message().encode());
+                if encoded.len() > crate::MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES {
                     return Err(FairV2IngressPushError::Rejected(inbound));
                 }
                 encoded
@@ -5977,6 +5930,47 @@ impl FairV2Ingress {
                     .position(|entry| entry.admission_ordinal == admission_ordinal)
             })
             .expect("serialized fair-ingress candidate must remain queued until selection");
+        let leader_wire_ownership = {
+            let entry = state
+                .lanes
+                .get(&source)
+                .and_then(|lane| lane.entries.get(admitted_index))
+                .expect("selected fair-ingress entry remains queued for runtime handoff");
+            match entry.leader_wire_token.as_ref() {
+                None => None,
+                Some(token) => {
+                    let ownership = entry
+                        .inbound
+                        .ingress_ownership
+                        .as_ref()
+                        .cloned()
+                        .ok_or_else(|| {
+                            "leader-wire dequeue lost its fair-ingress ownership carrier".to_owned()
+                        })?;
+                    if ownership.leader_wire_token() != Some(token)
+                        || ownership.leader_wire_runtime_receipt().is_some()
+                    {
+                        return Err(
+                            "leader-wire dequeue changed its exact ingress ownership".to_owned()
+                        );
+                    }
+                    Some(ownership)
+                }
+            }
+        };
+        if let Some(mut ownership) = leader_wire_ownership {
+            // Persist and install the deterministic runtime owner while the
+            // physical carrier, durable Ingress record, and queue lock still
+            // form one atomic handoff. Existing downstream bind calls then
+            // validate this receipt idempotently.
+            Self::bind_leader_wire_runtime_ownership_locked(&mut state, &mut ownership)?;
+            let entry = state
+                .lanes
+                .get_mut(&source)
+                .and_then(|lane| lane.entries.get_mut(admitted_index))
+                .expect("selected leader-wire entry remains queued through durable handoff");
+            Arc::make_mut(&mut entry.inbound).ingress_ownership = Some(ownership);
+        }
         if let Some(reservation) = state
             .lanes
             .get(&source)
@@ -6175,6 +6169,8 @@ pub(crate) fn fair_v2_ingress_admit_with_roster_for_test(
 /// Bounded ingress handle for the serialized Sumeragi v2 runner.
 ///
 /// Global v1 frames are decode-only and are rejected before any queue handoff.
+/// Fixed-small live auxiliary messages share the exact fair-ingress ownership
+/// path but are terminalized before either consensus reducer.
 /// All accepted queues are bounded and non-blocking. Reducer- and lane-owned
 /// durable intents reconstruct their own retransmissions; live transport
 /// callers additionally retain the exact item returned by [`SumeragiIngressDisposition::Retry`]
@@ -6243,7 +6239,10 @@ impl SumeragiHandle {
             return SumeragiIngressDisposition::Retry(inbound);
         }
 
-        if matches!(inbound.message(), BlockMessage::V2(_)) || inbound.message().is_lane_local() {
+        if matches!(inbound.message(), BlockMessage::V2(_))
+            || inbound.message().is_lane_local()
+            || inbound.message().is_live_auxiliary()
+        {
             let queue = status::WorkerQueueKind::Blocks;
             return match self.block.try_push(inbound) {
                 Ok(FairV2IngressPushDisposition::Enqueued) => {
@@ -6297,7 +6296,7 @@ impl SumeragiHandle {
         self.try_incoming_block_message_owned(InboundBlockMessage::new(message, Some(sender)))
     }
 
-    /// Enqueue a canonical v2 or retained lane-local message without blocking.
+    /// Enqueue a canonical v2, live auxiliary, or retained lane-local message without blocking.
     pub fn incoming_block_message(&self, message: BlockMessage) -> bool {
         self.try_incoming_block_message_owned(InboundBlockMessage::new(message, None))
             .accepted_or_coalesced()

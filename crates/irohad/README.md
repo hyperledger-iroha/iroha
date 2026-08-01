@@ -87,12 +87,17 @@ an external broker slot; missing, substituted, stale, zero-qualified, or
 test-marked configuration fails the common launcher preflight, while the live
 adapter remains requalified at Torii construction and around every operation.
 
-The source tree provides `serve_runtime_provider_broker_v1` as an injected
-broker-server library boundary, but no checked-in executable calls it and no
-HSM, KMS, sealed-store, credential loader, or production backend is packaged.
-Deployments using the stock client must therefore supervise a separately
-owned broker process that injects every requested backend. Client wiring alone
-is not production-adapter or deployment qualification.
+The source tree provides `RuntimeProviderBrokerDeploymentV1` as the standard
+deployment assembly around the injected `serve_runtime_provider_broker_v1`
+server boundary. Its `RuntimeProviderBrokerBackendRegistryV1` receives only the
+sanitized non-empty public catalog, and the assembled launch has redacted
+diagnostics and performs exact live server qualification before readiness. No
+checked-in executable supplies a vendor registry, HSM, KMS, sealed store,
+credential loader, or production backend. Deployments using the stock client
+must therefore build and supervise a separately owned broker executable that
+injects every requested backend through this assembly. Client wiring or an
+empty/dummy broker alone is not production-adapter or deployment
+qualification.
 
 Registry resolution itself validates the sanitized binding catalog and rejects
 missing or unrequested dependency objects. It cannot independently attest to a

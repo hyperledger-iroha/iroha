@@ -80,6 +80,10 @@ pub(crate) const ZK_X509_DER_STARK_FIXED_PADDING_ROWS_V1: usize =
 
 const _: () =
     assert!(ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1 < ZK_X509_DER_STARK_TRACE_SIZE_V1);
+const _: () = assert!(
+    ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1 + ZK_X509_DER_STARK_FIXED_PADDING_ROWS_V1
+        == ZK_X509_DER_STARK_TRACE_SIZE_V1
+);
 
 const DER_TUPLE_CHALLENGE_LABELS_V1: [&[u8]; 12] = [
     b"zk-x509-der-bus-tuple-slot-00-v1",
@@ -341,15 +345,9 @@ impl ZkX509DerStarkShapeV1 {
 
 /// Verifier-owned constant fixed schedule; it never stores native fixed rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ZkX509DerStarkFixedScheduleV1 {
-    shape: ZkX509DerStarkShapeV1,
-}
+pub(crate) struct ZkX509DerStarkFixedScheduleV1;
 
 impl ZkX509DerStarkFixedScheduleV1 {
-    pub(crate) fn shape(&self) -> &ZkX509DerStarkShapeV1 {
-        &self.shape
-    }
-
     pub(crate) const fn active_rows(&self) -> usize {
         ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1
     }
@@ -398,7 +396,7 @@ pub(crate) fn compile_zk_x509_der_stark_fixed_schedule_v1(
     shape: ZkX509DerStarkShapeV1,
 ) -> Result<ZkX509DerStarkFixedScheduleV1, ZkX509DerStarkErrorV1> {
     shape.validate()?;
-    Ok(ZkX509DerStarkFixedScheduleV1 { shape })
+    Ok(ZkX509DerStarkFixedScheduleV1)
 }
 
 /// Transcript challenges used by stack, event, and byte lookup buses.
@@ -446,7 +444,6 @@ impl ZkX509DerStarkChallengesV1 {
 /// The labels are stable even though a tuple slot has adapter-specific meaning;
 /// its numeric position, rather than a witness-selected event kind, determines
 /// the compression coefficient.
-#[allow(dead_code)]
 pub(crate) fn derive_zk_x509_der_stark_challenges_v1(
     transcript: &mut TransparentTranscriptV1,
 ) -> Result<ZkX509DerStarkChallengesV1, TransparentStarkErrorV1> {
@@ -4337,6 +4334,11 @@ mod tests {
             ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1
         );
         assert_eq!(schedule.aggregate_rows(), ZK_X509_DER_STARK_TRACE_SIZE_V1);
+        assert_eq!(ZK_X509_DER_STARK_FIXED_PADDING_ROWS_V1, 196_608);
+        assert_eq!(
+            schedule.active_rows() + ZK_X509_DER_STARK_FIXED_PADDING_ROWS_V1,
+            schedule.aggregate_rows()
+        );
 
         let first = schedule.fixed_row(0).expect("first");
         assert_eq!(first[FIX_ACTIVE], F::ONE);
@@ -4475,19 +4477,7 @@ mod tests {
         assert_eq!(ZK_X509_DER_MAX_VALUES_V1, 2_048);
     }
 
-    #[test]
-    fn bit_selectors_and_tuple_compression_are_numeric_and_total() {
-        let bits = [F::ONE, F::ZERO, F::ONE];
-        assert_eq!(pack_bits_v1(&bits), F(5));
-        for value in 0..8 {
-            assert_eq!(
-                equality_selector_from_bits_v1(&bits, value),
-                F(u64::from(value == 5))
-            );
-        }
-        let challenge = core::array::from_fn(|index| F((index + 2) as u64));
-        assert_ne!(compress_tuple_v1(&[F(7), F(11), F(13)], challenge), F::ZERO);
-    }
+    include!("der_stark/tuple_compression_test.rs");
 
     #[test]
     fn canonical_documents_compile_to_exact_streaming_and_set_rows() {

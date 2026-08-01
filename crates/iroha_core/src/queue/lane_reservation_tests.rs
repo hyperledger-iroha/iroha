@@ -2007,6 +2007,9 @@ fn reservation_restart_fits_ordinary_fifo_around_middle_anchor() {
             .replayed,
         3
     );
+    queue
+        .complete_lane_reservation_startup_reconciliation()
+        .expect("publish completed middle-anchor startup reconciliation");
     for (index, hash) in hashes.iter().copied().enumerate() {
         assert_eq!(
             queue
@@ -2455,7 +2458,6 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
         PrepareRelease,
         CompleteRelease,
         Commit,
-        Prune,
     }
 
     for terminal in [
@@ -2464,7 +2466,6 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
         TerminalAppend::PrepareRelease,
         TerminalAppend::CompleteRelease,
         TerminalAppend::Commit,
-        TerminalAppend::Prune,
     ] {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let state = lane_reservation_test_state();
@@ -2545,12 +2546,6 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
             TerminalAppend::Commit => {
                 inject_ambiguous_append();
                 queue.commit_lane_reservation(&keys[0]).map(|_| ())
-            }
-            TerminalAppend::Prune => {
-                inject_ambiguous_append();
-                queue
-                    .prune_lane_reservations(scope.lane_id, scope.lane_incarnation)
-                    .map(|_| ())
             }
         };
 

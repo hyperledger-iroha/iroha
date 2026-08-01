@@ -73,6 +73,7 @@ JUNIT_REPORT="${SDK_SESSION}/pytest.xml"
 "${VENV_PYTHON}" -m pytest -q -p no:cacheprovider \
   --junitxml "${JUNIT_REPORT}" \
   tests/cancel_asset_lock_v1_test.py \
+  tests/cancel_asset_lock_client_helpers_test.py \
   tests/client_ledger_helpers_test.py \
   tests/sorafs_reference_validation_test.py \
   tests/sorafs_replication_instruction_test.py

@@ -421,7 +421,10 @@ def _validate_application_evidence(document: dict[str, Any]) -> None:
     group = golden["receipt_group"]
     evidence = golden["application_evidence"]
     execution = evidence["execution_commitment"]
-    assert "merge_carrier" in execution and execution["merge_carrier"] is None
+    merge_carrier = execution["merge_carrier"]
+    assert set(merge_carrier) == {"entry_hash", "version"}
+    assert merge_carrier["version"] == 1
+    assert merge_carrier["entry_hash"].startswith("hash:")
     artifacts = evidence["manifest_artifacts"]
     assert execution["native_amx_application_manifest_version"] == 1
     assert execution["native_amx_application_manifest_count"] == len(artifacts) == 1

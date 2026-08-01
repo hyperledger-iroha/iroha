@@ -818,7 +818,7 @@ pub mod kura {
 
     use iroha_config_base::util::Bytes;
 
-    use crate::kura::FsyncMode;
+    use crate::{kura::FsyncMode, parameters::actual::KuraReplicaAdvertPolicy};
 
     /// Directory for Kura storage relative to the node working directory.
     pub const STORE_DIR: &str = "./storage";
@@ -830,6 +830,20 @@ pub mod kura {
     pub const ROSTER_SIDECAR_RETENTION: NonZeroUsize = nonzero!(512_usize);
     /// Distinct remote peers that must advertise a canonical block before local body eviction.
     pub const EVICTION_REQUIRED_REPLICAS: NonZeroUsize = nonzero!(3_usize);
+    /// Number of authenticated historical advert keys retained immediately before the protected
+    /// in-memory block tail.
+    pub const REPLICA_ADVERT_EVICTABLE_WINDOW: NonZeroUsize = nonzero!(4_096_usize);
+    /// Default lifetime of one authenticated remote replica observation.
+    pub const REPLICA_ADVERT_TTL: Duration = Duration::from_secs(60 * 60);
+    /// Default cadence for proactively refreshing selected-keeper replica adverts.
+    pub const REPLICA_ADVERT_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
+    /// Complete default authenticated replica-advert policy.
+    pub const REPLICA_ADVERT_POLICY: KuraReplicaAdvertPolicy = KuraReplicaAdvertPolicy {
+        eviction_required_replicas: EVICTION_REQUIRED_REPLICAS,
+        evictable_window: REPLICA_ADVERT_EVICTABLE_WINDOW,
+        ttl: REPLICA_ADVERT_TTL,
+        refresh_interval: REPLICA_ADVERT_REFRESH_INTERVAL,
+    };
     /// Default number of merge-ledger entries cached in memory.
     pub const MERGE_LEDGER_CACHE_CAPACITY: usize = 256;
     /// Default fsync policy for block persistence.
@@ -1962,6 +1976,14 @@ pub mod sorafs {
             pub const DEFAULT_RATE_LIMIT_BYTES: u64 = 8 * 1024 * 1024; // 8 MiB/s
             /// Default allowed requests per minute for token refresh.
             pub const DEFAULT_REQUESTS_PER_MINUTE: u32 = 120;
+            /// Maximum durable callback rows admitted by the external gateway owner.
+            pub const ADMISSION_MAX_PENDING: u32 = 65_536;
+            /// Maximum active token quota windows admitted by the external gateway owner.
+            pub const ADMISSION_MAX_TRACKED_TOKENS: u32 = 65_536;
+            /// Maximum ordered callback rows replayed by one reconciliation tick.
+            pub const ADMISSION_RECONCILE_MAX_ITEMS: u32 = 256;
+            /// Maximum lifetime of one external concurrency lease.
+            pub const ADMISSION_LEASE_TTL_MS: u64 = 120_000;
         }
     }
 

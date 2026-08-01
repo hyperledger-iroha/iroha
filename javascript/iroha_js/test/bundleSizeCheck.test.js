@@ -338,7 +338,7 @@ test("public browser aggregate bundles without Node inputs or global Buffer shim
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 59);
-  assert.equal(result.outputFiles[0].contents.byteLength, 476_074);
+  assert.equal(result.outputFiles[0].contents.byteLength, 474_956);
   assert.ok(
     result.outputFiles[0].contents.byteLength <= Math.floor(458_081 * 1.05),
     "public browser aggregate regressed more than 5% from the protected pre-reset tree",
@@ -394,8 +394,8 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
   ]);
   const expected = new Map([
     ["toriiClient.js", { bytes: 1_000_409, modules: 61 }],
-    ["transactionCodec.js (browser)", { bytes: 297_228, modules: 46 }],
-    ["nexusApp.js (browser)", { bytes: 380_431, modules: 55 }],
+    ["transactionCodec.js (browser)", { bytes: 298_550, modules: 45 }],
+    ["nexusApp.js (browser)", { bytes: 378_321, modules: 55 }],
     ["canonicalRequest.js (browser)", { bytes: 98_090, modules: 34 }],
   ]);
   const { build } = await import("esbuild");
@@ -460,7 +460,7 @@ test("Kotodama compiler browser export stays below 53 KiB without Node or Buffer
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 6);
-  assert.equal(result.outputFiles[0].contents.byteLength, 52_735);
+  assert.equal(result.outputFiles[0].contents.byteLength, 52_769);
   assert.ok(
     result.outputFiles[0].contents.byteLength <= Math.floor(52_156 * 1.05),
     "Kotodama compiler browser export regressed more than 5% from the protected pre-reset tree",

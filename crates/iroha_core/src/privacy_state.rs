@@ -714,14 +714,6 @@ impl PrivacyPgcPoolSnapshotV1 {
             .any(|(key, _)| key.epoch() == self.current_epoch && key.root() == self.current_root)
             .then_some((self.current_epoch, self.current_root))
     }
-
-    /// Return whether an exact historical epoch/root pair remains retained.
-    #[must_use]
-    pub(crate) fn contains_retained_root(&self, epoch: u64, root: PrivacyRootV1) -> bool {
-        self.retained_roots
-            .iter()
-            .any(|(key, _)| key.epoch() == epoch && key.root() == root)
-    }
 }
 
 fn validate_pgc_successor_link_v1(
@@ -6108,32 +6100,6 @@ impl PrivacyNullifierKeyV1 {
         }
     }
 
-    /// Return the Orchard namespace, if this is an Orchard nullifier.
-    #[must_use]
-    pub(crate) const fn orchard_namespace(self) -> Option<PrivacyNamespaceV1> {
-        match self {
-            Self::OrchardNullifier { namespace, .. } => Some(namespace),
-            Self::ZkAceReplay { .. }
-            | Self::ZkAmsKeyImage { .. }
-            | Self::ZkX509CertificateNullifier { .. }
-            | Self::FcmpKeyImage { .. }
-            | Self::ProofManagedNullifier { .. } => None,
-        }
-    }
-
-    /// Return the exact Orchard nullifier bytes, if present.
-    #[must_use]
-    pub(crate) const fn orchard_nullifier_bytes(self) -> Option<[u8; 32]> {
-        match self {
-            Self::OrchardNullifier { nullifier, .. } => Some(nullifier),
-            Self::ZkAceReplay { .. }
-            | Self::ZkAmsKeyImage { .. }
-            | Self::ZkX509CertificateNullifier { .. }
-            | Self::FcmpKeyImage { .. }
-            | Self::ProofManagedNullifier { .. } => None,
-        }
-    }
-
     /// Return the proof-managed pool namespace and nullifier, if present.
     #[must_use]
     pub(crate) const fn proof_managed_identity(
@@ -6491,24 +6457,6 @@ impl PrivacyCommitmentKeyV1 {
             namespace,
             output_id,
         })
-    }
-
-    /// Ordered bounds covering every proof-managed pool configuration.
-    #[must_use]
-    pub(crate) fn proof_managed_pool_config_range() -> core::ops::RangeInclusive<Self> {
-        let namespace = |protocol_id, pool_id| {
-            PrivacyNamespaceV1::new(
-                protocol_id,
-                PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
-                    pool_id: PrivacyPoolIdV1::new(pool_id),
-                }),
-            )
-        };
-        Self::ProofManagedPoolConfig {
-            namespace: namespace(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1, [0; 32]),
-        }..=Self::ProofManagedPoolConfig {
-            namespace: namespace(PrivacyProtocolIdV1::PqMaspStarkV0, [u8::MAX; 32]),
-        }
     }
 
     /// Ordered bounds covering all commitments in exactly one proof-managed pool.

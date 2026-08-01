@@ -24,7 +24,6 @@ import {
   buildPrivateEndKaigiTransaction,
   buildApplySccpRouteGovernanceInstruction,
   buildApplySccpRouteGovernanceTransaction,
-  buildPrivateKaigiFeeSpend,
   buildMintAssetTransaction,
   buildMintAndTransferTransaction,
   buildRegisterDomainAndMintTransaction,
@@ -3197,255 +3196,74 @@ test("buildRemoveSmartContractBytesTransaction wraps removal payload", () => {
   assert.equal(parsed.RemoveSmartContractBytes.reason, "cleanup");
 });
 
-baseTest("proof builders reject padded inline verifier-key metadata", () => {
+baseTest("confidential proof builder rejects padded inline verifier-key metadata", () => {
   const captures = [];
   const verifyingKey = {
     id: { backend: "halo2/ipa" },
-    record: { circuit_id: "private-kaigi-fee-v1" },
+    record: { circuit_id: "confidential-transfer-v2" },
     inlineKey: { bytesBase64: Buffer.from([1, 2, 3]).toString("base64") },
+  };
+  const request = {
+    chainId: "test-chain",
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    spendKey: Buffer.alloc(32, 0xaa),
+    treeCommitments: [],
+    inputs: [],
+    outputs: [],
+    rootHintHex: Buffer.alloc(32, 0xbb).toString("hex"),
+    verifyingKey,
   };
   withNativeBinding(
     {
-      buildPrivateKaigiFeeSpend: (
-        chainId,
-        assetDefinitionId,
-        actionHash,
-        anchorRootHex,
-        feeAmount,
-        backend,
-        circuitId,
-        bytes,
-      ) => {
+      buildConfidentialTransferProofV2: (...args) => {
         captures.push({
-          chainId,
-          assetDefinitionId,
-          actionHash,
-          anchorRootHex,
-          feeAmount,
-          backend,
-          circuitId,
-          bytes: Buffer.from(bytes),
+          backend: args[7],
+          circuitId: args[8],
+          bytes: Buffer.from(args[9]),
         });
         return {
-          assetDefinitionId,
-          anchorRoot: Buffer.alloc(32, 0x11),
           nullifiers: [],
           outputCommitments: [],
-          encryptedChangePayloads: [],
+          root: Buffer.alloc(32, 0x11),
           proof: Buffer.from("proof"),
         };
       },
     },
-    () => {
-      buildPrivateKaigiFeeSpend({
-        chainId: "test-chain",
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        actionHash: Buffer.alloc(32, 0xaa),
-        anchorRootHex: Buffer.alloc(32, 0xbb).toString("hex"),
-        feeAmount: "7",
-        verifyingKey,
-      });
-    },
+    () => buildConfidentialTransferProofV2(request),
   );
   assert.equal(captures[0].backend, "halo2/ipa");
-  assert.equal(captures[0].circuitId, "private-kaigi-fee-v1");
+  assert.equal(captures[0].circuitId, "confidential-transfer-v2");
   assert.deepEqual(captures[0].bytes, Buffer.from([1, 2, 3]));
 
-  for (const [label, patch, message] of [
+  let nativeCalls = 0;
+  for (const [patch, message] of [
     [
-      "backend",
       { id: { backend: " halo2/ipa " } },
-      /privateKaigiFeeSpend\.verifyingKey\.id\.backend must not contain surrounding whitespace/u,
+      /confidentialTransferProofV2\.verifyingKey\.id\.backend must not contain surrounding whitespace/u,
     ],
     [
-      "circuit",
-      { record: { circuit_id: " private-kaigi-fee-v1 " } },
-      /privateKaigiFeeSpend\.verifyingKey\.record\.circuit_id must not contain surrounding whitespace/u,
+      { record: { circuit_id: " confidential-transfer-v2 " } },
+      /confidentialTransferProofV2\.verifyingKey\.record\.circuit_id must not contain surrounding whitespace/u,
     ],
   ]) {
     assert.throws(
       () =>
         withNativeBinding(
           {
-            buildPrivateKaigiFeeSpend: () => {
-              throw new Error(
-                `${label} metadata should fail before native call`,
-              );
+            buildConfidentialTransferProofV2: () => {
+              nativeCalls += 1;
+              throw new Error("padded metadata must fail before native call");
             },
           },
           () =>
-            buildPrivateKaigiFeeSpend({
-              chainId: "test-chain",
-              assetDefinitionId: ASSET_DEFINITION_ID,
-              actionHash: Buffer.alloc(32, 0xaa),
-              anchorRootHex: Buffer.alloc(32, 0xbb).toString("hex"),
-              feeAmount: "7",
+            buildConfidentialTransferProofV2({
+              ...request,
               verifyingKey: { ...verifyingKey, ...patch },
             }),
         ),
       message,
     );
   }
-
-  for (const [label, patch, message] of [
-    [
-      "chainId",
-      { chainId: " test-chain" },
-      /privateKaigiFeeSpend\.chainId must not contain surrounding whitespace/u,
-    ],
-    [
-      "assetDefinitionId",
-      { assetDefinitionId: `${ASSET_DEFINITION_ID} ` },
-      /privateKaigiFeeSpend\.assetDefinitionId must not contain surrounding whitespace/u,
-    ],
-    [
-      "anchorRootHex",
-      { anchorRootHex: `${Buffer.alloc(32, 0xbb).toString("hex")}\n` },
-      /privateKaigiFeeSpend\.anchorRootHex must not contain surrounding whitespace/u,
-    ],
-    [
-      "feeAmount",
-      { feeAmount: " 7" },
-      /privateKaigiFeeSpend\.feeAmount must be a canonical non-negative Kotodama V1 Quantity/u,
-    ],
-  ]) {
-    assert.throws(
-      () =>
-        withNativeBinding(
-          {
-            buildPrivateKaigiFeeSpend: () => {
-              throw new Error(`${label} should fail before native call`);
-            },
-          },
-          () =>
-            buildPrivateKaigiFeeSpend({
-              chainId: "test-chain",
-              assetDefinitionId: ASSET_DEFINITION_ID,
-              actionHash: Buffer.alloc(32, 0xaa),
-              anchorRootHex: Buffer.alloc(32, 0xbb).toString("hex"),
-              feeAmount: "7",
-              verifyingKey,
-              ...patch,
-            }),
-        ),
-      message,
-    );
-  }
-});
-
-baseTest("private Kaigi fee spend forwards canonical fractional Quantity fees", () => {
-  const capturedFeeAmounts = [];
-  const verifyingKey = {
-    id: { backend: "halo2/ipa" },
-    record: { circuit_id: "private-kaigi-fee-v1" },
-    inlineKey: { bytesBase64: Buffer.from([1, 2, 3]).toString("base64") },
-  };
-  withNativeBinding(
-    {
-      buildPrivateKaigiFeeSpend: (
-        _chainId,
-        assetDefinitionId,
-        _actionHash,
-        _anchorRootHex,
-        feeAmount,
-      ) => {
-        capturedFeeAmounts.push(feeAmount);
-        return {
-          assetDefinitionId,
-          anchorRoot: Buffer.alloc(32, 0x11),
-          nullifiers: [],
-          outputCommitments: [],
-          encryptedChangePayloads: [],
-          proof: Buffer.from("proof"),
-        };
-      },
-    },
-    () => {
-      for (const feeAmount of [
-        "0",
-        "7",
-        8n,
-        "0.001",
-        "0.00005",
-        "0.0000000000000000000000000001",
-        "18446744073709551616.25",
-      ]) {
-        buildPrivateKaigiFeeSpend({
-          chainId: "test-chain",
-          assetDefinitionId: ASSET_DEFINITION_ID,
-          actionHash: Buffer.alloc(32, 0xaa),
-          anchorRootHex: Buffer.alloc(32, 0xbb).toString("hex"),
-          feeAmount,
-          verifyingKey,
-        });
-      }
-    },
-  );
-  assert.deepEqual(capturedFeeAmounts, [
-    "0",
-    "7",
-    "8",
-    "0.001",
-    "0.00005",
-    "0.0000000000000000000000000001",
-    "18446744073709551616.25",
-  ]);
-});
-
-baseTest("private Kaigi fee spend rejects lossy and noncanonical Quantity fees before native dispatch", () => {
-  let nativeCalls = 0;
-  const verifyingKey = {
-    id: { backend: "halo2/ipa" },
-    record: { circuit_id: "private-kaigi-fee-v1" },
-    inlineKey: { bytesBase64: Buffer.from([1, 2, 3]).toString("base64") },
-  };
-  const build = (feeAmount) =>
-    buildPrivateKaigiFeeSpend({
-      chainId: "test-chain",
-      assetDefinitionId: ASSET_DEFINITION_ID,
-      actionHash: Buffer.alloc(32, 0xaa),
-      anchorRootHex: Buffer.alloc(32, 0xbb).toString("hex"),
-      feeAmount,
-      verifyingKey,
-    });
-
-  withNativeBinding(
-    {
-      buildPrivateKaigiFeeSpend: () => {
-        nativeCalls += 1;
-        throw new Error("invalid fee must fail before native dispatch");
-      },
-    },
-    () => {
-      for (const feeAmount of [
-        1,
-        1.5,
-        "",
-        "1.0",
-        "0.0",
-        "01",
-        "1amt",
-        "1qty",
-        ".5",
-        "1.",
-        "-0.1",
-        "+1",
-        "1e-3",
-        "0.00000000000000000000000000001",
-        "9".repeat(155),
-      ]) {
-        assert.throws(
-          () => build(feeAmount),
-          /privateKaigiFeeSpend\.feeAmount must be a canonical non-negative Kotodama V1 Quantity|JavaScript numbers are rejected/u,
-          `feeAmount=${feeAmount}`,
-        );
-      }
-      assert.throws(
-        () => build(" 0.001"),
-        /privateKaigiFeeSpend\.feeAmount must be a canonical non-negative Kotodama V1 Quantity/u,
-      );
-    },
-  );
   assert.equal(nativeCalls, 0);
 });
 

@@ -682,10 +682,6 @@ impl ZkX509Rfc5280StarkShapeV1 {
         ]
     }
 
-    pub(crate) const fn active_rows(&self) -> usize {
-        FIXED_NON_PADDING_ROWS_V1
-    }
-
     pub(crate) fn validate(&self) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
         let eku_count = usize::from(self.leaf_extended_key_usage_count);
         let disclosed_count = usize::from(self.disclosed_attribute_count);
@@ -2485,21 +2481,6 @@ pub(crate) fn zk_x509_rfc5280_der_source_terminals_v1(
     Ok(ZkX509Rfc5280DerSourceTerminalsV1 { input_byte, node })
 }
 
-/// Exactly three certificate-TBS slots, one TBSCertList, and one complete
-/// signed CRL are document-derived SHA calls.
-pub(crate) const ZK_X509_RFC5280_DOCUMENT_SHA_CALLS_V1: usize = 5;
-
-/// Exact source slice for one document-derived SHA call.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ZkX509Rfc5280ShaSourceV1 {
-    pub(crate) call: u8,
-    pub(crate) role: ZkX509Rfc5280OutputRoleV1,
-    pub(crate) active: bool,
-    pub(crate) document: u8,
-    pub(crate) start: u16,
-    pub(crate) length: u16,
-}
-
 fn find_role_node_v1(
     trace: &ZkX509Rfc5280TraceV1,
     document: usize,
@@ -2539,71 +2520,6 @@ fn find_role_instance_node_v1(
         return Err(ZkX509Rfc5280StarkErrorV1::Grammar);
     }
     Ok(row)
-}
-
-/// Enumerate the fixed five document SHA sources.
-///
-/// Slot two is always present. For a depth-two chain it is the unique
-/// canonical inactive source `(document=0xff,start=0,length=0)`.
-pub(crate) fn zk_x509_rfc5280_document_sha_sources_v1(
-    trace: &ZkX509Rfc5280TraceV1,
-) -> Result<
-    [ZkX509Rfc5280ShaSourceV1; ZK_X509_RFC5280_DOCUMENT_SHA_CALLS_V1],
-    ZkX509Rfc5280StarkErrorV1,
-> {
-    validate_zk_x509_rfc5280_provenance_v1(trace)?;
-    let mut sources = [ZkX509Rfc5280ShaSourceV1 {
-        call: 0,
-        role: ZkX509Rfc5280OutputRoleV1::CertificateTbsSha,
-        active: false,
-        document: u8::MAX,
-        start: 0,
-        length: 0,
-    }; ZK_X509_RFC5280_DOCUMENT_SHA_CALLS_V1];
-    for certificate_slot in 0..3 {
-        sources[certificate_slot].call =
-            u8::try_from(certificate_slot).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
-        if certificate_slot < trace.certificates.len() {
-            let row = find_role_node_v1(
-                trace,
-                certificate_slot,
-                ZkX509Rfc5280GrammarRoleV1::CertificateTbs,
-            )?;
-            sources[certificate_slot].active = true;
-            sources[certificate_slot].document = row.document;
-            sources[certificate_slot].start = row.start;
-            sources[certificate_slot].length = row
-                .content_end
-                .checked_sub(row.start)
-                .ok_or(ZkX509Rfc5280StarkErrorV1::Grammar)?;
-        }
-    }
-    let crl_document = trace.certificates.len();
-    let crl_tbs = find_role_node_v1(trace, crl_document, ZkX509Rfc5280GrammarRoleV1::CrlTbs)?;
-    sources[3] = ZkX509Rfc5280ShaSourceV1 {
-        call: 3,
-        role: ZkX509Rfc5280OutputRoleV1::CrlTbsP256Message,
-        active: true,
-        document: crl_tbs.document,
-        start: crl_tbs.start,
-        length: crl_tbs
-            .content_end
-            .checked_sub(crl_tbs.start)
-            .ok_or(ZkX509Rfc5280StarkErrorV1::Grammar)?,
-    };
-    let complete_crl = find_role_node_v1(trace, crl_document, ZkX509Rfc5280GrammarRoleV1::Crl)?;
-    sources[4] = ZkX509Rfc5280ShaSourceV1 {
-        call: 4,
-        role: ZkX509Rfc5280OutputRoleV1::CrlCommitment,
-        active: true,
-        document: complete_crl.document,
-        start: complete_crl.start,
-        length: complete_crl
-            .content_end
-            .checked_sub(complete_crl.start)
-            .ok_or(ZkX509Rfc5280StarkErrorV1::Grammar)?,
-    };
-    Ok(sources)
 }
 
 fn endpoint_role_code_v1(role: ZkX509IoSegmentRoleV1) -> Result<u64, ZkX509Rfc5280StarkErrorV1> {
@@ -4986,21 +4902,6 @@ impl ZkX509Rfc5280StarkFixedScheduleV1 {
             active_family(ZkX509Rfc5280StarkFamilyV1::RangeByte).mul(fixed[FIX_LOCAL_LAST]);
         Ok(fixed)
     }
-
-    /// Build one verifier-preprocessed column at a time.
-    pub(crate) fn fixed_column(&self, column: usize) -> Result<Vec<F>, ZkX509Rfc5280StarkErrorV1> {
-        if column >= ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1 {
-            return Err(ZkX509Rfc5280StarkErrorV1::Shape);
-        }
-        let mut values = Vec::new();
-        values
-            .try_reserve_exact(ZK_X509_RFC5280_STARK_TRACE_SIZE_V1)
-            .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
-        for row in 0..ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 {
-            values.push(self.fixed_row(row)?[column]);
-        }
-        Ok(values)
-    }
 }
 
 /// Generic one-column replay helper for base and auxiliary providers.
@@ -5081,20 +4982,6 @@ const BASE_COPY_VALUE: usize = 112;
 
 const _: () = assert!(GRAMMAR_CHILD_COUNT_BITS + 16 == BASE_GRAMMAR_ORDINAL);
 const _: () = assert!(BASE_COPY_VALUE + 1 == ZK_X509_RFC5280_STARK_BASE_WIDTH_V1);
-
-/// Stamp the private depth selector into materialized rows. Row activity is
-/// supplied by each family builder; the selector is carried across the whole
-/// aggregate and constrained constant by the AIR.
-pub(crate) fn bind_zk_x509_rfc5280_private_selectors_v1(
-    rows: &mut [ZkX509Rfc5280StarkBaseRowV1],
-    private_shape: &ZkX509Rfc5280StarkPrivateShapeV1,
-) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
-    private_shape.validate()?;
-    for row in rows {
-        row[BASE_CERT2_ACTIVE] = private_shape.certificate_slot_2_active;
-    }
-    Ok(())
-}
 
 const SERIAL_LESS: usize = BASE_D;
 const SERIAL_ORDER_BEFORE: usize = BASE_E;
@@ -5502,11 +5389,6 @@ impl ZkX509Rfc5280StarkTerminalClaimsV1 {
                 }
             }),
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn canonical_zero_for_test_v1() -> Self {
-        Self::canonical_identity_v1()
     }
 
     #[cfg(test)]
@@ -6919,31 +6801,6 @@ fn active_family_gate_v1(
     current[BASE_ACTIVE].mul(family_gate_v1(fixed, family))
 }
 
-fn rfc_row_factor_v1(
-    domain: u64,
-    current: &ZkX509Rfc5280StarkBaseRowV1,
-    lane: usize,
-    challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
-    compress_tuple_v1(
-        [
-            F(domain),
-            current[BASE_DOCUMENT],
-            current[BASE_ADDRESS],
-            current[BASE_VALUE],
-            current[BASE_ROLE],
-            current[BASE_INSTANCE],
-            current[BASE_OFFSET],
-            current[BASE_ENDPOINT_ROLE],
-            current[BASE_ENDPOINT_INSTANCE],
-            current[BASE_IS_WRITE],
-            current[BASE_A],
-            current[BASE_B],
-        ],
-        challenges.tuple[lane],
-    )
-}
-
 fn output_row_factor_v1(
     current: &ZkX509Rfc5280StarkBaseRowV1,
     lane: usize,
@@ -7005,58 +6862,6 @@ fn normalized_copy_factor_v1(
             current[BASE_COPY_KEY_1],
             current[BASE_COPY_KEY_2],
             current[BASE_COPY_VALUE],
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-        ],
-        challenges.tuple[lane],
-    )
-}
-
-fn decimal_calendar_factor_v1(
-    time_instance: F,
-    component: F,
-    value: F,
-    lane: usize,
-    challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
-    compress_tuple_v1(
-        [
-            F(98),
-            time_instance,
-            component,
-            value,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-        ],
-        challenges.tuple[lane],
-    )
-}
-
-fn relation_range_factor_v1(
-    relation: F,
-    instance: F,
-    slack: F,
-    lane: usize,
-    challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
-    compress_tuple_v1(
-        [
-            F(99),
-            relation,
-            instance,
-            slack,
             F::ZERO,
             F::ZERO,
             F::ZERO,

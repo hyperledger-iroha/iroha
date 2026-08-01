@@ -236,6 +236,7 @@
         kura: Arc<Kura>,
         body_root: tempfile::TempDir,
         genesis_key: KeyPair,
+        validator_keys: Vec<KeyPair>,
         custody_account: AccountId,
         treasury_account: AccountId,
         include_projection_policies: bool,
@@ -758,6 +759,7 @@
                 kura,
                 body_root,
                 genesis_key: transaction_key,
+                validator_keys: keys,
                 custody_account,
                 treasury_account,
                 include_projection_policies,
@@ -827,6 +829,99 @@
             self.service
                 .execute(&self.context, store, &self.task)
                 .map(drop)
+        }
+
+        fn persist_exact_v2_finality_chain(&self, blocks: &[&SignedBlock]) {
+            assert!(!blocks.is_empty(), "finality fixture chain must not be empty");
+            let mut parent_commit_qc = None;
+            for block in blocks {
+                let height = block.header().height().get();
+                let mut context = self.context.clone();
+                context.height = height;
+                context.parent_commit_qc = parent_commit_qc;
+                context
+                    .validate()
+                    .expect("valid exact finality fixture context");
+
+                let executed_block_wire =
+                    block.encode_wire().expect("encode exact executed block wire");
+                let mut execution_commitment =
+                    wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                        Hash::new(b"v2 apply reservation finality parent state"),
+                        Hash::new(b"v2 apply reservation finality post state"),
+                        Hash::new(b"v2 apply reservation finality ordinary writes"),
+                        u64::try_from(executed_block_wire.len())
+                            .expect("executed block wire length fits u64"),
+                        Hash::new(&executed_block_wire),
+                    );
+                execution_commitment.merge_carrier = block
+                    .execution_context()
+                    .and_then(|bundle| bundle.merge_entry.as_ref())
+                    .map(|reference| wire::MergeCarrierCommitmentV1::new(reference.entry_hash));
+                execution_commitment
+                    .validate()
+                    .expect("valid exact finality execution commitment");
+
+                let subject = wire::BlockSubject {
+                    parent_block_hash: block.header().prev_block_hash(),
+                    block_hash: block.hash(),
+                    payload_hash: block
+                        .canonical_proposal_wire_hash()
+                        .expect("hash exact canonical proposal wire"),
+                };
+                let round = wire::ConsensusRound {
+                    context_id: context.id(),
+                    height,
+                    view: block.header().view_change_index(),
+                };
+                let mut commit_qc = wire::QuorumCertificate {
+                    round,
+                    proposal_round: round,
+                    phase: wire::GlobalPhase::Commit,
+                    subject,
+                    execution_commitment,
+                    signers: vec![0, 1, 2],
+                    aggregate_signature: vec![1],
+                };
+                let preimage = commit_qc
+                    .signer_preimage(&context, 0)
+                    .expect("valid exact finality fixture signer");
+                let signatures = commit_qc
+                    .signers
+                    .iter()
+                    .map(|index| {
+                        Signature::try_new(
+                            self.validator_keys
+                                [usize::try_from(*index).expect("fixture signer index")]
+                            .private_key(),
+                            &preimage,
+                        )
+                        .expect("sign exact finality fixture vote")
+                        .payload()
+                        .to_vec()
+                    })
+                    .collect::<Vec<_>>();
+                commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+                    &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                )
+                .expect("aggregate exact finality fixture votes");
+                let artifact = wire::finality::V2FinalityArtifact::new(
+                    context,
+                    subject,
+                    commit_qc,
+                    self.service.validator_set_pops.clone(),
+                );
+                artifact
+                    .verify()
+                    .expect("exact finality fixture is cryptographically valid");
+                let receipt = self
+                    .kura
+                    .store_v2_finality_artifact(&artifact)
+                    .expect("persist exact finality fixture");
+                assert_eq!(receipt.height(), height);
+                assert_eq!(receipt.block_hash(), block.hash());
+                parent_commit_qc = Some(artifact.commit_qc);
+            }
         }
 
         fn assert_no_post_apply_sidecars(&self) {
@@ -1014,18 +1109,21 @@
             )])
             .with_lane_payload_ownerships(lane_plan.ownerships)
         };
-        let creation_time_ms = fixture
+        let mut logical_time = fixture
             .body
             .header()
             .creation_time()
             .checked_add(fixture.service.block_cadence)
-            .expect("successor logical time fits Duration")
-            .max(
+            .expect("successor logical time fits Duration");
+        if !carries_only_autonomous_payloads {
+            logical_time = logical_time.max(
                 transaction
                     .creation_time()
                     .checked_add(Duration::from_millis(1))
                     .expect("successor transaction floor fits Duration"),
-            )
+            );
+        }
+        let creation_time_ms = logical_time
             .as_millis()
             .try_into()
             .expect("successor creation time fits u64");
@@ -2017,12 +2115,29 @@
             planned_routing.push(routing_plan);
         }
 
-        let producer_index = usize::try_from(context.leader(0)).expect("producer index fits usize");
-        let producer = context.roster[producer_index].validator.clone();
         let coordinator_routes = planned_routing
             .iter()
             .map(crate::queue::RoutingPlan::coordinator_route)
             .collect::<Vec<_>>();
+        let coordinator_route = coordinator_routes
+            .first()
+            .expect("canonical autonomous batch has a coordinator route");
+        assert!(
+            coordinator_routes
+                .iter()
+                .all(|route| route == coordinator_route),
+            "canonical autonomous fixture must target one reservation slot"
+        );
+        let reservation_slot =
+            super::super::lane_planner::plan_autonomous_lane_reservation_slot(
+                fixture.state.as_ref(),
+                fixture.kura.as_ref(),
+                context,
+                coordinator_route.lane_id,
+                coordinator_route.dataspace_id,
+            )
+            .expect("derive deterministic canonical autonomous reservation slot");
+        let producer = reservation_slot.author.clone();
         let entrypoint_hashes = entrypoints
             .iter()
             .map(|entrypoint| Hash::from(entrypoint.hash()))
@@ -2040,7 +2155,6 @@
         assert!(lane_plan.unavailable_indices.is_empty());
         assert_eq!(lane_plan.proposals.len(), 1);
         let proposal = lane_plan.proposals[0].clone();
-        let descriptor = &proposal.descriptor;
         let chain_id_hash = Hash::new(context.chain_id.clone().into_inner().as_bytes());
         let (reservation_owner_hash, proposal_identity_hash) =
             super::super::lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal(
@@ -2051,16 +2165,15 @@
                 &producer,
             )
             .expect("derive canonical successor reservation identity");
-        let scope = LaneQueueReservationScopeV1 {
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_incarnation: descriptor.lane_incarnation,
-            proposal_height: descriptor.proposal_height,
-            lane_block_height: descriptor.lane_block_height,
-            lane_block_view: descriptor.lane_block_view,
-            reservation_owner_hash,
-            proposal_identity_hash,
-        };
+        assert_eq!(
+            (reservation_owner_hash, proposal_identity_hash),
+            (
+                reservation_slot.reservation_owner_hash,
+                reservation_slot.proposal_identity_hash,
+            ),
+            "proposal and pre-selection slot must bind identical queue ownership",
+        );
+        let scope = reservation_slot.reservation_scope();
         let reserved = queue
             .reserve_transactions_for_lane(
                 fixture.state.as_ref(),

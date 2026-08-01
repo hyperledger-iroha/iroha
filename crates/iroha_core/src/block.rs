@@ -5906,7 +5906,31 @@ pub(crate) mod valid {
         }
     }
 
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    struct AutonomousMergeCarrierContent {
+        ordinary_entrypoints: usize,
+        external_contexts: usize,
+        autonomous_lane_payloads: usize,
+        lane_payload_ownerships: usize,
+        has_da: bool,
+        has_npos: bool,
+        has_axt_envelopes: bool,
+        axt_snapshot_mismatch: bool,
+        has_native_participant_frontiers: bool,
+    }
+
     impl ValidBlock {
+        fn validate_autonomous_merge_carrier_content(
+            content: AutonomousMergeCarrierContent,
+        ) -> Result<(), BlockValidationError> {
+            if content != AutonomousMergeCarrierContent::default() {
+                return Err(Self::execution_context_error(
+                    "certified merge execution carrier contains an incompatible ordinary, DA, NPoS, AXT, Native, or lane-payload effect",
+                ));
+            }
+            Ok(())
+        }
+
         fn new_unverified(block: SignedBlock) -> Self {
             Self {
                 block,
@@ -6401,6 +6425,11 @@ pub(crate) mod valid {
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
+            if let Err(error) =
+                Self::validate_staged_merge_execution_authorization(&block, state_block)
+            {
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
             if !state_block.replay_compatibility {
                 state_block.capture_exec_witness();
             }
@@ -6465,6 +6494,16 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
+                let ev = PipelineEventBox::from(BlockEvent {
+                    header: block.header(),
+                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
+                });
+                send_events(ev);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
+            if let Err(error) =
+                Self::validate_staged_merge_execution_authorization(&block, state_block)
+            {
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
                     status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
@@ -6837,6 +6876,53 @@ pub(crate) mod valid {
             Ok(())
         }
 
+        fn validate_staged_merge_execution_authorization(
+            block: &SignedBlock,
+            state_block: &StateBlock<'_>,
+        ) -> Result<(), BlockValidationError> {
+            if state_block
+                .staged_merge_entry()
+                .is_some_and(|entry| entry.execution_batch.is_some())
+            {
+                let context = block.execution_context().ok_or_else(|| {
+                    Self::execution_context_error(
+                        "certified merge execution carrier lacks execution context",
+                    )
+                })?;
+                let axt_snapshot_matches = block
+                    .axt_policy_snapshot()
+                    .is_none_or(|snapshot| snapshot == &state_block.axt_policy_snapshot());
+                let native_participant_frontiers =
+                    State::native_amx_participant_frontier_markers(block).map_err(|error| {
+                        Self::execution_context_error(format!(
+                            "certified merge execution carrier has invalid Native participant controls: {error}"
+                        ))
+                    })?;
+                Self::validate_autonomous_merge_carrier_content(AutonomousMergeCarrierContent {
+                    ordinary_entrypoints: block.external_entrypoint_count(),
+                    external_contexts: context.external.len(),
+                    autonomous_lane_payloads: context.autonomous_lane_payloads.len(),
+                    lane_payload_ownerships: context.lane_payload_ownerships.len(),
+                    has_da: block.da_commitments().is_some()
+                        || block.da_proof_policies().is_some()
+                        || block.da_pin_intents().is_some(),
+                    has_npos: block.npos_consensus_effects().is_some(),
+                    has_axt_envelopes: block
+                        .axt_envelopes()
+                        .is_some_and(|envelopes| !envelopes.is_empty()),
+                    axt_snapshot_mismatch: !axt_snapshot_matches,
+                    has_native_participant_frontiers: !native_participant_frontiers.is_empty(),
+                })?;
+            }
+            state_block
+                .validate_staged_merge_execution_authorization()
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "certified merge execution authorization is invalid after block effects: {error}"
+                    ))
+                })
+        }
+
         #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
         fn validate_keep_voting_block_inner<'state>(
             mut block: SignedBlock,
@@ -7089,6 +7175,14 @@ pub(crate) mod valid {
                 timings.execution_da_cursor_ms = to_ms(da_cursor_start.elapsed());
             }
             if let Err(error) = Self::validate_sccp_commitment_root(&block) {
+                drop(state_block);
+                record_timings(&mut timings, stateless_elapsed, Some(execution_start));
+                emit_rejection(&block, &error);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
+            if let Err(error) =
+                Self::validate_staged_merge_execution_authorization(&block, &state_block)
+            {
                 drop(state_block);
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
                 emit_rejection(&block, &error);
@@ -9004,13 +9098,6 @@ pub(crate) mod valid {
                 hex::encode(v2_context.context_id.0.as_ref()),
                 v2_context.epoch
             );
-            let shared_lane_domain_committee = !state.nexus().enabled
-                || crate::queue::routable_lane_ids_for_nexus_at_height(
-                    state.nexus(),
-                    proposal_height,
-                )
-                .len()
-                    <= 1;
             let external_entrypoint_hashes = block
                 .external_entrypoints_cloned()
                 .map(|entrypoint| Hash::from(entrypoint.hash()))
@@ -9196,35 +9283,10 @@ pub(crate) mod valid {
                     )));
                 }
 
-                let expected_producer = if shared_lane_domain_committee {
-                    let validator_count =
-                        u64::try_from(topology.as_ref().len()).map_err(|_| {
-                            Self::execution_context_error(format!(
-                                "autonomous lane payload envelope {index} shared validator count overflows u64"
-                            ))
-                        })?;
-                    let producer_index = (u64::from(v2_context.view_zero_leader) % validator_count
-                        + block.header().view_change_index() % validator_count)
-                        % validator_count;
-                    topology.as_ref().get(usize::try_from(producer_index).map_err(|_| {
-                        Self::execution_context_error(format!(
-                            "autonomous lane payload envelope {index} shared producer index overflows usize"
-                        ))
-                    })?)
-                } else {
-                    let validator_count = u64::try_from(validator_set.len()).map_err(|_| {
-                        Self::execution_context_error(format!(
-                            "autonomous lane payload envelope {index} validator count overflows u64"
-                        ))
-                    })?;
-                    let producer_index =
-                        descriptor.lane_block_height.saturating_sub(1) % validator_count;
-                    validator_set.get(usize::try_from(producer_index).map_err(|_| {
-                        Self::execution_context_error(format!(
-                            "autonomous lane payload envelope {index} producer index overflows usize"
-                        ))
-                    })?)
-                };
+                let expected_producer = crate::lane_consensus::deterministic_lane_author(
+                    &validator_set,
+                    descriptor.lane_block_height,
+                );
                 if expected_producer != Some(&payload.producer) {
                     return Err(Self::execution_context_error(format!(
                         "autonomous lane payload envelope {index} producer is not the deterministic lane author"
@@ -15148,6 +15210,9 @@ pub(crate) mod valid {
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
                 panic!("AXT envelope validation failed on unchecked block: {error}");
             }
+            Self::validate_staged_merge_execution_authorization(&block, state_block).expect(
+                "unchecked certified merge execution requires exact post-effect authorization",
+            );
             if !state_block.replay_compatibility {
                 state_block.capture_exec_witness();
             }
@@ -15634,6 +15699,89 @@ pub(crate) mod valid {
             tx::AcceptedTransaction,
         };
 
+        #[test]
+        fn autonomous_merge_carrier_content_gate_accepts_only_exact_empty_carrier() {
+            ValidBlock::validate_autonomous_merge_carrier_content(
+                AutonomousMergeCarrierContent::default(),
+            )
+            .expect("exact empty autonomous execution carrier is admissible");
+
+            let incompatible = [
+                (
+                    "ordinary entrypoint",
+                    AutonomousMergeCarrierContent {
+                        ordinary_entrypoints: 1,
+                        ..AutonomousMergeCarrierContent::default()
+                    },
+                ),
+                (
+                    "external context",
+                    AutonomousMergeCarrierContent {
+                        external_contexts: 1,
+                        ..AutonomousMergeCarrierContent::default()
+                    },
+                ),
+                (
+                    "DA",
+                    AutonomousMergeCarrierContent {
+                        has_da: true,
+                        ..AutonomousMergeCarrierContent::default()
+                    },
+                ),
+                (
+                    "NPoS",
+                    AutonomousMergeCarrierContent {
+                        has_npos: true,
+                        ..AutonomousMergeCarrierContent::default()
+                    },
+                ),
+                (
+                    "AXT envelope",
+                    AutonomousMergeCarrierContent {
+                        has_axt_envelopes: true,
+                        ..AutonomousMergeCarrierContent::default()
+                    },
+                ),
+                (
+                    "AXT snapshot drift",
+                    AutonomousMergeCarrierContent {
+                        axt_snapshot_mismatch: true,
+                        ..AutonomousMergeCarrierContent::default()
+                    },
+                ),
+                (
+                    "autonomous lane payload",
+                    AutonomousMergeCarrierContent {
+                        autonomous_lane_payloads: 1,
+                        ..AutonomousMergeCarrierContent::default()
+                    },
+                ),
+                (
+                    "lane payload ownership",
+                    AutonomousMergeCarrierContent {
+                        lane_payload_ownerships: 1,
+                        ..AutonomousMergeCarrierContent::default()
+                    },
+                ),
+                (
+                    "Native participant frontier",
+                    AutonomousMergeCarrierContent {
+                        has_native_participant_frontiers: true,
+                        ..AutonomousMergeCarrierContent::default()
+                    },
+                ),
+            ];
+            for (label, content) in incompatible {
+                assert!(
+                    matches!(
+                        ValidBlock::validate_autonomous_merge_carrier_content(content),
+                        Err(BlockValidationError::ExecutionContextInvalid(_))
+                    ),
+                    "{label} must be rejected before voting"
+                );
+            }
+        }
+
         fn checked_block_signature(
             private_key: &PrivateKey,
             block_hash: HashOf<BlockHeader>,
@@ -15949,7 +16097,30 @@ pub(crate) mod valid {
             lane_incarnation_override: Option<Hash>,
             lane_block_view: u64,
         ) -> AutonomousAnchorFixture {
-            let (state, _kura, topology, time_source, leader) = lane_payload_context_fixture();
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let validator_keys = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(2)
+            .collect::<Vec<_>>();
+            let topology = test_topology_with_keys(&validator_keys);
+            let mut world = World::new();
+            for (index, key) in validator_keys.iter().enumerate() {
+                insert_consensus_key(
+                    &mut world,
+                    &format!("autonomous-anchor-validator-{index}"),
+                    key,
+                    0,
+                    None,
+                    ConsensusKeyStatus::Active,
+                );
+            }
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let leader = &validator_keys[0];
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+            let (_, time_source) = TimeSource::new_mock(Duration::from_millis(1));
             let proposal_height = 2;
             let epoch = 4;
             let context_id = iroha_data_model::block::consensus_v2::HeightContextId(
@@ -16035,6 +16206,16 @@ pub(crate) mod valid {
                 payload_block_hint: None,
             };
             proposal.proposal_hash = proposal.computed_proposal_hash();
+            let producer = crate::lane_consensus::deterministic_lane_author(
+                &validator_set,
+                proposal.descriptor.lane_block_height,
+            )
+            .cloned()
+            .expect("fixture has a deterministic autonomous producer");
+            let producer_key = validator_keys
+                .iter()
+                .find(|key| key.public_key() == producer.public_key())
+                .expect("fixture retains the deterministic autonomous producer key");
             let routing_plan = crate::queue::RoutingPlan::single(
                 crate::queue::RoutingDecision::new(lane_id, dataspace_id),
             );
@@ -16047,7 +16228,7 @@ pub(crate) mod valid {
                     context_id,
                     epoch,
                     &proposal,
-                    &validator_set[0],
+                    &producer,
                 )
                 .expect("derive canonical autonomous reservation identity");
             let reservation = crate::queue::LaneQueueReservationKeyV2 {
@@ -16077,8 +16258,8 @@ pub(crate) mod valid {
                     vec![reservation],
                     vec![routing_plan],
                     vec![None],
-                    validator_set[0].clone(),
-                    leader.private_key(),
+                    producer,
+                    producer_key.private_key(),
                 )
                 .expect("construct valid autonomous anchor payload");
             let envelope = if lane_block_view == 0 {
@@ -16155,6 +16336,52 @@ pub(crate) mod valid {
                 fixture.profile.clone(),
             )
             .expect("exact control-only autonomous anchor must validate");
+        }
+
+        #[test]
+        fn autonomous_anchor_admission_uses_lane_slot_author_not_global_leader() {
+            let fixture = autonomous_anchor_fixture(None, 0);
+            let ConsensusValidationProfile::SumeragiV2 {
+                block_cadence,
+                mut context,
+            } = fixture.profile.clone()
+            else {
+                panic!("autonomous anchor fixture uses a v2 validation profile");
+            };
+            let payload = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
+                &fixture.bundle.autonomous_lane_payloads[0],
+                Hash::new(fixture.state.chain_id.clone().into_inner().as_bytes()),
+                context.epoch,
+            )
+            .expect("fixture autonomous payload decodes");
+            let global_leader_index = fixture
+                .topology
+                .as_ref()
+                .iter()
+                .position(|peer| peer != &payload.producer)
+                .expect("two-validator fixture has a global leader distinct from lane author");
+            context.view_zero_leader =
+                u32::try_from(global_leader_index).expect("fixture global leader index fits u32");
+            let profile = ConsensusValidationProfile::SumeragiV2 {
+                block_cadence,
+                context,
+            };
+            assert_ne!(
+                fixture.topology.as_ref().get(global_leader_index),
+                Some(&payload.producer),
+                "the regression requires a global leader distinct from the lane-slot author",
+            );
+
+            let view = fixture.state.query_view();
+            ValidBlock::validate_execution_context_autonomous_lane_payloads(
+                &fixture.block,
+                &fixture.topology,
+                &fixture.state.chain_id,
+                &view,
+                &fixture.bundle,
+                profile,
+            )
+            .expect("autonomous payload authority must follow the lane slot, not global view");
         }
 
         #[test]
@@ -28546,6 +28773,27 @@ mod tests {
         tx::AcceptedTransaction,
     };
 
+    #[test]
+    fn merge_capable_validation_paths_source_bind_post_effect_authorization() {
+        let source = include_str!("block.rs");
+        let staged_reference_needle = ["Self::validate_staged_merge_reference", "("].concat();
+        let post_effect_authorization_needle =
+            ["Self::validate_staged_merge_execution_authorization", "("].concat();
+        let staged_reference_calls = source.matches(&staged_reference_needle).count();
+        let post_effect_authorization_calls =
+            source.matches(&post_effect_authorization_needle).count();
+
+        assert_eq!(
+            post_effect_authorization_calls, 4,
+            "validate, validate_with_events, keep-voting, and unchecked must gate merge execution after effects"
+        );
+        assert_eq!(
+            staged_reference_calls,
+            post_effect_authorization_calls + 1,
+            "the only staged-reference path without the voting gate must remain the test-only SCCP root probe"
+        );
+    }
+
     fn install_test_lane_manifests(state: &State) {
         let statuses = state
             .nexus_snapshot()
@@ -35050,494 +35298,7 @@ seiyaku MeteredFailure {
         );
     }
 
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay() {
-        for parallel_apply in [false, true] {
-            let chain_id = ChainId::try_from(format!(
-                "contract-deployment-bootstrap-block-{parallel_apply}"
-            ))
-            .expect("canonical contract-deployment test chain id");
-            let leader = crate::block::checked_keypair();
-            let (authority, authority_keypair) = gen_account_in("bootstrap");
-            let (adversary, adversary_keypair) = gen_account_in("adversary");
-            let permission: Permission =
-                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
-                    .into();
-            let accepted_hash = Hash::new(b"accepted native upload bootstrap");
-            let existing_replay_hash = Hash::new(b"existing authority bootstrap replay");
-            let decorated_hash = Hash::new(b"decorated authority bootstrap");
-
-            let make_bootstrap_transaction =
-                |authority: &AccountId,
-                 keypair: &KeyPair,
-                 code_hash: Hash,
-                 decorated: bool,
-                 creation_time_ms: u64| {
-                    let mut account = Account::new(authority.clone());
-                    if decorated {
-                        let mut metadata = Metadata::default();
-                        metadata.insert(
-                            "bootstrap-note".parse().expect("metadata name"),
-                            Json::new("decorated"),
-                        );
-                        account = account.with_metadata(metadata);
-                    }
-                    let instructions: Vec<InstructionBox> = vec![
-                        Register::account(account).into(),
-                        Grant::account_permission(permission.clone(), authority.clone()).into(),
-                        iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk {
-                            code_hash,
-                            total_size: 1,
-                            chunk_index: 0,
-                            chunk_count: 1,
-                            chunk: vec![0xA5],
-                        }
-                        .into(),
-                    ];
-                    let contract_address =
-                        iroha_data_model::smart_contract::ContractAddress::derive(
-                            0,
-                            authority,
-                            0,
-                            DataSpaceId::UNIVERSAL,
-                        )
-                        .expect("bootstrap contract address");
-                    let mut transaction_metadata = Metadata::default();
-                    for key in ["gov_contract_address", "contract_address"] {
-                        transaction_metadata.insert(
-                            key.parse().expect("deployment metadata name"),
-                            Json::new(contract_address.to_string()),
-                        );
-                    }
-                    let (_time_handle, time_source) =
-                        TimeSource::new_mock(Duration::from_millis(creation_time_ms));
-                    TransactionBuilder::new_with_time_source(
-                        chain_id.clone(),
-                        authority.clone(),
-                        &time_source,
-                        iroha_data_model::transaction::FeePaymentIntent::authority(
-                            Vec::new(),
-                            None,
-                        ),
-                    )
-                    .with_metadata(transaction_metadata)
-                    .with_instructions(instructions)
-                    .sign(keypair.private_key())
-                };
-            let install_lane_manifest = |state: &State| {
-                let status = crate::governance::manifest::LaneManifestStatus {
-                    lane: LaneId::SINGLE,
-                    alias: "bootstrap".to_owned(),
-                    dataspace: DataSpaceId::UNIVERSAL,
-                    visibility: iroha_data_model::nexus::LaneVisibility::Public,
-                    storage: iroha_data_model::nexus::LaneStorageProfile::FullReplica,
-                    governance: None,
-                    manifest_path: None,
-                    governance_rules: None,
-                    privacy_commitments: Vec::new(),
-                };
-                let registry = std::sync::Arc::new(
-                    crate::governance::manifest::LaneManifestRegistry::from_statuses(
-                        BTreeMap::from([(LaneId::SINGLE, status)]),
-                    ),
-                );
-                state.install_lane_manifests(&registry);
-            };
-
-            let mut state = State::new_with_chain_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-                chain_id.clone(),
-            );
-            install_lane_manifest(&state);
-            let mut pipeline = state.pipeline.clone();
-            pipeline.parallel_overlay = true;
-            pipeline.parallel_apply = parallel_apply;
-            pipeline.workers = 2;
-            state.set_pipeline(pipeline.clone());
-
-            let (_genesis_handle, genesis_time_source) =
-                TimeSource::new_mock(Duration::from_millis(1));
-            let genesis = BlockBuilder::new_with_time_source(Vec::new(), genesis_time_source)
-                .chain(0, None)
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            let mut genesis_state_block = state.block(genesis.header());
-            let valid_genesis = genesis
-                .validate_and_record_transactions(&mut genesis_state_block)
-                .unpack(|_| {});
-            let genesis_signed = valid_genesis.as_ref().clone();
-            genesis_state_block
-                .commit()
-                .expect("commit empty genesis block");
-            let committed_genesis = valid_genesis.commit_unchecked().unpack(|_| {});
-
-            let accepted = make_bootstrap_transaction(
-                &authority,
-                &authority_keypair,
-                accepted_hash.clone(),
-                false,
-                10,
-            );
-            let (_block_handle, block_time_source) =
-                TimeSource::new_mock(Duration::from_millis(20));
-            let deployment = BlockBuilder::new_with_time_source(
-                vec![AcceptedTransaction::new_unchecked(Cow::Owned(accepted))],
-                block_time_source,
-            )
-            .chain(1, Some(&genesis_signed))
-            .sign(leader.private_key())
-            .unpack(|_| {});
-            assert!(
-                deployment.header().height().get() > 1,
-                "deployment bootstrap must execute after genesis"
-            );
-            let mut deployment_state_block = state.block(deployment.header());
-            let valid_deployment = deployment
-                .validate_and_record_transactions(&mut deployment_state_block)
-                .unpack(|_| {});
-            let deployment_errors = valid_deployment
-                .as_ref()
-                .errors()
-                .map(|(index, error)| format!("{index}: {error:?}"))
-                .collect::<Vec<_>>();
-            assert!(
-                deployment_errors.is_empty(),
-                "exact non-genesis bootstrap must succeed with parallel_apply={parallel_apply}: {deployment_errors:?}"
-            );
-            deployment_state_block
-                .world
-                .account(&authority)
-                .expect("bootstrap account exists in validated block");
-            assert!(
-                deployment_state_block
-                    .world
-                    .account_permissions_iter(&authority)
-                    .expect("bootstrap permissions")
-                    .any(|stored| stored == &permission)
-            );
-            assert!(
-                deployment_state_block
-                    .world
-                    .contract_code_upload_progress(&authority, &accepted_hash)
-                    .is_some()
-            );
-            let deployment_signed: SignedBlock = valid_deployment.as_ref().clone();
-            deployment_state_block
-                .commit()
-                .expect("commit deployment bootstrap block");
-            let committed_deployment = valid_deployment.commit_unchecked().unpack(|_| {});
-
-            let existing_replay = make_bootstrap_transaction(
-                &authority,
-                &authority_keypair,
-                existing_replay_hash.clone(),
-                false,
-                30,
-            );
-            let decorated = make_bootstrap_transaction(
-                &adversary,
-                &adversary_keypair,
-                decorated_hash.clone(),
-                true,
-                31,
-            );
-            let (_rejected_handle, rejected_time_source) =
-                TimeSource::new_mock(Duration::from_millis(40));
-            let rejected = BlockBuilder::new_with_time_source(
-                vec![
-                    AcceptedTransaction::new_unchecked(Cow::Owned(existing_replay)),
-                    AcceptedTransaction::new_unchecked(Cow::Owned(decorated)),
-                ],
-                rejected_time_source,
-            )
-            .chain(2, Some(&deployment_signed))
-            .sign(leader.private_key())
-            .unpack(|_| {});
-            assert!(
-                rejected.header().height().get() > 1,
-                "adversarial bootstrap cases must execute after genesis"
-            );
-            let mut rejected_state_block = state.block(rejected.header());
-            let valid_rejected = rejected
-                .validate_and_record_transactions(&mut rejected_state_block)
-                .unpack(|_| {});
-            assert_eq!(
-                valid_rejected.as_ref().errors().count(),
-                2,
-                "existing-authority replay and decorated bootstrap must both reject"
-            );
-            assert!(rejected_state_block.world.account(&adversary).is_err());
-            assert!(
-                rejected_state_block
-                    .world
-                    .contract_code_upload_progress(&authority, &existing_replay_hash)
-                    .is_none()
-            );
-            assert!(
-                rejected_state_block
-                    .world
-                    .contract_code_upload_progress(&adversary, &decorated_hash)
-                    .is_none()
-            );
-            rejected_state_block
-                .commit()
-                .expect("commit block containing rejected bootstraps");
-            let committed_rejected = valid_rejected.commit_unchecked().unpack(|_| {});
-
-            let mut replay_state = State::new_with_chain_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-                chain_id.clone(),
-            );
-            install_lane_manifest(&replay_state);
-            replay_state.set_pipeline(pipeline);
-            for committed in [
-                &committed_genesis,
-                &committed_deployment,
-                &committed_rejected,
-            ] {
-                let mut replay_block = replay_state.block(committed.as_ref().header());
-                let _ = replay_block.apply(committed, Vec::new());
-                replay_block
-                    .commit()
-                    .expect("committed bootstrap chain must replay");
-            }
-
-            let replay_view = replay_state.view();
-            let replay_world = replay_view.world();
-            replay_world
-                .account(&authority)
-                .expect("bootstrap account survives committed replay");
-            assert!(replay_world.account(&adversary).is_err());
-            assert!(
-                replay_world
-                    .account_permissions_iter(&authority)
-                    .expect("replayed bootstrap permissions")
-                    .any(|stored| stored == &permission)
-            );
-            assert!(
-                replay_world
-                    .contract_code_upload_progress(&authority, &accepted_hash)
-                    .is_some()
-            );
-            assert!(
-                replay_world
-                    .contract_code_upload_progress(&authority, &existing_replay_hash)
-                    .is_none()
-            );
-            assert!(
-                replay_world
-                    .contract_code_upload_progress(&adversary, &decorated_hash)
-                    .is_none()
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn genesis_public_key_is_checked() {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
-        // Predefined world state
-        let genesis_correct_key = crate::block::checked_keypair();
-        let genesis_wrong_key = crate::block::checked_keypair();
-        let genesis_correct_account_id = AccountId::new(genesis_correct_key.public_key().clone());
-        let genesis_wrong_account_id = AccountId::new(genesis_wrong_key.public_key().clone());
-        let genesis_domain =
-            Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_correct_account_id);
-        let genesis_wrong_account =
-            Account::new(genesis_wrong_account_id.clone()).build(&genesis_wrong_account_id);
-        let world = World::with([genesis_domain], [genesis_wrong_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        install_test_lane_manifests(&state);
-
-        // Creating an instruction
-        let isi = Log::new(
-            iroha_data_model::Level::DEBUG,
-            "instruction itself doesn't matter here".to_string(),
-        );
-
-        // Create genesis transaction
-        // Sign with `genesis_wrong_key` as peer which has incorrect genesis key pair
-        // Bypass `accept_genesis` check to allow signing with wrong key
-        let tx = TransactionBuilder::new(
-            chain_id.clone(),
-            genesis_wrong_account_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([isi])
-        .sign(genesis_wrong_key.private_key());
-        let tx = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-
-        // Create genesis block
-        let transactions = vec![tx];
-        let topology =
-            crate::sumeragi::network_topology::test_topology_with_keys([&genesis_correct_key]);
-        let unverified_block = BlockBuilder::new(transactions)
-            .chain(0, state.view().latest_block().as_deref())
-            .with_confidential_features(test_confidential_features(&state, 1))
-            .sign(genesis_correct_key.private_key())
-            .unpack(|_| {});
-
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-        state_block.commit().unwrap();
-
-        // Validate genesis block
-        // Use correct genesis key and check if transaction is rejected
-        let block: SignedBlock = valid_block.into();
-        let mut state_block = state.block(block.header());
-        let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
-        let (_, error) = ValidBlock::validate(
-            block,
-            &topology,
-            &chain_id,
-            &genesis_correct_account_id,
-            &time_source,
-            &mut state_block,
-        )
-        .unpack(|_| {})
-        .unwrap_err();
-        state_block.commit().unwrap();
-
-        // The first transaction should be rejected
-        assert_eq!(
-            error.as_ref(),
-            &BlockValidationError::InvalidGenesis(InvalidGenesisError::UnexpectedAuthority)
-        );
-    }
-
-    #[tokio::test]
-    async fn genesis_asset_definition_registration_is_not_domain_gated() {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
-        let genesis_key_pair = crate::block::checked_keypair();
-        let genesis_account_id = AccountId::new(genesis_key_pair.public_key().clone());
-        let alice_key_pair = crate::block::checked_keypair();
-        let wonderland_domain_id: DomainId =
-            DomainId::try_new("wonderland", "universal").expect("Valid domain id");
-        let alice_account_id = AccountId::new(alice_key_pair.public_key().clone());
-
-        let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let wonderland_domain = Domain::new(wonderland_domain_id.clone()).build(&alice_account_id);
-        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
-        let alice_account = Account::new(alice_account_id.clone()).build(&alice_account_id);
-
-        let world = World::with(
-            [genesis_domain, wonderland_domain],
-            [genesis_account, alice_account],
-            [],
-        );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        install_test_lane_manifests(&state);
-
-        let asset_definition_id = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").expect("valid domain id"),
-            "xor".parse().expect("valid asset name"),
-        );
-        let instruction = Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id).with_name("xor".to_owned()),
-        );
-
-        let tx = TransactionBuilder::new(
-            chain_id.clone(),
-            genesis_account_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([instruction])
-        .sign(genesis_key_pair.private_key());
-        let block = SignedBlock::genesis(
-            vec![tx],
-            genesis_key_pair.private_key(),
-            test_confidential_features(&state, 1),
-            None,
-        );
-
-        let topology =
-            crate::sumeragi::network_topology::test_topology_with_keys([&genesis_key_pair]);
-        let mut state_block = state.block(block.header());
-        let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
-        let _valid = ValidBlock::validate(
-            block,
-            &topology,
-            &chain_id,
-            &genesis_account_id,
-            &time_source,
-            &mut state_block,
-        )
-        .unpack(|_| {})
-        .expect(
-            "genesis asset-definition registration should not require domain-owner authorization",
-        );
-        state_block.commit().unwrap();
-    }
-
-    #[tokio::test]
-    async fn genesis_domain_registration_bootstraps_domain_name_lease() {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
-        let genesis_key_pair = crate::block::checked_keypair();
-        let genesis_account_id = AccountId::new(genesis_key_pair.public_key().clone());
-        let wonderland_domain_id: DomainId =
-            DomainId::try_new("wonderland", "universal").expect("valid domain id");
-
-        let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
-
-        let world = World::with([genesis_domain], [genesis_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        install_test_lane_manifests(&state);
-
-        let instruction = Register::domain(Domain::new(wonderland_domain_id.clone()));
-
-        let tx = TransactionBuilder::new(
-            chain_id.clone(),
-            genesis_account_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([instruction])
-        .sign(genesis_key_pair.private_key());
-        let block = SignedBlock::genesis(
-            vec![tx],
-            genesis_key_pair.private_key(),
-            test_confidential_features(&state, 1),
-            None,
-        );
-
-        let topology =
-            crate::sumeragi::network_topology::test_topology_with_keys([&genesis_key_pair]);
-        let mut state_block = state.block(block.header());
-        let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
-        let _valid = ValidBlock::validate(
-            block,
-            &topology,
-            &chain_id,
-            &genesis_account_id,
-            &time_source,
-            &mut state_block,
-        )
-        .unpack(|_| {})
-        .expect("genesis domain registration should bootstrap the SNS lease");
-        state_block.commit().unwrap();
-
-        let view = state.view();
-        assert_eq!(
-            crate::sns::active_domain_owner(view.world(), &wonderland_domain_id, 0),
-            Some(genesis_account_id),
-            "genesis registration should leave an active domain-name record behind"
-        );
-    }
+    include!("block/bootstrap_and_genesis_tests.rs");
 
     #[test]
     fn sumeragi_parameters_are_accessible() {
@@ -35589,224 +35350,8 @@ seiyaku MeteredFailure {
 }
 
 #[cfg(test)]
-mod commit_signature_tally_tests {
-    use std::collections::BTreeSet;
-
-    use iroha_crypto::{Algorithm, SignatureOf};
-    use iroha_data_model::block::builder::BlockBuilder as DataBlockBuilder;
-    use nonzero_ext::nonzero;
-
-    use super::*;
-    use crate::{
-        block::valid::commit_signature_tally,
-        sumeragi::{consensus::ValidatorIndex, network_topology::Topology},
-    };
-
-    fn checked_block_signature(
-        private_key: &iroha_crypto::PrivateKey,
-        block_hash: HashOf<BlockHeader>,
-    ) -> SignatureOf<BlockHeader> {
-        SignatureOf::try_from_hash(private_key, block_hash)
-            .expect("test block signing should succeed")
-    }
-
-    #[cfg(feature = "bls")]
-    #[test]
-    fn commit_signature_tally_dedups_and_counts_set_b() {
-        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_validator = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_set_b = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let topology = Topology::new(vec![
-            PeerId::new(kp_leader.public_key().clone()),
-            PeerId::new(kp_validator.public_key().clone()),
-            PeerId::new(kp_proxy.public_key().clone()),
-            PeerId::new(kp_set_b.public_key().clone()),
-        ]);
-
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let hash = header.hash();
-        let signatures = BTreeSet::from([
-            BlockSignature::new(0, checked_block_signature(kp_leader.private_key(), hash)),
-            BlockSignature::new(1, checked_block_signature(kp_validator.private_key(), hash)),
-            BlockSignature::new(2, checked_block_signature(kp_proxy.private_key(), hash)),
-            BlockSignature::new(3, checked_block_signature(kp_set_b.private_key(), hash)),
-        ]);
-        let block = DataBlockBuilder::new(header).build(signatures);
-
-        let tally = commit_signature_tally(&block, &topology);
-        assert_eq!(tally.present, 4);
-        assert_eq!(tally.counted, 4);
-        assert_eq!(tally.set_b_signatures, 1);
-    }
-
-    #[cfg(feature = "bls")]
-    #[test]
-    fn is_commit_rejects_duplicate_signer_index() {
-        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_dup = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let topology = Topology::new(vec![
-            PeerId::new(kp_leader.public_key().clone()),
-            PeerId::new(kp_proxy.public_key().clone()),
-        ]);
-
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let hash = header.hash();
-        let signatures = BTreeSet::from([
-            BlockSignature::new(0, checked_block_signature(kp_leader.private_key(), hash)),
-            BlockSignature::new(1, checked_block_signature(kp_proxy.private_key(), hash)),
-            BlockSignature::new(1, checked_block_signature(kp_dup.private_key(), hash)),
-        ]);
-        let block = DataBlockBuilder::new(header).build(signatures);
-
-        let err = ValidBlock::is_commit(&block, &topology).unwrap_err();
-        assert!(matches!(
-            err,
-            SignatureVerificationError::DuplicateSignature { signer } if signer == 1
-        ));
-    }
-
-    #[cfg(feature = "bls")]
-    #[test]
-    fn is_commit_rejects_proxy_tail_spoof() {
-        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_spoof = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let topology = Topology::new(vec![
-            PeerId::new(kp_leader.public_key().clone()),
-            PeerId::new(kp_proxy.public_key().clone()),
-        ]);
-
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let hash = header.hash();
-        let signatures = BTreeSet::from([
-            BlockSignature::new(0, checked_block_signature(kp_leader.private_key(), hash)),
-            BlockSignature::new(1, checked_block_signature(kp_spoof.private_key(), hash)),
-        ]);
-        let block = DataBlockBuilder::new(header).build(signatures);
-
-        let err = ValidBlock::is_commit(&block, &topology).unwrap_err();
-        assert!(
-            matches!(err, SignatureVerificationError::UnknownSignature),
-            "expected proxy tail spoof rejection, got {err:?}"
-        );
-    }
-
-    #[cfg(feature = "bls")]
-    #[test]
-    fn is_commit_rejects_leader_spoof() {
-        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_spoof = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let topology = Topology::new(vec![
-            PeerId::new(kp_leader.public_key().clone()),
-            PeerId::new(kp_proxy.public_key().clone()),
-        ]);
-
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let hash = header.hash();
-        let signatures = BTreeSet::from([
-            BlockSignature::new(0, checked_block_signature(kp_spoof.private_key(), hash)),
-            BlockSignature::new(1, checked_block_signature(kp_proxy.private_key(), hash)),
-        ]);
-        let block = DataBlockBuilder::new(header).build(signatures);
-
-        let err = ValidBlock::is_commit(&block, &topology).unwrap_err();
-        assert!(matches!(err, SignatureVerificationError::UnknownSignature));
-    }
-
-    #[cfg(feature = "bls")]
-    #[test]
-    fn is_commit_rejects_set_b_spoof() {
-        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_validator = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_set_b = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_spoof = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let topology = Topology::new(vec![
-            PeerId::new(kp_leader.public_key().clone()),
-            PeerId::new(kp_validator.public_key().clone()),
-            PeerId::new(kp_proxy.public_key().clone()),
-            PeerId::new(kp_set_b.public_key().clone()),
-        ]);
-
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let hash = header.hash();
-        let signatures = BTreeSet::from([
-            BlockSignature::new(0, checked_block_signature(kp_leader.private_key(), hash)),
-            BlockSignature::new(1, checked_block_signature(kp_validator.private_key(), hash)),
-            BlockSignature::new(2, checked_block_signature(kp_proxy.private_key(), hash)),
-            BlockSignature::new(3, checked_block_signature(kp_spoof.private_key(), hash)),
-        ]);
-        let block = DataBlockBuilder::new(header).build(signatures);
-
-        let err = ValidBlock::is_commit(&block, &topology).unwrap_err();
-        assert!(matches!(err, SignatureVerificationError::UnknownSignature));
-    }
-
-    #[cfg(feature = "bls")]
-    #[test]
-    fn commit_with_signers_rejects_invalid_block_signature() {
-        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let topology = Topology::new(vec![
-            PeerId::new(kp_leader.public_key().clone()),
-            PeerId::new(kp_proxy.public_key().clone()),
-        ]);
-
-        // Corrupt the leader signature so the block signatures are no longer trustworthy.
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let hash = header.hash();
-        let signatures = BTreeSet::from([
-            BlockSignature::new(0, checked_block_signature(kp_proxy.private_key(), hash)),
-            BlockSignature::new(1, checked_block_signature(kp_proxy.private_key(), hash)),
-        ]);
-        let block =
-            ValidBlock::new_unverified_for_tests(DataBlockBuilder::new(header).build(signatures));
-        let signers = BTreeSet::from([
-            ValidatorIndex::try_from(0).expect("validator index parses"),
-            ValidatorIndex::try_from(1).expect("validator index parses"),
-        ]);
-
-        let result = block
-            .commit_with_signers(&topology, &signers, false)
-            .unpack(|_| {});
-        assert!(
-            result.is_err(),
-            "invalid block signatures must still be rejected even when a QC signer set is present"
-        );
-    }
-
-    #[cfg(feature = "bls")]
-    #[test]
-    fn commit_with_signers_succeeds_with_quorum_and_signatures() {
-        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let topology = Topology::new(vec![
-            PeerId::new(kp_leader.public_key().clone()),
-            PeerId::new(kp_proxy.public_key().clone()),
-        ]);
-
-        let mut block = ValidBlock::new_dummy(kp_leader.private_key());
-        block.sign(&kp_proxy, &topology);
-        let signers = BTreeSet::from([
-            ValidatorIndex::try_from(0).expect("validator index parses"),
-            ValidatorIndex::try_from(1).expect("validator index parses"),
-        ]);
-
-        let result = block
-            .commit_with_signers(&topology, &signers, false)
-            .unpack(|_| {});
-        assert!(
-            result.is_ok(),
-            "quorum signatures should commit via QC signer set"
-        );
-    }
-
-    // Tail quorum and signature-restoration tests retain their stable libtest paths.
-    include!("block/commit_signature_tail_tests.rs");
-}
+#[path = "block/commit_signature_tally_tests.rs"]
+mod commit_signature_tally_tests;
 
 #[cfg(any(test, feature = "telemetry"))]
 fn committed_teu_by_lane_from_routes(

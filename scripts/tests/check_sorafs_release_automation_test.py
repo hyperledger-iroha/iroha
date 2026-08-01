@@ -1544,8 +1544,8 @@ def test_release_workflow_script_dependencies_are_exactly_pinned() -> None:
     assert requirements == sorted(requirements)
     assert requirements == [
         "blake3==1.0.9",
-        "pytest==8.4.2",
-        "requests==2.32.5",
+        "pytest==9.0.3",
+        "requests==2.33.0",
         'tomli==2.4.1; python_version < "3.11"',
         "tomli_w==1.2.0",
     ]

@@ -4,6 +4,14 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
+
+    def read_source_bundle(*relative_paths: str) -> str:
+        """Read one Rust module together with its lexically included test files."""
+        return "\n".join(
+            (ROOT_DIR / relative_path).read_text(encoding="utf-8")
+            for relative_path in relative_paths
+        )
+
     seed_source = (
         ROOT_DIR / "scripts" / "run_sumeragi_v2_seed_matrix.sh"
     ).read_text(encoding="utf-8")
@@ -28,18 +36,22 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     sumeragi_source = (
         ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "mod.rs"
     ).read_text(encoding="utf-8")
-    lane_work_source = (
-        ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_lane_work.rs"
-    ).read_text(encoding="utf-8")
+    lane_work_source = read_source_bundle(
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_lane_work_effect_queue.rs",
+    )
     lane_relay_source = (
         ROOT_DIR / "crates" / "iroha_core" / "src" / "nexus" / "lane_relay.rs"
     ).read_text(encoding="utf-8")
     merge_sidecar_source = (
         ROOT_DIR / "crates" / "iroha_core" / "src" / "merge_sidecar.rs"
     ).read_text(encoding="utf-8")
-    runner_source = (
-        ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_runner.rs"
-    ).read_text(encoding="utf-8")
+    runner_source = read_source_bundle(
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_01.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_02.rs",
+    )
     adapter_source = (
         ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "v2.rs"
     ).read_text(encoding="utf-8")
@@ -52,33 +64,40 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         / "v2_core"
         / "tests.rs"
     ).read_text(encoding="utf-8")
-    refinement_source = (
-        ROOT_DIR
-        / "crates"
-        / "iroha_core"
-        / "src"
-        / "sumeragi"
-        / "v2_core"
-        / "refinement.rs"
-    ).read_text(encoding="utf-8")
+    refinement_source = read_source_bundle(
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "crates/iroha_core/src/sumeragi/v2_core/refinement_cases.rs",
+    )
     effects_source = (
         ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_effects.rs"
     ).read_text(encoding="utf-8")
-    runtime_source = (
-        ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_runtime.rs"
-    ).read_text(encoding="utf-8")
-    worker_source = (
-        ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_worker.rs"
-    ).read_text(encoding="utf-8")
+    runtime_source = read_source_bundle(
+        "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_runtime_unsealed_00.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_runtime_unsealed_01.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_runtime_unsealed_02.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_runtime_unsealed_03.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_runtime_unsealed_04.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_runtime_unsealed_05.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_runtime_unsealed_06.rs",
+    )
+    worker_source = read_source_bundle(
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_worker_reply_route_cases.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_worker_backpressure_cases.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_worker_serve_unsealed_cases.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_worker_serve_decision_restart_cases.rs",
+    )
     p2p_network_source = (
         ROOT_DIR / "crates" / "iroha_p2p" / "src" / "network.rs"
     ).read_text(encoding="utf-8")
     p2p_peer_source = (
         ROOT_DIR / "crates" / "iroha_p2p" / "src" / "peer.rs"
     ).read_text(encoding="utf-8")
-    config_actual_source = (
-        ROOT_DIR / "crates" / "iroha_config" / "src" / "parameters" / "actual.rs"
-    ).read_text(encoding="utf-8")
+    config_actual_source = read_source_bundle(
+        "crates/iroha_config/src/parameters/actual.rs",
+        "crates/iroha_config/src/parameters/actual/tests.rs",
+    )
     config_user_source = (
         ROOT_DIR / "crates" / "iroha_config" / "src" / "parameters" / "user.rs"
     ).read_text(encoding="utf-8")
@@ -91,9 +110,15 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     kura_source = (ROOT_DIR / "crates" / "iroha_core" / "src" / "kura.rs").read_text(
         encoding="utf-8"
     )
-    lane_geometry_source = (
-        ROOT_DIR / "crates" / "iroha_core" / "src" / "kura" / "lane_geometry.rs"
-    ).read_text(encoding="utf-8")
+    lane_geometry_source = read_source_bundle(
+        "crates/iroha_core/src/kura/lane_geometry.rs",
+        "crates/iroha_core/src/kura/lane_geometry_tests/00_support.rs",
+        "crates/iroha_core/src/kura/lane_geometry/native_amx_retained_window_tests.rs",
+        "crates/iroha_core/src/kura/lane_geometry_tests/00_retirement.rs",
+        "crates/iroha_core/src/kura/lane_geometry_tests/01_retirement_and_recovery.rs",
+        "crates/iroha_core/src/kura/lane_geometry_tests/02_geometry_moves_and_journal.rs",
+        "crates/iroha_core/src/kura/lane_geometry_tests/03_gc_and_startup.rs",
+    )
     liveness_doc = (
         ROOT_DIR / "specs" / "sumeragi_v2_liveness.md"
     ).read_text(encoding="utf-8")
@@ -397,7 +422,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             canonical_fixed_pairs.replace(old, new, 1),
         )
 
-    mutate_fixed_progress_pairs("; 5]", "; 4]")
+    mutate_fixed_progress_pairs("; 6]", "; 5]")
     errors = module._kura_retirement_progress_production_source_fidelity_errors(
         fidelity_root
     )
@@ -421,7 +446,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
         assert any(
-            "must preserve exact five-member artifact membership and order"
+            "must preserve exact six-member artifact membership and order"
             in error
             for error in errors
         ), (data_name, errors)
@@ -433,14 +458,14 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         (
             "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             "    &fixed_progress_pairs,\n",
-            "    &fixed_progress_pairs[..4],\n",
+            "    &fixed_progress_pairs[..5],\n",
             "all fixed retirement progress pairs must recover before the "
             "immutable snapshot",
         ),
         (
             "recover_geometry_progress_pairs_before_snapshot",
             "for &(data_path, index_path, kind) in pairs {",
-            "for &(data_path, index_path, kind) in pairs.iter().take(4) {",
+            "for &(data_path, index_path, kind) in pairs.iter().take(5) {",
             "retirement recovery must visit every pair inside the "
             "authenticated directory",
         ),
@@ -1628,8 +1653,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_modules) == 38
-    assert len(set(production_modules)) == 38
+    assert len(production_modules) == 39
+    assert len(set(production_modules)) == 39
     assert "kura::tests" in production_modules
     assert "kura::lane_geometry::tests" in production_modules
     assert "sumeragi::authoritative_runtime_gate_tests" in production_modules
@@ -1734,8 +1759,12 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert "preflight-release-bootstrap pytest 82" in release_source
     assert "did not run exactly 37 passing tests" in release_source
     assert "preflight-release-bootstrap-validator pytest 37" in release_source
-    assert "did not run exactly 316 passing tests" in release_source
-    assert "preflight-release-receipt pytest 316" in release_source
+    assert "did not run exactly 320 passing tests" in release_source
+    assert "preflight-release-receipt pytest 320" in release_source
+    assert (
+        "pytests/scripts/sumeragi_v2_release_receipt_components_test.py"
+        in release_source
+    )
     assert "pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py" in release_source
     assert (
         "pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py"
@@ -1758,13 +1787,13 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         in receipt_source
     )
     assert (
-        '"preflight-release-receipt",\n                "pytest",\n                316,'
+        '"preflight-release-receipt",\n                "pytest",\n                320,'
         in receipt_source
     )
-    assert "did not run exactly 1730 passing tests" in release_source
-    assert "preflight-proof-fidelity pytest 1730" in release_source
+    assert "did not run exactly 1737 passing tests" in release_source
+    assert "preflight-proof-fidelity pytest 1737" in release_source
     assert (
-        "^1730 passed in [0-9]+([.][0-9]+)?s( "
+        "^1737 passed in [0-9]+([.][0-9]+)?s( "
         r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
         in release_source
     )
@@ -1782,8 +1811,33 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     ):
         assert contract_file in release_source
         assert contract_file in receipt_source
+    proof_fidelity_receipt_commands = [
+        command
+        for leg_id, _kind, _count, command in receipt_module._corridor_legs()
+        if leg_id == "preflight-proof-fidelity"
+    ]
+    assert len(proof_fidelity_receipt_commands) == 1
+    proof_fidelity_receipt_command = proof_fidelity_receipt_commands[0]
+    for selector in (
+        "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+        "test_inflight_composed_contract_rejects_legacy_layout_only_claim",
+        "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+        "test_inflight_composed_contract_rejects_state_order_weakening",
+        "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+        "test_inflight_composed_contract_rejects_snapshot_nonstutter_mapping",
+        "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+        "test_inflight_composed_contract_rejects_missing_direct_release_action",
+        "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+        "test_inflight_composed_contract_rejects_tla_snapshot_nonstutter_mapping",
+        "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+        "test_inflight_composed_contract_rejects_verus_snapshot_stutter_proof_removal",
+        "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+        "test_inflight_layout_contract_rejects_membership_only_lane_authorship",
+    ):
+        assert selector in release_source
+        assert selector in proof_fidelity_receipt_command
     assert (
-        '"preflight-proof-fidelity",\n                "pytest",\n                1730,'
+        '"preflight-proof-fidelity",\n                "pytest",\n                1737,'
         in receipt_source
     )
     assert "did not run exactly 26 passing tests" in release_source

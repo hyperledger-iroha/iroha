@@ -1332,10 +1332,16 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "42c699bccbd2f051c8300cc714dab9b3f32c0268a37d95226f0ecb466dabc2b2"
     ),
     "dormant_local_fifo_replacement": (
-        "349d197fc00128460c723ecb4cc4fc7b3253390d9847b61dac38e7157fb9af61"
+        "650e241b2095ea2701108807d750c057e9b7c6363d0094b80817f381b6bb2ff9"
+    ),
+    "dormant_local_fifo_replacement_inner": (
+        "bdcbaeb4ceb933c2a395691aab0d7fabef4f5d81d02a93196a97dd5e2aa25385"
     ),
     "occupied_with_dormant_reservations": (
-        "2a57306de4cfb2074082a0f67c34ffe9cb3d99ce2021c31256272d268a1bbe0e"
+        "d70ffa45df19675f7fd158ab1fbfb36d198615463dbaac214900bacc023b163e"
+    ),
+    "active_dormant_local_fifo_reservation_count": (
+        "e42231cb6d1c5f5c63e6181003cb3032b1c2fd069ccad4b3cbd3a497c9f000d9"
     ),
     "oldest_active_lifecycle_ordinal": (
         "fa6fbffb7201f69529caec900bafba3eb4f9433f00ec31289ca3e23e2363c7d4"
@@ -1343,14 +1349,23 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     "with_driver_and_lifecycle_ordinals": (
         "8b34854604799e519f0e40d85bac7f72564ee67ae94c6731222f45af13bcc863"
     ),
+    "freeze_due_clock_owners": (
+        "f097b1ce583dcb9d94293366cab9828f648c376dd586f7af28635b003f92c855"
+    ),
     "minimum_active_lifecycle_ordinal": (
-        "0c38e2c8725a12a05c06884f8ae22d3ea7c6395243dc08800afdbf4d1190d812"
+        "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
+    ),
+    "minimum_active_lifecycle_ordinal_excluding": (
+        "204a88b77ef7853327a2313583c25ef32f9bdea705dd57e0fc7bbd17b30afa1a"
     ),
     "complete_leader_wire_runtime_owner": (
         "e17e62beccb6e2e219f3aac01c126456531ffb0448930b83026d9cf02da6695c"
     ),
     "step": (
-        "25956cf04532441fca915496116cc9c6913df8743292c857fd478a2ba7b07bcc"
+        "82e349d880d8ff39c7438e8c06b301f5abcae332d25265285213a099b7ad8ce3"
+    ),
+    "dispatch_one_fence_dependency": (
+        "1109cb4b250d3115032fc5d5ed196182b53b9020ea4142f0f87e06b197731f00"
     ),
     "dispatch_one_adapter_deferred": (
         "20d4d698e8566e7df3ba96d0f6cc136ad87c05f10d95931b886aa174ae45b7b9"
@@ -1358,7 +1373,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
 }
 _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "de691044aee8685ad220d02975d2f829e4b7796d18a73aadf1106a169b76217e"
+        "f484ce37375c6eb73ff710d950d0b098375ad000e5209efdc8528b1c31ac02a7"
     ),
 }
 _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {
@@ -1372,7 +1387,7 @@ _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {
         "f225f861684b5a468fd1e45a9424e614b91b8bfebfd75e10e429c91dbd32b58d"
     ),
     "leader_wire_gate_rejects_producer_terminal_from_foreign_view_or_phase": (
-        "8db1b977e059aadd6bbce9e3746e4fea23167446b3fb64e058616eb41d7cb96a"
+        "f748fe58e6bd8d3e1724be826c60c5bdd593e88f71759c83e6061e1131f4c8ea"
     ),
     "snapshot_rejects_corruption_stale_context_and_capacity_exhaustion": (
         "9092b4ebab5ec88f8ad99a573352aedb05fe29385f5ff01215bf088c35511059"

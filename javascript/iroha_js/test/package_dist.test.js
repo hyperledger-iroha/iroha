@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { build as buildWithEsbuild } from "esbuild";
 
 import * as packageExports from "../dist/index.js";
+import * as packageTransactionExports from "../dist/transaction.js";
 import { NexusAppClient as PackageNexusAppClient } from "../dist/nexusApp.js";
 import * as packagePrivacyCapabilitiesExports from "../dist/privacyCapabilities.js";
 import * as packageSccpExports from "../dist/sccp.js";
@@ -250,6 +251,19 @@ test("package dist exposes the current general-purpose SDK entrypoint", () => {
     "privacyCapabilitiesV1",
   ]) {
     assert.notEqual(packageExports[name], undefined, `${name} is exported`);
+  }
+});
+
+test("package dist does not expose Private Kaigi fee proof synthesis", () => {
+  for (const [surface, exports] of [
+    ["root", packageExports],
+    ["transaction", packageTransactionExports],
+  ]) {
+    assert.equal(
+      Object.hasOwn(exports, "buildPrivateKaigiFeeSpend"),
+      false,
+      `${surface} must not expose fixture-backed fee proof synthesis`,
+    );
   }
 });
 

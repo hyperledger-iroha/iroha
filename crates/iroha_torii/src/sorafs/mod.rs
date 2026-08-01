@@ -5,6 +5,7 @@ pub mod alias_cache;
 #[cfg(feature = "app_api")]
 pub mod api;
 pub mod blinded;
+#[cfg(all(test, feature = "app_api"))]
 pub mod concurrency;
 #[cfg(feature = "app_api")]
 pub mod delegated_routing;
@@ -33,6 +34,7 @@ pub mod pop_api;
 pub mod por;
 #[cfg(feature = "app_api")]
 pub mod potr_signing;
+#[cfg(all(test, feature = "app_api"))]
 pub mod quota;
 #[cfg(feature = "app_api")]
 pub mod registry;
@@ -42,6 +44,10 @@ pub(crate) mod reserve_api;
 pub(crate) mod reserve_runtime;
 pub(crate) mod reserve_worker;
 pub mod site;
+#[cfg(feature = "app_api")]
+pub mod stream_token_admission;
+#[cfg(feature = "app_api")]
+pub(crate) mod stream_token_runtime;
 pub mod token;
 
 pub use admission::{
@@ -59,6 +65,7 @@ pub use blinded::{
     BLINDED_CID_LEN, BlindedCidResolver, ResolveError as BlindedResolveError, SaltSchedule,
     SaltScheduleError,
 };
+#[cfg(all(test, feature = "app_api"))]
 pub(crate) use concurrency::{StreamTokenConcurrencyPermit, StreamTokenConcurrencyTracker};
 pub use discovery::{
     ProviderAdvertCache, ReplayCheckpointError, capability_name, parse_capability_name,
@@ -85,6 +92,7 @@ pub use potr_signing::{
     PotrRuntimeReaderBindingsV1, PotrRuntimeSignerConfigError, PotrRuntimeSignerRolesV1,
     PotrRuntimeSignersV1, PotrSignerServiceError, PotrStateFinalizedPolicySourceV1,
 };
+#[cfg(all(test, feature = "app_api"))]
 pub(crate) use quota::{StreamTokenQuotaError, StreamTokenQuotaTracker};
 #[cfg(feature = "app_api")]
 pub(crate) use registry::{
@@ -98,11 +106,22 @@ pub use sorafs_manifest::{
 pub use sorafs_node::{
     PotrAdmissionPolicyBindingError, PotrAdmissionPolicyBindingV1, PotrAdmissionPolicyProgressError,
 };
+#[cfg(feature = "app_api")]
+pub use stream_token_admission::{
+    STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1, StreamTokenAdmissionCaptureV1,
+    StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionDeliveryStateV1,
+    StreamTokenGatewayAdmissionErrorV1, StreamTokenGatewayAdmissionProviderV1,
+    StreamTokenGatewayAdmissionQualificationV1, StreamTokenGatewayAdmissionReadbackV1,
+    StreamTokenGatewayAdmissionRecordV1, StreamTokenGatewayAdmissionRequestV1,
+    StreamTokenGatewayAdmissionResultV1, StreamTokenGatewayQuotaRequestV1,
+};
 pub(crate) use token::{
     MAX_CLIENT_ID_BYTES, MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES,
     MAX_TOKEN_FUTURE_SKEW_SECS, StreamTokenQuotaSubject,
 };
 pub use token::{
     StreamTokenHeaderError, StreamTokenIssuer, StreamTokenIssuerError, StreamTokenRuntimeSigner,
-    StreamTokenSigningError, TokenOverrides, decode_token_base64, encode_token_base64,
+    StreamTokenRuntimeSignerProbeErrorV1, StreamTokenRuntimeSignerQualificationV1,
+    StreamTokenRuntimeSignerQualificationValueErrorV1, StreamTokenSigningError, TokenOverrides,
+    decode_token_base64, encode_token_base64,
 };

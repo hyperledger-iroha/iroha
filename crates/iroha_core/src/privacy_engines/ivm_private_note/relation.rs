@@ -3,10 +3,9 @@
 use std::{collections::BTreeSet, fmt};
 
 use iroha_data_model::privacy::{
-    IrohaIvmPrivateNoteStarkStatementV1, PrivacyActionDigestV1, PrivacyCommitmentV1,
-    PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyPoolProgramNamespaceV1,
-    PrivacyProgramIdV1, PrivacyProtocolIdV1, PrivacyRootV1, PrivacyValueBalanceDirectionV1,
-    PrivacyValueBalanceV1,
+    IrohaIvmPrivateNoteStarkStatementV1, PrivacyCommitmentV1, PrivacyNamespaceScopeV1,
+    PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyPoolProgramNamespaceV1, PrivacyProgramIdV1,
+    PrivacyProtocolIdV1, PrivacyRootV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
 };
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -650,63 +649,6 @@ impl fmt::Debug for ValidatedPrivateNoteRelationV1 {
             .field("invocation_count", &self.invocations.len())
             .field("private_values", &"<redacted>")
             .finish_non_exhaustive()
-    }
-}
-
-/// Ledger-safe result produced only by successful proof verification.
-///
-/// It deliberately carries no next root or next epoch. Core must derive those
-/// from the trusted compact frontier and these statement-owned outputs.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct VerifiedIvmPrivateNoteActionV1 {
-    nullifiers: Vec<PrivacyNullifierV1>,
-    output_commitments: Vec<PrivacyCommitmentV1>,
-    current_root: PrivacyRootV1,
-    current_epoch: u64,
-    program_id: PrivacyProgramIdV1,
-    action_digest: PrivacyActionDigestV1,
-    value_balance: PrivacyValueBalanceV1,
-}
-
-impl VerifiedIvmPrivateNoteActionV1 {
-    pub(super) fn from_statement(statement: &IrohaIvmPrivateNoteStarkStatementV1) -> Self {
-        Self {
-            nullifiers: statement.nullifiers.clone(),
-            output_commitments: statement.output_commitments.clone(),
-            current_root: statement.state_root,
-            current_epoch: statement.root_epoch,
-            program_id: statement.program_id,
-            action_digest: statement.action_digest,
-            value_balance: statement.value_balance,
-        }
-    }
-
-    pub(crate) fn nullifiers(&self) -> &[PrivacyNullifierV1] {
-        &self.nullifiers
-    }
-
-    pub(crate) fn output_commitments(&self) -> &[PrivacyCommitmentV1] {
-        &self.output_commitments
-    }
-
-    pub(crate) const fn current_root(&self) -> PrivacyRootV1 {
-        self.current_root
-    }
-
-    pub(crate) const fn current_epoch(&self) -> u64 {
-        self.current_epoch
-    }
-
-    pub(crate) const fn program_id(&self) -> PrivacyProgramIdV1 {
-        self.program_id
-    }
-
-    pub(crate) const fn action_digest(&self) -> PrivacyActionDigestV1 {
-        self.action_digest
-    }
-
-    pub(crate) const fn value_balance(&self) -> PrivacyValueBalanceV1 {
-        self.value_balance
     }
 }
 

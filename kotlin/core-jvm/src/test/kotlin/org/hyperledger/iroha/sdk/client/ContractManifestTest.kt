@@ -80,7 +80,7 @@ class ContractManifestTest {
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"Option\""),
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"Amount\""),
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"amount\""),
-            fullResponse().replaceFirst("\"name\":\"transfer\",\"kind\"", "\"name\":\"Amount\",\"kind\""),
+            fullResponse().replaceFirst("\"name\":\"transfer\"", "\"name\":\"Amount\""),
             fullResponse().replaceFirst("\"name\":\"request\",\"type_name\"", "\"name\":\"Amount\",\"type_name\""),
             fullResponse().replaceFirst("\"fields\":[\"amount\",\"memo\"]", "\"fields\":[\"Amount\",\"memo\"]"),
             fullResponse().replaceFirst("\"name\":\"Balances\",\"type_name\"", "\"name\":\"Amount\",\"type_name\""),
@@ -112,8 +112,8 @@ class ContractManifestTest {
             fullResponse().replaceFirst("\"code_hash\":\"${"b".repeat(64)}\"", "\"code_hash\":\"${"f".repeat(64)}\""),
         )
 
-        invalid.forEach { payload ->
-            assertFailsWith<IllegalStateException>(payload) {
+        invalid.forEachIndexed { index, payload ->
+            assertFailsWith<IllegalStateException>("invalid[$index] mutation was accepted: $payload") {
                 ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8))
             }
         }
@@ -382,8 +382,9 @@ class ContractManifestTest {
                 stateName = "amount",
             ),
         )
-        assertEquals("state:amount", accepted.manifest.accessSetHints!!.dynamicReads.single().baseKey)
-        assertEquals("state:amount", accepted.manifest.accessSetHints!!.dynamicWrites.single().baseKey)
+        val acceptedHints = accepted.manifest.accessSetHints ?: error("missing access-set hints")
+        assertEquals("state:amount", acceptedHints.dynamicReads.single().baseKey)
+        assertEquals("state:amount", acceptedHints.dynamicWrites.single().baseKey)
     }
 
     @Test

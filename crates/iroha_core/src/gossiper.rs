@@ -4057,8 +4057,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: FsyncMode::Batched,
@@ -4163,8 +4162,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: FsyncMode::Batched,
@@ -4218,8 +4216,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: FsyncMode::Batched,
@@ -4347,8 +4344,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: FsyncMode::Batched,
@@ -5761,8 +5757,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: FsyncMode::Batched,
@@ -6494,8 +6489,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: FsyncMode::Batched,
@@ -6583,8 +6577,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: FsyncMode::Batched,
@@ -6690,8 +6683,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: FsyncMode::Batched,
@@ -6867,8 +6859,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: FsyncMode::Batched,

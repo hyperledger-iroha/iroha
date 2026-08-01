@@ -1,12 +1,16 @@
 //! Contains message structures for p2p communication during consensus.
 use std::{collections::BTreeMap, io::Write, sync::Arc};
 
-use iroha_crypto::{Hash, HashOf, PublicKey};
+use iroha_crypto::{Hash, HashOf, PublicKey, Signature};
 use iroha_data_model::{
+    ChainId,
     block::{
         BlockHeader, BlockSignature, SignedBlock,
         consensus::{LaneBlockCertificateV1, LaneBlockProposalV1, LaneBlockQcV1},
-        consensus_v2::{ConsensusMessageV2, ExecutionCommitment, finality::V2FinalityArtifact},
+        consensus_v2::{
+            ConsensusMessageV2, ExecutionCommitment, MAX_EXECUTED_BLOCK_WIRE_BYTES,
+            finality::V2FinalityArtifact,
+        },
     },
     peer::PeerId,
 };
@@ -57,7 +61,7 @@ pub enum BlockMessage {
     /// Request a pending (not-yet-committed) block payload by hash.
     FetchPendingBlock(#[skip_try_from] FetchPendingBlock),
     /// Advertisement that a peer durably retains a canonical committed block body.
-    KuraReplicaAdvert(#[skip_try_from] KuraReplicaAdvert),
+    KuraReplicaAdvert(#[skip_try_from] KuraReplicaAdvertV1),
     /// Proposal hint: minimal header carrying `HighestQC` reference for the proposal.
     ProposalHint(#[skip_try_from] ProposalHint),
     /// Full proposal header + payload hash. Used for on-wire parent/HighestQC checks.
@@ -118,6 +122,12 @@ impl BlockMessage {
         )
     }
 
+    /// Whether this is bounded live consensus traffic which does not enter
+    /// either the global reducer or an autonomous lane reducer.
+    pub(crate) const fn is_live_auxiliary(&self) -> bool {
+        matches!(self, Self::KuraReplicaAdvert(_))
+    }
+
     /// Reject retired global Sumeragi v1 messages at the live wire boundary.
     ///
     /// The variants remain part of the enum so historical frames can be
@@ -128,6 +138,11 @@ impl BlockMessage {
             Self::V2(message) => message.validate_version().map_err(|error| {
                 ncore::Error::Message(format!(
                     "refusing to emit non-canonical Sumeragi v2 message: {error}"
+                ))
+            }),
+            Self::KuraReplicaAdvert(advert) => advert.verify_keeper_signature().map_err(|error| {
+                ncore::Error::Message(format!(
+                    "refusing to emit an invalid Kura replica advert: {error}"
                 ))
             }),
             message if message.is_lane_local() => Ok(()),
@@ -154,7 +169,7 @@ impl BlockMessage {
     pub fn is_authoritative_v2_ingress(&self) -> bool {
         match self {
             Self::V2(message) => message.validate_version().is_ok(),
-            message => message.is_lane_local(),
+            message => message.is_lane_local() || message.is_live_auxiliary(),
         }
     }
 
@@ -1084,15 +1099,108 @@ pub struct FetchPendingBlock {
     pub commit_qc_only: Option<bool>,
 }
 
-/// Peer-local durable replica advertisement for canonical Kura block bodies.
-#[derive(Debug, Clone, Copy, Decode, Encode)]
-pub struct KuraReplicaAdvert {
+/// Current clean-break layout version for authenticated Kura replica adverts.
+pub const KURA_REPLICA_ADVERT_VERSION_V1: u16 = 1;
+/// Hard admission bound for one encoded Kura replica advert.
+pub const MAX_KURA_REPLICA_ADVERT_WIRE_BYTES: usize = 16 * 1024;
+const KURA_REPLICA_ADVERT_SIGNATURE_BYTES: usize = 96;
+const KURA_REPLICA_ADVERT_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:kura-replica-advert:v1";
+
+#[derive(Encode)]
+struct KuraReplicaAdvertSignaturePreimageV1 {
+    domain: Vec<u8>,
+    version: u16,
+    chain_id: ChainId,
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    executed_block_wire_len: u64,
+    executed_block_wire_hash: Hash,
+    finality_artifact_hash: HashOf<V2FinalityArtifact>,
+    keeper_index: u32,
+    keeper: PeerId,
+}
+
+/// Authenticated durable-replica claim for one exact canonical Kura body.
+///
+/// Every identity needed for safe eviction is signed.  The advert is useful
+/// only when Kura independently revalidates the exact retained finality
+/// artifact and deterministically selects `keeper` from that artifact's
+/// CommitQC signers.
+#[derive(Debug, Clone, Decode, Encode, PartialEq, Eq)]
+pub struct KuraReplicaAdvertV1 {
+    /// Advert layout version; must equal [`KURA_REPLICA_ADVERT_VERSION_V1`].
+    pub version: u16,
+    /// Finalized chain identifier, preventing cross-chain replay.
+    pub chain_id: ChainId,
     /// Height of the advertised canonical block.
     pub height: u64,
     /// Hash of the advertised canonical block.
     pub block_hash: HashOf<BlockHeader>,
-    /// Canonical framed block-body length retained by the peer.
-    pub payload_len: u64,
+    /// Canonical framed executed-block wire length retained by the keeper.
+    pub executed_block_wire_len: u64,
+    /// Hash of those exact canonical framed executed-block bytes.
+    pub executed_block_wire_hash: Hash,
+    /// Typed identity of the exact cryptographically verified finality artifact.
+    pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
+    /// Keeper's exact index in the finality artifact's frozen roster.
+    pub keeper_index: u32,
+    /// Keeper identity; also the only valid direct transport origin.
+    pub keeper: PeerId,
+    /// Keeper signature over [`Self::signature_preimage`].
+    pub signature: Vec<u8>,
+}
+
+impl KuraReplicaAdvertV1 {
+    /// Return the domain-separated canonical signing bytes.
+    #[must_use]
+    pub fn signature_preimage(&self) -> Vec<u8> {
+        KuraReplicaAdvertSignaturePreimageV1 {
+            domain: KURA_REPLICA_ADVERT_SIGNATURE_DOMAIN_V1.to_vec(),
+            version: self.version,
+            chain_id: self.chain_id.clone(),
+            height: self.height,
+            block_hash: self.block_hash,
+            executed_block_wire_len: self.executed_block_wire_len,
+            executed_block_wire_hash: self.executed_block_wire_hash,
+            finality_artifact_hash: self.finality_artifact_hash,
+            keeper_index: self.keeper_index,
+            keeper: self.keeper.clone(),
+        }
+        .encode()
+    }
+
+    /// Verify fixed bounds, the clean-break version, and the keeper signature.
+    ///
+    /// Kura must additionally authenticate the canonical block, finality,
+    /// CommitQC signer membership, and deterministic keeper selection.
+    pub(crate) fn verify_keeper_signature(&self) -> Result<(), String> {
+        if self.version != KURA_REPLICA_ADVERT_VERSION_V1 {
+            return Err(format!(
+                "unsupported Kura replica advert version {}; expected {}",
+                self.version, KURA_REPLICA_ADVERT_VERSION_V1
+            ));
+        }
+        if self.height == 0
+            || self.executed_block_wire_len == 0
+            || self.executed_block_wire_len > MAX_EXECUTED_BLOCK_WIRE_BYTES
+        {
+            return Err("Kura replica advert has an invalid executed-wire bound".to_owned());
+        }
+        if self.keeper.public_key().algorithm() != iroha_crypto::Algorithm::BlsNormal
+            || self.signature.len() != KURA_REPLICA_ADVERT_SIGNATURE_BYTES
+            || self.encode().len() > MAX_KURA_REPLICA_ADVERT_WIRE_BYTES
+        {
+            return Err(
+                "Kura replica advert must carry one exact BLS-normal keeper signature within its wire bound"
+                    .to_owned(),
+            );
+        }
+        let signature = Signature::try_from_bytes(&self.signature)
+            .map_err(|error| format!("invalid Kura replica advert signature bytes: {error}"))?;
+        signature
+            .verify(self.keeper.public_key(), &self.signature_preimage())
+            .map_err(|error| format!("invalid Kura replica advert keeper signature: {error}"))
+    }
 }
 
 #[cfg(test)]
@@ -1927,11 +2035,7 @@ mod tests {
             ),
             (
                 "KuraReplicaAdvert",
-                BlockMessage::KuraReplicaAdvert(KuraReplicaAdvert {
-                    height: 4,
-                    block_hash,
-                    payload_len: 128,
-                }),
+                BlockMessage::KuraReplicaAdvert(signed_kura_replica_advert_fixture()),
             ),
             (
                 "ProposalHint",
@@ -2714,6 +2818,91 @@ mod tests {
             }
             other => panic!("expected fetch message to remain unchanged, got {other:?}"),
         }
+    }
+
+    fn signed_kura_replica_advert_fixture() -> KuraReplicaAdvertV1 {
+        let key = KeyPair::try_from_seed(vec![0xD7; 32], Algorithm::BlsNormal)
+            .expect("derive Kura replica advert signer");
+        let mut advert = KuraReplicaAdvertV1 {
+            version: KURA_REPLICA_ADVERT_VERSION_V1,
+            chain_id: ChainId::from("kura-replica-advert-test"),
+            height: 17,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replica-block")),
+            executed_block_wire_len: 4096,
+            executed_block_wire_hash: Hash::new(b"replica-executed-wire"),
+            finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(b"replica-finality")),
+            keeper_index: 2,
+            keeper: PeerId::new(key.public_key().clone()),
+            signature: Vec::new(),
+        };
+        advert.signature = Signature::new(key.private_key(), &advert.signature_preimage())
+            .payload()
+            .to_vec();
+        advert
+    }
+
+    #[test]
+    fn kura_replica_advert_signature_binds_every_eviction_identity() {
+        let advert = signed_kura_replica_advert_fixture();
+        advert
+            .verify_keeper_signature()
+            .expect("exact signed advert is valid");
+
+        let mut mutations = Vec::new();
+        let mut wrong_chain = advert.clone();
+        wrong_chain.chain_id = ChainId::from("other-chain");
+        mutations.push(wrong_chain);
+        let mut wrong_height = advert.clone();
+        wrong_height.height += 1;
+        mutations.push(wrong_height);
+        let mut wrong_block = advert.clone();
+        wrong_block.block_hash = HashOf::from_untyped_unchecked(Hash::new(b"other-replica-block"));
+        mutations.push(wrong_block);
+        let mut wrong_wire_len = advert.clone();
+        wrong_wire_len.executed_block_wire_len += 1;
+        mutations.push(wrong_wire_len);
+        let mut wrong_wire_hash = advert.clone();
+        wrong_wire_hash.executed_block_wire_hash = Hash::new(b"other-executed-wire");
+        mutations.push(wrong_wire_hash);
+        let mut wrong_finality = advert.clone();
+        wrong_finality.finality_artifact_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"other-finality"));
+        mutations.push(wrong_finality);
+        let mut wrong_index = advert.clone();
+        wrong_index.keeper_index += 1;
+        mutations.push(wrong_index);
+        let mut wrong_keeper = advert.clone();
+        wrong_keeper.keeper = checked_random_peer_id();
+        mutations.push(wrong_keeper);
+
+        for mutation in mutations {
+            assert!(
+                mutation.verify_keeper_signature().is_err(),
+                "any changed eviction identity must invalidate the keeper signature"
+            );
+        }
+    }
+
+    #[test]
+    fn kura_replica_advert_is_live_auxiliary_not_lane_or_global_v1() {
+        let advert = signed_kura_replica_advert_fixture();
+        let message = BlockMessage::KuraReplicaAdvert(advert.clone());
+        assert!(message.is_live_auxiliary());
+        assert!(!message.is_lane_local());
+        assert!(message.is_authoritative_v2_ingress());
+        assert!(message.requires_blocking_ingress());
+        message
+            .ensure_live_outbound()
+            .expect("authenticated replica advert is an admitted live auxiliary type");
+
+        let mut invalid = advert;
+        invalid.executed_block_wire_len += 1;
+        assert!(
+            BlockMessage::KuraReplicaAdvert(invalid)
+                .ensure_live_outbound()
+                .is_err(),
+            "live outbound admission must reject a forged replica advert"
+        );
     }
 
     #[cfg(feature = "bls")]

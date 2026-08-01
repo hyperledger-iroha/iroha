@@ -114,8 +114,6 @@ def test_bare_cancel_asset_lock_v1_matches_the_exact_canonical_archive() -> None
         == archive
     )
     assert decode_cancel_asset_lock_v1(archive) == value
-    assert decode_cancel_asset_lock_v1(bytearray(archive)) == value
-    assert decode_cancel_asset_lock_v1(memoryview(archive)) == value
 
 
 def test_bare_cancel_asset_lock_v1_rejects_all_shared_negative_fixtures() -> None:
@@ -208,10 +206,12 @@ def test_bare_cancel_asset_lock_v1_rejects_quantity_aliases(
         encode_cancel_asset_lock_v1(_ESCROW_ID, quantity)
 
 
-def test_bare_cancel_asset_lock_v1_decoder_rejects_text_and_frame_substitution() -> None:
+def test_bare_cancel_asset_lock_v1_decoder_rejects_aliases_and_frame_substitution() -> None:
     canonical = _FIXTURES["cancel_asset_lock_v1.to"]
     for alias in (
         canonical.hex(),
+        bytearray(canonical),
+        memoryview(canonical),
         list(canonical),
         {"bytes": canonical},
     ):
@@ -224,22 +224,22 @@ def test_bare_cancel_asset_lock_v1_decoder_rejects_text_and_frame_substitution()
     wrong_version = bytearray(canonical)
     wrong_version[4] = 1
     with pytest.raises(ValueError, match="magic or version"):
-        decode_cancel_asset_lock_v1(wrong_version)
+        decode_cancel_asset_lock_v1(bytes(wrong_version))
 
     wrong_schema = bytearray(canonical)
     wrong_schema[6] ^= 1
     with pytest.raises(ValueError, match="schema"):
-        decode_cancel_asset_lock_v1(wrong_schema)
+        decode_cancel_asset_lock_v1(bytes(wrong_schema))
 
     compressed = bytearray(canonical)
     compressed[22] = 1
     with pytest.raises(ValueError, match="uncompressed"):
-        decode_cancel_asset_lock_v1(compressed)
+        decode_cancel_asset_lock_v1(bytes(compressed))
 
     wrong_flags = bytearray(canonical)
     wrong_flags[39] = 0
     with pytest.raises(ValueError, match="compact-length"):
-        decode_cancel_asset_lock_v1(wrong_flags)
+        decode_cancel_asset_lock_v1(bytes(wrong_flags))
 
     padded = canonical[:40] + b"\x00" + canonical[40:]
     with pytest.raises(ValueError, match="unpadded"):

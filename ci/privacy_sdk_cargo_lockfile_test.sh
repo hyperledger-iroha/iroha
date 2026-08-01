@@ -4523,7 +4523,7 @@ for workflow_path in \
   'crates/sorafs_car/**' \
   'crates/sorafs_chunker/**' \
   'crates/sorafs_orchestrator/**' \
-  ci/verify_privacy_python_wheel.py \
+  ci/verify_privacy_python_wheel.py scripts/check_native_sdk_abi21_artifact.py scripts/tests/check_privacy_csharp_native_contract_test.py \
   python/iroha_python/pyproject.toml \
   python/iroha_python/iroha_python_rs/build.rs \
   'python/iroha_python/iroha_python_rs/src/**' \
@@ -4586,7 +4586,7 @@ workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
 jobs = {
     "privacy_native_bridge_tests": {
         "consumer": (
-            "run: cargo test -p connect_norito_bridge privacy_ --lib "
+            "cargo test -p connect_norito_bridge privacy_ --lib "
             "-- --test-threads=1"
         ),
         "fetch_name": "Prime privacy native Cargo dependencies",

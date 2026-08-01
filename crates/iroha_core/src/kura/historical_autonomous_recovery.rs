@@ -2,20 +2,180 @@ const HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1: &str = "historical_autonomous
 const HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_VERSION_V1: u16 = 1;
 const HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS: usize = 4_096;
-const HISTORICAL_AUTONOMOUS_RECOVERY_MAX_AGGREGATE_BYTES: u64 =
-    V2_PENDING_CONTROL_SIDECAR_BYTES.get() as u64;
+const HISTORICAL_AUTONOMOUS_RECOVERY_HARD_MAX_AGGREGATE_BYTES: u64 =
+    V2_PENDING_CONTROL_SIDECAR_BYTES_MAX as u64;
+
+fn historical_autonomous_recovery_record_name_is_canonical(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .and_then(|name| name.strip_suffix(".norito"))
+        .is_some_and(|stem| {
+            stem.len() == Hash::LENGTH * 2
+                && stem
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        })
+}
+
+/// Enumerate one historical-recovery namespace without ever retaining more
+/// than the caller's remaining global record/byte budget.
+///
+/// The caller supplies the identity binder so startup replay can retain exact
+/// canonical file identities while ordinary readers and disk accounting can
+/// reuse the same filename, file-kind, link-count, per-file, count, and
+/// aggregate-byte gates.
+fn bounded_historical_autonomous_recovery_entries<T>(
+    directory: &Path,
+    record_limit: usize,
+    aggregate_byte_limit: u64,
+    mut bind: impl FnMut(&Path) -> Result<(T, std::fs::Metadata)>,
+) -> Result<(Vec<(PathBuf, T)>, u64)> {
+    if record_limit > HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS
+        || aggregate_byte_limit > HISTORICAL_AUTONOMOUS_RECOVERY_HARD_MAX_AGGREGATE_BYTES
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "historical autonomous recovery scan exceeds its hard bounds",
+            ),
+            directory.to_path_buf(),
+        ));
+    }
+
+    let before = std::fs::symlink_metadata(directory)
+        .map_err(|error| Error::IO(error, directory.to_path_buf()))?;
+    if before.file_type().is_symlink() || !before.file_type().is_dir() {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "historical autonomous recovery namespace is not a direct directory",
+            ),
+            directory.to_path_buf(),
+        ));
+    }
+    let entries =
+        std::fs::read_dir(directory).map_err(|error| Error::IO(error, directory.to_path_buf()))?;
+    let mut bounded = Vec::with_capacity(record_limit.min(64));
+    let mut encoded_bytes = 0_u64;
+    for entry in entries {
+        let entry = entry.map_err(|error| Error::IO(error, directory.to_path_buf()))?;
+        let path = entry.path();
+        if bounded.len() >= record_limit {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "historical autonomous recovery record count exceeds its hard bound",
+                ),
+                path,
+            ));
+        }
+        if path.parent() != Some(directory)
+            || !historical_autonomous_recovery_record_name_is_canonical(&entry.file_name())
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "historical autonomous recovery namespace has a temporary, noncanonical, or unknown entry",
+                ),
+                path,
+            ));
+        }
+        let (bound, metadata) = bind(&path)?;
+        if metadata.file_type().is_symlink()
+            || !metadata.file_type().is_file()
+            || !Kura::sidecar_is_single_link(&metadata)
+            || metadata.len() == 0
+            || metadata.len() > u64::try_from(HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES)?
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "historical autonomous recovery entry is empty, linked, non-regular, or oversized",
+                ),
+                path,
+            ));
+        }
+        encoded_bytes = encoded_bytes
+            .checked_add(metadata.len())
+            .filter(|bytes| *bytes <= aggregate_byte_limit)
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "historical autonomous recovery bytes exceed their hard bound",
+                    ),
+                    directory.to_path_buf(),
+                )
+            })?;
+        let after_bind = std::fs::symlink_metadata(&path)
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        if !Kura::sidecar_file_metadata_unchanged(&metadata, &after_bind) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "historical autonomous recovery entry changed during its bounded scan",
+                ),
+                path,
+            ));
+        }
+        bounded.push((path, bound, metadata));
+    }
+    let after = std::fs::symlink_metadata(directory)
+        .map_err(|error| Error::IO(error, directory.to_path_buf()))?;
+    if after.file_type().is_symlink()
+        || !after.file_type().is_dir()
+        || !Kura::sidecar_directory_metadata_unchanged(&before, &after)
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "historical autonomous recovery namespace changed during its bounded scan",
+            ),
+            directory.to_path_buf(),
+        ));
+    }
+    for (path, _, accounted) in &bounded {
+        let current = std::fs::symlink_metadata(path)
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        if !Kura::sidecar_file_metadata_unchanged(accounted, &current) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "historical autonomous recovery entry changed after bounded accounting",
+                ),
+                path.clone(),
+            ));
+        }
+    }
+    bounded.sort_by(|(left, _, _), (right, _, _)| left.file_name().cmp(&right.file_name()));
+    Ok((
+        bounded
+            .into_iter()
+            .map(|(path, bound, _)| (path, bound))
+            .collect(),
+        encoded_bytes,
+    ))
+}
 
 fn accumulate_historical_autonomous_recovery_bytes(
     current: u64,
     encoded_len: usize,
     exact_duplicate: bool,
+    aggregate_byte_limit: u64,
 ) -> Option<u64> {
     if exact_duplicate {
-        return (current <= HISTORICAL_AUTONOMOUS_RECOVERY_MAX_AGGREGATE_BYTES).then_some(current);
+        return (current <= aggregate_byte_limit).then_some(current);
     }
     current
         .checked_add(u64::try_from(encoded_len).ok()?)
-        .filter(|total| *total <= HISTORICAL_AUTONOMOUS_RECOVERY_MAX_AGGREGATE_BYTES)
+        .filter(|total| *total <= aggregate_byte_limit)
+}
+
+fn historical_autonomous_recovery_read_matches_accounting(
+    accounted: &std::fs::Metadata,
+    read: &StableSidecarRead,
+) -> bool {
+    u64::try_from(read.bytes.len()).ok() == Some(accounted.len())
+        && Kura::sidecar_file_metadata_unchanged(accounted, &read.metadata.file)
 }
 
 /// Immutable, self-contained Kura seal for historical autonomous lane work.
@@ -86,6 +246,23 @@ pub(crate) enum HistoricalAutonomousLaneRecoveryPersistOutcome {
 
 macro_rules! kura_historical_autonomous_recovery_methods {
     () => {
+        fn historical_autonomous_recovery_aggregate_byte_limit(&self) -> u64 {
+            u64::try_from(self.pending_control_sidecar_limits.aggregate_bytes)
+                .expect("validated pending-control sidecar bytes fit u64")
+        }
+
+        #[cfg(test)]
+        pub(crate) fn historical_autonomous_recovery_inventory_scans_for_test(&self) -> usize {
+            self.historical_autonomous_recovery_inventory_scans
+                .load(Ordering::Relaxed)
+        }
+
+        #[cfg(test)]
+        pub(crate) fn reset_historical_autonomous_recovery_inventory_scans_for_test(&self) {
+            self.historical_autonomous_recovery_inventory_scans
+                .store(0, Ordering::Relaxed);
+        }
+
         fn historical_autonomous_recovery_directory_for_entry(
             entry: &LaneConfigEntry,
             store_root: &Path,
@@ -219,6 +396,17 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             path: &Path,
             directory: &Path,
         ) -> Result<Option<HistoricalAutonomousLaneRecoveryRecordV1>> {
+            self.read_historical_autonomous_recovery_record_from_inventory(
+                path, directory, None,
+            )
+        }
+
+        fn read_historical_autonomous_recovery_record_from_inventory(
+            &self,
+            path: &Path,
+            directory: &Path,
+            accounted: Option<&std::fs::Metadata>,
+        ) -> Result<Option<HistoricalAutonomousLaneRecoveryRecordV1>> {
             let Some(snapshot) = self.read_regular_sidecar_snapshot(
                 path,
                 directory,
@@ -226,6 +414,14 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             )? else {
                 return Ok(None);
             };
+            if accounted.is_some_and(|accounted| {
+                !historical_autonomous_recovery_read_matches_accounting(accounted, &snapshot)
+            }) {
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    path.to_path_buf(),
+                    "historical autonomous recovery record changed after bounded accounting",
+                ));
+            }
             let mut cursor = snapshot.bytes.as_slice();
             let record = HistoricalAutonomousLaneRecoveryRecordV1::decode_all(&mut cursor)
                 .map_err(Error::NoritoFrame)?;
@@ -425,6 +621,9 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             &self,
             limit: usize,
         ) -> Result<Vec<HistoricalAutonomousLaneRecoveryRecordV1>> {
+            #[cfg(test)]
+            self.historical_autonomous_recovery_inventory_scans
+                .fetch_add(1, Ordering::Relaxed);
             if limit == 0 || limit > HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS {
                 return Err(Self::invalid_historical_autonomous_recovery(
                     self.store_root.clone(),
@@ -443,6 +642,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             let _sidecar_guard = self.sidecar_lock.lock();
             let mut records = Vec::new();
             let mut aggregate_bytes = 0_u64;
+            let aggregate_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
             for entry in entries {
                 let directory = Self::historical_autonomous_recovery_directory_for_entry(
                     &entry,
@@ -451,62 +651,41 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 if self.canonical_sidecar_directory(&directory)?.is_none() {
                     continue;
                 }
-                let mut directory_entries = std::fs::read_dir(&directory)
-                    .map_err(|error| Error::IO(error, directory.clone()))?
-                    .collect::<std::io::Result<Vec<_>>>()
-                    .map_err(|error| Error::IO(error, directory.clone()))?;
-                directory_entries.sort_by_key(std::fs::DirEntry::file_name);
-                for directory_entry in directory_entries {
-                    let path = directory_entry.path();
-                    let name = directory_entry.file_name().into_string().map_err(|_| {
+                let remaining_records = limit.saturating_sub(records.len());
+                let remaining_bytes = aggregate_byte_limit.checked_sub(aggregate_bytes).ok_or_else(
+                    || {
                         Self::invalid_historical_autonomous_recovery(
-                            path.clone(),
-                            "historical autonomous recovery namespace contains a non-UTF-8 entry",
+                            directory.clone(),
+                            "historical autonomous recovery aggregate byte count overflowed",
                         )
-                    })?;
-                    let canonical_name = name
-                        .strip_suffix(".norito")
-                        .is_some_and(|stem| {
-                            stem.len() == Hash::LENGTH * 2
-                                && stem.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-                        });
-                    if name.starts_with(".kura-sidecar-") || !canonical_name {
-                        return Err(Self::invalid_historical_autonomous_recovery(
-                            path,
-                            "historical autonomous recovery namespace contains a temporary or unknown entry",
-                        ));
-                    }
-                    let metadata = std::fs::symlink_metadata(&path)
-                        .map_err(|error| Error::IO(error, path.clone()))?;
-                    if metadata.file_type().is_symlink()
-                        || !metadata.file_type().is_file()
-                        || !Self::sidecar_is_single_link(&metadata)
-                    {
-                        return Err(Self::invalid_historical_autonomous_recovery(
-                            path,
-                            "historical autonomous recovery namespace contains a linked or non-regular entry",
-                        ));
-                    }
-                    aggregate_bytes = aggregate_bytes.checked_add(metadata.len()).ok_or_else(|| {
+                    },
+                )?;
+                let (directory_entries, directory_bytes) =
+                    bounded_historical_autonomous_recovery_entries(
+                        &directory,
+                        remaining_records,
+                        remaining_bytes,
+                        |path| {
+                            let metadata = std::fs::symlink_metadata(path)
+                                .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+                            Ok((metadata.clone(), metadata))
+                        },
+                    )?;
+                aggregate_bytes = aggregate_bytes
+                    .checked_add(directory_bytes)
+                    .ok_or_else(|| {
                         Self::invalid_historical_autonomous_recovery(
                             directory.clone(),
                             "historical autonomous recovery aggregate byte count overflowed",
                         )
                     })?;
-                    if aggregate_bytes > HISTORICAL_AUTONOMOUS_RECOVERY_MAX_AGGREGATE_BYTES {
-                        return Err(Self::invalid_historical_autonomous_recovery(
-                            directory,
-                            "historical autonomous recovery namespace exceeds its aggregate byte limit",
-                        ));
-                    }
-                    if records.len() >= limit {
-                        return Err(Self::invalid_historical_autonomous_recovery(
-                            path,
-                            "historical autonomous recovery namespace exceeds caller capacity",
-                        ));
-                    }
+                for (path, accounted) in directory_entries {
                     let record = self
-                        .read_historical_autonomous_recovery_record(&path, &directory)?
+                        .read_historical_autonomous_recovery_record_from_inventory(
+                            &path,
+                            &directory,
+                            Some(&accounted),
+                        )?
                         .ok_or_else(|| {
                             Self::invalid_historical_autonomous_recovery(
                                 path.clone(),
@@ -539,21 +718,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             });
             self.validate_historical_autonomous_recovery_inventory_collisions(&records)?;
             Ok(records)
-        }
-
-        /// Resolve the sole immutable recovery owner for one exact FIFO group.
-        /// The bounded inventory rejects any slot, proposal, transaction, or
-        /// recovery-ID collision before this lookup can return a record.
-        pub(crate) fn historical_autonomous_lane_recovery_record_for_group(
-            &self,
-            group: &LaneQueueReservationReconciliationGroupV1,
-        ) -> Result<Option<HistoricalAutonomousLaneRecoveryRecordV1>> {
-            let records = self.historical_autonomous_lane_recovery_records_bounded(
-                HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
-            )?;
-            Ok(records
-                .into_iter()
-                .find(|record| record.reservation_group == *group))
         }
 
         /// Prove that normal autonomous-payload and execution-input writers
@@ -665,10 +829,10 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             Ok(())
         }
 
-        pub(crate) fn preflight_historical_autonomous_lane_recovery_records(
+        fn preflight_historical_autonomous_lane_recovery_records_with_inventory(
             &self,
             incoming: &[HistoricalAutonomousLaneRecoveryRecordV1],
-        ) -> Result<()> {
+        ) -> Result<BTreeSet<Hash>> {
             if incoming.is_empty()
                 || incoming.len() > HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS
             {
@@ -680,13 +844,24 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             let mut combined = self.historical_autonomous_lane_recovery_records_bounded(
                 HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
             )?;
+            let existing_recovery_ids = combined
+                .iter()
+                .map(|record| record.recovery_id)
+                .collect::<BTreeSet<_>>();
+            let mut recovery_positions = combined
+                .iter()
+                .enumerate()
+                .map(|(index, record)| (record.recovery_id, index))
+                .collect::<BTreeMap<_, _>>();
             let mut combined_encoded_bytes = 0_u64;
+            let aggregate_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
             for existing in &combined {
                 let encoded = norito::encode_canonical(existing).map_err(Error::NoritoFrame)?;
                 combined_encoded_bytes = accumulate_historical_autonomous_recovery_bytes(
                     combined_encoded_bytes,
                     encoded.len(),
                     false,
+                    aggregate_byte_limit,
                 )
                 .ok_or_else(|| {
                     Self::invalid_historical_autonomous_recovery(
@@ -717,10 +892,11 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                         )
                     })?;
                 }
-                if let Some(existing) = combined
-                    .iter()
-                    .find(|existing| existing.recovery_id == record.recovery_id)
+                if let Some(existing_index) = recovery_positions
+                    .get(&record.recovery_id)
+                    .copied()
                 {
+                    let existing = &combined[existing_index];
                     if existing != record {
                         return Err(Self::invalid_historical_autonomous_recovery(
                             path.clone(),
@@ -731,6 +907,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                         combined_encoded_bytes,
                         encoded.len(),
                         true,
+                        aggregate_byte_limit,
                     )
                     .ok_or_else(|| {
                         Self::invalid_historical_autonomous_recovery(
@@ -738,12 +915,17 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                             "historical autonomous recovery bytes exceed their aggregate bound",
                         )
                     })?;
-                    self.validate_historical_autonomous_recovery_dependencies(existing, &path)?;
+                    if existing_recovery_ids.contains(&record.recovery_id) {
+                        self.validate_historical_autonomous_recovery_dependencies(
+                            existing, &path,
+                        )?;
+                    }
                 } else {
                     combined_encoded_bytes = accumulate_historical_autonomous_recovery_bytes(
                         combined_encoded_bytes,
                         encoded.len(),
                         false,
+                        aggregate_byte_limit,
                     )
                     .ok_or_else(|| {
                         Self::invalid_historical_autonomous_recovery(
@@ -754,6 +936,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     self.preflight_historical_autonomous_recovery_install_dependencies(
                         record, &path,
                     )?;
+                    recovery_positions.insert(record.recovery_id, combined.len());
                     combined.push(record.clone());
                 }
             }
@@ -763,9 +946,11 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     "historical autonomous recovery batch exceeds namespace capacity",
                 ));
             }
-            self.validate_historical_autonomous_recovery_inventory_collisions(&combined)
+            self.validate_historical_autonomous_recovery_inventory_collisions(&combined)?;
+            Ok(existing_recovery_ids)
         }
 
+        #[cfg(test)]
         pub(crate) fn historical_autonomous_lane_recovery_record_matches(
             &self,
             expected: &HistoricalAutonomousLaneRecoveryRecordV1,
@@ -799,6 +984,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
         /// Match an in-memory planner DTO to its complete durable record. The
         /// record reader still validates the stored ordered PoPs; the DTO does
         /// not get to supply or override that historical authority.
+        #[cfg(test)]
         pub(crate) fn historical_autonomous_lane_recovery_matches(
             &self,
             install: &crate::sumeragi::v2_apply::HistoricalAutonomousReservationInstallV1,
@@ -829,19 +1015,16 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             Ok(true)
         }
 
-        /// Persist carrier-extracted executable bytes through the ordinary
-        /// autonomous lane path, then persist the execution input, and only then
-        /// publish the separate immutable recovery seal.
-        pub(crate) fn persist_historical_autonomous_lane_recovery_record(
+        /// Persist one record after the caller completed the all-item namespace
+        /// preflight. This path performs only direct dependency and immutable
+        /// file checks; it never rescans the complete recovery namespace.
+        fn persist_preflighted_historical_autonomous_lane_recovery_record(
             &self,
             record: &HistoricalAutonomousLaneRecoveryRecordV1,
+            existing_from_preflight: bool,
         ) -> Result<HistoricalAutonomousLaneRecoveryPersistOutcome> {
-            self.ensure_prune_recovery_not_required()?;
-            self.durable_mutation_authorized()?;
-            self.preflight_historical_autonomous_lane_recovery_records(std::slice::from_ref(
-                record,
-            ))?;
-            if self.historical_autonomous_lane_recovery_record_matches(record)? {
+            if existing_from_preflight {
+                self.validate_historical_autonomous_lane_recovery_record_dependencies(record)?;
                 return Ok(HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled);
             }
 
@@ -969,6 +1152,49 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled
             })
         }
+
+        /// Persist one all-or-restart batch with exactly one complete bounded
+        /// inventory/preflight pass. Collision checks use ordered indexes;
+        /// subsequent per-record work uses direct paths and immutable readback.
+        pub(crate) fn persist_historical_autonomous_lane_recovery_records(
+            &self,
+            records: &[HistoricalAutonomousLaneRecoveryRecordV1],
+        ) -> Result<Vec<HistoricalAutonomousLaneRecoveryPersistOutcome>> {
+            let _historical_recovery_guard =
+                self.historical_autonomous_recovery_mutation_lock.lock();
+            self.ensure_prune_recovery_not_required()?;
+            self.durable_mutation_authorized()?;
+            let existing_recovery_ids = self
+                .preflight_historical_autonomous_lane_recovery_records_with_inventory(records)?;
+            let mut outcomes = Vec::new();
+            outcomes.try_reserve_exact(records.len())?;
+            for record in records {
+                outcomes.push(
+                    self.persist_preflighted_historical_autonomous_lane_recovery_record(
+                        record,
+                        existing_recovery_ids.contains(&record.recovery_id),
+                    )?,
+                );
+            }
+            Ok(outcomes)
+        }
+
+        /// Persist carrier-extracted executable bytes through the ordinary
+        /// autonomous lane path, then persist the execution input, and only then
+        /// publish the separate immutable recovery seal.
+        pub(crate) fn persist_historical_autonomous_lane_recovery_record(
+            &self,
+            record: &HistoricalAutonomousLaneRecoveryRecordV1,
+        ) -> Result<HistoricalAutonomousLaneRecoveryPersistOutcome> {
+            self.persist_historical_autonomous_lane_recovery_records(std::slice::from_ref(record))?
+                .pop()
+                .ok_or_else(|| {
+                    Self::invalid_historical_autonomous_recovery(
+                        self.store_root.clone(),
+                        "single historical autonomous recovery persistence produced no outcome",
+                    )
+                })
+        }
     };
 }
 
@@ -976,15 +1202,41 @@ macro_rules! kura_historical_autonomous_recovery_methods {
 mod historical_autonomous_recovery_bound_tests {
     use super::*;
 
+    const TEST_AGGREGATE_BYTE_LIMIT: u64 = V2_PENDING_CONTROL_SIDECAR_BYTES.get() as u64;
+
+    fn canonical_record_name(index: usize) -> String {
+        format!(
+            "{index:0width$x}.norito",
+            width = Hash::LENGTH.saturating_mul(2)
+        )
+    }
+
+    fn scan_metadata(
+        directory: &Path,
+        record_limit: usize,
+        aggregate_byte_limit: u64,
+    ) -> Result<(Vec<(PathBuf, ())>, u64)> {
+        bounded_historical_autonomous_recovery_entries(
+            directory,
+            record_limit,
+            aggregate_byte_limit,
+            |path| {
+                let metadata = std::fs::symlink_metadata(path)
+                    .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+                Ok(((), metadata))
+            },
+        )
+    }
+
     #[test]
     fn aggregate_byte_bound_is_exact_and_duplicate_aware() {
-        let limit = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_AGGREGATE_BYTES;
+        let limit = V2_PENDING_CONTROL_SIDECAR_BYTES_MIN as u64;
         assert_eq!(
-            accumulate_historical_autonomous_recovery_bytes(limit - 1, 1, false),
+            accumulate_historical_autonomous_recovery_bytes(limit - 1, 1, false, limit),
             Some(limit),
         );
         assert_eq!(
-            accumulate_historical_autonomous_recovery_bytes(limit, 1, false),
+            accumulate_historical_autonomous_recovery_bytes(limit, 1, false, limit),
             None,
             "one unique byte beyond the aggregate bound must fail",
         );
@@ -993,9 +1245,350 @@ mod historical_autonomous_recovery_bound_tests {
                 limit,
                 HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES,
                 true,
+                limit,
             ),
             Some(limit),
             "an exact immutable duplicate must not consume aggregate bytes twice",
         );
+    }
+
+    #[test]
+    fn bounded_namespace_honors_lower_and_higher_configured_limits() {
+        let lower = tempfile::tempdir().expect("temporary lower-bound namespace");
+        std::fs::write(lower.path().join(canonical_record_name(0)), [0_u8, 1_u8])
+            .expect("write lower-bound historical recovery record");
+        scan_metadata(lower.path(), 1, 1)
+            .expect_err("the caller's configured lower byte bound must be enforced");
+
+        let higher = tempfile::tempdir().expect("temporary higher-bound namespace");
+        std::fs::write(higher.path().join(canonical_record_name(0)), [0_u8])
+            .expect("write higher-bound historical recovery record");
+        let configured_higher = HISTORICAL_AUTONOMOUS_RECOVERY_HARD_MAX_AGGREGATE_BYTES;
+        assert!(configured_higher > TEST_AGGREGATE_BYTE_LIMIT);
+        let (records, bytes) = scan_metadata(higher.path(), 1, configured_higher)
+            .expect("a valid configured limit above the release default must be accepted");
+        assert_eq!(records.len(), 1);
+        assert_eq!(bytes, 1);
+
+        scan_metadata(
+            higher.path(),
+            1,
+            HISTORICAL_AUTONOMOUS_RECOVERY_HARD_MAX_AGGREGATE_BYTES.saturating_add(1),
+        )
+        .expect_err("a configured byte limit above the hard maximum must fail closed");
+    }
+
+    #[test]
+    fn bounded_namespace_rejects_same_path_mutation_during_accounting() {
+        let temp = tempfile::tempdir().expect("temporary mutation namespace");
+        let path = temp.path().join(canonical_record_name(0));
+        std::fs::write(&path, [0_u8]).expect("write historical recovery record");
+
+        bounded_historical_autonomous_recovery_entries(
+            temp.path(),
+            1,
+            TEST_AGGREGATE_BYTE_LIMIT,
+            |path| {
+                let accounted = std::fs::symlink_metadata(path)
+                    .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+                std::fs::write(path, [0_u8, 1_u8])
+                    .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+                Ok(((), accounted))
+            },
+        )
+        .expect_err("same-path mutation after metadata accounting must fail closed");
+    }
+
+    #[test]
+    fn bounded_namespace_rechecks_every_file_after_enumeration() {
+        let temp = tempfile::tempdir().expect("temporary post-enumeration mutation namespace");
+        for index in 0..2 {
+            std::fs::write(temp.path().join(canonical_record_name(index)), [0_u8])
+                .expect("write historical recovery record");
+        }
+        let mut first_accounted_path: Option<PathBuf> = None;
+
+        bounded_historical_autonomous_recovery_entries(
+            temp.path(),
+            2,
+            TEST_AGGREGATE_BYTE_LIMIT,
+            |path| {
+                let accounted = std::fs::symlink_metadata(path)
+                    .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+                if let Some(first) = &first_accounted_path {
+                    std::fs::write(first, [0_u8, 1_u8])
+                        .map_err(|error| Error::IO(error, first.to_path_buf()))?;
+                } else {
+                    first_accounted_path = Some(path.to_path_buf());
+                }
+                Ok(((), accounted))
+            },
+        )
+        .expect_err(
+            "an earlier entry changed while a later entry was bound must fail final accounting",
+        );
+    }
+
+    #[test]
+    fn decoded_bytes_must_match_the_scanner_accounted_identity_and_length() {
+        let temp = tempfile::tempdir().expect("temporary decode-accounting namespace");
+        let path = temp.path().join(canonical_record_name(0));
+        std::fs::write(&path, [0_u8]).expect("write accounted historical recovery record");
+        let accounted = std::fs::symlink_metadata(&path).expect("accounted record metadata");
+        let directory =
+            std::fs::symlink_metadata(temp.path()).expect("recovery directory metadata");
+        let canonical_path = std::fs::canonicalize(&path).expect("canonical recovery path");
+
+        let length_drift = vec![0_u8, 1_u8];
+        let length_mismatch = StableSidecarRead {
+            bytes_hash: Hash::new(&length_drift),
+            bytes: length_drift,
+            metadata: StableSidecarMetadata {
+                canonical_path: canonical_path.clone(),
+                file: accounted.clone(),
+                directory: directory.clone(),
+            },
+        };
+        assert!(
+            !historical_autonomous_recovery_read_matches_accounting(
+                &accounted,
+                &length_mismatch,
+            ),
+            "bytes with a different scanner-accounted length must never reach decoding",
+        );
+
+        let replacement = temp.path().join("replacement");
+        let replacement_bytes = vec![1_u8];
+        std::fs::write(&replacement, &replacement_bytes).expect("write same-length replacement");
+        std::fs::remove_file(&path).expect("remove scanner-accounted record");
+        std::fs::rename(&replacement, &path).expect("install same-path replacement");
+        let identity_mismatch = StableSidecarRead {
+            bytes_hash: Hash::new(&replacement_bytes),
+            bytes: replacement_bytes,
+            metadata: StableSidecarMetadata {
+                canonical_path,
+                file: std::fs::symlink_metadata(&path).expect("replacement record metadata"),
+                directory,
+            },
+        };
+        assert!(
+            !historical_autonomous_recovery_read_matches_accounting(
+                &accounted,
+                &identity_mismatch,
+            ),
+            "same-path and same-length replacement metadata must never reach decoding",
+        );
+    }
+
+    #[test]
+    fn bounded_namespace_accepts_exact_record_and_aggregate_limits() {
+        let temp = tempfile::tempdir().expect("temporary historical recovery namespace");
+        for index in 0..HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS {
+            std::fs::write(temp.path().join(canonical_record_name(index)), [0_u8])
+                .expect("write bounded historical recovery record");
+        }
+        let (records, bytes) = scan_metadata(
+            temp.path(),
+            HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            TEST_AGGREGATE_BYTE_LIMIT,
+        )
+        .expect("the exact record-count boundary is valid");
+        assert_eq!(records.len(), HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS);
+        assert_eq!(
+            bytes,
+            u64::try_from(HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS)
+                .expect("record count fits u64")
+        );
+
+        let aggregate = tempfile::tempdir().expect("temporary aggregate-bound namespace");
+        let mut remaining = TEST_AGGREGATE_BYTE_LIMIT;
+        let mut index = 0_usize;
+        while remaining != 0 {
+            let len = remaining.min(
+                u64::try_from(HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES)
+                    .expect("record byte limit fits u64"),
+            );
+            let file = std::fs::File::create(aggregate.path().join(canonical_record_name(index)))
+                .expect("create sparse historical recovery record");
+            file.set_len(len)
+                .expect("size sparse historical recovery record");
+            remaining -= len;
+            index = index.saturating_add(1);
+        }
+        let (records, bytes) = scan_metadata(
+            aggregate.path(),
+            HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            TEST_AGGREGATE_BYTE_LIMIT,
+        )
+        .expect("the exact aggregate-byte boundary is valid");
+        assert_eq!(records.len(), index);
+        assert_eq!(bytes, TEST_AGGREGATE_BYTE_LIMIT);
+    }
+
+    #[test]
+    fn bounded_namespace_rejects_count_size_and_aggregate_overflow() {
+        let count = tempfile::tempdir().expect("temporary count-overflow namespace");
+        for index in 0..=HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS {
+            std::fs::write(count.path().join(canonical_record_name(index)), [0_u8])
+                .expect("write count-overflow historical recovery record");
+        }
+        scan_metadata(
+            count.path(),
+            HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            TEST_AGGREGATE_BYTE_LIMIT,
+        )
+        .expect_err("the 4,097th historical recovery record must fail");
+
+        let oversized = tempfile::tempdir().expect("temporary oversized-record namespace");
+        let file = std::fs::File::create(oversized.path().join(canonical_record_name(0)))
+            .expect("create oversized sparse historical recovery record");
+        file.set_len(
+            u64::try_from(HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES)
+                .expect("record byte limit fits u64")
+                .saturating_add(1),
+        )
+        .expect("size oversized sparse historical recovery record");
+        scan_metadata(
+            oversized.path(),
+            HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            TEST_AGGREGATE_BYTE_LIMIT,
+        )
+        .expect_err("one byte beyond the per-record bound must fail");
+
+        let aggregate = tempfile::tempdir().expect("temporary aggregate-overflow namespace");
+        let per_record = u64::try_from(HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES)
+            .expect("record byte limit fits u64");
+        let full_records = TEST_AGGREGATE_BYTE_LIMIT / per_record;
+        for index in 0..usize::try_from(full_records).expect("record count fits usize") {
+            let file = std::fs::File::create(aggregate.path().join(canonical_record_name(index)))
+                .expect("create aggregate sparse historical recovery record");
+            file.set_len(per_record)
+                .expect("size aggregate sparse historical recovery record");
+        }
+        std::fs::write(
+            aggregate.path().join(canonical_record_name(
+                usize::try_from(full_records).expect("count fits"),
+            )),
+            [0_u8],
+        )
+        .expect("write one byte beyond aggregate historical recovery limit");
+        scan_metadata(
+            aggregate.path(),
+            HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            TEST_AGGREGATE_BYTE_LIMIT,
+        )
+        .expect_err("one byte beyond the aggregate bound must fail");
+    }
+
+    #[test]
+    fn bounded_namespace_rejects_noncanonical_and_nested_entries() {
+        for name in [
+            ".kura-sidecar-pending".to_owned(),
+            "ABCDEF.norito".to_owned(),
+            format!("{}.norito", "A".repeat(Hash::LENGTH.saturating_mul(2))),
+        ] {
+            let temp = tempfile::tempdir().expect("temporary malformed-name namespace");
+            std::fs::write(temp.path().join(name), [0_u8])
+                .expect("write malformed historical recovery entry");
+            scan_metadata(
+                temp.path(),
+                HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+                TEST_AGGREGATE_BYTE_LIMIT,
+            )
+            .expect_err("a temporary, short, or uppercase filename must fail");
+        }
+
+        let nested = tempfile::tempdir().expect("temporary nested-entry namespace");
+        std::fs::create_dir(nested.path().join(canonical_record_name(0)))
+            .expect("create nested historical recovery entry");
+        scan_metadata(
+            nested.path(),
+            HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            TEST_AGGREGATE_BYTE_LIMIT,
+        )
+        .expect_err("a nested directory must fail");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_namespace_rejects_symlinks_and_hardlinks() {
+        use std::os::unix::fs::symlink;
+
+        let symlinked = tempfile::tempdir().expect("temporary symlink namespace");
+        let outside = tempfile::NamedTempFile::new().expect("symlink target");
+        symlink(
+            outside.path(),
+            symlinked.path().join(canonical_record_name(0)),
+        )
+        .expect("create historical recovery symlink");
+        scan_metadata(
+            symlinked.path(),
+            HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            TEST_AGGREGATE_BYTE_LIMIT,
+        )
+        .expect_err("a record symlink must fail");
+
+        let linked = tempfile::tempdir().expect("temporary hardlink namespace");
+        let first = linked.path().join(canonical_record_name(0));
+        let second = linked.path().join(canonical_record_name(1));
+        std::fs::write(&first, [0_u8]).expect("write hardlink source");
+        std::fs::hard_link(&first, &second).expect("create historical recovery hardlink");
+        scan_metadata(
+            linked.path(),
+            HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            TEST_AGGREGATE_BYTE_LIMIT,
+        )
+        .expect_err("a hardlinked historical recovery record must fail");
+
+        let namespace_parent = tempfile::tempdir().expect("temporary namespace parent");
+        let real_namespace = tempfile::tempdir().expect("real historical recovery namespace");
+        symlink(
+            real_namespace.path(),
+            namespace_parent
+                .path()
+                .join(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1),
+        )
+        .expect("create historical recovery namespace symlink");
+        scan_metadata(
+            &namespace_parent
+                .path()
+                .join(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1),
+            HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            TEST_AGGREGATE_BYTE_LIMIT,
+        )
+        .expect_err("a namespace symlink must fail");
+    }
+
+    #[test]
+    fn block_store_accounting_counts_recognized_nested_records_once() {
+        let temp = tempfile::tempdir().expect("temporary block store");
+        let lane_artifacts = temp.path().join(LANE_ARTIFACTS_DIR_NAME);
+        std::fs::create_dir(&lane_artifacts).expect("create lane artifacts");
+        let before = Kura::block_store_bytes_with_historical_limit(
+            temp.path(),
+            TEST_AGGREGATE_BYTE_LIMIT,
+        )
+        .expect("measure empty block store");
+
+        let historical = lane_artifacts.join(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1);
+        std::fs::create_dir(&historical).expect("create historical recovery namespace");
+        let record = historical.join(canonical_record_name(0));
+        let record_bytes = b"bounded historical recovery accounting";
+        std::fs::write(&record, record_bytes).expect("write historical recovery record");
+        let after = Kura::block_store_bytes_with_historical_limit(
+            temp.path(),
+            TEST_AGGREGATE_BYTE_LIMIT,
+        )
+        .expect("measure nested recovery record");
+        assert_eq!(
+            after.checked_sub(before),
+            Some(u64::try_from(record_bytes.len()).expect("record length fits u64")),
+            "the recognized nested record must be counted exactly once",
+        );
+
+        std::fs::create_dir(lane_artifacts.join("unexpected_nested_namespace"))
+            .expect("create unexpected nested namespace");
+        Kura::block_store_bytes_with_historical_limit(temp.path(), TEST_AGGREGATE_BYTE_LIMIT)
+            .expect_err("an unrecognized nested lane-artifact namespace must fail closed");
     }
 }

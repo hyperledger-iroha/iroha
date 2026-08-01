@@ -47,26 +47,12 @@ pub(crate) const ZK_X509_MAX_CRL_BYTES_V1: usize = 4_096;
 pub(crate) const ZK_X509_MAX_CRL_ENTRIES_V1: usize = 64;
 /// Maximum canonical unsigned certificate-serial bytes.
 pub(crate) const ZK_X509_MAX_SERIAL_BYTES_V1: usize = 20;
-/// Exact depth of the governed CA membership tree.
-///
-/// The first-release registry admits at most 4,096 trust-anchor SPKIs, so the
-/// sole canonical tree is the complete depth-12 tree used by the codec,
-/// Merkle relation, SHA-call schedule, accumulator AIR, and X5C1 proof.  There
-/// is no parallel 256-level profile or legacy decoder.
-pub(crate) const ZK_X509_CA_TREE_DEPTH_V1: usize = 12;
 /// Maximum accepted lag between trusted block time and CRL `thisUpdate`.
 pub(crate) const ZK_X509_MAX_CRL_AGE_SECONDS_V1: u64 = 300;
-/// Maximum accepted future skew for any witness time.
-///
-/// Consensus supplies one trusted block timestamp, so future tolerance is
-/// intentionally zero rather than dependent on a node's wall clock.
-pub(crate) const ZK_X509_MAX_FUTURE_SKEW_SECONDS_V1: u64 = 0;
 /// Fixed private salt width for one subject-attribute commitment.
 pub(crate) const ZK_X509_ATTRIBUTE_SALT_BYTES_V1: usize = 32;
 /// Maximum exact DER content bytes in one committed subject attribute.
 pub(crate) const ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1: usize = 256;
-/// Fixed raw P-256 affine public-key width, including SEC1 prefix.
-pub(crate) const ZK_X509_COMPRESSED_P256_BYTES_V1: usize = 33;
 /// Fixed uncompressed P-256 affine public-key width, including SEC1 prefix.
 pub(crate) const ZK_X509_UNCOMPRESSED_P256_BYTES_V1: usize = 65;
 
@@ -97,8 +83,6 @@ pub(crate) const ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1: &[u8] = &[
 
 /// Domain for the canonical SHA-256 field-framing function.
 pub(crate) const ZK_X509_HASH_FRAME_DOMAIN_V1: &[u8] = b"iroha.zk-x509.sha256.frame.v1";
-/// Domain for CA sparse-tree member keys.
-pub(crate) const ZK_X509_CA_KEY_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.key.v1";
 /// Domain for occupied CA leaves.
 pub(crate) const ZK_X509_CA_LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.leaf.v1";
 /// Domain for empty CA leaves.
@@ -142,45 +126,6 @@ pub(crate) const ZK_X509_CRL_REVISION_SCHEMA_V1: &[u8] = b"implicit_version:u16-
 /// CRLs, distribution-point partitions, and incomplete shard claims are
 /// rejected rather than interpreted.
 pub(crate) const ZK_X509_CRL_SCOPE_PROFILE_V1: &[u8] = b"leaf-only:one-issuer-per-certificate-policy:complete-base-crl:no-delta:no-indirect:no-partition:no-distribution-point";
-
-/// Exact extension roles admitted on every certificate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ZkX509CertificateExtensionV1 {
-    /// RFC 5280 authority key identifier, non-critical.
-    AuthorityKeyIdentifier,
-    /// RFC 5280 subject key identifier, non-critical.
-    SubjectKeyIdentifier,
-    /// RFC 5280 basic constraints, critical.
-    BasicConstraints,
-    /// RFC 5280 key usage, critical.
-    KeyUsage,
-    /// RFC 5280 extended key usage, critical and leaf-only.
-    ExtendedKeyUsage,
-}
-
-/// Complete certificate extension allow-list in canonical engine role order.
-pub(crate) const ZK_X509_ALLOWED_CERTIFICATE_EXTENSIONS_V1: [ZkX509CertificateExtensionV1; 5] = [
-    ZkX509CertificateExtensionV1::AuthorityKeyIdentifier,
-    ZkX509CertificateExtensionV1::SubjectKeyIdentifier,
-    ZkX509CertificateExtensionV1::KeyUsage,
-    ZkX509CertificateExtensionV1::BasicConstraints,
-    ZkX509CertificateExtensionV1::ExtendedKeyUsage,
-];
-
-/// Exact extension roles admitted on the complete base CRL.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ZkX509CrlExtensionV1 {
-    /// RFC 5280 authority key identifier, non-critical.
-    AuthorityKeyIdentifier,
-    /// RFC 5280 monotonically increasing CRLNumber, non-critical.
-    CrlNumber,
-}
-
-/// Complete CRL extension allow-list in canonical engine role order.
-pub(crate) const ZK_X509_ALLOWED_CRL_EXTENSIONS_V1: [ZkX509CrlExtensionV1; 2] = [
-    ZkX509CrlExtensionV1::AuthorityKeyIdentifier,
-    ZkX509CrlExtensionV1::CrlNumber,
-];
 
 /// Canonical rules for the admitted complete base CRL.
 ///

@@ -42,9 +42,6 @@ pub(crate) const MAX_FIELD_REJECTION_ATTEMPTS_V1: u64 = 16;
 pub(crate) const GOLDILOCKS_FP4_DEGREE_V1: usize = 4;
 /// Canonical encoded size of one quartic-extension value.
 pub(crate) const GOLDILOCKS_FP4_WIRE_BYTES_V1: usize = GOLDILOCKS_FP4_DEGREE_V1 * 8;
-/// Profile binding for the extension polynomial and coefficient encoding.
-pub(crate) const GOLDILOCKS_FP4_PARAMETER_LABEL_V1: &[u8] =
-    b"goldilocks-fp4:x4-minus-7:coefficients-c0-through-c3:u64be:v1";
 const GOLDILOCKS_FP4_NONRESIDUE_V1: GoldilocksFieldV1 = GoldilocksFieldV1(GOLDILOCKS_GENERATOR_V1);
 
 /// Checked zero-knowledge masking geometry for the canonical DEEP-ALI flow.
@@ -986,7 +983,6 @@ pub(crate) fn masked_trace_lde_column_v1<R: TryRngCore>(
 #[derive(Clone, Debug)]
 pub(crate) struct Sha256MerkleTreeV1 {
     levels: Vec<Vec<[u8; 32]>>,
-    node_domain: &'static [u8],
 }
 
 impl Sha256MerkleTreeV1 {
@@ -1009,10 +1005,7 @@ impl Sha256MerkleTreeV1 {
                 .collect();
             levels.push(next);
         }
-        Ok(Self {
-            levels,
-            node_domain,
-        })
+        Ok(Self { levels })
     }
 
     /// Root digest.
@@ -1033,11 +1026,6 @@ impl Sha256MerkleTreeV1 {
             index >>= 1;
         }
         Ok(path)
-    }
-
-    /// Domain used for internal nodes.
-    pub(crate) const fn node_domain(&self) -> &'static [u8] {
-        self.node_domain
     }
 }
 

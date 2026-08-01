@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.client;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.hyperledger.iroha.android.client.TransactionCompatibilityMockResponses.compatibleCapabilities;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -40,6 +41,7 @@ public final class OkHttpClientIntegrationTests {
   @Test
   public void okhttpExecutorSupportsRestAndRpcClients() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
+      server.enqueue(compatibleCapabilities());
       server.enqueue(
           new MockResponse()
               .setResponseCode(202)
@@ -69,6 +71,9 @@ public final class OkHttpClientIntegrationTests {
       final ClientResponse submitResponse = transport.submitTransaction(transaction).get(2, TimeUnit.SECONDS);
       assertEquals(202, submitResponse.statusCode());
       assertEquals(SignedTransactionHasher.hashHex(transaction), submitResponse.hashHex().orElse(null));
+      final RecordedRequest compatibility = server.takeRequest();
+      assertEquals("/v1/node/capabilities", compatibility.getPath());
+      assertEquals("GET", compatibility.getMethod());
       final RecordedRequest submit = server.takeRequest();
       assertEquals("/v1/pipeline/transactions", submit.getPath());
       assertEquals("POST", submit.getMethod());
@@ -94,10 +99,10 @@ public final class OkHttpClientIntegrationTests {
       assertEquals("application/x-norito", rpcRequest.getHeader("Content-Type"));
       assertArrayEquals(payload, rpcRequest.getBody().readByteArray());
 
-      assertEquals(2, telemetry.requests.size());
-      assertEquals(2, telemetry.responses.size());
-      assertEquals(1, observer.requestCount);
-      assertEquals(1, observer.responseCount);
+      assertEquals(3, telemetry.requests.size());
+      assertEquals(3, telemetry.responses.size());
+      assertEquals(2, observer.requestCount);
+      assertEquals(2, observer.responseCount);
     }
   }
 

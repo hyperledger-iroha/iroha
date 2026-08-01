@@ -5,9 +5,22 @@ use std::sync::Arc;
 use irohad::{
     BuildLine, IrohaRuntimeDeps, IrohaRuntimeProviderBindingsV1,
     IrohaRuntimeProviderRegistryErrorV1, IrohaRuntimeProviderRegistryV1, MainError, ReportResult,
+    RuntimeProviderBrokerBackendRegistryV1, RuntimeProviderBrokerBackendsV1,
+    RuntimeProviderBrokerDeploymentV1,
 };
 
 struct DeploymentRegistry;
+
+struct DeploymentBrokerBackendRegistry;
+
+impl RuntimeProviderBrokerBackendRegistryV1 for DeploymentBrokerBackendRegistry {
+    fn resolve(
+        &self,
+        _bindings: &IrohaRuntimeProviderBindingsV1,
+    ) -> Result<RuntimeProviderBrokerBackendsV1, IrohaRuntimeProviderRegistryErrorV1> {
+        Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
+    }
+}
 
 impl IrohaRuntimeProviderRegistryV1 for DeploymentRegistry {
     fn resolve(
@@ -102,6 +115,14 @@ fn external_crate_can_implement_registry_and_name_standard_launcher() {
 
     assert_eq!(Arc::strong_count(&registry), 1);
     let _ = launcher;
+}
+
+#[test]
+fn external_crate_can_implement_and_name_broker_backend_launcher() {
+    let registry: &dyn RuntimeProviderBrokerBackendRegistryV1 = &DeploymentBrokerBackendRegistry;
+    let _ = registry;
+    let _ = RuntimeProviderBrokerDeploymentV1::try_new;
+    let _ = RuntimeProviderBrokerDeploymentV1::serve;
 }
 
 #[test]

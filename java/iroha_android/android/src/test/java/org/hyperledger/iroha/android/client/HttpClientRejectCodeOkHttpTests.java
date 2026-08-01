@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.client;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.hyperledger.iroha.android.client.TransactionCompatibilityMockResponses.compatibleCapabilities;
 
 import java.net.URI;
 import java.time.Duration;
@@ -21,6 +22,7 @@ public final class HttpClientRejectCodeOkHttpTests {
   @Test
   public void okHttpTransportSurfacesRejectHeader() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
+      server.enqueue(compatibleCapabilities());
       server.enqueue(
           new MockResponse()
               .setResponseCode(400)
@@ -45,6 +47,9 @@ public final class HttpClientRejectCodeOkHttpTests {
       assertEquals(400, response.statusCode());
       assertEquals("PRTRY:TX_SIGNATURE_MISSING", response.rejectCode().orElse(null));
 
+      final RecordedRequest compatibility = server.takeRequest(1, TimeUnit.SECONDS);
+      assertNotNull("mock server must observe compatibility probe", compatibility);
+      assertEquals("/v1/node/capabilities", compatibility.getPath());
       final RecordedRequest recorded = server.takeRequest(1, TimeUnit.SECONDS);
       assertNotNull("mock server must observe submission", recorded);
       assertEquals("/v1/pipeline/transactions", recorded.getPath());

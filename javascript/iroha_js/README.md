@@ -181,6 +181,15 @@ the canonical Norito `PrivacyCapabilitySnapshotV1` archive. The generic
 request/build/verify dispatcher and its free-form algorithm aliases do not
 exist; proving is exposed only by protocol-specific typed APIs.
 
+Private Kaigi entrypoint builders require a caller-supplied `feeSpend` produced
+by a production confidential wallet or prover. The JavaScript SDK does not
+synthesize a fee spend from an action hash, amount, and verifier key because
+those values do not include the spend key, input-note witnesses, Merkle path,
+or output-note witnesses required for a valid confidential transfer. The
+typed `buildConfidentialTransferProofV2()` API remains available when the
+caller supplies that complete witness material; it is not an automatic Private
+Kaigi fee-spend adapter.
+
 `PRIVACY_PROTOCOL_IDS_V1` is the closed registry of exactly twelve identities,
 in wire order: `zk-ace-pq-authorization-v0`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
@@ -4231,7 +4240,9 @@ const diagnostic = validateAppealFinanceCancelAssetLock(archive);
 ```
 
 This codec accepts exactly the two snake-case string fields and exact archive
-bytes. Raw hex/base64, byte-array field aliases, nested identifiers, padding,
+bytes. The encoder returns an ordinary, owned, full-span `Uint8Array`; the bare
+decoder rejects `Buffer`, `ArrayBuffer`, shared, subclass, and partial-view
+aliases. Raw hex/base64, byte-array field aliases, nested identifiers, padding,
 substituted schemas or flags, and trailing bytes are rejected. The validation
 outcome is diagnostic and does not itself authorize settlement.
 

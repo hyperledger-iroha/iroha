@@ -20,152 +20,32 @@ import pytest
 
 from pytests.scripts.sumeragi_v2_release_receipt_components import (
     proof_ledger_checker_components,
+    release_receipt_writer_components,
     terminal_output_path,
+)
+from pytests.scripts.sumeragi_v2_release_receipt_test_support import (
+    CARGO_VERSION_OUTPUT,
+    CHAOS_FIELDS,
+    CHAOS_MARKER,
+    FINAL_MARKER,
+    PREBUILT_HOST_TRIPLE,
+    RUSTC_VERSION_OUTPUT,
+    SCALING_CONFIGURATION_DATA,
+    SCALING_IROHAD_SHA256,
+    SCALING_IROHA_CLI_SHA256,
+    SCALING_TRIAL_HARNESS_DATA,
+    SCENARIOS,
+    SUMMARY_FIELDS,
+    artifact_metadata,
+    canonical_json,
+    command_record,
+    protected_metadata,
+    sha256,
+    write_tsv,
 )
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py"
-FINAL_MARKER = (
-    "Sumeragi v2 formal gate passed: source-bound TLAPS, all registered "
-    "adversarial scheduler/readiness/indexed-height/item-carrier/reply-writer/"
-    "recovery/ownership mutations, bounded TLC, trace replay, and production Verus"
-)
-CHAOS_MARKER = (
-    "SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 "
-    "npos_heights=50000 total_heights=100000 supplied_commit_qcs=100000 "
-    "supplied_tcs=75000 finalized_validators=400000 wal_append_restarts=314 "
-    "fetch_restarts=312 store_restarts=312 validation_restarts=312 "
-    "application_restarts=312 stale_generation_rejections=1562 "
-    "deferred_fetch_completions=400936 deferred_store_completions=400624 "
-    "deferred_validation_completions=400312 "
-    "deferred_application_completions=400000 duplicate_commit_qcs=3124 "
-    "reordered_commit_batches=75000 reordered_tc_batches=75000 "
-    "insufficient_dual_qcs=1030 count_only_qcs=515 power_only_qcs=515 "
-    "restart_interval=64 duplicate_interval=32 under_quorum_interval=97 "
-    "certificate_source=external_fixture"
-)
-CHAOS_FIELDS = {
-    "schema_version": "2",
-    "permissioned_heights": "50000",
-    "npos_heights": "50000",
-    "completed_heights": "100000",
-    "supplied_commit_qcs": "100000",
-    "supplied_tcs": "75000",
-    "finalized_validators": "400000",
-    "wal_append_restarts": "314",
-    "fetch_restarts": "312",
-    "store_restarts": "312",
-    "validation_restarts": "312",
-    "application_restarts": "312",
-    "stale_generation_rejections": "1562",
-    "deferred_fetch_completions": "400936",
-    "deferred_store_completions": "400624",
-    "deferred_validation_completions": "400312",
-    "deferred_application_completions": "400000",
-    "duplicate_commit_qcs": "3124",
-    "reordered_commit_batches": "75000",
-    "reordered_tc_batches": "75000",
-    "insufficient_dual_qcs": "1030",
-    "count_only_qcs": "515",
-    "power_only_qcs": "515",
-    "restart_interval": "64",
-    "duplicate_interval": "32",
-    "under_quorum_interval": "97",
-    "certificate_source": "external_fixture",
-}
-SCENARIOS = (
-    "authoritative_v2_genesis_commits_on_every_validator",
-    "authoritative_v2_finalizes_through_validator_restart",
-    "taira_npos_leader_timeout_commits_within_rotation_bound",
-    "real_network_same_subject_locked_reproposal_converges_after_ordered_quorum_release",
-    "real_network_distinct_subject_prepare_qcs_converge_after_causal_release",
-)
-SUMMARY_FIELDS = (
-    "profile",
-    "source_manifest_sha256",
-    "scenario",
-    "seed",
-    "result",
-    "cargo_status",
-    "tee_status",
-    "run_log_sha256",
-    "output",
-    "localnet",
-    "command",
-)
-SCALING_CONFIGURATION_DATA = b"[nexus]\nenabled = true\n"
-SCALING_TRIAL_HARNESS_DATA = b"#!/usr/bin/env bash\nexit 0\n"
-SCALING_IROHAD_SHA256 = "c" * 64
-SCALING_IROHA_CLI_SHA256 = "d" * 64
-CARGO_VERSION_OUTPUT = b"cargo 1.93.1 (083ac5135 2025-12-15)\n"
-RUSTC_VERSION_OUTPUT = (
-    b"rustc 1.93.1 (01f6ddf75 2026-02-11)\n"
-    b"binary: rustc\n"
-    b"commit-hash: 01f6ddf7501f6ddf7501f6ddf7501f6ddf7501f6\n"
-    b"commit-date: 2026-02-11\n"
-    b"host: x86_64-unknown-linux-gnu\n"
-    b"release: 1.93.1\n"
-    b"LLVM version: 21.1.0\n"
-)
-PREBUILT_HOST_TRIPLE = "x86_64-unknown-linux-gnu"
-
-
-def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def canonical_json(value: object) -> bytes:
-    return (
-        json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
-    ).encode("utf-8")
-
-
-def artifact_metadata(path: Path, mode: int) -> dict[str, object]:
-    return {
-        "archive_name": path.name,
-        "mode": f"{mode:04o}",
-        "sha256": sha256(path),
-        "size_bytes": path.stat().st_size,
-    }
-
-
-def protected_metadata(
-    path: Path, mode: int, protected_sha256: str
-) -> dict[str, object]:
-    return {
-        "archive_name": path.name,
-        "mode": f"{mode:04o}",
-        "observed_sha256": sha256(path),
-        "protected_sha256": protected_sha256,
-        "size_bytes": path.stat().st_size,
-    }
-
-
-def command_record(
-    argv: list[str],
-    replay_argv: list[str],
-    status: int,
-    stdout: bytes,
-    stderr: bytes,
-) -> dict[str, object]:
-    return {
-        "argv": argv,
-        "replay_argv": replay_argv,
-        "exit_status": status,
-        "stdout_base64": base64.b64encode(stdout).decode("ascii"),
-        "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
-        "stdout_size_bytes": len(stdout),
-        "stderr_base64": base64.b64encode(stderr).decode("ascii"),
-        "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
-        "stderr_size_bytes": len(stderr),
-    }
-
-
-def write_tsv(path: Path, fields: dict[str, str]) -> None:
-    path.write_text(
-        "".join(f"{name}\t{value}\n" for name, value in fields.items()),
-        encoding="utf-8",
-    )
 
 
 def fixture_writer(tmp_path: Path) -> Path:
@@ -177,6 +57,10 @@ def fixture_writer(tmp_path: Path) -> Path:
     nexus.mkdir()
     writer = scripts / SCRIPT.name
     shutil.copy2(SCRIPT, writer)
+    for relative in release_receipt_writer_components(ROOT_DIR):
+        destination = project / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
     shutil.copy2(
         ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh",
         scripts / "run_sumeragi_v2_release_gates.sh",
@@ -231,6 +115,16 @@ if "--release" in args:
             "canonical": True,
         }:
             raise SystemExit(83)
+    if "--production-trace-extraction-evidence" in args:
+        trace_path = pathlib.Path(
+            args[args.index("--production-trace-extraction-evidence") + 1]
+        )
+        if json.loads(trace_path.read_text(encoding="utf-8")) != {
+            "backend_verification": True,
+            "canonical": True,
+            "theorem": "sumeragi-v2-production-trace-extraction",
+        }:
+            raise SystemExit(85)
 raise SystemExit(0)
 """,
         encoding="utf-8",
@@ -1956,7 +1850,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 "jar_sha256\t"
                 "1ac65e9c16595c19241519b209c8055d1aa79bf718f23df7cde5cf9b3dd88f2a",
                 f"source_manifest_sha256\t{sealed_manifest}",
-                "result_count\t5",
+                "result_count\t6",
                 "result\tautoscale-lifecycle\tSumeragiV2AutoscaleLifecycle\t"
                 "multilane_autoscale_lifecycle_fixed.cfg\t8\tNoError\t"
                 f"{'1' * 64}\t{'2' * 64}\t{'3' * 64}",
@@ -1972,10 +1866,14 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 "SumeragiV2QueuePlanAdmissionRegistry\t"
                 "multilane_queue_plan_admission_registry_fixed.cfg\t8\tNoError\t"
                 f"{'a' * 64}\t{'b' * 64}\t{'c' * 64}",
+                "result\tkura-replica-retention\t"
+                "SumeragiV2KuraReplicaRetention\t"
+                "kura_replica_retention_fixed.cfg\t8\tNoError\t"
+                f"{'d' * 64}\t{'e' * 64}\t{'f' * 64}",
                 "result\tinflight-first-release-layout\t"
                 "SumeragiV2InFlightFirstRelease\t"
                 "inflight_first_release_fixed.cfg\t18\tNoError\t"
-                f"{'d' * 64}\t{'e' * 64}\t{'f' * 64}",
+                f"{'0' * 64}\t{'1' * 64}\t{'2' * 64}",
             )
         )
         + "\n",
@@ -1984,6 +1882,16 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     formal_cross_tool_evidence = formal_dir / "cross_tool_evidence.json"
     formal_cross_tool_evidence.write_text(
         '{"backend_verification":true,"canonical":true}\n', encoding="utf-8"
+    )
+    # Aggregate-success fixtures exercise the checker-authenticated production
+    # trace-extraction theorem interface required by the release receipt.
+    formal_production_trace_extraction_evidence = (
+        formal_dir / "production_trace_extraction_evidence.json"
+    )
+    formal_production_trace_extraction_evidence.write_text(
+        '{"backend_verification":true,"canonical":true,'
+        '"theorem":"sumeragi-v2-production-trace-extraction"}\n',
+        encoding="utf-8",
     )
     formal_harness_lock = formal_dir / "harness-Cargo.lock"
     shutil.copy2(
@@ -2045,7 +1953,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     write_tsv(
         formal_completion,
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "head_commit": head,
             "head_tree": tree,
             "source_manifest_sha256": sealed_manifest,
@@ -2059,6 +1967,9 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 formal_multilane_apalache_evidence
             ),
             "cross_tool_evidence_sha256": sha256(formal_cross_tool_evidence),
+            "production_trace_extraction_evidence_sha256": sha256(
+                formal_production_trace_extraction_evidence
+            ),
             "harness_cargo_lock_sha256": sha256(formal_harness_lock),
             "formal_toolchain_sha256": sha256(formal_toolchain),
             "tlaps_resource_jsonl_sha256": sha256(formal_tlaps_resource_jsonl),
@@ -2338,6 +2249,9 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "formal_verus_log": formal_verus_log,
         "formal_multilane_apalache_evidence": formal_multilane_apalache_evidence,
         "formal_cross_tool_evidence": formal_cross_tool_evidence,
+        "formal_production_trace_extraction_evidence": (
+            formal_production_trace_extraction_evidence
+        ),
         "formal_harness_lock": formal_harness_lock,
         "formal_toolchain": formal_toolchain,
         "formal_tlaps_resource_jsonl": formal_tlaps_resource_jsonl,
@@ -2823,6 +2737,9 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
             "formal_multilane_apalache_evidence"
         ),
         "formal_cross_tool_evidence": "formal_cross_tool_evidence",
+        "formal_production_trace_extraction_evidence": (
+            "formal_production_trace_extraction_evidence"
+        ),
         "formal_harness_lock": "formal_harness_lock",
         "formal_toolchain": "formal_toolchain",
         "formal_tlaps_resource_jsonl": "formal_tlaps_resource_jsonl",
@@ -3083,6 +3000,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
                 "formal_verus_log",
                 "formal_multilane_apalache_evidence",
                 "formal_cross_tool_evidence",
+                "formal_production_trace_extraction_evidence",
                 "formal_harness_lock",
                 "formal_toolchain",
                 "formal_tlaps_resource_jsonl",
@@ -3961,7 +3879,7 @@ def test_receipt_rejects_rehashed_noncanonical_apalache_evidence(
     assert isinstance(completion, Path)
     canonical = apalache.read_text(encoding="utf-8")
     apalache.write_text(
-        canonical.replace("result_count\t5", "result_count\t4", 1),
+        canonical.replace("result_count\t6", "result_count\t5", 1),
         encoding="utf-8",
     )
     fields = dict(
@@ -3991,6 +3909,62 @@ def test_receipt_rejects_rehashed_noncanonical_apalache_evidence(
 
     assert result.returncode == 1
     assert "is not exact source-bound NoError evidence" in result.stderr
+
+
+def test_receipt_rejects_legacy_formal_completion_without_trace_extraction(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    completion = evidence["formal_completion"]
+    assert isinstance(completion, Path)
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields["schema_version"] = "1"
+    fields.pop("production_trace_extraction_evidence_sha256")
+    write_tsv(completion, fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert (
+        "formal completion is release-ineligible without authenticated "
+        "production trace-extraction evidence"
+    ) in result.stderr
+
+
+def test_receipt_rejects_trace_extraction_not_authenticated_by_checker(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    trace_evidence = evidence["formal_production_trace_extraction_evidence"]
+    completion = evidence["formal_completion"]
+    assert isinstance(trace_evidence, Path)
+    assert isinstance(completion, Path)
+    trace_evidence.write_text(
+        '{"backend_verification":false,"canonical":true,'
+        '"theorem":"sumeragi-v2-production-trace-extraction"}\n',
+        encoding="utf-8",
+    )
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields["production_trace_extraction_evidence_sha256"] = sha256(
+        trace_evidence
+    )
+    write_tsv(completion, fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert (
+        "archived formal evidence does not authenticate production "
+        "trace extraction"
+    ) in result.stderr
 
 
 def test_receipt_links_required_cross_tool_evidence(tmp_path: Path) -> None:
@@ -4857,6 +4831,10 @@ def test_receipt_rejects_cross_source_completion(
             "formal_multilane_apalache_evidence",
             "formal multilane Apalache evidence digest mismatch",
         ),
+        (
+            "formal_production_trace_extraction_evidence",
+            "formal production trace-extraction evidence digest mismatch",
+        ),
         ("formal_toolchain", "formal toolchain digest mismatch"),
         ("formal_tlaps_resource_jsonl", "TLAPS resource samples digest mismatch"),
         ("formal_tlaps_resource_summary", "TLAPS resource summary digest mismatch"),
@@ -5341,7 +5319,10 @@ def test_hand_invoked_writer_rejects_fake_machine_completion_artifacts(
     result = run_writer(evidence, output, SCRIPT)
 
     assert result.returncode == 1
-    assert "archived formal Verus evidence failed validation" in result.stderr
+    assert (
+        "archived formal ledger has an invalid cross-tool evidence requirement"
+        in result.stderr
+    )
     assert not output.exists()
 
 

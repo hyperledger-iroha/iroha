@@ -13,9 +13,6 @@ use super::p256_group_air::{
 };
 use super::p256_window_air::P256WindowScalarV1;
 
-/// Stable descriptor for the complete ECDSA equation layer.
-pub(crate) const ZK_X509_P256_ECDSA_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-ecdsa-air-v1-incompatible:strict-der-r-s-bound-externally:canonical-n-scalar-inputs:r-and-s-nonzero-by-inverse:digest-reduce-one-subtraction:w=s-inverse:u1=z-times-w:u2=r-times-w:complete-straus-u1G-plus-u2Q:public-key-affine-oncurve:result-nonidentity:x-affine-reduce-one-subtraction:reduced-x-equals-r:wallet-low-s:certificate-and-crl-high-or-low-s:fixed-topology:no-native-verifier-recheck:integration=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
-
 /// Verifier-fixed signature role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256EcdsaRoleV1 {

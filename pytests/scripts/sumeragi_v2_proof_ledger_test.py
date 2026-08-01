@@ -78,7 +78,7 @@ def checker_source_paths() -> tuple[Path, ...]:
 
     module = load_checker()
     filenames = tuple(module._CHECKER_COMPONENT_FILES)
-    assert len(filenames) == len(set(filenames)) == 11
+    assert len(filenames) == len(set(filenames)) == 13
     return (SCRIPT, *(SCRIPT.with_name(filename) for filename in filenames))
 
 
@@ -134,6 +134,10 @@ def copy_serve_lifecycle_production_fixture(tmp_path: Path, module) -> Path:
     for relative in (
         Path("crates/iroha_core/src/sumeragi/mod.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+        Path(
+            "crates/iroha_core/src/sumeragi/v2_worker/"
+            "exact_output_rollover_claim.rs"
+        ),
         Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
         *(
             Path("crates/iroha_core/src/sumeragi/tests") / filename
@@ -357,6 +361,20 @@ def copy_queue_plan_semantic_request_fixture(tmp_path: Path) -> None:
         shutil.copy2(ROOT_DIR / relative, destination)
 
 
+def copy_reviewed_rust_include_components(tmp_path: Path) -> None:
+    """Copy each reviewed include closure whose parent is in the fixture."""
+
+    for parent_relative, component_relatives in REVIEWED_RUST_INCLUDE_MANIFESTS.items():
+        parent = tmp_path / parent_relative
+        if not parent.is_file():
+            continue
+        for component_relative in component_relatives:
+            source = (ROOT_DIR / parent_relative).parent / component_relative
+            destination = parent.parent / component_relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+
+
 def copy_serviced_candidate_production_fixture(tmp_path: Path) -> None:
     """Copy the durable candidate store and its adapter integration."""
 
@@ -371,6 +389,7 @@ def copy_serviced_candidate_production_fixture(tmp_path: Path) -> None:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(tmp_path)
 
 
 def copy_async_source_fidelity_fixture(
@@ -415,6 +434,7 @@ def copy_async_source_fidelity_fixture(
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(tmp_path)
     for name in (*formal_names, "SumeragiV2AsyncTemporalClosureProofs.tla"):
         destination = formal_dir / name
         if name == "SumeragiV2AsyncLivenessProofs.tla":
@@ -767,12 +787,12 @@ def test_reviewed_obligation_inventory_rejects_deleted_obligation() -> None:
     ),
 )
 def test_reviewed_obligation_inventory_rejects_retargeting(
-    field: str, replacement: str, expected_error: str
+    field: str, replacement: str, expected_error: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module = load_checker()
     ledger = copy.deepcopy(module.load_ledger())
     ledger["obligations"][0][field] = replacement
-
+    monkeypatch.setattr(module, "_module_sources", None)
     errors = module.validate_ledger(ledger).errors
 
     assert expected_error in errors
@@ -18060,6 +18080,10 @@ def test_exact_output_production_source_mutations_fail_closed(
         "crates/iroha_core/src/lib.rs",
         "crates/iroha_core/src/merge_sidecar.rs",
         "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker/"
+            "exact_output_rollover_claim.rs"
+        ),
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "crates/iroha_core/src/sumeragi/v2_runner.rs",
         "crates/iroha_core/src/sumeragi/mod.rs",
@@ -23855,7 +23879,10 @@ def test_serviced_candidate_production_contract_is_complete(
             "durable WAL completion must reclaim only after ingress pruning",
         ),
         (
-            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/"
+                "tests/v2_runtime_unsealed_03.rs"
+            ),
             "fn busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation()",
             "fn removed_busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation()",
             (
@@ -23865,9 +23892,16 @@ def test_serviced_candidate_production_contract_is_complete(
             ),
         ),
         (
-            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
-            "a valid earlier carrier cannot rebase through a mutated causal ingress identity",
-            "a valid earlier carrier may rebase through a mutated causal ingress identity",
+            Path(
+                "crates/iroha_core/src/sumeragi/"
+                "tests/v2_runtime_unsealed_03.rs"
+            ),
+            ".reconcile_deferred_ingress_ownership(Some((deferred_ordinal, "
+            "mutation.clone(),))),\n"
+            "            Err(RuntimeIngressMergeError::IndependentOccurrence),",
+            ".reconcile_deferred_ingress_ownership(Some((deferred_ordinal, "
+            "mutation.clone(),))),\n"
+            "            Ok(owner_tag),",
             (
                 "V4 serviced-candidate regression "
                 "busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation"
@@ -23885,8 +23919,8 @@ def test_serviced_candidate_production_contract_is_complete(
         ),
         (
             Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "a higher invalid view cannot replace the quarantined family owner",
-            "a higher invalid view may replace the quarantined family owner",
+            "assert_ne!(honest_lifecycle, invalid_lifecycle);",
+            "assert_eq!(honest_lifecycle, invalid_lifecycle);",
             (
                 "V4 serviced-candidate regression "
                 "invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity"
@@ -24030,13 +24064,42 @@ def test_serviced_candidate_production_contract_rejects_mutations(
         ),
         (
             Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
-            ".and_then(|occupied| occupied.checked_add("
-            "self.dormant_local_fifo_reservations.len()))",
+            ".and_then(|occupied| occupied.checked_add(dormant))",
             ".map(|occupied| occupied)",
             "_SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256",
             "occupied_with_dormant_reservations",
             "occupied_with_dormant_reservations",
             "dormant Local owners must consume physical queue capacity",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "self.dormant_local_fifo_replacement_inner(command, false)",
+            "self.dormant_local_fifo_replacement_inner(command, true)",
+            "_SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256",
+            "dormant_local_fifo_replacement",
+            "dormant_local_fifo_replacement",
+            "ordinary FIFO admission must reject reserved-body alias replacement",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "if self.dormant_local_fifo_reservations.contains(&expected) {",
+            "if false {",
+            "_SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256",
+            "dormant_local_fifo_replacement_inner",
+            "dormant_local_fifo_replacement_inner",
+            "exact local replay must atomically replace its latent FIFO slot",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            ".checked_sub(usize::from(aliased.is_some()))",
+            ".checked_sub(0)",
+            "_SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256",
+            "active_dormant_local_fifo_reservation_count",
+            "active_dormant_local_fifo_reservation_count",
+            (
+                "an aliased dormant Local owner must consume exactly one physical "
+                "capacity slot"
+            ),
         ),
     ),
 )
@@ -31161,8 +31224,8 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     adapter.write_text(
         mutate_adapter_item(
             "drain_deferred_with_evidence",
-            "self.deferred_authenticated_event_matches_wire(&selection.evidence)",
-            "true",
+            "self.drain_deferred_with_evidence_for_ordinals(&eligible)",
+            "Ok(None)",
         ),
         encoding="utf-8",
     )
@@ -31244,6 +31307,12 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
 
     runtime = tmp_path / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
     canonical_runtime = runtime.read_text(encoding="utf-8")
+    canonical_runtime_sources = {runtime: canonical_runtime}
+    for component_relative in REVIEWED_RUST_INCLUDE_MANIFESTS[
+        Path("crates/iroha_core/src/sumeragi/v2_runtime.rs")
+    ]:
+        component = runtime.parent / component_relative
+        canonical_runtime_sources[component] = component.read_text(encoding="utf-8")
 
     trait_deferred_method = (
         "    fn authenticated_deferred_admission_ordinals(&self) -> BTreeSet<u128>;\n"
@@ -31268,15 +31337,29 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     production_driver_context = (
         ("impl", "RuntimeDriver", "for", "SumeragiV2Adapter"),
     )
-    def mutate_runtime_item(name: str, old: str, new: str) -> str:
-        item = module.rust_items(canonical_runtime, name)[0]
-        assert item.source.count(old) == 1, (name, old)
-        start = canonical_runtime.index(item.source)
-        end = start + len(item.source)
-        return (
-            canonical_runtime[:start]
-            + item.source.replace(old, new, 1)
-            + canonical_runtime[end:]
+    def write_runtime_item_mutation(name: str, old: str, new: str) -> Path:
+        for source_path, canonical_source in canonical_runtime_sources.items():
+            items = module.rust_items(canonical_source, name)
+            if not items:
+                continue
+            assert len(items) == 1, (name, source_path)
+            item = items[0]
+            assert item.source.count(old) == 1, (name, old)
+            start = canonical_source.index(item.source)
+            end = start + len(item.source)
+            source_path.write_text(
+                canonical_source[:start]
+                + item.source.replace(old, new, 1)
+                + canonical_source[end:],
+                encoding="utf-8",
+            )
+            return source_path
+        raise AssertionError((name, "reviewed runtime include closure"))
+
+    def restore_runtime_source(source_path: Path) -> None:
+        source_path.write_text(
+            canonical_runtime_sources[source_path],
+            encoding="utf-8",
         )
 
     def mutate_runtime_item_in_context(
@@ -31542,24 +31625,18 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         ),
     )
     for item_name, old, new, expected_error in deferred_owner_runtime_mutations:
-        runtime.write_text(
-            mutate_runtime_item(item_name, old, new),
-            encoding="utf-8",
-        )
+        mutated_path = write_runtime_item_mutation(item_name, old, new)
         errors = module._async_source_fidelity_errors(formal_dir)
         assert any(expected_error in error for error in errors), (
             expected_error,
             errors,
         )
-        runtime.write_text(canonical_runtime, encoding="utf-8")
+        restore_runtime_source(mutated_path)
 
-    runtime.write_text(
-        mutate_runtime_item(
-            "dispatch_one_adapter_deferred",
-            "if !self.driver.deferred_work_is_serviceable()",
-            "if self.driver.deferred_work_is_serviceable()",
-        ),
-        encoding="utf-8",
+    mutated_path = write_runtime_item_mutation(
+        "dispatch_one_adapter_deferred",
+        "if !self.driver.deferred_work_is_serviceable()",
+        "if self.driver.deferred_work_is_serviceable()",
     )
     errors = module._async_source_fidelity_errors(formal_dir)
     assert any(
@@ -31567,18 +31644,15 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         "complete control flow must match" in error
         for error in errors
     ), errors
-    runtime.write_text(canonical_runtime, encoding="utf-8")
+    restore_runtime_source(mutated_path)
 
-    runtime.write_text(
-        mutate_runtime_item(
-            "step",
-            "        if let Some(step) = self.dispatch_one_adapter_deferred(now)? {\n",
-            "        if false {\n"
-            "            return Ok(RuntimeStep::Idle);\n"
-            "        }\n"
-            "        if let Some(step) = self.dispatch_one_adapter_deferred(now)? {\n",
-        ),
-        encoding="utf-8",
+    mutated_path = write_runtime_item_mutation(
+        "step",
+        "        if let Some(step) = self.dispatch_one_adapter_deferred(now)? {\n",
+        "        if false {\n"
+        "            return Ok(RuntimeStep::Idle);\n"
+        "        }\n"
+        "        if let Some(step) = self.dispatch_one_adapter_deferred(now)? {\n",
     )
     errors = module._async_source_fidelity_errors(formal_dir)
     assert any(
@@ -31586,7 +31660,7 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         "control flow must match" in error
         for error in errors
     ), errors
-    runtime.write_text(canonical_runtime, encoding="utf-8")
+    restore_runtime_source(mutated_path)
 
     refinement = (
         tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"

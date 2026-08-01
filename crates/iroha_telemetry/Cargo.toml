@@ -46,9 +46,9 @@ tokio-tungstenite = { workspace = true }
 url = { workspace = true }
 prometheus = { workspace = true }
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls-native-roots"], optional = true }
-opentelemetry = { version = "0.31", default-features = false, features = ["metrics"], optional = true }
-opentelemetry_sdk = { version = "0.31", default-features = false, features = ["metrics", "rt-tokio"], optional = true }
-opentelemetry_otlp = { package = "opentelemetry-otlp", version = "0.31", default-features = false, features = ["metrics", "grpc-tonic"], optional = true }
+opentelemetry = { version = "0.32", default-features = false, features = ["metrics"], optional = true }
+opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics", "rt-tokio"], optional = true }
+opentelemetry_otlp = { package = "opentelemetry-otlp", version = "0.32", default-features = false, features = ["metrics", "grpc-tonic"], optional = true }
 blake3 = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }

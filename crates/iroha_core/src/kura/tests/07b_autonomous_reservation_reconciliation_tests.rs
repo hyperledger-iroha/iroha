@@ -34,28 +34,37 @@
         kura.persist_lane_executable_payload(&successor, chain_id_hash, epoch)
             .expect("persist later latest attempt");
 
-        let classified = kura
-            .classify_autonomous_lane_reservation_groups(
-                &[first_group, successor_group],
-                chain_id_hash,
-                &[epoch, epoch],
-            )
-            .expect("classify both exact proposal-height attempts");
-        assert!(matches!(
-            &classified[0],
-            AutonomousLaneReservationEvidenceV1::ExactRetired {
-                payload,
-                retirement: exact_retirement,
-                certification: AutonomousLaneReservationCertificationV1::Uncertified,
-            } if payload == &first && exact_retirement == &retirement
-        ));
-        assert!(matches!(
-            &classified[1],
-            AutonomousLaneReservationEvidenceV1::ExactLive {
-                payload,
-                certification: AutonomousLaneReservationCertificationV1::Uncertified,
-            } if payload == &successor
-        ));
+        let groups = [first_group, successor_group];
+        let expected_epochs = [epoch, epoch];
+        let assert_exact_attempts = |kura: &Kura| {
+            let classified = kura
+                .classify_autonomous_lane_reservation_groups(
+                    &groups,
+                    chain_id_hash,
+                    &expected_epochs,
+                )
+                .expect("classify both exact proposal-height attempts");
+            assert!(matches!(
+                &classified[0],
+                AutonomousLaneReservationEvidenceV1::ExactRetired {
+                    payload,
+                    retirement: exact_retirement,
+                    certification: AutonomousLaneReservationCertificationV1::Uncertified,
+                } if payload == &first && exact_retirement == &retirement
+            ));
+            assert!(matches!(
+                &classified[1],
+                AutonomousLaneReservationEvidenceV1::ExactLive {
+                    payload,
+                    certification: AutonomousLaneReservationCertificationV1::Uncertified,
+                } if payload == &successor
+            ));
+        };
+        assert_exact_attempts(kura.as_ref());
+
+        drop(kura);
+        let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+        assert_exact_attempts(reopened.as_ref());
     }
 
     #[test]
@@ -555,4 +564,523 @@
             temp_bytes,
             "claim preflight must not remove or promote a conflicting stage",
         );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let archive_dir = TempDir::new().expect("fixture archive dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, first_b) =
+            autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+        let incarnation_b = first_b.origin_proposal.descriptor.lane_incarnation;
+        let rebound_a = rebind_autonomous_lane_payload_for_kura(
+            &first_b,
+            lane.lane_id,
+            lane.dataspace_id,
+            1,
+            b"historical-autonomous-recovery-incarnation-a",
+            &signer,
+        );
+        let incarnation_a = rebound_a.origin_proposal.descriptor.lane_incarnation;
+        let incarnation_a_payload =
+            repropose_autonomous_lane_payload_for_kura(&rebound_a, 84, &signer);
+        let rebound_b = rebind_autonomous_lane_payload_for_kura(
+            &incarnation_a_payload,
+            lane.lane_id,
+            lane.dataspace_id,
+            1,
+            b"kura-autonomous-view-incarnation",
+            &signer,
+        );
+        let recreated_b = repropose_autonomous_lane_payload_for_kura(&rebound_b, 126, &signer);
+        assert_ne!(incarnation_a, incarnation_b);
+        assert_eq!(
+            recreated_b.origin_proposal.descriptor.lane_incarnation, incarnation_b,
+            "the final leg deliberately exercises an incarnation-hash ABA replay",
+        );
+        assert_eq!(
+            first_b.reservation_keys[0].signed_transaction_hash,
+            incarnation_a_payload.reservation_keys[0].signed_transaction_hash,
+        );
+        assert_eq!(
+            first_b.reservation_keys[0].signed_transaction_hash,
+            recreated_b.reservation_keys[0].signed_transaction_hash,
+            "all three generations contend for the exact same FIFO transaction",
+        );
+
+        let first_b_record = historical_autonomous_recovery_record_for_kura(
+            &first_b,
+            &signer,
+            b"incarnation-b-first",
+        );
+        let incarnation_a_record = historical_autonomous_recovery_record_for_kura(
+            &incarnation_a_payload,
+            &signer,
+            b"incarnation-a",
+        );
+        let recreated_b_record = historical_autonomous_recovery_record_for_kura(
+            &recreated_b,
+            &signer,
+            b"incarnation-b-recreated",
+        );
+        assert_ne!(first_b_record.recovery_id, incarnation_a_record.recovery_id);
+        assert_ne!(first_b_record.recovery_id, recreated_b_record.recovery_id);
+        assert_ne!(
+            incarnation_a_record.recovery_id,
+            recreated_b_record.recovery_id
+        );
+
+        let (first_b_session, first_b_pops) =
+            committed_lane_block_session_for_kura_proposal(&first_b.origin_proposal, &signer);
+        let (incarnation_a_session, incarnation_a_pops) =
+            committed_lane_block_session_for_kura_proposal(
+                &incarnation_a_payload.origin_proposal,
+                &signer,
+            );
+        let (recreated_b_session, recreated_b_pops) =
+            committed_lane_block_session_for_kura_proposal(&recreated_b.origin_proposal, &signer);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        let recreate_lane_storage = |stage: &str| {
+            kura.reconcile_lane_segments_for_testing(&[], &[], &[(lane, lane)])
+                .unwrap_or_else(|error| panic!("provision {stage} lane storage: {error:?}"));
+            let blocks = lane.blocks_dir(temp_dir.path());
+            for file_name in [INDEX_FILE_NAME, DATA_FILE_NAME, HASHES_FILE_NAME] {
+                assert!(
+                    blocks.join(file_name).is_file(),
+                    "{stage} lane storage is missing {file_name}",
+                );
+            }
+            let lane_artifacts = blocks.join(LANE_ARTIFACTS_DIR_NAME);
+            let lane_artifacts_metadata = fs::symlink_metadata(&lane_artifacts)
+                .unwrap_or_else(|error| panic!("inspect {stage} lane artifacts: {error:?}"));
+            assert!(
+                lane_artifacts_metadata.is_dir()
+                    && !lane_artifacts_metadata.file_type().is_symlink(),
+                "{stage} lane artifacts must be a direct directory",
+            );
+            assert_eq!(
+                fs::read_dir(&lane_artifacts)
+                    .unwrap_or_else(|error| panic!("read {stage} lane artifacts: {error:?}"))
+                    .count(),
+                0,
+                "{stage} lane artifacts must start empty",
+            );
+            let merge_path = lane.merge_log_path(temp_dir.path());
+            let merge_metadata = fs::metadata(&merge_path)
+                .unwrap_or_else(|error| panic!("inspect {stage} lane merge log: {error:?}"));
+            assert!(
+                merge_metadata.is_file() && merge_metadata.len() == 0,
+                "{stage} lane merge log must be a fresh empty file",
+            );
+        };
+        kura.install_lane_incarnation_marker_for_test(lane, incarnation_b, 0)
+            .expect("activate first incarnation B");
+        assert_eq!(
+            kura.active_lane_incarnation_marker(lane)
+                .expect("read first incarnation-B marker"),
+            (incarnation_b, 0),
+        );
+        assert_eq!(
+            kura.persist_historical_autonomous_lane_recovery_record(&first_b_record)
+                .expect("persist first-B historical recovery"),
+            HistoricalAutonomousLaneRecoveryPersistOutcome::Installed,
+        );
+        kura.persist_committed_lane_block_session(&first_b_session, &first_b_pops)
+            .expect("persist first-B QC evidence");
+        let first_b_record_path = Kura::historical_autonomous_recovery_path_for_entry(
+            lane,
+            temp_dir.path(),
+            first_b_record.recovery_id,
+        );
+        let first_b_record_relative = first_b_record_path
+            .strip_prefix(lane.blocks_dir(temp_dir.path()))
+            .expect("first-B recovery lives below its lane segment")
+            .to_path_buf();
+        let first_b_archive = archive_dir.path().join("incarnation-b-first");
+        fs::rename(lane.blocks_dir(temp_dir.path()), &first_b_archive)
+            .expect("archive first incarnation B");
+        let archived_first_b_record = first_b_archive.join(first_b_record_relative);
+        assert!(archived_first_b_record.is_file());
+
+        recreate_lane_storage("incarnation-A");
+        assert!(
+            !Kura::historical_autonomous_recovery_path_for_entry(
+                lane,
+                temp_dir.path(),
+                incarnation_a_record.recovery_id,
+            )
+            .exists(),
+            "incarnation-A storage must not inherit first-B recovery bytes",
+        );
+        kura.install_lane_incarnation_marker_for_test(lane, incarnation_a, 60)
+            .expect("activate intermediate incarnation A");
+        assert_eq!(
+            kura.active_lane_incarnation_marker(lane)
+                .expect("read incarnation-A marker"),
+            (incarnation_a, 60),
+        );
+        assert_eq!(
+            kura.persist_historical_autonomous_lane_recovery_record(&incarnation_a_record)
+                .expect("persist incarnation-A historical recovery"),
+            HistoricalAutonomousLaneRecoveryPersistOutcome::Installed,
+        );
+        kura.persist_committed_lane_block_session(&incarnation_a_session, &incarnation_a_pops)
+            .expect("persist incarnation-A QC evidence");
+        let incarnation_a_record_path = Kura::historical_autonomous_recovery_path_for_entry(
+            lane,
+            temp_dir.path(),
+            incarnation_a_record.recovery_id,
+        );
+        let incarnation_a_record_relative = incarnation_a_record_path
+            .strip_prefix(lane.blocks_dir(temp_dir.path()))
+            .expect("incarnation-A recovery lives below its lane segment")
+            .to_path_buf();
+        let incarnation_a_archive = archive_dir.path().join("incarnation-a");
+        fs::rename(lane.blocks_dir(temp_dir.path()), &incarnation_a_archive)
+            .expect("archive intermediate incarnation A");
+        let archived_incarnation_a_record =
+            incarnation_a_archive.join(incarnation_a_record_relative);
+        assert!(archived_incarnation_a_record.is_file());
+
+        recreate_lane_storage("recreated-B");
+        assert!(
+            !Kura::historical_autonomous_recovery_path_for_entry(
+                lane,
+                temp_dir.path(),
+                recreated_b_record.recovery_id,
+            )
+            .exists(),
+            "recreated-B storage must not inherit earlier B/A recovery bytes",
+        );
+        kura.install_lane_incarnation_marker_for_test(lane, incarnation_b, 100)
+            .expect("activate recreated incarnation B with a fresh activation fence");
+        assert_eq!(
+            kura.active_lane_incarnation_marker(lane)
+                .expect("read recreated-B marker"),
+            (incarnation_b, 100),
+        );
+        assert_eq!(
+            kura.persist_historical_autonomous_lane_recovery_record(&recreated_b_record)
+                .expect("persist recreated-B historical recovery"),
+            HistoricalAutonomousLaneRecoveryPersistOutcome::Installed,
+        );
+        kura.persist_committed_lane_block_session(&recreated_b_session, &recreated_b_pops)
+            .expect("persist recreated-B QC evidence");
+        let recreated_b_group =
+            autonomous_reservation_reconciliation_group(recreated_b.reservation_keys.clone());
+        assert!(matches!(
+            kura.classify_autonomous_lane_reservation_group(
+                &recreated_b_group,
+                chain_id_hash,
+                epoch,
+            ),
+            Ok(AutonomousLaneReservationEvidenceV1::ExactLive {
+                payload,
+                certification,
+            }) if payload == recreated_b && certification.is_certified()
+        ));
+
+        for stale_record in [&first_b_record, &incarnation_a_record] {
+            assert!(
+                kura.persist_historical_autonomous_lane_recovery_record(stale_record)
+                    .is_err(),
+                "an earlier B/A recovery record must not hydrate into recreated-B storage",
+            );
+        }
+        for (stale_session, stale_pops) in [
+            (&first_b_session, &first_b_pops),
+            (&incarnation_a_session, &incarnation_a_pops),
+        ] {
+            assert!(
+                kura.persist_committed_lane_block_session(stale_session, stale_pops)
+                    .is_err(),
+                "an earlier B/A QC must not overwrite the recreated-B certificate",
+            );
+        }
+        for stale_payload in [&first_b, &incarnation_a_payload] {
+            let stale_group =
+                autonomous_reservation_reconciliation_group(stale_payload.reservation_keys.clone());
+            assert!(matches!(
+            kura.classify_autonomous_lane_reservation_group(&stale_group, chain_id_hash, epoch,),
+            Err(AutonomousLaneReservationEvidenceError::Kura(_))
+        ));
+        }
+
+        let recreated_b_record_path = Kura::historical_autonomous_recovery_path_for_entry(
+            lane,
+            temp_dir.path(),
+            recreated_b_record.recovery_id,
+        );
+        let recreated_b_record_bytes =
+            fs::read(&recreated_b_record_path).expect("read recreated-B recovery bytes");
+        for archived_stale_record in [&archived_first_b_record, &archived_incarnation_a_record] {
+            let stale_target = recreated_b_record_path.with_file_name(
+                archived_stale_record
+                    .file_name()
+                    .expect("archived recovery file name"),
+            );
+            fs::copy(archived_stale_record, &stale_target)
+                .expect("inject delayed archived recovery record");
+            assert!(
+                kura.historical_autonomous_lane_recovery_records_bounded(3)
+                    .is_err(),
+                "a physically delayed B/A record must fail the active marker boundary",
+            );
+            assert_eq!(
+                fs::read(&recreated_b_record_path)
+                    .expect("read recreated-B record after stale injection"),
+                recreated_b_record_bytes,
+                "stale inventory bytes must not overwrite the recreated-B seal",
+            );
+            fs::remove_file(&stale_target).expect("remove delayed stale recovery fixture");
+        }
+
+        assert_eq!(
+            kura.historical_autonomous_lane_recovery_records_bounded(3)
+                .expect("read exact recreated-B recovery inventory"),
+            vec![recreated_b_record.clone()],
+        );
+        assert!(
+            kura.historical_autonomous_lane_recovery_record_matches(&recreated_b_record)
+                .expect("revalidate recreated-B recovery dependencies"),
+        );
+        assert_eq!(
+            kura.read_autonomous_lane_block_artifact(lane.lane_id, 1, chain_id_hash, epoch)
+                .expect("read recreated-B autonomous payload")
+                .executable_payload,
+            recreated_b,
+        );
+        assert_eq!(
+            kura.read_lane_block_execution_input(lane.lane_id, 1)
+                .expect("read recreated-B execution input")
+                .proposal,
+            recreated_b.origin_proposal,
+        );
+        assert_eq!(
+            kura.read_certified_lane_block_artifact(lane.lane_id, 1)
+                .expect("read recreated-B certified artifact")
+                .proposal,
+            recreated_b.origin_proposal,
+        );
+
+        drop(kura);
+        let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen recreated-B Kura");
+        assert_eq!(
+            reopened
+                .historical_autonomous_lane_recovery_records_bounded(3)
+                .expect("recover recreated-B inventory after restart"),
+            vec![recreated_b_record.clone()],
+        );
+        assert!(
+            reopened
+                .historical_autonomous_lane_recovery_record_matches(&recreated_b_record)
+                .expect("revalidate recreated-B recovery after restart"),
+        );
+        assert_eq!(
+            reopened
+                .read_autonomous_lane_block_artifact(lane.lane_id, 1, chain_id_hash, epoch)
+                .expect("recover recreated-B payload after restart")
+                .executable_payload,
+            recreated_b,
+        );
+        assert_eq!(
+            reopened
+                .read_certified_lane_block_artifact(lane.lane_id, 1)
+                .expect("recover recreated-B QC after restart")
+                .proposal,
+            recreated_b.origin_proposal,
+        );
+        assert!(matches!(
+            reopened.classify_autonomous_lane_reservation_group(
+                &recreated_b_group,
+                chain_id_hash,
+                epoch,
+            ),
+            Ok(AutonomousLaneReservationEvidenceV1::ExactLive {
+                payload,
+                certification,
+            }) if payload == recreated_b && certification.is_certified()
+        ));
+
+        let lane_blocks = lane.blocks_dir(temp_dir.path());
+        let historical_byte_limit =
+            reopened.historical_autonomous_recovery_aggregate_byte_limit();
+        let with_recovery =
+            Kura::block_store_bytes_with_historical_limit(&lane_blocks, historical_byte_limit)
+                .expect("measure recreated-B block store");
+        let accounting_probe = archive_dir.path().join("recreated-b-accounting-probe.norito");
+        fs::rename(&recreated_b_record_path, &accounting_probe)
+            .expect("temporarily move recreated-B recovery for exact accounting");
+        let without_recovery =
+            Kura::block_store_bytes_with_historical_limit(&lane_blocks, historical_byte_limit)
+                .expect("measure recreated-B block store without recovery");
+        fs::rename(&accounting_probe, &recreated_b_record_path)
+            .expect("restore recreated-B recovery after exact accounting");
+        assert_eq!(
+            with_recovery.checked_sub(without_recovery),
+            Some(
+                u64::try_from(recreated_b_record_bytes.len())
+                    .expect("recreated-B recovery length fits u64")
+            ),
+            "nested historical recovery bytes must be counted exactly once",
+        );
+        let accounting = reopened
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect("read post-restart disk accounting");
+        assert!(
+            accounting.enforced_initialized && accounting.total_initialized,
+            "restart must publish both disk-accounting caches",
+        );
+        assert_eq!(
+            accounting.cached_enforced_bytes, accounting.exact_enforced_bytes,
+            "restart enforced accounting must include nested recovery evidence",
+        );
+        assert_eq!(
+            accounting.cached_total_bytes, accounting.exact_total_bytes,
+            "restart total accounting must include nested recovery evidence",
+        );
+    }
+    #[allow(clippy::too_many_lines)]
+    fn historical_autonomous_recovery_record_for_kura(
+        payload: &LaneExecutablePayloadV1,
+        signer: &KeyPair,
+        fixture_tag: &[u8],
+    ) -> HistoricalAutonomousLaneRecoveryRecordV1 {
+        let descriptor = &payload.origin_proposal.descriptor;
+        let hint = payload
+            .origin_proposal
+            .payload_block_hint
+            .expect("historical recovery fixture has a canonical carrier hint");
+        assert_eq!(descriptor.proposal_height, hint.proposal_height);
+        assert_eq!(descriptor.validator_set.len(), 1);
+        assert_eq!(
+            descriptor.validator_set[0].public_key(),
+            signer.public_key()
+        );
+
+        let roster = descriptor
+            .validator_set
+            .iter()
+            .cloned()
+            .map(|validator| ValidatorPower {
+                validator,
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let historical_context = HeightContext {
+            chain_id: ChainId::from("kura-autonomous-chain"),
+            protocol_version: PROTOCOL_VERSION,
+            height: descriptor.proposal_height,
+            epoch: payload.epoch,
+            epoch_end_height: descriptor.proposal_height.saturating_add(100),
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            snapshot_bootstrap: Some(
+                iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor {
+                    snapshot_height: descriptor.proposal_height.saturating_sub(1),
+                    snapshot_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(
+                        Hash::new_from_chunks(&[
+                            b"kura:test:historical-recovery:snapshot-block:v1\0",
+                            fixture_tag,
+                        ]),
+                    ),
+                    snapshot_block_creation_time_ms: descriptor.proposal_height,
+                    snapshot_state_hash: Hash::new_from_chunks(&[
+                        b"kura:test:historical-recovery:snapshot-state:v1\0",
+                        fixture_tag,
+                    ]),
+                },
+            ),
+            quorum: DualQuorum::from_roster(&roster).expect("historical recovery fixture quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new_from_chunks(&[
+                b"kura:test:historical-recovery:nexus:v1\0",
+                fixture_tag,
+            ]),
+            execution_policy_hash: Hash::new_from_chunks(&[
+                b"kura:test:historical-recovery:policy:v1\0",
+                fixture_tag,
+            ]),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::Plain,
+                chunk_size_bytes: 1024,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 4096,
+                max_chunk_count: 4,
+            },
+            leader_seed: [0xA7; 32],
+        };
+        historical_context
+            .validate()
+            .expect("valid historical recovery fixture context");
+        assert_eq!(
+            Hash::new(historical_context.chain_id.as_str().as_bytes()),
+            payload.chain_id_hash,
+            "fixture carrier context must bind the executable payload chain",
+        );
+
+        let executed_wire =
+            norito::encode_canonical(payload).expect("encode historical recovery fixture wire");
+        let executed_block_wire_len =
+            u64::try_from(executed_wire.len()).expect("fixture wire length fits u64");
+        let executed_block_wire_hash = Hash::new(&executed_wire);
+        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
+            Hash::new_from_chunks(&[
+                b"kura:test:historical-recovery:parent-state:v1\0",
+                fixture_tag,
+            ]),
+            Hash::new_from_chunks(&[
+                b"kura:test:historical-recovery:post-state:v1\0",
+                fixture_tag,
+            ]),
+            Hash::new_from_chunks(&[b"kura:test:historical-recovery:writes:v1\0", fixture_tag]),
+            executed_block_wire_len,
+            executed_block_wire_hash,
+        );
+        execution_commitment
+            .validate()
+            .expect("valid historical recovery execution commitment");
+        let canonical_body = crate::sumeragi::message::CanonicalExecutedBlockNeedV1 {
+            height: descriptor.proposal_height,
+            block_hash: hint.proposal_block_hash,
+            finality_artifact_hash: HashOf::<V2FinalityArtifact>::from_untyped_unchecked(
+                Hash::new_from_chunks(&[
+                    b"kura:test:historical-recovery:finality:v1\0",
+                    fixture_tag,
+                ]),
+            ),
+            execution_commitment,
+            executed_block_wire_len,
+            executed_block_wire_hash,
+        };
+        let reservation_group =
+            autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
+        let mut install = crate::sumeragi::v2_apply::HistoricalAutonomousReservationInstallV1 {
+            version: crate::sumeragi::v2_apply::HistoricalAutonomousReservationInstallV1::VERSION,
+            recovery_id: Hash::prehashed([0; Hash::LENGTH]),
+            canonical_body,
+            historical_context_id: historical_context.id(),
+            historical_context_hash: HashOf::new(&historical_context),
+            historical_context,
+            carrier_view: hint.proposal_view,
+            payload: payload.clone(),
+            reservation_group,
+        };
+        install.recovery_id = install.computed_recovery_id();
+        assert!(install.has_valid_identity());
+        HistoricalAutonomousLaneRecoveryRecordV1::from_install(
+            &install,
+            vec![
+                bls_normal_pop_prove(signer.private_key())
+                    .expect("historical recovery fixture signer PoP"),
+            ],
+        )
     }

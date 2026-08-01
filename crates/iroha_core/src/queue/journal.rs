@@ -4297,14 +4297,14 @@ mod tests {
         let mut wrong_version = exact.clone();
         wrong_version.admission_context.version =
             super::super::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2.saturating_add(1);
-        mutations.push(wrong_version);
+        mutations.push(("wrong context version", wrong_version));
 
         let mut noncontiguous_height = exact.clone();
         noncontiguous_height.admission_context.proposal_height = noncontiguous_height
             .admission_context
             .proposal_height
             .saturating_add(1);
-        mutations.push(noncontiguous_height);
+        mutations.push(("noncontiguous proposal height", noncontiguous_height));
 
         let mut unexpected_genesis_predecessor = exact.clone();
         unexpected_genesis_predecessor
@@ -4312,12 +4312,15 @@ mod tests {
             .predecessor_block_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
             b"forged-genesis-predecessor",
         )));
-        mutations.push(unexpected_genesis_predecessor);
+        mutations.push((
+            "unexpected genesis predecessor",
+            unexpected_genesis_predecessor,
+        ));
 
         let mut wrong_plan_digest = exact.clone();
         wrong_plan_digest.admission_context.routing_plan_digest =
             Hash::new(b"wrong-routing-plan-digest");
-        mutations.push(wrong_plan_digest);
+        mutations.push(("wrong routing-plan digest", wrong_plan_digest));
 
         let mut noncanonical_plan = exact.clone();
         if let RoutingPlan::Single(leg) = &mut noncanonical_plan.routing_plan {
@@ -4325,30 +4328,33 @@ mod tests {
         }
         noncanonical_plan.admission_context.route_incarnations[0].leg =
             noncanonical_plan.routing_plan.coordinator_leg();
-        mutations.push(noncanonical_plan);
+        mutations.push(("noncanonical routing plan", noncanonical_plan));
 
         let mut missing_leg = exact.clone();
         missing_leg.admission_context.route_incarnations.clear();
-        mutations.push(missing_leg);
+        mutations.push(("missing route leg", missing_leg));
 
         let mut zero_incarnation = exact.clone();
         zero_incarnation.admission_context.route_incarnations[0].lane_incarnation =
             Hash::prehashed([0; Hash::LENGTH]);
-        mutations.push(zero_incarnation);
+        mutations.push(("zero lane incarnation", zero_incarnation));
 
         let mut zero_validator_hash = exact.clone();
         zero_validator_hash.admission_context.route_incarnations[0].validator_set_hash =
             HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]));
-        mutations.push(zero_validator_hash);
+        mutations.push(("zero validator-set hash", zero_validator_hash));
 
         let mut wrong_threshold = exact;
         wrong_threshold.admission_context.route_incarnations[0].durability_threshold = 2;
-        mutations.push(wrong_threshold);
+        mutations.push(("wrong durability threshold", wrong_threshold));
 
-        for mutation in mutations {
-            let error = journal
-                .put_deferred_flush(mutation)
-                .expect_err("noncanonical V4 context must fail before append");
+        for (label, mutation) in mutations {
+            let error = match journal.put_deferred_flush(mutation) {
+                Ok(flush) => {
+                    panic!("{label} must fail before append; accepted flush: {flush:?}")
+                }
+                Err(error) => error,
+            };
             assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         }
         assert_eq!(

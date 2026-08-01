@@ -1841,6 +1841,7 @@ pub(crate) enum PrivacyVerificationErrorV1 {
     #[error(transparent)]
     Envelope(Box<PrivacyEnvelopeFailureV1>),
     /// The selected protocol has no complete native verifier.
+    #[cfg(not(feature = "zk-stark"))]
     #[error(transparent)]
     EngineUnavailable(Box<PrivacyEngineUnavailableFailureV1>),
     /// Native VeRange decoding or verification failed.
@@ -1955,6 +1956,7 @@ pub(crate) struct PrivacyEnvelopeFailureV1 {
 }
 
 #[derive(Debug, Error)]
+#[cfg(not(feature = "zk-stark"))]
 #[error("native privacy engine for {protocol_id:?} is not available")]
 pub(crate) struct PrivacyEngineUnavailableFailureV1 {
     protocol_id: PrivacyProtocolIdV1,
@@ -4987,18 +4989,7 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn pgc_rejects_cross_suite_proof_replay() {
-        let fixture = PgcFixture::new();
-        let (verange_envelope, _, _) = valid_envelope();
-        let mut replayed = fixture.envelope.clone();
-        replayed.proof = verange_envelope.proof;
-
-        assert!(matches!(
-            verify_privacy_envelope_v1(&replayed, fixture.verification_context()),
-            Err(PrivacyVerificationErrorV1::Envelope(_))
-        ));
-    }
+    include!("privacy_verifier/cross_suite_replay_test.rs");
 
     #[test]
     fn verified_orchard_effect_is_complete_and_derived_from_authoritative_frontier() {

@@ -45,9 +45,6 @@ use super::{
     },
 };
 
-/// Stable descriptor for the one-signature witness compiler.
-pub(crate) const ZK_X509_P256_TRACE_COMPILER_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-trace-compiler-v1-incompatible:one-signature-per-instance:symbolic-initial-and-derived-values:canonical-initial-then-operation-result-ssa-ids:no-forward-operation-reads:exact-arithmetic-operations:128-verifier-positioned-window-traces:final-order-u1-window0-through63-then-u2-window0-through63:reduction-and-low-s-bindings:independent-value-free-verifier-topology-compiler:every-witness-schedule-family-must-match:native-arithmetic-witness-generation-only:no-native-verifier-recheck:integration=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
-
 const ZERO_BE_V1: [u8; 32] = [0; 32];
 const ONE_BE_V1: [u8; 32] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,

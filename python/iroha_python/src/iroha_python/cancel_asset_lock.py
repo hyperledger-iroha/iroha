@@ -245,19 +245,12 @@ def encode_cancel_asset_lock_v1(
     return header + payload
 
 
-def decode_cancel_asset_lock_v1(
-    archive: bytes | bytearray | memoryview,
-) -> CancelAssetLockV1:
-    """Decode one exact schema-bound bare V1 archive without text aliases."""
+def decode_cancel_asset_lock_v1(archive: bytes) -> CancelAssetLockV1:
+    """Decode one exact schema-bound bare V1 archive without container aliases."""
 
-    if type(archive) is bytes:
-        encoded = archive
-    elif type(archive) is bytearray:
-        encoded = bytes(archive)
-    elif type(archive) is memoryview:
-        encoded = archive.tobytes()
-    else:
-        raise TypeError("archive must be bytes, bytearray, or memoryview")
+    if type(archive) is not bytes:
+        raise TypeError("archive must be exact bytes")
+    encoded = archive
     if len(encoded) < _FRAME_HEADER_BYTES:
         raise ValueError("CancelAssetLockV1 archive is shorter than its Norito header")
     if encoded[:6] != b"NRT0\x00\x00":

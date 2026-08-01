@@ -13,6 +13,7 @@ readonly release_runner="scripts/run_sumeragi_v2_release_gates.sh"
 readonly grouped_parity_harness="ci/run_native_amx_v2_grouped_sdk_parity.sh"
 readonly grouped_fixture="fixtures/sumeragi_v2/native_amx_v2_grouped.json"
 readonly release_receipt_writer="scripts/write_sumeragi_v2_release_receipt.py"
+readonly release_receipt_component="scripts/write_sumeragi_v2_release_receipt_formal_artifacts.py"
 readonly prebuilt_bundle_shell="scripts/sumeragi_v2_prebuilt_bundle.sh"
 readonly prebuilt_bundle_helper="scripts/sumeragi_v2_prebuilt_bundle.py"
 readonly seed_runner="scripts/run_sumeragi_v2_seed_matrix.sh"
@@ -76,6 +77,11 @@ require_nonignored_test "$autoscale_file" "$autoscale_restart_test"
 require_nonignored_test "$autoscale_file" "$autoscale_drain_test"
 require_nonignored_test "$native_file" "$native_test"
 
+if [[ ! -f "$release_receipt_component" || -L "$release_receipt_component" ]]; then
+  echo "release receipt formal-artifact component must be a regular non-symlink file" >&2
+  exit 1
+fi
+
 require_exact_token \
   "$launcher" \
   "readonly AUTOSCALE_FOUR_PEER_RELEASE_TEST=\"${autoscale_qualified_test}\""
@@ -114,7 +120,13 @@ require_exact_token \
   "readonly native_amx_grouped_parity_harness=\"${grouped_parity_harness}\""
 require_exact_token \
   "$release_runner" \
-  "readonly expected_multilane_focus_test_count=302"
+  "readonly expected_multilane_focus_test_count=390"
+require_exact_token \
+  "$release_runner" \
+  "readonly expected_multilane_formal_mutation_count=73"
+require_exact_token \
+  "$release_runner" \
+  "  'echo \"[tlc] all 73 multilane mutations produced their exact named counterexamples; no deductive proof status was changed\"' \\"
 require_exact_token \
   "$release_runner" \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
@@ -141,24 +153,39 @@ require_exact_token \
   "    native_amx_grouped_fixture_sha256 \"\$native_amx_grouped_fixture_sha256\" \\"
 require_exact_token \
   "$release_runner" \
-  "    native_amx_grouped_negative_control_count 50 \\"
+  "    native_amx_grouped_negative_control_count 52 \\"
 require_exact_token \
   "$grouped_parity_harness" \
-  "readonly expected_negative_control_count=50"
-for grouped_test_count in 7 56 54 3 6 5; do
+  "readonly expected_negative_control_count=52"
+for grouped_test_count in 7 58 56 3 6 5; do
   require_exact_token \
     "$grouped_parity_harness" \
     "    observed_test_count=${grouped_test_count}"
 done
 require_exact_token \
   "$release_receipt_writer" \
-  "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 50"
+  "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 52"
 require_exact_token \
   "$release_receipt_writer" \
-  "_G_UNIT_TEST_COUNT = 302"
+  "_G_UNIT_TEST_COUNT = 390"
 require_exact_token \
   "$release_receipt_writer" \
   "_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"
+require_exact_token \
+  "$release_receipt_writer" \
+  "    \"write_sumeragi_v2_release_receipt_formal_artifacts.py\","
+require_exact_token \
+  "$release_receipt_writer" \
+  "for _release_receipt_component in _RELEASE_RECEIPT_COMPONENT_FILES:"
+require_exact_token \
+  "$release_receipt_writer" \
+  '        "kura-replica-retention",'
+require_exact_token \
+  "$release_receipt_writer" \
+  '        "SumeragiV2KuraReplicaRetention",'
+require_exact_token \
+  "$release_receipt_writer" \
+  '        "kura_replica_retention_fixed.cfg",'
 require_exact_token \
   "$release_receipt_writer" \
   "_G4P_NATIVE_AMX_GROUPED_PRUNING_MARKER = ("
@@ -167,8 +194,8 @@ require_exact_token \
   '        "native_grouped_pruning_evidence": "passed",'
 for grouped_suite in \
   '    ("openapi", 7),' \
-  '    ("python", 56),' \
-  '    ("javascript", 54),' \
+  '    ("python", 58),' \
+  '    ("javascript", 56),' \
   '    ("swift", 3),' \
   '    ("kotlin", 6),' \
   '    ("java", 5),'; do
@@ -178,6 +205,7 @@ done
 python3 -I -S - \
   "$release_runner" \
   "$release_receipt_writer" \
+  "$release_receipt_component" \
   "$canonical_production_test_count" <<'PY'
 from __future__ import annotations
 
@@ -193,7 +221,9 @@ source = runner.read_text(encoding="utf-8")
 lines = source.splitlines()
 receipt_writer = Path(sys.argv[2])
 receipt_source = receipt_writer.read_text(encoding="utf-8")
-canonical_production_test_count = int(sys.argv[3])
+receipt_component = Path(sys.argv[3])
+receipt_component_source = receipt_component.read_text(encoding="utf-8")
+canonical_production_test_count = int(sys.argv[4])
 
 
 def reject(message: str) -> None:
@@ -231,9 +261,47 @@ for node in receipt_tree.body:
     target = node.targets[0]
     if (
         isinstance(target, ast.Name)
-        and target.id in {"_PRODUCTION_TEST_COUNT", "_PRODUCTION_MODULES"}
+        and target.id
+        in {
+            "_RELEASE_RECEIPT_COMPONENT_FILES",
+            "_PRODUCTION_TEST_COUNT",
+            "_PRODUCTION_MODULES",
+            "_APALACHE_REFINEMENT_RESULTS",
+            "_APALACHE_LAYOUT_ONLY_RESULTS",
+        }
     ):
         receipt_assignments[target.id] = ast.literal_eval(node.value)
+expected_receipt_components = (
+    "write_sumeragi_v2_release_receipt_formal_artifacts.py",
+)
+if (
+    receipt_assignments.get("_RELEASE_RECEIPT_COMPONENT_FILES")
+    != expected_receipt_components
+):
+    reject("receipt writer component manifest is not exact")
+expected_receipt_component_symbols = (
+    "_validate_multilane_apalache_evidence",
+    "_validate_formal_snapshot_replays",
+    "_formal_artifacts",
+)
+parent_component_symbols = tuple(
+    node.name
+    for node in receipt_tree.body
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    and node.name in expected_receipt_component_symbols
+)
+if parent_component_symbols:
+    reject("receipt writer formal-artifact functions are not source-isolated")
+receipt_component_tree = ast.parse(
+    receipt_component_source, filename=str(receipt_component)
+)
+component_symbols = tuple(
+    node.name
+    for node in receipt_component_tree.body
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+)
+if component_symbols != expected_receipt_component_symbols:
+    reject("receipt writer formal-artifact component symbol inventory is not exact")
 if (
     receipt_assignments.get("_PRODUCTION_TEST_COUNT")
     != canonical_production_test_count
@@ -255,6 +323,57 @@ if (
     reject(
         "receipt writer production-module counts must sum exactly to "
         f"{canonical_production_test_count}"
+    )
+
+expected_apalache_refinement_results = (
+    (
+        "autoscale-lifecycle",
+        "SumeragiV2AutoscaleLifecycle",
+        "multilane_autoscale_lifecycle_fixed.cfg",
+        "8",
+    ),
+    (
+        "native-application-evidence",
+        "SumeragiV2NativeApplicationEvidence",
+        "multilane_native_application_evidence_fixed.cfg",
+        "5",
+    ),
+    (
+        "autonomous-reservation-carrier",
+        "SumeragiV2AutonomousReservationCarrier",
+        "multilane_autonomous_reservation_carrier_fixed.cfg",
+        "10",
+    ),
+    (
+        "queue-plan-admission-registry",
+        "SumeragiV2QueuePlanAdmissionRegistry",
+        "multilane_queue_plan_admission_registry_fixed.cfg",
+        "8",
+    ),
+    (
+        "kura-replica-retention",
+        "SumeragiV2KuraReplicaRetention",
+        "kura_replica_retention_fixed.cfg",
+        "8",
+    ),
+)
+expected_apalache_layout_results = (
+    (
+        "inflight-first-release-layout",
+        "SumeragiV2InFlightFirstRelease",
+        "inflight_first_release_fixed.cfg",
+        "18",
+    ),
+)
+if (
+    receipt_assignments.get("_APALACHE_REFINEMENT_RESULTS")
+    != expected_apalache_refinement_results
+    or receipt_assignments.get("_APALACHE_LAYOUT_ONLY_RESULTS")
+    != expected_apalache_layout_results
+):
+    reject(
+        "receipt writer must bind exactly five Apalache refinement results "
+        "plus the one layout-only result"
     )
 expected_changed_module_counts = {
     "sumeragi::authoritative_runtime_gate_tests": 40,
@@ -291,8 +410,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "1873bbd68c9736db1991842c5f34b0ff"
-    "4b98460567a76649619d256d4e510700"
+    "0c1ee4be74b736dba126c0eeedd1f39c"
+    "caf6cbd6eed0e6374f158e3457f2eff5"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -445,9 +564,9 @@ for block in source_sealed_blocks:
         reject(f"source-sealed command/evidence block {label} is missing or duplicated")
 
 expected_focus_counts = {
-    "required_multilane_core_focus_tests": 108,
-    "required_multilane_queue_journal_focus_tests": 137,
-    "required_multilane_config_lib_focus_tests": 3,
+    "required_multilane_core_focus_tests": 187,
+    "required_multilane_queue_journal_focus_tests": 140,
+    "required_multilane_config_lib_focus_tests": 9,
     "required_multilane_config_runtime_focus_tests": 2,
     "required_multilane_config_fixtures_focus_tests": 2,
     "required_multilane_data_model_focus_tests": 8,
@@ -489,9 +608,9 @@ for array_name, expected_count in expected_focus_counts.items():
         )
     all_focus_entries.extend(entries)
 
-if len(all_focus_entries) != 302 or len(set(all_focus_entries)) != 302:
+if len(all_focus_entries) != 390 or len(set(all_focus_entries)) != 390:
     reject(
-        "multilane focus-test arrays must contain 302 globally distinct tests; "
+        "multilane focus-test arrays must contain 390 globally distinct tests; "
         f"found {len(all_focus_entries)} entries and "
         f"{len(set(all_focus_entries))} distinct entries"
     )
@@ -501,21 +620,21 @@ g_unit_groups = (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        108,
+        187,
         "--lib",
     ),
     (
         "required_multilane_queue_journal_focus_tests",
         "g-unit-iroha-core-queue-journal",
         "iroha_core",
-        137,
+        140,
         "--lib",
     ),
     (
         "required_multilane_config_lib_focus_tests",
         "g-unit-iroha-config-lib",
         "iroha_config",
-        3,
+        9,
         "--lib",
     ),
     (
@@ -573,7 +692,7 @@ for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
     if source.count(
         f'    g_unit_expected_test_count "$expected_multilane_focus_test_count" \\'
     ) != 1:
-        reject("G-UNIT expected 302 count is not published exactly once")
+        reject("G-UNIT expected 390 count is not published exactly once")
     if expected_count <= 0:
         reject(f"G-UNIT leg {leg_id} has an invalid expected count")
 
@@ -1166,4 +1285,4 @@ if [[ "$(grep -Fxc -- "    env \"\${ENV_VARS[@]}\" IROHA_MULTILANE_RELEASE_MODE=
   exit 1
 fi
 
-echo "[multilane-release-inventory] 82 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 39 modules, exact 302/302 G-UNIT (108 core, 137 queue-journal, 7 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 82 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 39 modules, exact 390/390 G-UNIT (187 core, 140 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"

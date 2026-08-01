@@ -116,6 +116,7 @@
                 .kura
                 .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
                 .expect("persist exact execution carrier and merge log");
+            fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
             fixture
                 .state
                 .seed_applied_merge_entry_for_v2_settlement_test(&entry)
@@ -314,12 +315,13 @@
             let carrier = body_with_exact_merge_execution_header(&entry);
             fixture
                 .kura
-                .store_block(Arc::new(parent))
+                .store_block(Arc::new(parent.clone()))
                 .expect("persist execution-carrier parent");
             fixture
                 .kura
-                .store_block_with_merge_entry(Arc::new(carrier), &entry)
+                .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
                 .expect("persist committed merge carrier and exact sidecar");
+            fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
             drop(first_queue);
 
             let replayed_queue = Queue::from_config(QueueConfig::default(), events_sender);
@@ -446,12 +448,13 @@
             let first_carrier = body_with_exact_merge_execution_header(&first_entry);
             fixture
                 .kura
-                .store_block(Arc::new(parent))
+                .store_block(Arc::new(parent.clone()))
                 .expect("persist valid-prefix carrier parent");
             fixture
                 .kura
-                .store_block_with_merge_entry(Arc::new(first_carrier), &first_entry)
+                .store_block_with_merge_entry(Arc::new(first_carrier.clone()), &first_entry)
                 .expect("persist exact valid-prefix merge binding");
+            fixture.persist_exact_v2_finality_chain(&[&parent, &first_carrier]);
             fixture.state.record_direct_committed_transactions(
                 [
                     first.signed_transaction_hash,
@@ -560,12 +563,13 @@
         let carrier = body_with_exact_merge_execution_header(&entry);
         fixture
             .kura
-            .store_block(Arc::new(parent))
+            .store_block(Arc::new(parent.clone()))
             .expect("persist committed suffix carrier parent");
         fixture
             .kura
-            .store_block_with_merge_entry(Arc::new(carrier), &entry)
+            .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
             .expect("persist full committed suffix merge group");
+        fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
         fixture.state.record_direct_committed_transactions(
             keys.iter().map(|key| key.signed_transaction_hash),
             NonZeroUsize::new(1).expect("committed suffix State height"),
@@ -680,12 +684,13 @@
             let carrier = body_with_exact_merge_execution_header(&entry);
             fixture
                 .kura
-                .store_block(Arc::new(parent))
+                .store_block(Arc::new(parent.clone()))
                 .expect("persist mixed commit barrier carrier parent");
             fixture
                 .kura
-                .store_block_with_merge_entry(Arc::new(carrier), &entry)
+                .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
                 .expect("persist exact first committed group");
+            fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
             fixture.state.record_direct_committed_transactions(
                 first_keys
                     .iter()
@@ -775,12 +780,13 @@
         let carrier = body_with_exact_merge_execution_header(&entry);
         fixture
             .kura
-            .store_block(Arc::new(parent))
+            .store_block(Arc::new(parent.clone()))
             .expect("persist replayed commit barrier parent");
         fixture
             .kura
-            .store_block_with_merge_entry(Arc::new(carrier), &entry)
+            .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
             .expect("persist replayed commit barrier merge group");
+        fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
         fixture.state.record_direct_committed_transactions(
             keys.iter().map(|key| key.signed_transaction_hash),
             NonZeroUsize::new(1).expect("replayed commit barrier State height"),
@@ -1432,20 +1438,18 @@
                 .expect("commit parent before historical autonomous successor");
             let context = successor_height_context(&fixture);
             let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
-            let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+            let queue = Arc::new(Queue::from_config(
+                QueueConfig::default(),
+                events_sender.clone(),
+            ));
             let journal_dir = tempfile::tempdir().expect("historical autonomous journal directory");
+            let plan_path = journal_dir.path().join("queue-plans.norito");
+            let reservation_path = journal_dir.path().join("lane-reservations.norito");
             queue
-                .install_plan_journal(
-                    journal_dir.path().join("queue-plans.norito"),
-                    1024 * 1024,
-                    true,
-                )
+                .install_plan_journal(&plan_path, 1024 * 1024, true)
                 .expect("install historical autonomous queue-plan journal");
             queue
-                .install_lane_reservation_journal(
-                    journal_dir.path().join("lane-reservations.norito"),
-                    1024 * 1024,
-                )
+                .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
                 .expect("install historical autonomous reservation journal");
             let (payload, _) =
                 reserve_canonical_successor_autonomous_batch(&fixture, &queue, &context, 2);
@@ -1480,6 +1484,20 @@
             next_context
                 .validate()
                 .expect("valid next context for historical recovery");
+            drop(queue);
+
+            let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
+            let replay = queue
+                .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+                .expect("replay historical autonomous reservation owners");
+            assert_eq!(replay.restored, payload.reservation_keys.len());
+            queue
+                .install_plan_journal(&plan_path, 1024 * 1024, true)
+                .expect("install replayed historical autonomous QueuePlan journal");
+            queue
+                .replay_plan_journal(fixture.state.as_ref())
+                .expect("replay historical autonomous QueuePlan payloads");
+            assert!(queue.lane_reservation_startup_reconciliation_pending());
             let before = queue
                 .lane_reservation_reconciliation_snapshot()
                 .expect("capture historical ownership snapshot");
@@ -1585,6 +1603,9 @@
             std::fs::write(&recovery_path, recovery_bytes)
                 .expect("restore historical recovery seal");
 
+            fixture
+                .kura
+                .reset_historical_autonomous_recovery_inventory_scans_for_test();
             let replanning = plan_lane_reservation_ownership(
                 fixture.state.as_ref(),
                 queue.as_ref(),
@@ -1596,12 +1617,30 @@
                 panic!("durable historical recovery must make the immutable plan ready");
             };
             assert_eq!(
-                apply_lane_reservation_reconciliation_plan(
-                    queue.as_ref(),
-                    fixture.kura.as_ref(),
-                    plan,
-                )
-                .expect("publish historical reservation reconciliation"),
+                fixture
+                    .kura
+                    .historical_autonomous_recovery_inventory_scans_for_test(),
+                1,
+                "one planning authority boundary must scan the bounded historical inventory once",
+            );
+            fixture
+                .kura
+                .reset_historical_autonomous_recovery_inventory_scans_for_test();
+            let summary = apply_lane_reservation_reconciliation_plan(
+                queue.as_ref(),
+                fixture.kura.as_ref(),
+                plan,
+            )
+            .expect("publish historical reservation reconciliation");
+            assert_eq!(
+                fixture
+                    .kura
+                    .historical_autonomous_recovery_inventory_scans_for_test(),
+                1,
+                "one application authority boundary must scan the bounded historical inventory once",
+            );
+            assert_eq!(
+                summary,
                 LaneReservationReconciliationSummary {
                     recovered: payload.reservation_keys.len(),
                     retained_historical_recovery: payload.reservation_keys.len(),

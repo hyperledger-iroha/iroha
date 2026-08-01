@@ -1960,6 +1960,8 @@ required_multilane_core_focus_tests=(
   kura::tests::native_amx_latest_index_startup_rejects_manifest_binding_drift_without_receipt
   kura::tests::native_amx_drain_evidence_requires_exact_manifest_receipt_finality_and_latest_index
   kura::tests::native_amx_retirement_scan_rejects_old_incarnation_evidence_after_aba_recreation
+  kura::lane_geometry::tests::native_amx_retirement_targets_exact_participant_incarnation_and_fails_closed
+  kura::lane_geometry::tests::mixed_role_native_amx_retirement_ignores_coordinator_and_targets_remote_routes
   kura::tests::autonomous_claim_inventory_rejects_unexpected_artifacts_before_any_cleanup_or_stage
   kura::tests::autonomous_claim_runtime_inventory_enforces_boundary_without_partial_staging
   kura::tests::autonomous_claim_startup_inventory_bound_fails_before_temp_reconciliation
@@ -1981,21 +1983,21 @@ required_multilane_core_focus_tests=(
   kura::tests::pending_queue_plan_admission_survives_retired_purge_and_process_reopen
   kura::lane_geometry::tests::first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotion
   sumeragi::v2_lane_work::tests::native_amx_request_rejects_same_next_height_wrong_coordinator_predecessor_hash
-  sumeragi::v2_lane_work::tests::native_participant_recovery_marker_rejects_malformed_height_source_and_aba_shapes
-  sumeragi::v2_lane_work::tests::native_participant_recovery_authority_rejects_missing_leaf_execution_and_finality_drift
-  sumeragi::v2_lane_work::tests::native_participant_recovery_wire_request_is_certificate_free_and_frame_bounded
-  sumeragi::v2_lane_work::tests::native_participant_recovery_response_accepts_valid_carrier_above_autonomous_bundle_bound
+  sumeragi::v2_lane_work::tests::normal_lane_adapter_serves_certificate_free_canonical_executed_block_chunks
+  sumeragi::v2_lane_work::tests::canonical_executed_block_recovery_rejects_drift_rotates_signers_and_caches_exact_body
+  sumeragi::v2_lane_work::tests::canonical_executed_block_multichunk_restarts_whole_wire_after_byzantine_signer
   sumeragi::v2_lane_work::tests::historical_recovery_request_rejects_missing_extra_and_tampered_signer_pops
   sumeragi::v2_lane_work::tests::historical_recovery_request_survives_current_state_key_pruning
   sumeragi::v2_lane_work::tests::historical_recovery_request_rejects_stale_incarnation_and_unanchored_view
   sumeragi::v2_core::refinement::tests::in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps
+  sumeragi::v2_core::refinement::tests::in_flight_first_release_dynamic_committees_bind_masks_custody_and_canonical_quorum
   queue::reservation_journal::tests::crash_at_every_operation_frame_write_boundary_is_prefix_atomic
   queue::tests::concurrent_lane_reserve_attempts_cannot_duplicate_one_transaction
   queue::tests::lane_reservation_group_diagnostics_follow_durable_commit_forget_boundary
-  kura::tests::committed_merge_reservation_lookup_reconstructs_from_canonical_indexes_after_restart
+  kura::tests::committed_merge_entry_lookup_reconstructs_from_canonical_indexes_after_restart
   kura::tests::merge_frontier_startup_requires_geometry_only_after_committed_execution
-  kura::tests::committed_merge_reservation_lookup_fails_closed_on_log_mutation
-  kura::tests::committed_merge_reservation_lookup_requires_complete_unique_transaction_index
+  kura::tests::committed_merge_entry_lookup_fails_closed_on_log_mutation
+  kura::tests::canonical_transaction_index_exposes_completeness_and_all_carrier_heights
   kura::lane_geometry::tests::native_amx_archive_is_admissible_accounted_and_purged_without_touching_sibling
   kura::lane_geometry::tests::native_amx_archive_gc_rejects_malformed_truncated_and_oversized_evidence
   kura::lane_geometry::tests::native_amx_archive_gc_rejects_symlinked_evidence_without_following_it
@@ -2003,6 +2005,10 @@ required_multilane_core_focus_tests=(
   state::tests::merge_execution_predecessor_rejects_wrong_frontier_hash
   state::tests::merge_execution_canonical_order_is_route_first
   state::tests::autonomous_lane_diagnostic_queue_finalization_is_terminal
+  state::tests::mixed_role_native_amx_state_projections_exclude_the_coordinator_route
+  state::tests::mixed_role_native_amx_diagnostics_report_remote_identity_conflict
+  state::tests::mixed_role_native_amx_state_projections_reject_same_route_identity_drift
+  sumeragi::v2_lane_work::tests::pre_kura_direct_release_projection_is_four_validator_bound_and_fail_closed
   sumeragi::v2_lane_work::tests::autonomous_local_author_reserves_fifo_before_durable_hint_free_publication
   sumeragi::v2_lane_work::tests::autonomous_restart_hydrates_durable_hint_free_payload_and_queue_owner
   sumeragi::v2_apply::tests::native_amx_prepublication_failure_leaves_wsv_unchanged
@@ -2048,9 +2054,82 @@ required_multilane_core_focus_tests=(
   kura::tests::bounded_pending_merge_hash_scan_filters_orders_and_reports_overflow
   kura::tests::complete_merge_retry_ignores_unrelated_pending_sidecar_capacity
   kura::tests::bounded_pending_merge_selection_skips_committed_prefix_without_underfill
+  kura::tests::kura_start_rejects_unbound_local_peer_identity
+  kura::tests::eviction_requires_distinct_matching_replica_adverts
+  kura::tests::deterministic_commit_qc_keepers_use_f_plus_one_and_pin_a_local_keeper
+  kura::tests::nonkeeper_replica_advert_probe_never_reads_the_complete_body
+  kura::tests::selected_keeper_invalid_index_missing_body_and_corrupt_body_fail_closed
+  kura::tests::authenticated_replica_admission_rejects_forgery_non_qc_peer_and_alternate_finality
+  kura::tests::authenticated_replica_admission_rejects_outside_the_active_horizon_before_mutation
+  kura::tests::eviction_query_prunes_expired_and_out_of_horizon_replica_observations
+  kura::tests::replica_adverts_ignore_zero_height_and_payload_len
+  kura::tests::replica_registry_capacity_preserves_the_configured_evictable_height_window
+  kura::tests::invalid_replica_advert_runtime_geometry_fails_before_store_creation
+  kura::tests::nonselected_or_wrong_length_replica_observations_do_not_count
+  kura::tests::expired_replica_adverts_do_not_allow_eviction
+  kura::tests::replica_adverts_expiring_during_compaction_block_stage_publication
+  sumeragi::message::tests::kura_replica_advert_signature_binds_every_eviction_identity
+  sumeragi::message::tests::kura_replica_advert_is_live_auxiliary_not_lane_or_global_v1
+  tests::kura_replica_advert_uses_bounded_consensus_auxiliary_topic
+  sumeragi::authoritative_runtime_gate_tests::kura_replica_advert_requires_exact_signed_direct_keeper_ownership
+  sumeragi::v2_runner::tests::kura_replica_advert_error_classification_retires_only_invalid_remote_claims
+  sumeragi::v2_worker::kura_replica_advert_refresh_tests::refresh_window_is_evictable_first_and_overflow_safe
+  sumeragi::v2_worker::kura_replica_advert_refresh_tests::refresh_turn_retains_one_source_and_attempts_at_most_one_fanout
+  sumeragi::v2_worker::kura_replica_advert_refresh_tests::tip_advance_never_resets_an_in_progress_scan
+  sumeragi::v2_worker::kura_replica_advert_refresh_tests::same_height_tip_rewrite_requests_follow_up_without_starving_current_cursor
+  sumeragi::v2_worker::tests::retained_replica_advert_source_survives_service_rollover_without_pending_ownership
+  sumeragi::v2_worker::tests::retained_replica_advert_source_never_blocks_handoff_or_seal
+  sumeragi::v2_worker::tests::durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_drift
   sumeragi::v2_lane_work::tests::historical_recovery_diagnostics_are_typed_bounded_and_payload_free
-  sumeragi::v2_lane_work::tests::native_participant_pruned_carrier_retries_queue_pressure_and_retires_carrier_siblings
+  sumeragi::v2_lane_work::tests::native_participant_missing_carrier_uses_generic_chunk_recovery_then_repairs_receipt
   sumeragi::v2_lane_work::tests::merge_leader_candidate_rejects_substitution_outer_epoch_and_oversize_before_journal
+  kura::tests::startup_lane_geometry_refresh_replaces_contracted_lane_auxiliary_identities
+  kura::tests::startup_lane_geometry_refresh_replaces_relabelled_lane_auxiliary_identities
+  kura::tests::startup_replay_binding_covers_the_recognized_historical_recovery_namespace
+  kura::tests::startup_replay_auxiliary_capture_rejects_configured_historical_byte_overflow
+  kura::tests::startup_replay_binding_rejects_unknown_nested_lane_artifact_directories
+  kura::historical_autonomous_recovery_bound_tests::aggregate_byte_bound_is_exact_and_duplicate_aware
+  kura::historical_autonomous_recovery_bound_tests::bounded_namespace_honors_lower_and_higher_configured_limits
+  kura::historical_autonomous_recovery_bound_tests::bounded_namespace_rejects_same_path_mutation_during_accounting
+  kura::historical_autonomous_recovery_bound_tests::bounded_namespace_rechecks_every_file_after_enumeration
+  kura::historical_autonomous_recovery_bound_tests::decoded_bytes_must_match_the_scanner_accounted_identity_and_length
+  kura::historical_autonomous_recovery_bound_tests::bounded_namespace_accepts_exact_record_and_aggregate_limits
+  kura::historical_autonomous_recovery_bound_tests::bounded_namespace_rejects_count_size_and_aggregate_overflow
+  kura::historical_autonomous_recovery_bound_tests::bounded_namespace_rejects_noncanonical_and_nested_entries
+  kura::historical_autonomous_recovery_bound_tests::bounded_namespace_rejects_symlinks_and_hardlinks
+  kura::historical_autonomous_recovery_bound_tests::block_store_accounting_counts_recognized_nested_records_once
+  kura::lane_geometry::tests::retirement_historical_recovery_record_bound_is_global_and_exact
+  kura::lane_geometry::tests::retirement_two_lane_scan_passes_remaining_global_budget_before_decode
+  kura::tests::configured_historical_recovery_bytes_follow_runtime_limits
+  kura::tests::historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation
+  sumeragi::v2_apply::tests::prior_height_canonical_uncertified_owner_requires_historical_recovery
+  sumeragi::v2_core::refinement::tests::in_flight_first_release_composed_commit_path_is_exact_and_terminal
+  sumeragi::v2_core::refinement::tests::in_flight_first_release_composed_four_stage_release_is_exact_and_terminal
+  sumeragi::v2_core::refinement::tests::in_flight_first_release_snapshot_and_direct_release_are_exactly_aligned
+  lane_consensus::tests::autonomous_payload_requires_height_rotated_committee_author
+  block::valid::tests::autonomous_anchor_admission_uses_lane_slot_author_not_global_leader
+  kura::tests::autonomous_payload_duplicate_requires_exact_producer_authenticated_bytes
+  sumeragi::v2_candidate::tests::autonomous_anchors_validate_without_ordinary_candidates
+  sumeragi::v2_lane_work::tests::autonomous_non_author_does_not_take_queue_ownership
+  sumeragi::v2_lane_work::tests::autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vote
+  kura::tests::durable_autonomous_merge_source_requires_every_exact_component_and_survives_restart
+  kura::tests::durable_autonomous_merge_source_rejects_execution_input_drift
+  kura::tests::durable_autonomous_merge_source_rejects_persisted_bundle_drift
+  kura::tests::autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_and_linked_artifacts
+  block::valid::tests::autonomous_merge_carrier_content_gate_accepts_only_exact_empty_carrier
+  block::tests::merge_capable_validation_paths_source_bind_post_effect_authorization
+  state::tests::canonical_wsv_authorization_commits_exact_autonomous_execution_once
+  state::tests::autonomous_execution_commit_rejects_missing_wsv_authorization
+  state::tests::autonomous_execution_commit_rejects_missing_carrier_metadata_authorization
+  state::tests::autonomous_execution_commit_rejects_mismatched_wsv_authorization
+  state::tests::autonomous_execution_commit_rejects_replayed_carrier_metadata_authorization
+  state::tests::autonomous_execution_commit_rejects_stale_authorized_base
+  state::tests::autonomous_execution_commit_rejects_post_stage_wsv_drift
+  state::tests::autonomous_execution_commit_rejects_post_stage_runtime_surface_drift
+  state::tests::autonomous_execution_defers_expired_axt_replay_pruning
+  state::tests::autonomous_execution_rejects_post_stage_axt_replay_drift
+  state::tests::autonomous_execution_stage_rejects_preexisting_axt_replay_overlay
+  state::tests::autonomous_execution_pre_vote_rejects_due_start_of_block_effect
 )
 required_multilane_queue_journal_focus_tests=(
   queue::journal::tests::queue_plan_journal_claim_digest_binds_exact_v4_record_bytes_and_context
@@ -2256,6 +2335,12 @@ required_multilane_config_lib_focus_tests=(
   parameters::actual::tests::sumeragi_v2_shared_config_defaults_are_finite_and_deterministic
   parameters::actual::tests::sumeragi_v2_shared_fingerprint_binds_every_runtime_category
   parameters::actual::tests::sumeragi_v2_config_rejects_merge_runtime_limit_boundaries
+  parameters::user::duration_clamp_tests::kura_replica_advert_defaults_reserve_an_evictable_window_after_the_tail
+  parameters::user::duration_clamp_tests::kura_replica_advert_ttl_is_nonzero_and_bounded
+  parameters::user::duration_clamp_tests::kura_replica_advert_refresh_is_nonzero_and_at_most_half_the_ttl
+  parameters::user::duration_clamp_tests::kura_replica_advert_geometry_uses_checked_arithmetic
+  parameters::user::duration_clamp_tests::kura_eviction_replica_floor_must_fit_the_protocol_validator_bound
+  parameters::user::duration_clamp_tests::kura_config_rejects_unrepresentable_replica_advert_peer_geometry
 )
 required_multilane_config_runtime_focus_tests=(
   every_merge_runtime_override_reaches_the_actual_config
@@ -2265,7 +2350,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=305
+readonly expected_multilane_focus_test_count=390
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2436,7 +2521,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 305-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 390-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2544,8 +2629,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 306 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 305 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 391 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 390 focused tests" >&2
     exit 1
   fi
 fi
@@ -2600,7 +2685,7 @@ done
 # The source-binding checker derives this same ordered corpus from the formal
 # ledger. Keep an independent fixed release count and terminal contract marker
 # so the runner and ledger cannot silently agree to drop a mutation together.
-readonly expected_multilane_formal_mutation_count=52
+readonly expected_multilane_formal_mutation_count=73
 observed_multilane_formal_mutation_count="$(
   grep -Ec '^run_mutant [a-z0-9-]+ ' \
     scripts/formal/run_sumeragi_v2_multilane_mutations.sh
@@ -2611,9 +2696,9 @@ if ((observed_multilane_formal_mutation_count
   exit 1
 fi
 if ! grep -Fqx -- \
-  'echo "[tlc] all 52 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"' \
+  'echo "[tlc] all 73 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"' \
   scripts/formal/run_sumeragi_v2_multilane_mutations.sh; then
-  echo "multilane mutation runner lacks the exact 52-mutation completion contract" >&2
+  echo "multilane mutation runner lacks the exact 73-mutation completion contract" >&2
   exit 1
 fi
 
@@ -3190,6 +3275,7 @@ fi
 # evidence changes before the corridor relies on the final release receipt.
 release_receipt_contract_files=(
   pytests/scripts/sumeragi_v2_release_receipt_test.py
+  pytests/scripts/sumeragi_v2_release_receipt_components_test.py
   pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py
   pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py
 )
@@ -3200,16 +3286,16 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_receipt_pass_summary="$(
-  grep -Ec '^316 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^320 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 316 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 320 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 316 \
+  preflight-release-receipt pytest 320 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
@@ -3256,6 +3342,13 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_proof_ledger_test.py
   pytests/scripts/sumeragi_v2_verus_evidence_test.py
   pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py
+  pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_composed_contract_rejects_legacy_layout_only_claim
+  pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_composed_contract_rejects_state_order_weakening
+  pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_composed_contract_rejects_snapshot_nonstutter_mapping
+  pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_composed_contract_rejects_missing_direct_release_action
+  pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_composed_contract_rejects_tla_snapshot_nonstutter_mapping
+  pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_composed_contract_rejects_verus_snapshot_stutter_proof_removal
+  pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_layout_contract_rejects_membership_only_lane_authorship
 )
 proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
 set +e
@@ -3264,15 +3357,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 proof_fidelity_pass_summary="$(
-  grep -Ec '^1730 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^1737 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 1730 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 1737 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 1730 \
+  preflight-proof-fidelity pytest 1737 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -3414,7 +3507,7 @@ publish_corridor_completion() {
     native_amx_grouped_fixture_sha256 "$native_amx_grouped_fixture_sha256" \
     native_amx_grouped_suite_source_manifest_sha256 \
       "$native_amx_grouped_suite_source_manifest_sha256" \
-    native_amx_grouped_negative_control_count 50 \
+    native_amx_grouped_negative_control_count 52 \
     tlc_profile "$SUMERAGI_V2_TLC_PROFILE" \
     tlaps_threads "$SUMERAGI_TLAPS_THREADS" \
     >"$corridor_completion_tmp"
@@ -3733,4 +3826,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-  echo "Sumeragi v2 production release gates passed, including exact 305/305 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+  echo "Sumeragi v2 production release gates passed, including exact 390/390 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

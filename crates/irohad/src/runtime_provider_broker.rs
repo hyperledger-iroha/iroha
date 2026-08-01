@@ -27,12 +27,18 @@
 
 /// Launcher-facing broker lifecycle, registry, backend set, and serve boundary.
 mod api;
+/// Standard deployment-owned broker assembly without credential discovery.
+mod launcher;
 
 pub(crate) use api::StockRuntimeProviderBrokerRegistryV1;
 pub use api::{
     RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
     RuntimeProviderBrokerServerErrorV1, StockGovernanceDagServiceRuntimeProviderRegistryV1,
     serve_runtime_provider_broker_v1, serve_runtime_provider_broker_with_lifecycle_v1,
+};
+pub use launcher::{
+    RuntimeProviderBrokerBackendRegistryV1, RuntimeProviderBrokerDeploymentV1,
+    RuntimeProviderBrokerLauncherErrorV1,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod protocol {
@@ -971,6 +977,14 @@ mod protocol {
                 revision: binding.revision(),
                 policy_digest: binding.policy_digest(),
                 stream_token_signer_public_key: binding.stream_token_signer_public_key(),
+                stream_token_gateway_admission_qualification: binding
+                    .stream_token_gateway_admission_qualification(),
+                stream_token_gateway_admission_max_pending: binding
+                    .stream_token_gateway_admission_max_pending(),
+                stream_token_gateway_admission_max_tracked_tokens: binding
+                    .stream_token_gateway_admission_max_tracked_tokens(),
+                stream_token_gateway_admission_reconcile_max_items: binding
+                    .stream_token_gateway_admission_reconcile_max_items(),
                 appeal_finance_signer_binding: binding.appeal_finance_signer_binding().map(
                     |signer| AppealFinanceSignerBindingWireV1 {
                         authority: signer.authority.clone(),
@@ -1137,12 +1151,13 @@ mod protocol {
 
     fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerError> {
         let stream_token = binding.slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id();
+        let stream_token_gateway_admission =
+            binding.slot == IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id();
         if binding.handle.is_empty()
             || binding.handle.len() > MAX_PROVIDER_HANDLE_BYTES_V1
             || binding.handle.as_bytes().contains(&0)
             || !iroha_config::parameters::is_production_runtime_handle(&binding.handle)
-            || (!stream_token && !binding.has_exact_qualification())
-            || (stream_token && (binding.revision.is_some() || binding.policy_digest.is_some()))
+            || !binding.has_exact_qualification()
         {
             return Err(BrokerError::BindingMismatch);
         }
@@ -1156,7 +1171,18 @@ mod protocol {
             binding.slot == IrohaRuntimeProviderSlotV1::PorFinalizedReplayArchive.wire_id();
         let potr_signer = binding.slot == IrohaRuntimeProviderSlotV1::PotrGatewaySigner.wire_id()
             || binding.slot == IrohaRuntimeProviderSlotV1::PotrProviderSigner.wire_id();
+        let has_stream_token_gateway_metadata = binding
+            .stream_token_gateway_admission_qualification
+            .is_some()
+            || binding.stream_token_gateway_admission_max_pending.is_some()
+            || binding
+                .stream_token_gateway_admission_max_tracked_tokens
+                .is_some()
+            || binding
+                .stream_token_gateway_admission_reconcile_max_items
+                .is_some();
         let has_new_role_metadata = binding.stream_token_signer_public_key.is_some()
+            || has_stream_token_gateway_metadata
             || binding.appeal_finance_signer_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -1170,6 +1196,35 @@ mod protocol {
                 .ok_or(BrokerError::BindingMismatch)?;
             if public_key == [0; 32]
                 || iroha_crypto::ed25519_parse_public_key(&public_key).is_err()
+                || binding.appeal_finance_signer_binding.is_some()
+                || binding.appeal_finance_checkpoint_binding.is_some()
+                || binding.appeal_finance_checkpoint_max_bytes.is_some()
+                || binding.pop_credential_runtime_binding.is_some()
+                || binding.por_replay_archive_binding.is_some()
+                || binding.por_replay_archive_proof_limits.is_some()
+                || binding.potr_runtime_binding.is_some()
+                || has_stream_token_gateway_metadata
+            {
+                return Err(BrokerError::BindingMismatch);
+            }
+        } else if stream_token_gateway_admission {
+            let qualification = binding
+                .stream_token_gateway_admission_qualification
+                .ok_or(BrokerError::BindingMismatch)?;
+            qualification
+                .validate()
+                .map_err(|_| BrokerError::BindingMismatch)?;
+            if binding.revision != Some(qualification.revision)
+                || binding.policy_digest != Some(qualification.policy_digest)
+                || binding.stream_token_gateway_admission_max_pending
+                    != Some(qualification.max_pending)
+                || binding.stream_token_gateway_admission_max_tracked_tokens
+                    != Some(qualification.max_tracked_tokens)
+                || !matches!(
+                    binding.stream_token_gateway_admission_reconcile_max_items,
+                    Some(1..=iroha_torii::sorafs::STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1)
+                )
+                || binding.stream_token_signer_public_key.is_some()
                 || binding.appeal_finance_signer_binding.is_some()
                 || binding.appeal_finance_checkpoint_binding.is_some()
                 || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -1199,6 +1254,7 @@ mod protocol {
                 || binding.por_replay_archive_binding.is_some()
                 || binding.por_replay_archive_proof_limits.is_some()
                 || binding.potr_runtime_binding.is_some()
+                || has_stream_token_gateway_metadata
             {
                 return Err(BrokerError::BindingMismatch);
             }
@@ -1221,6 +1277,7 @@ mod protocol {
                 || binding.por_replay_archive_binding.is_some()
                 || binding.por_replay_archive_proof_limits.is_some()
                 || binding.potr_runtime_binding.is_some()
+                || has_stream_token_gateway_metadata
             {
                 return Err(BrokerError::BindingMismatch);
             }
@@ -1252,6 +1309,7 @@ mod protocol {
                 || binding.por_replay_archive_binding.is_some()
                 || binding.por_replay_archive_proof_limits.is_some()
                 || binding.potr_runtime_binding.is_some()
+                || has_stream_token_gateway_metadata
             {
                 return Err(BrokerError::BindingMismatch);
             }
@@ -1288,6 +1346,7 @@ mod protocol {
                 || binding.appeal_finance_checkpoint_max_bytes.is_some()
                 || binding.pop_credential_runtime_binding.is_some()
                 || binding.potr_runtime_binding.is_some()
+                || has_stream_token_gateway_metadata
             {
                 return Err(BrokerError::BindingMismatch);
             }
@@ -1305,6 +1364,7 @@ mod protocol {
                 || binding.pop_credential_runtime_binding.is_some()
                 || binding.por_replay_archive_binding.is_some()
                 || binding.por_replay_archive_proof_limits.is_some()
+                || has_stream_token_gateway_metadata
             {
                 return Err(BrokerError::BindingMismatch);
             }
@@ -3060,6 +3120,22 @@ mod protocol {
             sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Ambiguous => {
                 BrokerError::Ambiguous
             }
+        }
+    }
+
+    const fn stream_token_gateway_provider_error(
+        error: iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1,
+    ) -> BrokerError {
+        use iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1 as Error;
+
+        match error {
+            Error::Unavailable | Error::ReputationCallback => BrokerError::Unavailable,
+            Error::InvalidRequest | Error::Rejected | Error::SubstitutedOutcome => {
+                BrokerError::Rejected
+            }
+            Error::BindingMismatch | Error::StaleOrRevoked => BrokerError::StaleOrRevoked,
+            Error::Conflict => BrokerError::Conflict,
+            Error::Ambiguous => BrokerError::Ambiguous,
         }
     }
 
@@ -6023,6 +6099,7 @@ mod protocol {
         }
         match requested.slot {
             slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id()
+                || slot == IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id()
                 || slot == IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider.wire_id()
                 || slot == IrohaRuntimeProviderSlotV1::PrivacyReleaseAnchor.wire_id()
                 || slot == IrohaRuntimeProviderSlotV1::TransparencyLeaderLease.wire_id()
@@ -8318,6 +8395,10 @@ mod protocol {
                 | OPERATION_SORACLOUD_PROVENANCE_SIGN_V1
                 | OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1
                 | OPERATION_STREAM_TOKEN_SIGN_V1
+                | OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1
+                | OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1
+                | OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1
+                | OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1
                 | OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1
                 | OPERATION_APPEAL_FINANCE_CHECKPOINT_SIGN_V1
                 | OPERATION_APPEAL_FINANCE_CHECKPOINT_LOAD_V1
@@ -9013,1219 +9094,7 @@ mod protocol {
         }
     }
 
-    fn validate_operation_payload(
-        request: &OperationRequestV1,
-        session_chain_id: Option<&str>,
-    ) -> Result<(), BrokerError> {
-        let moderation_quarantine_slot =
-            IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id();
-        let moderation_transaction_signer_slot =
-            IrohaRuntimeProviderSlotV1::ModerationTransactionSigner.wire_id();
-        let moderation_settlement_handoff_slot =
-            IrohaRuntimeProviderSlotV1::ModerationSettlementHandoff.wire_id();
-        let moderation_publication_handoff_slot =
-            IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id();
-        let moderation_panel_notification_slot =
-            IrohaRuntimeProviderSlotV1::ModerationPanelNotification.wire_id();
-        let privacy_cycle_prf_slot = IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider.wire_id();
-        let privacy_release_anchor_slot =
-            IrohaRuntimeProviderSlotV1::PrivacyReleaseAnchor.wire_id();
-        let transparency_leader_lease_slot =
-            IrohaRuntimeProviderSlotV1::TransparencyLeaderLease.wire_id();
-        let fenced_privacy_publisher_slot =
-            IrohaRuntimeProviderSlotV1::FencedPrivacyPublisher.wire_id();
-        let fenced_privacy_head_reader_slot =
-            IrohaRuntimeProviderSlotV1::FencedPrivacyHeadReader.wire_id();
-        let signer_slot = IrohaRuntimeProviderSlotV1::GovernanceDagSigner.wire_id();
-        let ipfs_auth_slot = IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator.wire_id();
-        let head_auth_slot = IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator.wire_id();
-        let checkpoint_slot = IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore.wire_id();
-        let stream_token_slot = IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id();
-        let appeal_signer_slot =
-            IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner.wire_id();
-        let appeal_checkpoint_slot = IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint.wire_id();
-        let potr_gateway_slot = IrohaRuntimeProviderSlotV1::PotrGatewaySigner.wire_id();
-        let potr_provider_slot = IrohaRuntimeProviderSlotV1::PotrProviderSigner.wire_id();
-        let gateway_acme_slot = IrohaRuntimeProviderSlotV1::GatewayAcmeClient.wire_id();
-        let gateway_compliance_slot =
-            IrohaRuntimeProviderSlotV1::GatewayComplianceFeedTransport.wire_id();
-        let pop_registry_slot = IrohaRuntimeProviderSlotV1::PopCredentialProviderRegistry.wire_id();
-        let por_replay_archive_slot =
-            IrohaRuntimeProviderSlotV1::PorFinalizedReplayArchive.wire_id();
-        let provider_ingest_resolver_slot =
-            IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver.wire_id();
-        let provider_ingest_source_slot =
-            IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id();
-        let provider_ingest_signer_slot =
-            IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner.wire_id();
-        let provider_ingest_checkpoint_slot =
-            IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore.wire_id();
-        let provider_ingest_retention_slot =
-            IrohaRuntimeProviderSlotV1::ProviderIngestRetentionAuthority.wire_id();
-        let reputation_retention_slot =
-            IrohaRuntimeProviderSlotV1::ReputationFinalizedArchiveRetentionAuthority.wire_id();
-        let reputation_journal_slot =
-            IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter.wire_id();
-        let reputation_threshold_slot =
-            IrohaRuntimeProviderSlotV1::ReputationThresholdSigner.wire_id();
-        let reputation_governance_slot =
-            IrohaRuntimeProviderSlotV1::ReputationGovernanceDag.wire_id();
-        let reputation_checkpoint_slot =
-            IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint.wire_id();
-        let billing_finalized_query_slot =
-            IrohaRuntimeProviderSlotV1::BillingFinalizedQuery.wire_id();
-        let billing_journal_verifier_slot =
-            IrohaRuntimeProviderSlotV1::BillingJournalVerifier.wire_id();
-        let billing_statement_signer_slot =
-            IrohaRuntimeProviderSlotV1::BillingStatementSigner.wire_id();
-        let billing_statement_publisher_slot =
-            IrohaRuntimeProviderSlotV1::BillingStatementPublisher.wire_id();
-        let billing_acknowledgement_authority_slot =
-            IrohaRuntimeProviderSlotV1::BillingAcknowledgementAuthority.wire_id();
-        let billing_epoch_witness_store_slot =
-            IrohaRuntimeProviderSlotV1::BillingEpochWitnessStore.wire_id();
-        let evidence_webauthn_slot = IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn.wire_id();
-        let evidence_grants_slot =
-            IrohaRuntimeProviderSlotV1::EvidenceViewerGrantAuthority.wire_id();
-        let evidence_receipt_signer_slot =
-            IrohaRuntimeProviderSlotV1::EvidenceViewerReceiptSigner.wire_id();
-        let evidence_erasure_slot = IrohaRuntimeProviderSlotV1::EvidenceViewerErasure.wire_id();
-        let evidence_checkpoint_slot =
-            IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore.wire_id();
-        let moderation_checkpoint_slot =
-            IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id();
-        let evidence_archive_slot =
-            IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive.wire_id();
-        let evidence_transparency_publisher_slot =
-            IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher.wire_id();
-        let soracloud_runtime_signer_slot =
-            IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
-        let soracloud_hf_credential_slot =
-            IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id();
-        match (request.binding.slot, request.operation) {
-            (slot, OPERATION_QUALIFY_V1)
-                if slot == moderation_quarantine_slot
-                    || slot == privacy_cycle_prf_slot
-                    || slot == privacy_release_anchor_slot
-                    || slot == transparency_leader_lease_slot
-                    || slot == fenced_privacy_publisher_slot
-                    || slot == fenced_privacy_head_reader_slot
-                    || slot == signer_slot
-                    || slot == ipfs_auth_slot
-                    || slot == head_auth_slot
-                    || slot == checkpoint_slot
-                    || slot == appeal_signer_slot
-                    || slot == appeal_checkpoint_slot
-                    || slot == potr_gateway_slot
-                    || slot == potr_provider_slot
-                    || slot == gateway_acme_slot
-                    || slot == gateway_compliance_slot
-                    || slot == pop_registry_slot
-                    || slot == por_replay_archive_slot
-                    || slot == moderation_transaction_signer_slot
-                    || slot == moderation_settlement_handoff_slot
-                    || slot == moderation_publication_handoff_slot
-                    || slot == moderation_panel_notification_slot
-                    || slot == reputation_journal_slot
-                    || slot == reputation_threshold_slot
-                    || slot == reputation_governance_slot
-                    || slot == reputation_checkpoint_slot
-                    || slot == billing_finalized_query_slot
-                    || slot == billing_journal_verifier_slot
-                    || slot == billing_statement_signer_slot
-                    || slot == billing_statement_publisher_slot
-                    || slot == billing_acknowledgement_authority_slot
-                    || slot == billing_epoch_witness_store_slot
-                    || slot == soracloud_runtime_signer_slot
-                    || slot == soracloud_hf_credential_slot
-                    || native_transaction_signer_role_for_slot(slot).is_some() =>
-            {
-                decode_canonical::<()>(&request.payload, MAX_OPERATION_FRAME_BYTES_V1)?;
-            }
-            (slot, OPERATION_PRIVACY_CYCLE_PRF_DERIVE_V1) if slot == privacy_cycle_prf_slot => {
-                decode_canonical::<PrivacyCyclePrfRequestWireV1>(
-                    &request.payload,
-                    MAX_TRANSPARENCY_PRF_FRAME_BYTES_V1,
-                )?
-                .to_request()?;
-            }
-            (slot, OPERATION_PRIVACY_RELEASE_ANCHOR_FINALIZED_HEAD_V1)
-                if slot == privacy_release_anchor_slot =>
-            {
-                let finalized = decode_canonical::<PrivacyReleaseAnchorFinalizedHeadRequestWireV1>(
-                    &request.payload,
-                    MAX_PRIVACY_RELEASE_ANCHOR_FRAME_BYTES_V1,
-                )?;
-                validate_privacy_release_anchor_query(finalized)?;
-            }
-            (slot, OPERATION_PRIVACY_RELEASE_ANCHOR_COMPARE_AND_SET_V1)
-                if slot == privacy_release_anchor_slot =>
-            {
-                let compare = decode_canonical::<PrivacyReleaseAnchorCompareAndSetRequestWireV1>(
-                    &request.payload,
-                    MAX_PRIVACY_RELEASE_ANCHOR_FRAME_BYTES_V1,
-                )?;
-                validate_privacy_release_anchor_compare_and_set(&compare)?;
-            }
-            (slot, OPERATION_TRANSPARENCY_LEADER_LEASE_ACQUIRE_V1)
-                if slot == transparency_leader_lease_slot =>
-            {
-                let configured = transparency_runtime_binding_from_wire(&request.binding)?;
-                let acquire = decode_canonical::<TransparencyLeaderLeaseAcquireRequestWireV1>(
-                    &request.payload,
-                    MAX_TRANSPARENCY_LEADER_LEASE_FRAME_BYTES_V1,
-                )?;
-                validate_transparency_leader_lease_acquire(&acquire, &configured)?;
-            }
-            (slot, OPERATION_TRANSPARENCY_LEADER_LEASE_RENEW_V1)
-                if slot == transparency_leader_lease_slot =>
-            {
-                let configured = transparency_runtime_binding_from_wire(&request.binding)?;
-                let renew = decode_canonical::<TransparencyLeaderLeaseRenewRequestWireV1>(
-                    &request.payload,
-                    MAX_TRANSPARENCY_LEADER_LEASE_FRAME_BYTES_V1,
-                )?;
-                validate_transparency_leader_lease_renew(&renew, &configured)?;
-            }
-            (slot, OPERATION_TRANSPARENCY_LEADER_LEASE_RELEASE_V1)
-                if slot == transparency_leader_lease_slot =>
-            {
-                let configured = transparency_runtime_binding_from_wire(&request.binding)?;
-                let release = decode_canonical::<TransparencyLeaderLeaseReleaseRequestWireV1>(
-                    &request.payload,
-                    MAX_TRANSPARENCY_LEADER_LEASE_FRAME_BYTES_V1,
-                )?;
-                validate_transparency_leader_lease_release(&release, &configured)?;
-            }
-            (slot, OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1)
-                if slot == fenced_privacy_publisher_slot =>
-            {
-                decode_canonical::<FencedPrivacyPublicationRequestWireV1>(
-                    &request.payload,
-                    MAX_FENCED_PRIVACY_PUBLICATION_FRAME_BYTES_V1,
-                )?
-                .to_request()?;
-            }
-            (slot, OPERATION_FENCED_PRIVACY_READ_HEAD_WITH_ANCESTRY_V1)
-                if slot == fenced_privacy_head_reader_slot =>
-            {
-                decode_canonical::<FencedPrivacyHeadReadRequestWireV1>(
-                    &request.payload,
-                    MAX_FENCED_PRIVACY_HEAD_FRAME_BYTES_V1,
-                )?
-                .to_required_evidence()?;
-            }
-            (slot, OPERATION_NATIVE_TRANSACTION_SIGN_V1)
-                if slot == moderation_transaction_signer_slot =>
-            {
-                decode_native_transaction_payload(&request.payload)?;
-            }
-            (slot, OPERATION_MODERATION_HANDOFF_DELIVER_ONCE_V1)
-                if slot == moderation_settlement_handoff_slot
-                    || slot == moderation_publication_handoff_slot =>
-            {
-                let handoff = decode_canonical::<ModerationDurableHandoffRequestWireV1>(
-                    &request.payload,
-                    MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
-                )?;
-                validate_moderation_handoff_request(&handoff, slot)?;
-            }
-            (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_DELIVER_ONCE_V1)
-                if slot == moderation_panel_notification_slot =>
-            {
-                let notification =
-                    decode_canonical::<ModerationDurablePanelNotificationRequestWireV1>(
-                        &request.payload,
-                        MAX_MODERATION_PANEL_NOTIFICATION_FRAME_BYTES_V1,
-                    )?;
-                validate_moderation_panel_notification_request(&notification)?;
-            }
-            (slot, OPERATION_REPUTATION_JOURNAL_SUPPORTS_AUTHORITY_V1)
-                if slot == reputation_journal_slot =>
-            {
-                decode_canonical::<ReputationJournalSupportsAuthorityRequestWireV1>(
-                    &request.payload,
-                    MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
-                )?;
-            }
-            (slot, OPERATION_REPUTATION_JOURNAL_SUBMIT_V1) if slot == reputation_journal_slot => {
-                let wire = decode_canonical::<ReputationJournalTransactionRequestWireV1>(
-                    &request.payload,
-                    MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                reputation_journal_request_from_wire(wire)?;
-            }
-            (slot, OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1)
-                if slot == reputation_threshold_slot =>
-            {
-                let wire = decode_canonical::<ReputationThresholdSigningRequestWireV1>(
-                    &request.payload,
-                    MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                reputation_threshold_request_from_wire(wire)?;
-            }
-            (slot, OPERATION_REPUTATION_GOVERNANCE_RECONCILE_V1)
-                if slot == reputation_governance_slot =>
-            {
-                let wire = decode_canonical::<ReputationGovernanceDagPublicationRequestWireV1>(
-                    &request.payload,
-                    MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                reputation_governance_request_from_wire(wire)?;
-            }
-            (slot, OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1)
-                if slot == reputation_checkpoint_slot =>
-            {
-                let version = decode_canonical::<u8>(
-                    &request.payload,
-                    MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
-                )?;
-                if version != CHECKPOINT_LOAD_REQUEST_VERSION_V1 {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1)
-                if slot == reputation_checkpoint_slot =>
-            {
-                let compare =
-                    decode_canonical::<ReputationJournalCheckpointCompareAndSwapRequestWireV1>(
-                        &request.payload,
-                        MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
-                    )?;
-                if compare.expected_revision == Some([0; 32]) {
-                    return Err(BrokerError::Rejected);
-                }
-                reserve_external_canonical_decode(
-                    compare.next_record.len(),
-                    MAX_REPUTATION_JOURNAL_CHECKPOINT_RECORD_BYTES_V1,
-                )?;
-                sorafs_node::reputation::runtime::ReputationJournalSealedCheckpointRecordV1::
-                    from_canonical_bytes(
-                        &compare.next_record,
-                        sorafs_node::reputation::runtime::
-                            REPUTATION_JOURNAL_PRODUCER_MAX_CHECKPOINT_BYTES_V1,
-                    )
-                    .map_err(|_| BrokerError::Rejected)?;
-            }
-            (slot, OPERATION_BILLING_IDENTITY_V1)
-                if slot == billing_finalized_query_slot
-                    || slot == billing_journal_verifier_slot
-                    || slot == billing_statement_signer_slot
-                    || slot == billing_statement_publisher_slot
-                    || slot == billing_acknowledgement_authority_slot =>
-            {
-                decode_canonical::<()>(&request.payload, MAX_BILLING_CONTROL_FRAME_BYTES_V1)?;
-            }
-            (slot, OPERATION_BILLING_READINESS_V1)
-                if slot == billing_finalized_query_slot
-                    || slot == billing_journal_verifier_slot
-                    || slot == billing_statement_signer_slot
-                    || slot == billing_statement_publisher_slot
-                    || slot == billing_acknowledgement_authority_slot
-                    || slot == billing_epoch_witness_store_slot =>
-            {
-                decode_canonical::<()>(&request.payload, MAX_BILLING_CONTROL_FRAME_BYTES_V1)?;
-            }
-            (slot, OPERATION_BILLING_QUERY_CAPABILITIES_V1)
-            | (slot, OPERATION_BILLING_FINALIZED_HEAD_V1)
-                if slot == billing_finalized_query_slot =>
-            {
-                decode_canonical::<()>(&request.payload, MAX_BILLING_CONTROL_FRAME_BYTES_V1)?;
-            }
-            (slot, OPERATION_BILLING_QUERY_PAGE_V1) if slot == billing_finalized_query_slot => {
-                let query = decode_canonical::<BillingQueryPageRequestWireV1>(
-                    &request.payload,
-                    MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                validate_billing_query_position(query.position)?;
-                if query.max_events == 0
-                    || query.max_events
-                        > sorafs_node::hedging_billing_service::
-                            HEDGING_BILLING_MAX_EVENTS_PER_PAGE_V1
-                {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_BILLING_QUERY_PERIOD_CLOSE_V1)
-                if slot == billing_finalized_query_slot =>
-            {
-                let query = decode_canonical::<BillingQueryPeriodCloseRequestWireV1>(
-                    &request.payload,
-                    MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                validate_billing_query_position(query.position)?;
-                if query.period_end_unix == 0 {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_BILLING_VERIFY_PAGE_V1) if slot == billing_journal_verifier_slot => {
-                let verify = decode_canonical::<BillingVerifyPageRequestWireV1>(
-                    &request.payload,
-                    MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                validate_billing_chain_id(&verify.chain_id)?;
-                validate_billing_page_shape(&verify.page, None)?;
-                if verify.page.chain_id != verify.chain_id {
-                    return Err(BrokerError::Rejected);
-                }
-                if let Some(previous) = verify.previous {
-                    validate_billing_journal_commitment(previous)?;
-                }
-            }
-            (slot, OPERATION_BILLING_VERIFY_PERIOD_CLOSE_V1)
-                if slot == billing_journal_verifier_slot =>
-            {
-                let verify = decode_canonical::<BillingVerifyPeriodCloseRequestWireV1>(
-                    &request.payload,
-                    MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                validate_billing_chain_id(&verify.chain_id)?;
-                validate_billing_period_close_shape(&verify.close, None)?;
-                if verify.close.chain_id != verify.chain_id {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_BILLING_VERIFY_EPOCH_TRANSITION_V1)
-                if slot == billing_journal_verifier_slot =>
-            {
-                let verify = decode_canonical::<BillingVerifyEpochTransitionRequestWireV1>(
-                    &request.payload,
-                    MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                validate_billing_chain_id(&verify.chain_id)?;
-                verify
-                    .transition
-                    .verify()
-                    .map_err(|_| BrokerError::Rejected)?;
-                if verify.transition.previous_service_policy.chain_id != verify.chain_id
-                    || verify.transition.next_service_policy.chain_id != verify.chain_id
-                {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_BILLING_SIGN_STATEMENT_DIGEST_V1)
-                if slot == billing_statement_signer_slot =>
-            {
-                let sign = decode_canonical::<BillingSignDigestRequestWireV1>(
-                    &request.payload,
-                    MAX_BILLING_CONTROL_FRAME_BYTES_V1,
-                )?;
-                if sign.digest == [0; 32] {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_BILLING_PUBLISH_STATEMENT_V1)
-                if slot == billing_statement_publisher_slot =>
-            {
-                let publish = decode_canonical::<BillingPublishStatementRequestWireV1>(
-                    &request.payload,
-                    MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                validate_billing_publish_request(&publish)?;
-            }
-            (slot, OPERATION_BILLING_LOOKUP_PUBLICATION_V1)
-                if slot == billing_statement_publisher_slot =>
-            {
-                let lookup = decode_canonical::<BillingLookupRequestWireV1>(
-                    &request.payload,
-                    MAX_BILLING_CONTROL_FRAME_BYTES_V1,
-                )?;
-                validate_billing_record_id(lookup.record_id)?;
-            }
-            (slot, OPERATION_BILLING_VERIFY_ACKNOWLEDGEMENT_V1)
-            | (slot, OPERATION_BILLING_RECORD_ACKNOWLEDGEMENT_V1)
-                if slot == billing_acknowledgement_authority_slot =>
-            {
-                let acknowledgement = decode_canonical::<BillingAcknowledgementRequestWireV1>(
-                    &request.payload,
-                    MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                validate_billing_acknowledgement_request(&acknowledgement)?;
-            }
-            (slot, OPERATION_BILLING_LOOKUP_ACKNOWLEDGEMENT_V1)
-                if slot == billing_acknowledgement_authority_slot =>
-            {
-                let lookup = decode_canonical::<BillingLookupRequestWireV1>(
-                    &request.payload,
-                    MAX_BILLING_CONTROL_FRAME_BYTES_V1,
-                )?;
-                validate_billing_record_id(lookup.record_id)?;
-            }
-            (slot, OPERATION_BILLING_LOAD_LATEST_EPOCH_V1)
-                if slot == billing_epoch_witness_store_slot =>
-            {
-                decode_canonical::<()>(&request.payload, MAX_BILLING_CONTROL_FRAME_BYTES_V1)?;
-            }
-            (slot, OPERATION_BILLING_LOAD_EPOCH_V1) if slot == billing_epoch_witness_store_slot => {
-                let load = decode_canonical::<BillingLoadEpochRequestWireV1>(
-                    &request.payload,
-                    MAX_BILLING_CONTROL_FRAME_BYTES_V1,
-                )?;
-                if load.epoch_sequence == 0 {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_BILLING_COMPARE_AND_SWAP_EPOCH_V1)
-                if slot == billing_epoch_witness_store_slot =>
-            {
-                let compare = decode_canonical::<BillingCompareAndSwapEpochRequestWireV1>(
-                    &request.payload,
-                    MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                if compare.expected_revision == Some([0; 32]) {
-                    return Err(BrokerError::Rejected);
-                }
-                compare
-                    .next
-                    .validate(
-                        sorafs_node::hedging_billing_service::
-                            HEDGING_BILLING_MAX_CHECKPOINT_BYTES_V1,
-                    )
-                    .map_err(|_| BrokerError::Rejected)?;
-            }
-            (slot, OPERATION_NATIVE_TRANSACTION_SIGN_V1)
-                if native_transaction_signer_role_for_slot(slot).is_some() =>
-            {
-                let expected = native_transaction_signer_binding_from_wire(&request.binding)?;
-                let payload = decode_native_transaction_payload(&request.payload)?;
-                if payload.authority() != expected.authority() {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_NATIVE_TRANSACTION_SIGN_V1)
-                if slot == soracloud_runtime_signer_slot =>
-            {
-                let expected = soracloud_runtime_signer_binding_from_wire(&request.binding)?;
-                let payload = decode_native_transaction_payload(&request.payload)?;
-                if payload.authority() != expected.authority() {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_SORACLOUD_PROVENANCE_SIGN_V1)
-                if slot == soracloud_runtime_signer_slot =>
-            {
-                let sign = decode_canonical::<SoracloudProvenanceSignRequestWireV1>(
-                    &request.payload,
-                    MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
-                )?;
-                let purpose = iroha_data_model::soracloud::
-                    SoracloudRuntimeProvenancePurposeV1::try_from_wire_id(sign.purpose)
-                    .map_err(|_| BrokerError::Rejected)?;
-                if sign.preimage.is_empty()
-                    || sign.preimage.len() > MAX_NATIVE_TRANSACTION_PAYLOAD_BYTES_V1
-                {
-                    return Err(BrokerError::Rejected);
-                }
-                iroha_data_model::soracloud::validate_soracloud_runtime_provenance_preimage_v1(
-                    purpose,
-                    &sign.preimage,
-                )
-                .map_err(|_| BrokerError::Rejected)?;
-            }
-            (slot, OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1)
-                if slot == soracloud_hf_credential_slot =>
-            {
-                let mut wire = decode_canonical::<SoracloudHfAuthenticatedInferenceRequestWireV1>(
-                    &request.payload,
-                    MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
-                )?;
-                crate::soracloud_hf_credential::
-                    SoracloudHfAuthenticatedInferenceRequestV1::try_new(
-                        std::mem::take(&mut wire.url),
-                        std::mem::take(&mut wire.content_type),
-                        wire.accept.take(),
-                        std::mem::take(&mut wire.body),
-                        wire.maximum_response_bytes,
-                    )
-                    .map_err(|_| BrokerError::Rejected)?;
-            }
-            (slot, OPERATION_STREAM_TOKEN_SIGN_V1) if slot == stream_token_slot => {
-                let signing = decode_canonical::<SignRequestWireV1>(
-                    &request.payload,
-                    MAX_STREAM_TOKEN_FRAME_BYTES_V1,
-                )?;
-                validate_stream_token_signing_payload(&signing.payload)?;
-            }
-            (slot, OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1) if slot == appeal_signer_slot => {
-                let exact = request
-                    .binding
-                    .appeal_finance_signer_binding
-                    .as_ref()
-                    .ok_or(BrokerError::BindingMismatch)?;
-                let payload = decode_transaction_payload_bounded(
-                    &request.payload,
-                    MAX_APPEAL_FINANCE_TRANSACTION_BYTES_V1,
-                )?;
-                if payload.authority() != &exact.authority {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_APPEAL_FINANCE_CHECKPOINT_SIGN_V1)
-                if slot == appeal_checkpoint_slot =>
-            {
-                let digest = decode_canonical::<[u8; 32]>(
-                    &request.payload,
-                    MAX_STREAM_TOKEN_FRAME_BYTES_V1,
-                )?;
-                if digest == [0; 32] {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_APPEAL_FINANCE_CHECKPOINT_LOAD_V1)
-                if slot == appeal_checkpoint_slot =>
-            {
-                decode_canonical::<()>(&request.payload, MAX_STREAM_TOKEN_FRAME_BYTES_V1)?;
-            }
-            (slot, OPERATION_APPEAL_FINANCE_CHECKPOINT_COMPARE_AND_SWAP_V1)
-                if slot == appeal_checkpoint_slot =>
-            {
-                let compare = decode_canonical::<AppealFinanceCheckpointCompareAndSwapWireV1>(
-                    &request.payload,
-                    MAX_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1,
-                )?;
-                if compare.expected_revision == Some([0; 32]) {
-                    return Err(BrokerError::Rejected);
-                }
-                let checkpoint_max = request
-                    .binding
-                    .appeal_finance_checkpoint_max_bytes
-                    .ok_or(BrokerError::BindingMismatch)?;
-                compare
-                    .next
-                    .validate(checkpoint_max)
-                    .map_err(|_| BrokerError::Rejected)?;
-            }
-            (slot, OPERATION_POTR_SIGN_V1)
-                if slot == potr_gateway_slot || slot == potr_provider_slot =>
-            {
-                let signing = decode_canonical::<PotrSignRequestWireV1>(
-                    &request.payload,
-                    MAX_POTR_FRAME_BYTES_V1,
-                )?;
-                if signing.payload.is_empty()
-                    || signing.payload.len() > MAX_POTR_SIGNING_PAYLOAD_BYTES_V1
-                    || signing.expected_public_key.is_empty()
-                    || signing.expected_public_key.len() > MAX_POTR_PUBLIC_KEY_BYTES_V1
-                {
-                    return Err(BrokerError::Rejected);
-                }
-                let runtime = request
-                    .binding
-                    .potr_runtime_binding
-                    .as_ref()
-                    .ok_or(BrokerError::BindingMismatch)?;
-                validate_potr_signing_payload(
-                    &signing.payload,
-                    runtime.baseline_admission_policy.provider_id,
-                )?;
-                if slot == potr_gateway_slot {
-                    if signing.expected_public_key.as_slice()
-                        != runtime.gateway_public_key.as_slice()
-                    {
-                        return Err(BrokerError::BindingMismatch);
-                    }
-                } else if iroha_crypto::PublicKey::from_bytes(
-                    iroha_crypto::Algorithm::MlDsa,
-                    &signing.expected_public_key,
-                )
-                .is_err()
-                {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_GATEWAY_ACME_ORDER_CERTIFICATE_V1) if slot == gateway_acme_slot => {
-                let order = decode_canonical::<GatewayAcmeOrderRequestWireV1>(
-                    &request.payload,
-                    MAX_GATEWAY_ACME_FRAME_BYTES_V1,
-                )?;
-                validate_gateway_acme_order(&order)?;
-            }
-            (slot, OPERATION_GATEWAY_COMPLIANCE_RESOLVE_V1) if slot == gateway_compliance_slot => {
-                let resolve = decode_canonical::<GatewayComplianceResolveRequestWireV1>(
-                    &request.payload,
-                    128 * 1024,
-                )?;
-                validate_gateway_compliance_resolve_request(&resolve)?;
-            }
-            (slot, OPERATION_GATEWAY_COMPLIANCE_FETCH_V1) if slot == gateway_compliance_slot => {
-                let fetch = decode_canonical::<GatewayComplianceFetchRequestWireV1>(
-                    &request.payload,
-                    MAX_GATEWAY_COMPLIANCE_FRAME_BYTES_V1,
-                )?;
-                validate_gateway_compliance_fetch_request(&fetch)?;
-            }
-            (slot, OPERATION_POP_RUNTIME_RESOLVE_V1) if slot == pop_registry_slot => {
-                let exact = decode_canonical::<PopCredentialRuntimeBindingWireV1>(
-                    &request.payload,
-                    MAX_POP_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                if Some(&exact) != request.binding.pop_credential_runtime_binding.as_ref() {
-                    return Err(BrokerError::BindingMismatch);
-                }
-                pop_runtime_bindings_from_wire(&request.binding)?;
-            }
-            (slot, OPERATION_POP_ISSUER_SIGN_V1) if slot == pop_registry_slot => {
-                let sign = decode_canonical::<PopIssuerSignRequestWireV1>(
-                    &request.payload,
-                    MAX_POP_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                if sign.digest == [0; 32] {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_POP_AUTHENTICATE_V1) if slot == pop_registry_slot => {
-                let authenticate = decode_canonical::<PopAuthenticateRequestWireV1>(
-                    &request.payload,
-                    MAX_POP_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                validate_pop_authenticate_request(&authenticate)?;
-            }
-            (slot, OPERATION_POP_REGISTRY_SUBMIT_V1) if slot == pop_registry_slot => {
-                let submit = decode_canonical::<PopRegistrySubmitRequestWireV1>(
-                    &request.payload,
-                    MAX_POP_REGISTRY_OPERATION_BYTES_V1,
-                )?;
-                if submit.idempotency_key == [0; 32] {
-                    return Err(BrokerError::Rejected);
-                }
-                submit
-                    .operation
-                    .validate()
-                    .map_err(|_| BrokerError::Rejected)?;
-            }
-            (slot, OPERATION_POP_REGISTRY_NEXT_V1) if slot == pop_registry_slot => {
-                let next = decode_canonical::<PopRegistryNextRequestWireV1>(
-                    &request.payload,
-                    MAX_POP_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                if let Some(cursor) = next.cursor {
-                    validate_pop_cursor(cursor)?;
-                }
-            }
-            (slot, OPERATION_POP_ISSUANCE_DRAFT_V1) if slot == pop_registry_slot => {
-                let draft = decode_canonical::<PopIssuanceDraftRequestWireV1>(
-                    &request.payload,
-                    MAX_POP_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                if draft.request_id == [0; 32] || draft.now_epoch == 0 {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_POP_WALLET_WRAP_DEK_V1) if slot == pop_registry_slot => {
-                let wrap = decode_canonical::<PopWalletWrapDekRequestWireV1>(
-                    &request.payload,
-                    MAX_POP_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                if wrap.context == [0; 32] || wrap.dek == [0; 32] {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_POP_WALLET_UNWRAP_DEK_V1) if slot == pop_registry_slot => {
-                let unwrap = decode_canonical::<PopWalletUnwrapDekRequestWireV1>(
-                    &request.payload,
-                    MAX_POP_RUNTIME_FRAME_BYTES_V1,
-                )?;
-                let exact = request
-                    .binding
-                    .pop_credential_runtime_binding
-                    .as_ref()
-                    .ok_or(BrokerError::BindingMismatch)?;
-                if unwrap.key_id != exact.wallet_wrapping_key_id
-                    || unwrap.context == [0; 32]
-                    || unwrap.wrapped_dek.is_empty()
-                    || unwrap.wrapped_dek.len() > MAX_POP_WRAPPED_DEK_BYTES_V1
-                {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_POP_WALLET_WITNESS_V1) if slot == pop_registry_slot => {
-                let witness = decode_canonical::<PopWalletWitnessRequestWireV1>(
-                    &request.payload,
-                    MAX_POP_PROJECTION_BYTES_V1,
-                )?;
-                if witness.credential_commitment == [0; 32] {
-                    return Err(BrokerError::Rejected);
-                }
-                let exact = request
-                    .binding
-                    .pop_credential_runtime_binding
-                    .as_ref()
-                    .ok_or(BrokerError::BindingMismatch)?;
-                validate_pop_projection(&witness.projection, exact)?;
-            }
-            (slot, OPERATION_POP_FINALIZED_TIME_V1) if slot == pop_registry_slot => {
-                decode_canonical::<()>(&request.payload, MAX_POP_RUNTIME_FRAME_BYTES_V1)?;
-            }
-            (slot, OPERATION_POR_REPLAY_ARCHIVE_READINESS_V1)
-            | (slot, OPERATION_POR_REPLAY_ARCHIVE_CURRENT_HEAD_V1)
-                if slot == por_replay_archive_slot =>
-            {
-                decode_canonical::<()>(
-                    &request.payload,
-                    MAX_POR_REPLAY_ARCHIVE_CONTROL_FRAME_BYTES_V1,
-                )?;
-            }
-            (slot, OPERATION_POR_REPLAY_ARCHIVE_APPEND_V1) if slot == por_replay_archive_slot => {
-                let append = decode_canonical::<PorReplayArchiveAppendRequestWireV1>(
-                    &request.payload,
-                    MAX_POR_REPLAY_ARCHIVE_FRAME_BYTES_V1,
-                )?;
-                validate_por_replay_archive_append_request(&append)?;
-            }
-            (slot, OPERATION_POR_REPLAY_ARCHIVE_LOOKUP_V1) if slot == por_replay_archive_slot => {
-                let lookup = decode_canonical::<PorReplayArchiveLookupRequestWireV1>(
-                    &request.payload,
-                    MAX_POR_REPLAY_ARCHIVE_CONTROL_FRAME_BYTES_V1,
-                )?;
-                validate_por_replay_archive_lookup_request(&lookup, &request.binding)?;
-            }
-            (slot, OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1)
-                if slot == moderation_quarantine_slot =>
-            {
-                let wrap = decode_canonical::<ModerationQuarantineWrapDekRequestWireV1>(
-                    &request.payload,
-                    MAX_MODERATION_QUARANTINE_OPERATION_BYTES_V1,
-                )?;
-                validate_moderation_quarantine_context_and_dek(wrap.context_digest, wrap.dek)?;
-            }
-            (slot, OPERATION_MODERATION_QUARANTINE_UNWRAP_DEK_V1)
-                if slot == moderation_quarantine_slot =>
-            {
-                let unwrap = decode_nested_canonical::<ModerationQuarantineUnwrapDekRequestWireV1>(
-                    &request.payload,
-                    MAX_MODERATION_QUARANTINE_OPERATION_BYTES_V1,
-                )?;
-                validate_moderation_quarantine_key_id(&unwrap.key_id)?;
-                if unwrap.context_digest == [0; 32] {
-                    return Err(BrokerError::Rejected);
-                }
-                validate_moderation_quarantine_wrapped_dek(&unwrap.wrapped_dek)?;
-            }
-            (slot, OPERATION_QUALIFY_V1)
-                if slot == provider_ingest_resolver_slot
-                    || slot == provider_ingest_checkpoint_slot
-                    || slot == provider_ingest_source_slot
-                    || slot == provider_ingest_retention_slot
-                    || slot == reputation_retention_slot =>
-            {
-                decode_canonical::<()>(&request.payload, MAX_OPERATION_FRAME_BYTES_V1)?;
-            }
-            (slot, OPERATION_PROVIDER_INGEST_SOURCE_READINESS_V1)
-                if slot == provider_ingest_source_slot =>
-            {
-                decode_canonical::<()>(&request.payload, MAX_OPERATION_FRAME_BYTES_V1)?;
-            }
-            (slot, OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1)
-                if slot == provider_ingest_source_slot =>
-            {
-                let fetch = decode_canonical::<ProviderIngestSourceFetchRequestWireV1>(
-                    &request.payload,
-                    MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1,
-                )?;
-                validate_source_fetch_request(&fetch, &request.binding, None)?;
-            }
-            (slot, OPERATION_SIGN_V1) if slot == signer_slot => {
-                let signing = decode_canonical::<SignRequestWireV1>(
-                    &request.payload,
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )?;
-                validate_signing_payload_len(signing.payload.len())?;
-            }
-            (slot, OPERATION_GOVERNANCE_REQUEST_AUTHENTICATE_V1)
-                if slot == ipfs_auth_slot || slot == head_auth_slot =>
-            {
-                let wire = decode_canonical::<GovernanceRequestAuthRequestWireV1>(
-                    &request.payload,
-                    MAX_GOVERNANCE_REQUEST_AUTH_FRAME_BYTES_V1,
-                )?;
-                let max_body_bytes = request
-                    .binding
-                    .governance_request_auth_max_body_bytes
-                    .ok_or(BrokerError::BindingMismatch)?;
-                let descriptor = governance_request_auth_from_wire(&wire, max_body_bytes)?;
-                let expected_scope = if slot == ipfs_auth_slot {
-                    sorafs_node::GovernanceDagAuthenticationScope::Ipfs
-                } else {
-                    sorafs_node::GovernanceDagAuthenticationScope::SignedHead
-                };
-                if descriptor.scope() != expected_scope {
-                    return Err(BrokerError::BindingMismatch);
-                }
-            }
-            (slot, OPERATION_SEALED_LOAD_V1) if slot == checkpoint_slot => {
-                let load = decode_canonical::<SealedLoadRequestWireV1>(
-                    &request.payload,
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )?;
-                sealed_slot_from_wire(load.slot)?;
-            }
-            (slot, OPERATION_SEALED_COMPARE_AND_SWAP_V1) if slot == checkpoint_slot => {
-                let compare_and_swap = decode_canonical::<SealedCompareAndSwapRequestWireV1>(
-                    &request.payload,
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )?;
-                let slot = sealed_slot_from_wire(compare_and_swap.slot)?;
-                if compare_and_swap.expected_revision == Some([0; 32]) {
-                    return Err(BrokerError::Rejected);
-                }
-                validate_sealed_record_fields(
-                    slot,
-                    compare_and_swap.next.generation,
-                    compare_and_swap.next.revision,
-                    &compare_and_swap.next.payload,
-                )?;
-            }
-            (slot, OPERATION_SEALED_DELETE_V1) if slot == checkpoint_slot => {
-                let delete = decode_canonical::<SealedDeleteRequestWireV1>(
-                    &request.payload,
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )?;
-                validate_sealed_delete(
-                    sealed_slot_from_wire(delete.slot)?,
-                    delete.expected_revision,
-                )?;
-            }
-            (slot, OPERATION_PROVIDER_INGEST_RESOLVER_READINESS_V1)
-                if slot == provider_ingest_resolver_slot =>
-            {
-                decode_canonical::<()>(&request.payload, MAX_OPERATION_FRAME_BYTES_V1)?;
-            }
-            (slot, OPERATION_PROVIDER_INGEST_RESOLVE_SIGNER_V1)
-                if slot == provider_ingest_resolver_slot =>
-            {
-                let resolve = decode_canonical::<ProviderIngestResolveSignerRequestWireV1>(
-                    &request.payload,
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )?;
-                let context = provider_ingest_signer_context_from_wire(&resolve.context)?;
-                let expected = provider_ingest_expected_signer_binding(&request.binding)?;
-                if !expected
-                    .qualification
-                    .matches_authority(&context.provider_owner)
-                    || expected.qualification.signer_policy != context.signer_policy
-                {
-                    return Err(BrokerError::BindingMismatch);
-                }
-            }
-            (slot, OPERATION_PROVIDER_INGEST_SIGN_V1) if slot == provider_ingest_signer_slot => {
-                let (context, _expected, payload) = decode_provider_ingest_sign_operation(request)?;
-                ensure_provider_ingest_completion_payload_context(&payload, &context)?;
-                if let Some(expected_chain_id) = session_chain_id {
-                    ensure_transaction_session_chain(&payload, expected_chain_id)?;
-                }
-            }
-            (slot, OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1)
-                if slot == provider_ingest_checkpoint_slot =>
-            {
-                let version = decode_canonical::<u8>(
-                    &request.payload,
-                    MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
-                )?;
-                if version != CHECKPOINT_LOAD_REQUEST_VERSION_V1 {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1)
-                if slot == provider_ingest_checkpoint_slot =>
-            {
-                let compare = decode_canonical::<
-                    ProviderIngestCheckpointCompareAndSwapRequestWireV1,
-                >(&request.payload, MAX_OPERATION_FRAME_BYTES_V1)?;
-                if compare.expected_revision == Some([0; 32]) {
-                    return Err(BrokerError::Rejected);
-                }
-                let checkpoint_max = request
-                    .binding
-                    .provider_ingest_checkpoint_max_bytes
-                    .ok_or(BrokerError::BindingMismatch)?;
-                let checkpoint_limit =
-                    usize::try_from(checkpoint_max).map_err(|_| BrokerError::Rejected)?;
-                reserve_external_canonical_decode(compare.next_record.len(), checkpoint_limit)?;
-                sorafs_node::ProviderIngestSealedCheckpointRecordV1::from_canonical_bytes(
-                    &compare.next_record,
-                    checkpoint_max,
-                )
-                .map_err(|_| BrokerError::Rejected)?;
-            }
-            (slot, OPERATION_PROVIDER_INGEST_RETENTION_LOAD_V1)
-                if slot == provider_ingest_retention_slot =>
-            {
-                let load = decode_canonical::<ProviderIngestRetentionLoadRequestWireV1>(
-                    &request.payload,
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )?;
-                validate_provider_ingest_chain_id(&load.chain_id)?;
-            }
-            (slot, OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1)
-                if slot == provider_ingest_retention_slot =>
-            {
-                let compare = decode_canonical::<ProviderIngestRetentionCompareAndSwapRequestWireV1>(
-                    &request.payload,
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )?;
-                validate_provider_ingest_chain_id(&compare.chain_id)?;
-                if compare.expected_revision == Some([0; 32]) {
-                    return Err(BrokerError::Rejected);
-                }
-                reserve_external_canonical_decode(
-                    compare.next_record.len(),
-                    MAX_PROVIDER_INGEST_RETENTION_APPROVAL_BYTES_V1,
-                )?;
-                let next = iroha_core::query::provider_ingest_finalized::
-                    ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::from_canonical_bytes(
-                        &compare.next_record,
-                    )
-                    .map_err(|_| BrokerError::Rejected)?;
-                let expected = qualification_from_binding(&request.binding)?;
-                let actual = next.authority_qualification();
-                if actual.revision() != expected.revision
-                    || actual.policy_digest() != expected.policy_digest
-                    || next.predecessor_revision() != compare.expected_revision
-                {
-                    return Err(BrokerError::BindingMismatch);
-                }
-            }
-            (slot, OPERATION_REPUTATION_RETENTION_LOAD_V1) if slot == reputation_retention_slot => {
-                let load = decode_canonical::<ReputationRetentionLoadRequestWireV1>(
-                    &request.payload,
-                    MAX_REPUTATION_RETENTION_FRAME_BYTES_V1,
-                )?;
-                validate_provider_ingest_chain_id(&load.chain_id)?;
-            }
-            (slot, OPERATION_REPUTATION_RETENTION_COMPARE_AND_SWAP_V1)
-                if slot == reputation_retention_slot =>
-            {
-                let compare = decode_canonical::<ReputationRetentionCompareAndSwapRequestWireV1>(
-                    &request.payload,
-                    MAX_REPUTATION_RETENTION_FRAME_BYTES_V1,
-                )?;
-                validate_provider_ingest_chain_id(&compare.chain_id)?;
-                if compare.expected_revision == Some([0; 32])
-                    || compare.next_record.is_empty()
-                    || compare.next_record.len() > MAX_REPUTATION_RETENTION_APPROVAL_BYTES_V1
-                {
-                    return Err(BrokerError::Rejected);
-                }
-                reserve_external_canonical_decode(
-                    compare.next_record.len(),
-                    MAX_REPUTATION_RETENTION_APPROVAL_BYTES_V1,
-                )?;
-                let next = iroha_core::query::reputation_finalized::
-                    ReputationFinalizedArchiveRetentionApprovalRecordV1::from_canonical_bytes(
-                        &compare.next_record,
-                    )
-                    .map_err(|_| BrokerError::Rejected)?;
-                let expected = qualification_from_binding(&request.binding)?;
-                let actual = next.authority_qualification();
-                if actual.revision() != expected.revision
-                    || actual.policy_digest() != expected.policy_digest
-                    || next.predecessor_revision() != compare.expected_revision
-                {
-                    return Err(BrokerError::BindingMismatch);
-                }
-            }
-            (slot, OPERATION_QUALIFY_V1)
-                if slot == evidence_webauthn_slot
-                    || slot == evidence_grants_slot
-                    || slot == evidence_receipt_signer_slot
-                    || slot == evidence_erasure_slot
-                    || slot == evidence_checkpoint_slot
-                    || slot == moderation_checkpoint_slot
-                    || slot == evidence_archive_slot
-                    || slot == evidence_transparency_publisher_slot =>
-            {
-                decode_canonical::<()>(&request.payload, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)?;
-            }
-            (slot, OPERATION_EVIDENCE_VIEWER_ISSUE_CHALLENGE_V1)
-                if slot == evidence_webauthn_slot =>
-            {
-                let issue = decode_canonical::<EvidenceViewerIssueChallengeRequestWireV1>(
-                    &request.payload,
-                    MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                )?;
-                let webauthn = request
-                    .binding
-                    .evidence_viewer_webauthn_binding
-                    .as_ref()
-                    .ok_or(BrokerError::BindingMismatch)?;
-                let lifetime = issue
-                    .expires_at_unix_ms
-                    .checked_sub(issue.issued_at_unix_ms)
-                    .ok_or(BrokerError::Rejected)?;
-                if issue.binding_digest == [0; 32]
-                    || issue.issued_at_unix_ms == 0
-                    || lifetime != webauthn.challenge_ttl_ms
-                {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_EVIDENCE_VIEWER_VERIFY_AND_CONSUME_V1)
-                if slot == evidence_webauthn_slot =>
-            {
-                let verify = decode_canonical::<EvidenceViewerVerifyAndConsumeRequestWireV1>(
-                    &request.payload,
-                    MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                )?;
-                let webauthn = request
-                    .binding
-                    .evidence_viewer_webauthn_binding
-                    .as_ref()
-                    .ok_or(BrokerError::BindingMismatch)?;
-                validate_evidence_viewer_secret(&verify.challenge)?;
-                if verify.assertion.is_empty()
-                    || verify.assertion.len()
-                        > sorafs_node::evidence_viewer::
-                            EVIDENCE_VIEWER_MAX_WEBAUTHN_ASSERTION_BYTES_V1
-                    || verify.binding_digest == [0; 32]
-                    || verify.rp_id != webauthn.rp_id
-                    || verify.allowed_origins != webauthn.allowed_origins
-                    || verify.now_unix_ms == 0
-                {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_EVIDENCE_VIEWER_GRANT_ISSUE_V1) if slot == evidence_grants_slot => {
-                let issue = decode_canonical::<EvidenceViewerGrantIssueRequestWireV1>(
-                    &request.payload,
-                    MAX_EVIDENCE_VIEWER_CLAIMS_BYTES_V1,
-                )?;
-                validate_evidence_viewer_grant_claims(&issue.claims, &request.binding)?;
-            }
-            (slot, OPERATION_EVIDENCE_VIEWER_GRANT_VERIFY_V1) if slot == evidence_grants_slot => {
-                let verify = decode_canonical::<EvidenceViewerGrantVerifyRequestWireV1>(
-                    &request.payload,
-                    MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                )?;
-                validate_evidence_viewer_secret(&verify.token)?;
-                validate_evidence_viewer_grant_claims(&verify.claims, &request.binding)?;
-                if verify.now_unix_ms < verify.claims.issued_at_unix_ms
-                    || verify.now_unix_ms >= verify.claims.expires_at_unix_ms
-                {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_EVIDENCE_VIEWER_GRANT_REVOKE_V1) if slot == evidence_grants_slot => {
-                let revoke = decode_canonical::<EvidenceViewerGrantRevokeRequestWireV1>(
-                    &request.payload,
-                    MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                )?;
-                if revoke.token_digest == [0; 32] {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_EVIDENCE_VIEWER_RECEIPT_SIGN_V1)
-                if slot == evidence_receipt_signer_slot =>
-            {
-                let sign = decode_canonical::<SignRequestWireV1>(
-                    &request.payload,
-                    MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                )?;
-                if sign.payload.is_empty()
-                    || sign.payload.len() > MAX_EVIDENCE_VIEWER_RECEIPT_MESSAGE_BYTES_V1
-                {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_EVIDENCE_VIEWER_ERASE_V1) if slot == evidence_erasure_slot => {
-                let erase = decode_canonical::<EvidenceViewerEraseRequestWireV1>(
-                    &request.payload,
-                    MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                )?;
-                if erase.operation_id == [0; 32]
-                    || erase.quarantine_id == [0; 16]
-                    || erase.object_id == [0; 16]
-                    || erase.evidence_digest == [0; 32]
-                {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_EVIDENCE_VIEWER_CHECKPOINT_LOAD_V1)
-                if slot == evidence_checkpoint_slot =>
-            {
-                decode_canonical::<()>(&request.payload, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)?;
-            }
-            (slot, OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1)
-                if slot == evidence_checkpoint_slot =>
-            {
-                let compare = decode_canonical::<
-                    EvidenceViewerCheckpointCompareAndSwapRequestWireV1,
-                >(
-                    &request.payload, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
-                )?;
-                if compare.expected_revision == Some([0; 32]) {
-                    return Err(BrokerError::Rejected);
-                }
-                decode_evidence_viewer_checkpoint_record(&compare.next_record, &request.binding)?;
-            }
-            (slot, OPERATION_MODERATION_CHECKPOINT_LOAD_V1)
-                if slot == moderation_checkpoint_slot =>
-            {
-                decode_canonical::<()>(&request.payload, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)?;
-            }
-            (slot, OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1)
-                if slot == moderation_checkpoint_slot =>
-            {
-                let compare = decode_canonical::<
-                    EvidenceViewerCheckpointCompareAndSwapRequestWireV1,
-                >(
-                    &request.payload, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
-                )?;
-                if compare.expected_revision == Some([0; 32]) {
-                    return Err(BrokerError::Rejected);
-                }
-                decode_moderation_checkpoint_record(&compare.next_record, &request.binding)?;
-            }
-            (slot, OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1)
-                if slot == evidence_archive_slot =>
-            {
-                let install = decode_canonical::<EvidenceViewerArchiveInstallRequestWireV1>(
-                    &request.payload,
-                    MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
-                )?;
-                let max_bytes = usize::try_from(
-                    request
-                        .binding
-                        .evidence_viewer_archive_max_bytes
-                        .ok_or(BrokerError::BindingMismatch)?,
-                )
-                .map_err(|_| BrokerError::Rejected)?;
-                if install.operation_id == [0; 32]
-                    || install.receipt_message == [0; 32]
-                    || install.canonical_artifact.is_empty()
-                    || install.canonical_artifact.len() > max_bytes
-                {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1) if slot == evidence_archive_slot => {
-                let read = decode_canonical::<EvidenceViewerArchiveReadRequestWireV1>(
-                    &request.payload,
-                    MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                )?;
-                if read.operation_id == [0; 32] {
-                    return Err(BrokerError::Rejected);
-                }
-            }
-            (slot, OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1)
-                if slot == evidence_transparency_publisher_slot =>
-            {
-                decode_canonical::<()>(&request.payload, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)?;
-            }
-            (slot, OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1)
-                if slot == evidence_transparency_publisher_slot =>
-            {
-                let body = decode_canonical::<
-                    sorafs_node::evidence_viewer::transparency_producer::
-                        EvidenceViewerTransparencyHeadBodyV1,
-                >(
-                    &request.payload, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
-                )?;
-                validate_evidence_viewer_transparency_head_body(&body, &request.binding)?;
-            }
-            _ => return Err(BrokerError::BindingMismatch),
-        }
-        Ok(())
-    }
+    include!("runtime_provider_broker/validate_operation_payload.rs");
 
     fn validate_operation_response(
         request: &OperationRequestV1,
@@ -10493,6 +9362,20 @@ mod protocol {
                     if request.binding.slot
                         == IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider
                             .wire_id() =>
+                {
+                    let qualification = decode_canonical::<QualificationResultWireV1>(
+                        result,
+                        MAX_OPERATION_FRAME_BYTES_V1,
+                    )?;
+                    if Some(qualification.revision) != request.binding.revision
+                        || Some(qualification.policy_digest) != request.binding.policy_digest
+                    {
+                        return Err(BrokerError::Protocol);
+                    }
+                }
+                OPERATION_QUALIFY_V1
+                    if request.binding.slot
+                        == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id() =>
                 {
                     let qualification = decode_canonical::<QualificationResultWireV1>(
                         result,
@@ -10936,6 +9819,44 @@ mod protocol {
                         &sign.payload,
                     )
                     .map_err(|_| BrokerError::Protocol)?;
+                }
+                OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1 => {
+                    let admission = decode_canonical::<
+                        iroha_torii::sorafs::StreamTokenGatewayAdmissionRequestV1,
+                    >(
+                        &request.payload, MAX_BROKER_UNARY_FRAME_BYTES_V1
+                    )?;
+                    let result = decode_canonical::<
+                        iroha_torii::sorafs::StreamTokenGatewayAdmissionResultV1,
+                    >(result, MAX_BROKER_UNARY_FRAME_BYTES_V1)?;
+                    let qualification = request
+                        .binding
+                        .stream_token_gateway_admission_qualification
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    result
+                        .validate_for_request(&admission, qualification)
+                        .map_err(|_| BrokerError::Protocol)?;
+                }
+                OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1 => {
+                    let max_items =
+                        decode_canonical::<u32>(&request.payload, MAX_BROKER_UNARY_FRAME_BYTES_V1)?;
+                    let pending = decode_canonical::<
+                        iroha_torii::sorafs::StreamTokenGatewayAdmissionReadbackV1,
+                    >(result, MAX_BROKER_UNARY_FRAME_BYTES_V1)?;
+                    let qualification = request
+                        .binding
+                        .stream_token_gateway_admission_qualification
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    pending
+                        .validate(max_items, qualification)
+                        .map_err(|_| BrokerError::Protocol)?;
+                }
+                OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1
+                | OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1 => {
+                    decode_canonical::<iroha_torii::sorafs::StreamTokenGatewayAdmissionAckV1>(
+                        result,
+                        MAX_BROKER_UNARY_FRAME_BYTES_V1,
+                    )?;
                 }
                 OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1 => {
                     let signed = decode_canonical::<
@@ -11696,8 +10617,12 @@ mod protocol {
         };
 
         use super::*;
+        use iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1 as _;
+        #[path = "stream_token_gateway_client.rs"]
+        mod stream_token_gateway_client;
         #[cfg(test)]
         use std::io;
+        use stream_token_gateway_client::StreamTokenGatewayAdmissionBrokerProvider;
 
         #[cfg(target_os = "linux")]
         const STOCK_BROKER_ENDPOINT_V1: &str = "/run/iroha/runtime-provider-broker-v1.sock";
@@ -11945,10 +10870,53 @@ mod protocol {
                         .stream_token_signer_public_key
                         .ok_or(RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
                     let public_key = signer.public_key();
-                    if signer.handle() != binding.handle || public_key != expected_key {
+                    let qualification = signer
+                        .qualification()
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    qualification
+                        .validate()
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    if signer.handle() != binding.handle
+                        || !iroha_config::parameters::is_production_runtime_handle(signer.handle())
+                        || public_key != expected_key
+                        || binding.revision != Some(qualification.revision())
+                        || binding.policy_digest != Some(qualification.policy_digest())
+                    {
                         return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
                     }
-                    if signer.handle() != binding.handle || signer.public_key() != public_key {
+                    let qualification_after = signer
+                        .qualification()
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    qualification_after
+                        .validate()
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    if signer.handle() != binding.handle
+                        || signer.public_key() != public_key
+                        || qualification_after != qualification
+                    {
+                        return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
+                    }
+                }
+                slot if slot
+                    == IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id() =>
+                {
+                    let provider = backends
+                        .stream_token_gateway_admission
+                        .as_ref()
+                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let expected = binding
+                        .stream_token_gateway_admission_qualification
+                        .ok_or(RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    let qualification = provider
+                        .qualification()
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    if provider.handle() != binding.handle || qualification != expected {
+                        return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
+                    }
+                    let qualification_after = provider
+                        .qualification()
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    if provider.handle() != binding.handle || qualification_after != qualification {
                         return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
                     }
                 }
@@ -13180,6 +12148,8 @@ mod protocol {
                         == backends.governance_dag_checkpoint_store.is_some()
                     && requested(IrohaRuntimeProviderSlotV1::StreamTokenSigner)
                         == backends.stream_token_signer.is_some()
+                    && requested(IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission)
+                        == backends.stream_token_gateway_admission.is_some()
                     && requested(IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint)
                         == backends.appeal_finance_checkpoint.is_some()
                     && requested(IrohaRuntimeProviderSlotV1::ProofOutcomeTransactionSigner)
@@ -13885,6 +12855,8 @@ mod protocol {
             let governance_checkpoint_slot =
                 IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore.wire_id();
             let stream_token_slot = IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id();
+            let stream_token_gateway_admission_slot =
+                IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id();
             let appeal_signer_slot =
                 IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner.wire_id();
             let appeal_checkpoint_slot =
@@ -14139,6 +13111,7 @@ mod protocol {
                         || slot == governance_ipfs_auth_slot
                         || slot == governance_head_auth_slot
                         || slot == governance_checkpoint_slot
+                        || slot == stream_token_slot
                         || slot == appeal_signer_slot
                         || slot == appeal_checkpoint_slot
                         || slot == potr_gateway_slot
@@ -15524,6 +14497,108 @@ mod protocol {
                         &SignResultWireV1 { signature },
                         MAX_STREAM_TOKEN_FRAME_BYTES_V1,
                     )
+                }
+                (slot, OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1)
+                    if slot == stream_token_gateway_admission_slot =>
+                {
+                    let admission = decode_canonical::<
+                        iroha_torii::sorafs::StreamTokenGatewayAdmissionRequestV1,
+                    >(
+                        &request.payload, MAX_BROKER_UNARY_FRAME_BYTES_V1
+                    )?;
+                    admission.validate().map_err(|_| BrokerError::Rejected)?;
+                    let provider = state
+                        .backends
+                        .stream_token_gateway_admission
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    let admission_result = provider
+                        .admit(&admission)
+                        .map_err(stream_token_gateway_provider_error)?;
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )
+                    .map_err(|_| BrokerError::Ambiguous)?;
+                    let qualification = request
+                        .binding
+                        .stream_token_gateway_admission_qualification
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    admission_result
+                        .validate_for_request(&admission, qualification)
+                        .map_err(|_| BrokerError::Ambiguous)?;
+                    encode_canonical(&admission_result, MAX_BROKER_UNARY_FRAME_BYTES_V1)
+                }
+                (slot, OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1)
+                    if slot == stream_token_gateway_admission_slot =>
+                {
+                    let max_items =
+                        decode_canonical::<u32>(&request.payload, MAX_BROKER_UNARY_FRAME_BYTES_V1)?;
+                    let configured = request
+                        .binding
+                        .stream_token_gateway_admission_reconcile_max_items
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    if max_items == 0 || max_items > configured {
+                        return Err(BrokerError::Rejected);
+                    }
+                    let provider = state
+                        .backends
+                        .stream_token_gateway_admission
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    let pending = provider
+                        .pending(max_items)
+                        .map_err(stream_token_gateway_provider_error)?;
+                    let qualification = request
+                        .binding
+                        .stream_token_gateway_admission_qualification
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    pending
+                        .validate(max_items, qualification)
+                        .map_err(|_| BrokerError::Rejected)?;
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )?;
+                    encode_canonical(&pending, MAX_BROKER_UNARY_FRAME_BYTES_V1)
+                }
+                (slot, OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1)
+                | (slot, OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1)
+                    if slot == stream_token_gateway_admission_slot =>
+                {
+                    let record = decode_canonical::<
+                        iroha_torii::sorafs::StreamTokenGatewayAdmissionRecordV1,
+                    >(
+                        &request.payload, MAX_BROKER_UNARY_FRAME_BYTES_V1
+                    )?;
+                    let qualification = request
+                        .binding
+                        .stream_token_gateway_admission_qualification
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    record
+                        .validate_shape(qualification)
+                        .map_err(|_| BrokerError::Rejected)?;
+                    let provider = state
+                        .backends
+                        .stream_token_gateway_admission
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    let outcome =
+                        if request.operation == OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1 {
+                            provider.acknowledge(record)
+                        } else {
+                            provider.release_lease(record)
+                        }
+                        .map_err(stream_token_gateway_provider_error)?;
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )
+                    .map_err(|_| BrokerError::Ambiguous)?;
+                    encode_canonical(&outcome, MAX_BROKER_UNARY_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1)
                     if slot == appeal_signer_slot =>
@@ -20189,6 +19264,23 @@ mod protocol {
             }
         }
 
+        fn map_stream_token_probe_error(
+            error: BrokerError,
+        ) -> iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1 {
+            match error {
+                BrokerError::Unavailable | BrokerError::Ambiguous => {
+                    iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1::Unavailable
+                }
+                BrokerError::Rejected
+                | BrokerError::Conflict
+                | BrokerError::StaleOrRevoked
+                | BrokerError::Protocol
+                | BrokerError::BindingMismatch => {
+                    iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1::StaleOrRevoked
+                }
+            }
+        }
+
         #[derive(Clone)]
         struct StreamTokenBrokerSigner {
             session: Arc<BrokerSession>,
@@ -20206,12 +19298,42 @@ mod protocol {
                 self.public_key
             }
 
+            fn qualification(
+                &self,
+            ) -> Result<
+                iroha_torii::sorafs::StreamTokenRuntimeSignerQualificationV1,
+                iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1,
+            > {
+                let qualification = live_exact_qualification(
+                    self.session.as_ref(),
+                    &self.binding,
+                    self.metadata_digest,
+                )
+                .map_err(map_stream_token_probe_error)?;
+                let qualification =
+                    iroha_torii::sorafs::StreamTokenRuntimeSignerQualificationV1::new(
+                        qualification.revision,
+                        qualification.policy_digest,
+                    );
+                qualification.validate().map_err(|_| {
+                    self.session.poison();
+                    iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1::StaleOrRevoked
+                })?;
+                Ok(qualification)
+            }
+
             fn sign(
                 &self,
                 signing_payload: &[u8],
             ) -> Result<[u8; 64], iroha_torii::sorafs::StreamTokenSigningError> {
                 validate_stream_token_signing_payload(signing_payload)
                     .map_err(map_stream_token_error)?;
+                live_exact_qualification(
+                    self.session.as_ref(),
+                    &self.binding,
+                    self.metadata_digest,
+                )
+                .map_err(map_stream_token_error)?;
                 let payload = encode_canonical(
                     &SignRequestWireV1 {
                         payload: signing_payload.to_vec(),
@@ -20234,6 +19356,12 @@ mod protocol {
                     .decode_result::<SignResultWireV1>(&result)
                     .map_err(map_stream_token_error)?
                     .signature;
+                live_exact_qualification(
+                    self.session.as_ref(),
+                    &self.binding,
+                    self.metadata_digest,
+                )
+                .map_err(map_stream_token_error)?;
                 if verify_evidence_viewer_ed25519_signature(
                     self.public_key,
                     signature,
@@ -28099,17 +27227,15 @@ mod protocol {
                 .iter()
                 .map(ProviderBindingWireV1::try_from_binding)
                 .collect::<Result<Vec<_>, _>>()?;
-            if requested_catalog.iter().any(|binding| {
-                binding.slot != IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id()
-                    && !binding.has_exact_qualification()
-            }) {
+            if requested_catalog
+                .iter()
+                .any(|binding| !binding.has_exact_qualification())
+            {
                 return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
                     bindings
                         .iter()
                         .find(|binding| {
-                            binding.slot() != IrohaRuntimeProviderSlotV1::StreamTokenSigner
-                                && (binding.revision().is_none()
-                                    || binding.policy_digest().is_none())
+                            binding.revision().is_none() || binding.policy_digest().is_none()
                         })
                         .map_or(
                             IrohaRuntimeProviderSlotV1::GovernanceDagSigner,
@@ -28201,7 +27327,45 @@ mod protocol {
                             metadata_digest: observation.metadata_digest,
                             public_key,
                         });
+                        let first = live_exact_qualification(
+                            signer.session.as_ref(),
+                            &signer.binding,
+                            signer.metadata_digest,
+                        )
+                        .map_err(registry_error)?;
+                        let second = live_exact_qualification(
+                            signer.session.as_ref(),
+                            &signer.binding,
+                            signer.metadata_digest,
+                        )
+                        .map_err(registry_error)?;
+                        if second != first {
+                            signer.session.poison();
+                            return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+                        }
                         dependencies = dependencies.with_sorafs_stream_token_signer(signer);
+                    }
+                    slot
+                        if slot
+                            == IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id() =>
+                    {
+                        let qualification = binding
+                            .stream_token_gateway_admission_qualification
+                            .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
+                        qualification
+                            .validate()
+                            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
+                        let provider = Arc::new(StreamTokenGatewayAdmissionBrokerProvider {
+                            session: Arc::clone(&session),
+                            binding: binding.clone(),
+                            metadata_digest: observation.metadata_digest,
+                            qualification,
+                        });
+                        provider.qualification().map_err(|_| {
+                            IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked
+                        })?;
+                        dependencies = dependencies
+                            .with_sorafs_stream_token_gateway_admission(provider);
                     }
                     slot if slot
                         == IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner.wire_id() =>
@@ -33795,6 +32959,10 @@ mod protocol {
                     revision: Some(7),
                     policy_digest: Some(TEST_POLICY_DIGEST),
                     stream_token_signer_public_key: None,
+                    stream_token_gateway_admission_qualification: None,
+                    stream_token_gateway_admission_max_pending: None,
+                    stream_token_gateway_admission_max_tracked_tokens: None,
+                    stream_token_gateway_admission_reconcile_max_items: None,
                     appeal_finance_signer_binding: None,
                     appeal_finance_checkpoint_binding: None,
                     appeal_finance_checkpoint_max_bytes: None,
@@ -33818,6 +32986,14 @@ mod protocol {
                     evidence_viewer_archive_public_key: None,
                     evidence_viewer_archive_max_bytes: None,
                 }
+            }
+
+            fn stream_token_signer_binding() -> ProviderBindingWireV1 {
+                let mut binding = signer_binding();
+                binding.slot = IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id();
+                binding.handle = "pkcs11:prod/sorafs/stream-token/primary".to_owned();
+                binding.stream_token_signer_public_key = Some(TEST_SIGNER_KEY);
+                binding
             }
 
             fn plain_runtime_binding(
@@ -34064,6 +33240,10 @@ mod protocol {
                     revision: Some(7),
                     policy_digest: Some(TEST_POLICY_DIGEST),
                     stream_token_signer_public_key: None,
+                    stream_token_gateway_admission_qualification: None,
+                    stream_token_gateway_admission_max_pending: None,
+                    stream_token_gateway_admission_max_tracked_tokens: None,
+                    stream_token_gateway_admission_reconcile_max_items: None,
                     appeal_finance_signer_binding: None,
                     appeal_finance_checkpoint_binding: None,
                     appeal_finance_checkpoint_max_bytes: None,
@@ -34096,6 +33276,10 @@ mod protocol {
                     revision: Some(7),
                     policy_digest: Some(TEST_POLICY_DIGEST),
                     stream_token_signer_public_key: None,
+                    stream_token_gateway_admission_qualification: None,
+                    stream_token_gateway_admission_max_pending: None,
+                    stream_token_gateway_admission_max_tracked_tokens: None,
+                    stream_token_gateway_admission_reconcile_max_items: None,
                     appeal_finance_signer_binding: None,
                     appeal_finance_checkpoint_binding: None,
                     appeal_finance_checkpoint_max_bytes: None,
@@ -34128,6 +33312,10 @@ mod protocol {
                     revision: Some(7),
                     policy_digest: Some(TEST_POLICY_DIGEST),
                     stream_token_signer_public_key: None,
+                    stream_token_gateway_admission_qualification: None,
+                    stream_token_gateway_admission_max_pending: None,
+                    stream_token_gateway_admission_max_tracked_tokens: None,
+                    stream_token_gateway_admission_reconcile_max_items: None,
                     appeal_finance_signer_binding: None,
                     appeal_finance_checkpoint_binding: None,
                     appeal_finance_checkpoint_max_bytes: None,
@@ -34598,6 +33786,10 @@ mod protocol {
                     revision: Some(7),
                     policy_digest: Some(TEST_POLICY_DIGEST),
                     stream_token_signer_public_key: None,
+                    stream_token_gateway_admission_qualification: None,
+                    stream_token_gateway_admission_max_pending: None,
+                    stream_token_gateway_admission_max_tracked_tokens: None,
+                    stream_token_gateway_admission_reconcile_max_items: None,
                     appeal_finance_signer_binding: None,
                     appeal_finance_checkpoint_binding: None,
                     appeal_finance_checkpoint_max_bytes: None,
@@ -36059,6 +35251,10 @@ mod protocol {
                     revision: Some(5),
                     policy_digest: Some([0xB1; 32]),
                     stream_token_signer_public_key: None,
+                    stream_token_gateway_admission_qualification: None,
+                    stream_token_gateway_admission_max_pending: None,
+                    stream_token_gateway_admission_max_tracked_tokens: None,
+                    stream_token_gateway_admission_reconcile_max_items: None,
                     appeal_finance_signer_binding: None,
                     appeal_finance_checkpoint_binding: None,
                     appeal_finance_checkpoint_max_bytes: None,
@@ -38332,6 +37528,128 @@ mod protocol {
                     Err(BrokerError::Rejected),
                     "the external signer accepts only the canonical unsigned receipt"
                 );
+            }
+
+            #[test]
+            fn stream_token_signer_binding_and_qualification_frames_are_exact() {
+                let binding = stream_token_signer_binding();
+                assert_eq!(validate_wire_binding(&binding), Ok(()));
+
+                for mutate in [
+                    |binding: &mut ProviderBindingWireV1| binding.revision = None,
+                    |binding: &mut ProviderBindingWireV1| binding.revision = Some(0),
+                    |binding: &mut ProviderBindingWireV1| binding.policy_digest = None,
+                    |binding: &mut ProviderBindingWireV1| binding.policy_digest = Some([0; 32]),
+                ] {
+                    let mut invalid = binding.clone();
+                    mutate(&mut invalid);
+                    assert_eq!(
+                        validate_wire_binding(&invalid),
+                        Err(BrokerError::BindingMismatch)
+                    );
+                }
+
+                let request = validated_test_operation(
+                    binding,
+                    OPERATION_QUALIFY_V1,
+                    encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
+                        .expect("encode qualification request"),
+                );
+                let exact = encode_canonical(
+                    &QualificationResultWireV1 {
+                        revision: 7,
+                        policy_digest: TEST_POLICY_DIGEST,
+                    },
+                    MAX_OPERATION_FRAME_BYTES_V1,
+                )
+                .expect("encode exact qualification");
+                assert_eq!(validate_operation_result(&request, STATUS_OK_V1, &exact), Ok(()));
+                let substituted = encode_canonical(
+                    &QualificationResultWireV1 {
+                        revision: 8,
+                        policy_digest: TEST_POLICY_DIGEST,
+                    },
+                    MAX_OPERATION_FRAME_BYTES_V1,
+                )
+                .expect("encode substituted qualification");
+                assert_eq!(
+                    validate_operation_result(&request, STATUS_OK_V1, &substituted),
+                    Err(BrokerError::Protocol)
+                );
+            }
+
+            #[test]
+            fn stream_token_server_observation_rejects_drift_and_test_markers() {
+                struct SignerProbe {
+                    handle: &'static str,
+                    drift: bool,
+                    calls: AtomicU64,
+                }
+
+                impl iroha_torii::sorafs::StreamTokenRuntimeSigner for SignerProbe {
+                    fn handle(&self) -> &str {
+                        self.handle
+                    }
+
+                    fn public_key(&self) -> [u8; 32] {
+                        TEST_SIGNER_KEY
+                    }
+
+                    fn qualification(
+                        &self,
+                    ) -> Result<
+                        iroha_torii::sorafs::StreamTokenRuntimeSignerQualificationV1,
+                        iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1,
+                    > {
+                        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(
+                            iroha_torii::sorafs::StreamTokenRuntimeSignerQualificationV1::new(
+                                if self.drift { 7 + call } else { 7 },
+                                TEST_POLICY_DIGEST,
+                            ),
+                        )
+                    }
+
+                    fn sign(
+                        &self,
+                        _signing_payload: &[u8],
+                    ) -> Result<[u8; 64], iroha_torii::sorafs::StreamTokenSigningError>
+                    {
+                        Err(iroha_torii::sorafs::StreamTokenSigningError::Refused)
+                    }
+                }
+
+                let binding = stream_token_signer_binding();
+                let exact = Arc::new(SignerProbe {
+                    handle: "pkcs11:prod/sorafs/stream-token/primary",
+                    drift: false,
+                    calls: AtomicU64::new(0),
+                });
+                let backends = RuntimeProviderBrokerBackendsV1::new()
+                    .with_stream_token_signer(exact.clone());
+                make_server_observation(&binding, &backends)
+                    .expect("observe exact stream-token signer twice");
+                assert_eq!(exact.calls.load(Ordering::SeqCst), 2);
+
+                for provider in [
+                    SignerProbe {
+                        handle: "pkcs11:prod/sorafs/stream-token/primary",
+                        drift: true,
+                        calls: AtomicU64::new(0),
+                    },
+                    SignerProbe {
+                        handle: "pkcs11:test/sorafs/stream-token",
+                        drift: false,
+                        calls: AtomicU64::new(0),
+                    },
+                ] {
+                    let backends = RuntimeProviderBrokerBackendsV1::new()
+                        .with_stream_token_signer(Arc::new(provider));
+                    assert!(matches!(
+                        make_server_observation(&binding, &backends),
+                        Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
+                    ));
+                }
             }
 
             #[test]
@@ -42137,6 +41455,10 @@ mod protocol {
                     revision: Some(5),
                     policy_digest: Some([0xB1; 32]),
                     stream_token_signer_public_key: None,
+                    stream_token_gateway_admission_qualification: None,
+                    stream_token_gateway_admission_max_pending: None,
+                    stream_token_gateway_admission_max_tracked_tokens: None,
+                    stream_token_gateway_admission_reconcile_max_items: None,
                     appeal_finance_signer_binding: None,
                     appeal_finance_checkpoint_binding: None,
                     appeal_finance_checkpoint_max_bytes: None,
@@ -42206,6 +41528,10 @@ mod protocol {
                     revision: Some(6),
                     policy_digest: Some([0xB2; 32]),
                     stream_token_signer_public_key: None,
+                    stream_token_gateway_admission_qualification: None,
+                    stream_token_gateway_admission_max_pending: None,
+                    stream_token_gateway_admission_max_tracked_tokens: None,
+                    stream_token_gateway_admission_reconcile_max_items: None,
                     appeal_finance_signer_binding: None,
                     appeal_finance_checkpoint_binding: None,
                     appeal_finance_checkpoint_max_bytes: None,
@@ -42266,6 +41592,10 @@ mod protocol {
                     revision: Some(7),
                     policy_digest: Some([0xA7; 32]),
                     stream_token_signer_public_key: None,
+                    stream_token_gateway_admission_qualification: None,
+                    stream_token_gateway_admission_max_pending: None,
+                    stream_token_gateway_admission_max_tracked_tokens: None,
+                    stream_token_gateway_admission_reconcile_max_items: None,
                     appeal_finance_signer_binding: None,
                     appeal_finance_checkpoint_binding: None,
                     appeal_finance_checkpoint_max_bytes: None,
@@ -42370,6 +41700,10 @@ mod protocol {
                     revision: Some(9),
                     policy_digest: Some([0xC9; 32]),
                     stream_token_signer_public_key: None,
+                    stream_token_gateway_admission_qualification: None,
+                    stream_token_gateway_admission_max_pending: None,
+                    stream_token_gateway_admission_max_tracked_tokens: None,
+                    stream_token_gateway_admission_reconcile_max_items: None,
                     appeal_finance_signer_binding: None,
                     appeal_finance_checkpoint_binding: None,
                     appeal_finance_checkpoint_max_bytes: None,

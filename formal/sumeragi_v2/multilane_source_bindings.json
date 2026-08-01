@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "closure_mutations": [
     {
       "id": "ML-MUT-NAT-01",
@@ -79,6 +79,28 @@
       "obligation": "MLNativeLatestIndexExact",
       "mutation_configs": [
         "multilane_native_ambiguous_latest_index_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-KURA-01",
+      "classification": "tla_counterexample",
+      "obligation": "KuraReplicaRetentionProductionRefinementObligation",
+      "mutation_configs": [
+        "kura_replica_forged_signature_bug.cfg",
+        "kura_replica_relayed_advert_bug.cfg",
+        "kura_replica_wrong_finality_identity_bug.cfg",
+        "kura_replica_wrong_wire_identity_bug.cfg",
+        "kura_replica_keeper_cardinality_bug.cfg",
+        "kura_replica_nonsigner_keeper_bug.cfg",
+        "kura_replica_local_keeper_evict_bug.cfg",
+        "kura_replica_partial_remote_freshness_bug.cfg",
+        "kura_replica_ttl_expiry_bug.cfg",
+        "kura_replica_restart_registry_reuse_bug.cfg",
+        "kura_replica_registry_capacity_overflow_bug.cfg",
+        "kura_replica_refresh_window_oversize_bug.cfg",
+        "kura_replica_refresh_cursor_skip_bug.cfg",
+        "kura_replica_skip_final_prestage_recheck_bug.cfg"
       ],
       "source_checks": []
     },
@@ -326,7 +348,7 @@
         {
           "path": "ci/run_native_amx_v2_grouped_sdk_parity.sh",
           "required_tokens": [
-            "readonly expected_negative_control_count=50",
+            "readonly expected_negative_control_count=52",
             "openapi|python|javascript|swift|kotlin|java)",
             "grouped Native AMX V2 negative controls must fail closed",
             "--suite-source-manifest-sha256"
@@ -398,7 +420,7 @@
     }
   ],
   "inflight_first_release_layout_contract": {
-    "claim": "layout_only_no_transition_refinement",
+    "claim": "composed_state_action_relation_no_trace_extraction",
     "module": "SumeragiV2InFlightFirstRelease",
     "positive_config": "inflight_first_release_fixed.cfg",
     "runner": "scripts/formal/run_sumeragi_v2_inflight_first_release.sh",
@@ -407,12 +429,16 @@
       "SelectQueuePlanV4Conjunction",
       "FsyncReservationV5",
       "ActivateKura",
+      "FanoutFromProducer",
+      "ServeLateBody",
       "PersistExecutionInput",
       "AuthorizeReady",
       "SignReady",
       "PersistReadyQc",
       "Crash",
       "Recover",
+      "RecoverReservationSnapshot",
+      "ReleaseReservationDirect",
       "LaneCommit",
       "ApplyCarrier",
       "PersistReservationCommitted",
@@ -505,6 +531,14 @@
         "invariant": "MLPostCarrierCommitCleanupOrder"
       },
       {
+        "config": "inflight_first_release_commit_prefix_skipped_key_bug.cfg",
+        "invariant": "MLPostCarrierCommitCleanupOrder"
+      },
+      {
+        "config": "inflight_first_release_commit_prefix_decrease_bug.cfg",
+        "invariant": "MLPostCarrierCommitCleanupOrder"
+      },
+      {
         "config": "inflight_first_release_release_pending_before_retirement_bug.cfg",
         "invariant": "MLReleaseStageOrder"
       },
@@ -562,6 +596,30 @@
       {
         "path": "crates/iroha_core/src/lane_consensus.rs",
         "kind": "fn",
+        "symbol": "deterministic_lane_author",
+        "required_tokens": [
+          "lane_block_height.checked_sub(1)?",
+          "u64::try_from(validator_set.len()).ok()?",
+          "if validator_count == 0",
+          "usize::try_from(author_offset % validator_count).ok()?",
+          "validator_set.get(author_index)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/lane_consensus.rs",
+        "kind": "method",
+        "symbol": "LaneExecutablePayloadV1::validate",
+        "required_tokens": [
+          "deterministic_lane_author(",
+          "&self.origin_proposal.descriptor.validator_set",
+          "self.origin_proposal.descriptor.lane_block_height",
+          ") != Some(&self.producer)",
+          "LaneAutonomousArtifactError::ProducerNotDeterministicAuthor"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/lane_consensus.rs",
+        "kind": "fn",
         "symbol": "validate_lane_executable_payload_body",
         "required_tokens": [
           "version != LANE_EXECUTABLE_PAYLOAD_VERSION_V2",
@@ -574,6 +632,21 @@
           "key.lane_incarnation != descriptor.lane_incarnation",
           "routing_plan.digest() != key.routing_plan_digest",
           "compute_lane_executable_payload_hash("
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/lane_planner.rs",
+        "kind": "fn",
+        "symbol": "assemble_autonomous_lane_reservation_slot",
+        "required_tokens": [
+          "let lane_block_height = previous_lane_block_height",
+          ".checked_add(1)",
+          "canonical_validator_set",
+          "crate::lane_consensus::deterministic_lane_author(",
+          "&validator_set",
+          "lane_block_height",
+          "AutonomousLaneReservationSlotPlanError::InvalidQuorum",
+          "author,"
         ]
       },
       {
@@ -616,6 +689,34 @@
           "key: LaneQueueReservationKeyV2",
           "enqueue_timestamp_ms: u64",
           "fifo_order: LaneQueueFifoOrderV5"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "enum",
+        "symbol": "LaneQueueReservationJournalFrameV5",
+        "required_tokens": [
+          "Bootstrap {",
+          "Snapshot {",
+          "PutBatch(Vec<LaneQueueReservationRecordV5>)",
+          "ReleaseBatch(Vec<LaneQueueReservationKeyV2>)",
+          "Commit(LaneQueueReservationKeyV2)",
+          "ForgetCommit(LaneQueueReservationKeyV2)",
+          "PrepareRelease(LaneQueueReservationReleaseBarrierV3)",
+          "CompleteRelease(LaneQueueReservationReleaseCompletionV5)",
+          "ForgetRelease(LaneQueueReservationReleaseBarrierV3)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "fn",
+        "symbol": "bootstrap_frame",
+        "required_tokens": [
+          "RESERVATION_JOURNAL_OPERATION_SCHEMA_V5",
+          "RESERVATION_JOURNAL_FRAME_FORMAT_VERSION",
+          "RESERVATION_JOURNAL_BOOTSTRAP_DOMAIN",
+          "RESERVATION_JOURNAL_FRAME_MAGIC",
+          "RESERVATION_JOURNAL_FRAME_COMMIT"
         ]
       },
       {
@@ -725,8 +826,6 @@
           "let after = if before == Some(DurableReservationOwnership::Committed(*key)) {\n                    None\n                } else {\n                    before\n                };",
           "IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT",
           "IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT,\n                    *key,\n                    None,\n                    before,\n                    after,",
-          "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED",
-          "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED,\n                        before.key(),\n                        None,\n                        Some(before),\n                        None,",
           "Some(DurableReservationOwnership::Live(existing)) if existing == *key => {\n                            Some(DurableReservationOwnership::Prepared {\n                                key: *key,\n                                barrier_digest: release_digest,\n                            })\n                        }",
           "owner @ (DurableReservationOwnership::Prepared { .. }\n                            | DurableReservationOwnership::Completed { .. })",
           "IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE",
@@ -802,22 +901,6 @@
           "self.committed.insert(",
           "DurableReservationOwnership::Committed(key)",
           "self.next_order = next_order;"
-        ]
-      },
-      {
-        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
-        "kind": "method",
-        "symbol": "IndexedReservationReplayState::transition_prune",
-        "required_tokens": [
-          ".live_by_lane_incarnation",
-          ".get(&lane)",
-          "let mut removals = Vec::with_capacity(hashes.len());",
-          "Some(DurableReservationOwnership::Live(key))",
-          "key.lane_id == lane_id && key.lane_incarnation == lane_incarnation",
-          "removals.push(self.validate_live_secondary_indexes(hash, key)?);",
-          "if apply {",
-          "for record in &removals",
-          "self.remove_preflighted_live(record);"
         ]
       },
       {
@@ -922,6 +1005,144 @@
         ]
       },
       {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "kind": "struct",
+        "symbol": "ProductionInFlightFirstReleaseHistoryProjection",
+        "required_tokens": [
+          "pub(crate) reservation_committed_prefix: u64",
+          "pub(crate) queue_plan_tombstoned_prefix: u64",
+          "pub(crate) reservation_commit_forgotten_prefix: u64"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "kind": "struct",
+        "symbol": "ProductionInFlightFirstReleaseStateProjection",
+        "required_tokens": [
+          "pub(crate) validator_count: u8",
+          "pub(crate) producer: u128",
+          "pub(crate) producer_selected_owner: u128",
+          "pub(crate) replicated_carrier_owners: u128",
+          "pub(crate) payload_binding_a: u128",
+          "pub(crate) binding_a: CanonicalIdentityProjection",
+          "pub(crate) queue: ProductionInFlightFirstReleaseQueueProjection",
+          "pub(crate) carrier: ProductionInFlightFirstReleaseCarrierProjection",
+          "pub(crate) session: ProductionInFlightFirstReleaseSessionProjection",
+          "pub(crate) history: ProductionInFlightFirstReleaseHistoryProjection",
+          "pub(crate) decision: ProductionInFlightFirstReleaseDecisionProjection",
+          "pub(crate) release: ProductionInFlightFirstReleaseReleaseProjection"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "kind": "struct",
+        "symbol": "ProductionInFlightFirstReleaseTransitionProjection",
+        "required_tokens": [
+          "pub(crate) action: u8",
+          "pub(crate) actor: u128",
+          "pub(crate) target: u128",
+          "pub(crate) before: ProductionInFlightFirstReleaseStateProjection",
+          "pub(crate) after: ProductionInFlightFirstReleaseStateProjection"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "kind": "macro",
+        "symbol": "production_in_flight_first_release_state_body",
+        "required_tokens": [
+          "in_flight_first_release_validator_mask_body!(state.validator_count)",
+          "in_flight_first_release_ready_quorum_body!(state.validator_count)",
+          "state.validator_count >= 1u8",
+          "state.validator_count <= 128u8",
+          "state.producer_selected_owner == state.producer",
+          "state.replicated_carrier_owners == (validator_mask & !state.producer)",
+          "(state.payload_binding_a & !validator_mask) == 0u128",
+          "(state.payload_binding_a & state.producer) == state.producer",
+          "in_flight_first_release_bitmap_count_body!(history.ready_signed)",
+          ">= ready_quorum",
+          "queue.selected_count > 0u64 && queue.selected_count <= 4096u64",
+          "queue.reservation_state\n                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_ABSENT)\n                || queue.plan_state\n                    != refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_ABSENT)",
+          "(carrier.execution_input_durable & !carrier.kura_active) == 0u128",
+          "(carrier.kura_active == 0u128 || history.ever_reservation_v5)",
+          "(session.ready_authorized & !carrier.execution_input_durable) == 0u128",
+          "(history.ready_signed & !history.ever_ready_authorized) == 0u128",
+          "decision.application_count <= 1u8",
+          "decision.wsv_committed == (decision.application_count == 1u8)",
+          "history.reservation_committed_prefix <= queue.selected_count",
+          "history.queue_plan_tombstoned_prefix\n                <= history.reservation_committed_prefix",
+          "history.reservation_commit_forgotten_prefix\n                <= history.queue_plan_tombstoned_prefix",
+          "release.released_prefix <= release.pending_prefix",
+          "IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "kind": "macro",
+        "symbol": "production_in_flight_first_release_transition_body",
+        "required_tokens": [
+          "production_in_flight_first_release_state_body!(before)",
+          "production_in_flight_first_release_state_body!(after)",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_SERVE_LATE_BODY",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_AUTHORIZE_READY",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_SIGN_READY",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_CRASH",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_APPLY_CARRIER",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT",
+          "== (before.history.reservation_committed_prefix + 1u64) as u128",
+          "== (before.history.queue_plan_tombstoned_prefix + 1u64) as u128",
+          "== (before.history.reservation_commit_forgotten_prefix + 1u64) as u128",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_KURA_RETIREMENT",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_PREPARE_RESERVATION_RELEASE",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+          "in_flight_first_release_state_equal_body!(before, after)",
+          "// exact stutter, never a new reservation acquisition.\n                projection.actor == 0u128\n                    && projection.target == 0u128\n                    && in_flight_first_release_state_equal_body!(before, after)",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT",
+          "IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "kind": "fn",
+        "symbol": "check_production_in_flight_first_release_transition",
+        "required_tokens": [
+          "production_in_flight_first_release_transition_kernel(projection)",
+          "Some(CheckedProductionTransition { projection })",
+          "None"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "kind": "fn",
+        "symbol": "production_in_flight_first_release_terminal_owner",
+        "required_tokens": [
+          "production_in_flight_first_release_state_kernel(projection)",
+          "IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN",
+          "projection.history.reservation_commit_forgotten_prefix\n            == projection.queue.selected_count",
+          "IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN",
+          "IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED",
+          "ordinary_fifo_owner: false",
+          "canonical_wsv_owner: true",
+          "ordinary_fifo_owner: true",
+          "canonical_wsv_owner: false"
+        ]
+      },
+      {
         "path": "crates/iroha_core/src/queue.rs",
         "kind": "fn",
         "symbol": "reserve_transactions_for_lane_bounded",
@@ -932,6 +1153,31 @@
           "journal.put_batch(",
           "restore_popped_hash_locked",
           "live_by_hash"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "kind": "struct",
+        "symbol": "PreKuraDirectReleaseContext",
+        "required_tokens": [
+          "validator_count: u8",
+          "producer: u128",
+          "expected_group: LaneQueueReservationGroupBindingV1",
+          "ordered_keys: Vec<LaneQueueReservationKeyV2>"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "kind": "method",
+        "symbol": "PendingAutonomousReservationBatch::pre_kura_direct_release_context",
+        "required_tokens": [
+          "validator_count == 0 || validator_count > 128",
+          "HashOf::new(&self.slot.validator_set)",
+          "commit_quorum_from_len(validator_count)",
+          ".position(|peer| peer == &self.slot.author)",
+          "lane_queue_reservation_group_binding_from_ordered_keys(&ordered_keys)",
+          "expected_group.identity != expected_identity",
+          "Ok(PreKuraDirectReleaseContext {"
         ]
       },
       {
@@ -983,6 +1229,27 @@
           "if &verified != recovered",
           "LaneBlockExecutionInputArtifact::new(verified)",
           "write_lane_block_execution_input_artifact(&artifact)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "method",
+        "symbol": "Queue::release_pre_kura_autonomous_reservation_batch",
+        "required_tokens": [
+          "let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();",
+          "let queue_guard = self.push_remove_lock.lock();",
+          "validate_for_lane_reservation_commit(&record.key)",
+          "Self::reconciliation_record_from_durable_claim(record, claim.value())?",
+          "check_production_in_flight_first_release_transition(projection)",
+          "production_in_flight_first_release_terminal_owner(after)",
+          "let restored_fifo = self.fifo_with_released_reservations_locked(&records)?;",
+          "drop(store);",
+          "self.apply_lane_reservation_journal(|journal| {",
+          "let authorized_projection = checked.into_projection();",
+          "journal.release_batch(release_keys)",
+          "let mut store = self.lane_reservations.lock();",
+          "self.replace_fifo_locked(&restored_fifo);",
+          "drop(queue_guard);"
         ]
       }
     ],
@@ -1102,8 +1369,6 @@
           "Some(DurableReservationOwnership::Committed(*key))",
           "LaneQueueReservationJournalFrameV5::ForgetCommit(key) => {",
           "IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT",
-          "LaneQueueReservationJournalFrameV5::Prune {",
-          "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED",
           "LaneQueueReservationJournalFrameV5::PrepareRelease(barrier) => {",
           "IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE",
           "LaneQueueReservationJournalFrameV5::CompleteRelease(completion) => {",
@@ -1143,21 +1408,6 @@
           "self.committed.insert(",
           "DurableReservationOwnership::Committed(key)",
           "self.next_order = next_order;"
-        ]
-      },
-      {
-        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
-        "kind": "method",
-        "symbol": "IndexedReservationReplayState::transition_prune",
-        "tokens": [
-          ".live_by_lane_incarnation",
-          ".get(&lane)",
-          "let mut removals = Vec::with_capacity(hashes.len());",
-          "key.lane_id == lane_id && key.lane_incarnation == lane_incarnation",
-          "removals.push(self.validate_live_secondary_indexes(hash, key)?);",
-          "if apply {",
-          "for record in &removals",
-          "self.remove_preflighted_live(record);"
         ]
       },
       {
@@ -1276,6 +1526,27 @@
           "LaneBlockExecutionInputArtifact::new(verified)",
           "write_lane_block_execution_input_artifact(&artifact)"
         ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "method",
+        "symbol": "Queue::release_pre_kura_autonomous_reservation_batch",
+        "tokens": [
+          "let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();",
+          "let queue_guard = self.push_remove_lock.lock();",
+          "validate_for_lane_reservation_commit(&record.key)",
+          "Self::reconciliation_record_from_durable_claim(record, claim.value())?",
+          "check_production_in_flight_first_release_transition(projection)",
+          "production_in_flight_first_release_terminal_owner(after)",
+          "let restored_fifo = self.fifo_with_released_reservations_locked(&records)?;",
+          "drop(store);",
+          "self.apply_lane_reservation_journal(|journal| {",
+          "let authorized_projection = checked.into_projection();",
+          "journal.release_batch(release_keys)",
+          "let mut store = self.lane_reservations.lock();",
+          "self.replace_fifo_locked(&restored_fifo);",
+          "drop(queue_guard);"
+        ]
       }
     ],
     "forbidden_source_checks": [
@@ -1320,10 +1591,29 @@
       },
       {
         "path": "crates/iroha_core/src/queue/reservation_journal.rs",
-        "kind": "method",
-        "symbol": "IndexedReservationReplayState::transition_prune",
+        "kind": "enum",
+        "symbol": "LaneQueueReservationJournalFrameV5",
         "forbidden_tokens": [
-          "remove_live_unchecked"
+          "Prune",
+          "RetiredLaneWideRemoval"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::transition_semantics",
+        "forbidden_tokens": [
+          "LaneQueueReservationJournalFrameV5::Prune",
+          "transition_prune"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::check_in_flight_transition",
+        "forbidden_tokens": [
+          "LaneQueueReservationJournalFrameV5::Prune",
+          "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED"
         ]
       },
       {
@@ -1344,6 +1634,38 @@
           "panic!(",
           "unreachable!("
         ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "kind": "macro",
+        "symbol": "production_in_flight_reservation_transition_body",
+        "forbidden_tokens": [
+          "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "kind": "macro",
+        "symbol": "production_in_flight_first_release_state_body",
+        "forbidden_tokens": [
+          "IN_FLIGHT_FIRST_RELEASE_RESERVATION_PRUNED_RETIRED"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "kind": "macro",
+        "symbol": "production_in_flight_first_release_transition_body",
+        "forbidden_tokens": [
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_PRUNE_RETIRED_RESERVATION"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "kind": "fn",
+        "symbol": "production_in_flight_first_release_terminal_owner",
+        "forbidden_tokens": [
+          "IN_FLIGHT_FIRST_RELEASE_RESERVATION_PRUNED_RETIRED"
+        ]
       }
     ],
     "source_checks": [
@@ -1352,7 +1674,10 @@
         "required_tokens": [
           "pub(crate) const MAX_LANE_EXECUTABLE_ENTRYPOINTS: usize = MAX_MERGE_EXECUTION_ENTRYPOINTS;",
           "pub(crate) const LANE_EXECUTABLE_PAYLOAD_VERSION_V2: u8 = 2;",
-          "unknown.version = LANE_EXECUTABLE_PAYLOAD_VERSION_V2 + 1;"
+          "unknown.version = LANE_EXECUTABLE_PAYLOAD_VERSION_V2 + 1;",
+          "fn autonomous_payload_requires_height_rotated_committee_author()",
+          "committee membership and a valid signature must not confer slot authorship",
+          "global carrier view must not change autonomous authorship"
         ]
       },
       {
@@ -1372,6 +1697,9 @@
         "path": "crates/iroha_core/src/queue/reservation_journal.rs",
         "required_tokens": [
           "pub const LANE_QUEUE_RESERVATION_JOURNAL_VERSION: u16 = 5;",
+          "const RESERVATION_JOURNAL_OPERATION_SCHEMA_V5: &[u8] =",
+          "fn retired_v5_lane_wide_removal_fails_closed_at_bootstrap_and_operation_decode()",
+          "retired V5 operation tag must not decode as an ordered release",
           "legacy.fifo_order.version = LANE_QUEUE_RESERVATION_JOURNAL_VERSION - 1;"
         ]
       },
@@ -1389,6 +1717,41 @@
         ]
       },
       {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement_cases.rs",
+        "required_tokens": [
+          "fn in_flight_first_release_dynamic_committees_bind_masks_custody_and_canonical_quorum()",
+          "fn in_flight_first_release_composed_commit_path_is_exact_and_terminal()",
+          "fn in_flight_first_release_commit_cleanup_prefixes_cover_bounds_and_crash_recovery()",
+          "fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reordering()",
+          "fn in_flight_first_release_composed_four_stage_release_is_exact_and_terminal()",
+          "fn in_flight_first_release_snapshot_and_direct_release_are_exactly_aligned()"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "required_tokens": [
+          "fn pre_kura_direct_release_projection_is_four_validator_bound_and_fail_closed()",
+          "mismatched_group.expected_group.reservation_group_hash =",
+          "outside_committee.producer = 1_u128 << 4;",
+          "the checked transition must append before FIFO ownership is published"
+        ]
+      },
+      {
+        "path": "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+        "required_tokens": [
+          "pub struct ProductionInFlightFirstReleaseStateProjection {",
+          "pub struct ProductionInFlightFirstReleaseTransitionProjection {",
+          "pub reservation_committed_prefix: u64",
+          "pub queue_plan_tombstoned_prefix: u64",
+          "pub reservation_commit_forgotten_prefix: u64",
+          "pub closed spec fn production_in_flight_first_release_transition_kernel(",
+          "pub proof fn production_in_flight_first_release_transition_refines_named_next(",
+          "pub proof fn production_in_flight_first_release_snapshot_recovery_is_stutter(",
+          "pub proof fn production_in_flight_first_release_terminal_owner_is_exclusive(",
+          "terminal.canonical_wsv_owner ==> ("
+        ]
+      },
+      {
         "path": "scripts/formal/run_sumeragi_v2_tlc.sh",
         "required_tokens": [
           "readonly INFLIGHT_FIRST_RELEASE_RUNNER=\"${REPO_ROOT}/scripts/formal/run_sumeragi_v2_inflight_first_release.sh\"",
@@ -1399,6 +1762,10 @@
         "path": "scripts/write_sumeragi_v2_release_receipt.py",
         "required_tokens": [
           "_APALACHE_LAYOUT_ONLY_RESULTS = (",
+          "\"kura-replica-retention\"",
+          "\"SumeragiV2KuraReplicaRetention\"",
+          "\"kura_replica_retention_fixed.cfg\"",
+          "\"kura_replica_retention_fixed.cfg\",\n        \"8\",",
           "\"inflight-first-release-layout\"",
           "\"SumeragiV2InFlightFirstRelease\"",
           "\"inflight_first_release_fixed.cfg\"",
@@ -1410,7 +1777,9 @@
       {
         "path": "pytests/scripts/sumeragi_v2_release_receipt_test.py",
         "required_tokens": [
-          "canonical.replace(\"result_count\\t5\", \"result_count\\t4\", 1)",
+          "canonical.replace(\"result_count\\t6\", \"result_count\\t5\", 1)",
+          "\"result\\tkura-replica-retention\\t\"",
+          "\"kura_replica_retention_fixed.cfg\\t8\\tNoError\\t\"",
           "\"inflight_first_release_fixed.cfg\\t18\\tNoError\\t\"",
           "\"result\\tinflight-first-release-refinement\\t\"",
           "\"is not exact source-bound NoError evidence\""
@@ -1433,8 +1802,669 @@
       "reservation V9",
       "MLPayloadV3CarriesExactAdmissionPreimage",
       "MLPutBatchV5BeforeReservationV9",
-      "MLReservationV9BeforeKuraActive"
+      "MLReservationV9BeforeKuraActive",
+      "PrunedRetired",
+      "PruneRetiredReservation"
     ]
+  },
+  "kura_replica_retention_contract": {
+    "module": "SumeragiV2KuraReplicaRetention",
+    "positive_config": "kura_replica_retention_fixed.cfg",
+    "production_refinement_obligation": "KuraReplicaRetentionProductionRefinementObligation",
+    "mutations": [
+      {
+        "config": "kura_replica_forged_signature_bug.cfg",
+        "invariant": "KRAdmittedAdvertsSigned"
+      },
+      {
+        "config": "kura_replica_relayed_advert_bug.cfg",
+        "invariant": "KRAdmittedAdvertsDirectAuthenticated"
+      },
+      {
+        "config": "kura_replica_wrong_finality_identity_bug.cfg",
+        "invariant": "KRAdmittedAdvertsBindExactFinality"
+      },
+      {
+        "config": "kura_replica_wrong_wire_identity_bug.cfg",
+        "invariant": "KRAdmittedAdvertsBindExactWire"
+      },
+      {
+        "config": "kura_replica_keeper_cardinality_bug.cfg",
+        "invariant": "KRDeterministicFPlusOneKeepers"
+      },
+      {
+        "config": "kura_replica_nonsigner_keeper_bug.cfg",
+        "invariant": "KRDeterministicFPlusOneKeepers"
+      },
+      {
+        "config": "kura_replica_local_keeper_evict_bug.cfg",
+        "invariant": "KRLocalSelectedKeeperPinsBody"
+      },
+      {
+        "config": "kura_replica_partial_remote_freshness_bug.cfg",
+        "invariant": "KREvictionRequiresAllSelectedRemoteFresh"
+      },
+      {
+        "config": "kura_replica_ttl_expiry_bug.cfg",
+        "invariant": "KRExpiredAdvertsCannotAuthorize"
+      },
+      {
+        "config": "kura_replica_restart_registry_reuse_bug.cfg",
+        "invariant": "KRRestartClearsAdvertRegistry"
+      },
+      {
+        "config": "kura_replica_registry_capacity_overflow_bug.cfg",
+        "invariant": "KRRegistryCapacityBounded"
+      },
+      {
+        "config": "kura_replica_refresh_window_oversize_bug.cfg",
+        "invariant": "KRRefreshWindowBounded"
+      },
+      {
+        "config": "kura_replica_refresh_cursor_skip_bug.cfg",
+        "invariant": "KRRefreshCursorExact"
+      },
+      {
+        "config": "kura_replica_skip_final_prestage_recheck_bug.cfg",
+        "invariant": "KRFinalPreStageRecheck"
+      }
+    ],
+    "production_symbols": [
+      {
+        "path": "crates/iroha_core/src/sumeragi/message.rs",
+        "kind": "struct",
+        "symbol": "KuraReplicaAdvertV1",
+        "required_tokens": [
+          "version: u16",
+          "chain_id: ChainId",
+          "height: u64",
+          "block_hash: HashOf<BlockHeader>",
+          "executed_block_wire_len: u64",
+          "executed_block_wire_hash: Hash",
+          "finality_artifact_hash: HashOf<V2FinalityArtifact>",
+          "keeper_index: u32",
+          "keeper: PeerId",
+          "signature: Vec<u8>"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/message.rs",
+        "kind": "method",
+        "symbol": "KuraReplicaAdvertV1::signature_preimage",
+        "required_tokens": [
+          "KURA_REPLICA_ADVERT_SIGNATURE_DOMAIN_V1",
+          "version: self.version",
+          "chain_id: self.chain_id.clone()",
+          "height: self.height",
+          "block_hash: self.block_hash",
+          "executed_block_wire_len: self.executed_block_wire_len",
+          "executed_block_wire_hash: self.executed_block_wire_hash",
+          "finality_artifact_hash: self.finality_artifact_hash",
+          "keeper_index: self.keeper_index",
+          "keeper: self.keeper.clone()"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/message.rs",
+        "kind": "method",
+        "symbol": "KuraReplicaAdvertV1::verify_keeper_signature",
+        "required_tokens": [
+          "self.version != KURA_REPLICA_ADVERT_VERSION_V1",
+          "self.executed_block_wire_len > MAX_EXECUTED_BLOCK_WIRE_BYTES",
+          "self.signature.len() != KURA_REPLICA_ADVERT_SIGNATURE_BYTES",
+          "self.encode().len() > MAX_KURA_REPLICA_ADVERT_WIRE_BYTES",
+          "Signature::try_from_bytes(&self.signature)",
+          ".verify(self.keeper.public_key(), &self.signature_preimage())"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "kind": "fn",
+        "symbol": "admit_kura_replica_advert_ingress",
+        "required_tokens": [
+          "let authenticated_via = inbound.via().cloned()",
+          "matches_semantic_origin(inbound.sender())",
+          "sender.as_ref() != Some(&advertised_keeper)",
+          "authenticated_via.as_ref() != Some(&advertised_keeper)",
+          "advert.keeper != advertised_keeper",
+          "kura.admit_kura_replica_advert(&advert)"
+        ]
+      },
+      {
+        "path": "crates/iroha_config/src/parameters/actual.rs",
+        "kind": "method",
+        "symbol": "KuraReplicaAdvertPolicy::validate",
+        "required_tokens": [
+          "self.eviction_required_replicas.get() > KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT",
+          "kura_replica_advert_registry_key_capacity(blocks_in_memory, self.evictable_window)",
+          "KuraReplicaAdvertPolicyError::RegistryKeyCapacityOverflow",
+          "kura_replica_advert_registry_entry_capacity(blocks_in_memory, self.evictable_window)",
+          "KuraReplicaAdvertPolicyError::RegistryEntryCapacityOverflow",
+          "self.ttl < KURA_REPLICA_ADVERT_TTL_MIN",
+          "self.ttl > KURA_REPLICA_ADVERT_TTL_MAX",
+          "self.refresh_interval < KURA_REPLICA_ADVERT_REFRESH_INTERVAL_MIN",
+          "KuraReplicaAdvertPolicyError::RefreshIntervalBelowMinimum",
+          "self.refresh_interval > self.ttl.checked_div(2).unwrap_or_default()",
+          "Ok(key_capacity)"
+        ]
+      },
+      {
+        "path": "crates/iroha_config/src/parameters/actual.rs",
+        "kind": "fn",
+        "symbol": "kura_replica_advert_registry_key_capacity",
+        "required_tokens": [
+          "blocks_in_memory\n        .get()\n        .checked_add(evictable_window.get())",
+          ".and_then(NonZeroUsize::new)"
+        ]
+      },
+      {
+        "path": "crates/iroha_config/src/parameters/actual.rs",
+        "kind": "fn",
+        "symbol": "kura_replica_advert_registry_entry_capacity",
+        "required_tokens": [
+          "kura_replica_advert_registry_key_capacity(blocks_in_memory, evictable_window)?",
+          ".checked_mul(KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT)",
+          ".and_then(NonZeroUsize::new)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/replica_advert_and_body_status.rs",
+        "kind": "method",
+        "symbol": "Kura::bind_local_peer_id",
+        "required_tokens": [
+          "self.local_peer_id.get()",
+          "self.local_peer_id.set(peer)",
+          "Error::KuraReplicaLocalPeerConflict"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
+        "symbol": "Kura::start",
+        "required_tokens": [
+          "kura.local_peer_id.get().is_none()",
+          "Error::KuraReplicaLocalPeerUnbound",
+          "kura.ensure_snapshot_bootstrap_authenticated()?",
+          "kura.ensure_canonical_storage_not_poisoned()?"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/tests/04_merge_log_and_associations.rs",
+        "kind": "fn",
+        "symbol": "kura_start_rejects_unbound_local_peer_identity",
+        "required_tokens": [
+          "let kura = Kura::blank_kura_for_testing()",
+          "Kura::start(kura, ShutdownSignal::new())",
+          "Err(Error::KuraReplicaLocalPeerUnbound)"
+        ]
+      },
+      {
+        "path": "crates/irohad/src/main.rs",
+        "kind": "method",
+        "symbol": "Iroha::start_with_runtime_deps",
+        "required_tokens": [
+          "kura.bind_local_peer_id(PeerId::new(config.common.key_pair.public_key().clone()))",
+          "failed to bind the configured node identity to Kura before runtime start",
+          "Kura::start(kura.clone(), supervisor.shutdown_signal())"
+        ]
+      },
+      {
+        "path": "crates/irohad/src/main.rs",
+        "kind": "fn",
+        "symbol": "standard_launcher_binds_kura_local_peer_before_start",
+        "required_tokens": [
+          "let construct = compact_source",
+          "let bind = compact_source",
+          "let start = compact_source",
+          "construct < bind && bind < start"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
+        "symbol": "Kura::new_inner",
+        "required_tokens": [
+          "let replica_registry_key_capacity = config",
+          ".replica_advert\n            .validate(config.blocks_in_memory)",
+          "Error::InvalidKuraReplicaAdvertConfiguration(error.to_string())",
+          "eviction_required_replicas: config.replica_advert.eviction_required_replicas",
+          "local_peer_id: OnceLock::new()",
+          "replica_registry: Mutex::new(BTreeMap::new())",
+          "replica_registry_key_capacity,",
+          "replica_advert_evictable_window: config.replica_advert.evictable_window",
+          "replica_advert_ttl: config.replica_advert.ttl",
+          "replica_advert_refresh_interval: config.replica_advert.refresh_interval"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/replica_advert_and_body_status.rs",
+        "kind": "struct",
+        "symbol": "KuraReplicaAdvertSourceV1",
+        "required_tokens": [
+          "chain_id: ChainId",
+          "height: u64",
+          "block_hash: HashOf<BlockHeader>",
+          "executed_block_wire_len: u64",
+          "executed_block_wire_hash: Hash",
+          "finality_artifact_hash: HashOf<V2FinalityArtifact>",
+          "keeper_index: u32",
+          "keeper: PeerId"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/replica_advert_and_body_status.rs",
+        "kind": "method",
+        "symbol": "Kura::exact_kura_replica_advert_tip",
+        "required_tokens": [
+          "let _prune_guard = self.prune_lock.lock()",
+          "let _canonical_chain_guard = self.canonical_chain_lock.lock()",
+          "let height = store.read_exact_durable_index_count()?",
+          "Self::read_durable_hash_at_height(&mut store, height)?",
+          "Ok(Some((height, hash)))"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/replica_advert_and_body_status.rs",
+        "kind": "method",
+        "symbol": "Kura::probe_kura_replica_advert_source",
+        "required_tokens": [
+          "let keeper = PeerId::new(local_key.public_key().clone())",
+          "self.local_peer_id.get() != Some(&keeper)",
+          "let _prune_guard = self.prune_lock.lock()",
+          "let _canonical_chain_guard = self.canonical_chain_lock.lock()",
+          "self.probe_kura_replica_advert_source_under_guards(height, &keeper)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/replica_advert_and_body_status.rs",
+        "kind": "method",
+        "symbol": "Kura::build_signed_kura_replica_advert_from_source",
+        "required_tokens": [
+          "source.keeper != keeper || self.local_peer_id.get() != Some(&keeper)",
+          "let _prune_guard = self.prune_lock.lock()",
+          "let _canonical_chain_guard = self.canonical_chain_lock.lock()",
+          ".probe_kura_replica_advert_source_under_guards(source.height, &keeper)?",
+          "if &current != source",
+          "self.verify_complete_kura_replica_body_under_guards(source)?",
+          "Signature::try_new(local_key.private_key(), &advert.signature_preimage())",
+          ".verify_keeper_signature()"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/replica_advert_and_body_status.rs",
+        "kind": "method",
+        "symbol": "Kura::revalidate_kura_replica_advert_source",
+        "required_tokens": [
+          ".verify_keeper_signature()",
+          "self.local_peer_id.get() != Some(&advert.keeper)",
+          "let _prune_guard = self.prune_lock.lock()",
+          "let _canonical_chain_guard = self.canonical_chain_lock.lock()",
+          "let source = KuraReplicaAdvertSourceV1::from_advert(advert)",
+          ".probe_kura_replica_advert_source_under_guards(advert.height, &advert.keeper)?",
+          "if current != source",
+          "self.verify_complete_kura_replica_body_under_guards(&source)?"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker/kura_replica_advert_refresh.rs",
+        "kind": "struct",
+        "symbol": "KuraReplicaAdvertRefreshWindow",
+        "required_tokens": [
+          "durable_tip: u64",
+          "evictable_start: u64",
+          "evictable_len: u64",
+          "tail_start: u64",
+          "tail_len: u64"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker/kura_replica_advert_refresh.rs",
+        "kind": "method",
+        "symbol": "KuraReplicaAdvertRefreshWindow::new",
+        "required_tokens": [
+          "let tail_len = durable_tip.min(protected_tail)",
+          "let before_tail = durable_tip.saturating_sub(tail_len)",
+          "let evictable_len = before_tail.min(evictable_window)",
+          ".saturating_sub(evictable_len)",
+          ".saturating_sub(tail_len)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker/kura_replica_advert_refresh.rs",
+        "kind": "method",
+        "symbol": "KuraReplicaAdvertRefreshWindow::contains",
+        "required_tokens": [
+          "height == 0 || height > self.durable_tip || self.len() == 0",
+          "let first = if self.evictable_len == 0",
+          "height >= first"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker/kura_replica_advert_refresh.rs",
+        "kind": "struct",
+        "symbol": "KuraReplicaAdvertRefreshTip",
+        "required_tokens": [
+          "height: u64",
+          "block_hash: HashOf<BlockHeader>"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker/kura_replica_advert_refresh.rs",
+        "kind": "struct",
+        "symbol": "KuraReplicaAdvertRefreshState",
+        "required_tokens": [
+          "observed_durable_tip: Option<KuraReplicaAdvertRefreshTip>",
+          "cursor: Option<KuraReplicaAdvertRefreshCursor>",
+          "retained_source: Option<KuraReplicaAdvertSourceV1>",
+          "urgent_heights: BTreeSet<u64>",
+          "next_cycle_at: Instant",
+          "follow_up_cycle_requested: bool"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker/kura_replica_advert_refresh.rs",
+        "kind": "method",
+        "symbol": "KuraReplicaAdvertRefreshCursor::next_height",
+        "required_tokens": [
+          "self.window.height_at(self.next_offset)?",
+          "self.next_offset = self.next_offset.saturating_add(1)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker/kura_replica_advert_refresh.rs",
+        "kind": "method",
+        "symbol": "KuraReplicaAdvertRefreshState::note_durable_tip",
+        "required_tokens": [
+          "previous.height == current.height && previous.block_hash == current.block_hash",
+          "current.height <= previous.height",
+          "self.retained_source = None",
+          "self.follow_up_cycle_requested = true"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker/kura_replica_advert_refresh.rs",
+        "kind": "method",
+        "symbol": "KuraReplicaAdvertRefreshOwner::from_kura",
+        "required_tokens": [
+          "kura.blocks_in_memory().get()",
+          "kura.replica_advert_evictable_window().get()",
+          ".exact_kura_replica_advert_tip()",
+          ".map(|(height, block_hash)| KuraReplicaAdvertRefreshTip::new(height, block_hash))",
+          "kura.replica_advert_refresh_interval()"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker/kura_replica_advert_refresh.rs",
+        "kind": "method",
+        "symbol": "KuraReplicaAdvertRefreshOwner::new",
+        "required_tokens": [
+          "refresh_interval < KURA_REPLICA_ADVERT_REFRESH_INTERVAL_MIN",
+          "now.checked_add(refresh_interval)",
+          "protected_tail",
+          "evictable_window",
+          "refresh_interval",
+          "state: Mutex::new(KuraReplicaAdvertRefreshState::new(initial_durable_tip, now))"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker/kura_replica_advert_refresh.rs",
+        "kind": "method",
+        "symbol": "KuraReplicaAdvertRefreshOwner::note_durable_tip",
+        "required_tokens": [
+          "tip: Option<(u64, HashOf<BlockHeader>)>",
+          "tip.is_some_and(|(height, _)| height == 0)",
+          "tip.map(|(height, block_hash)| KuraReplicaAdvertRefreshTip::new(height, block_hash))",
+          "let active_window = KuraReplicaAdvertRefreshWindow::new(",
+          ".retain(|height| active_window.contains(*height))"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker/kura_replica_advert_refresh.rs",
+        "kind": "method",
+        "symbol": "KuraReplicaAdvertRefreshOwner::schedule_retired_exact_output_heights",
+        "required_tokens": [
+          "let active_window = KuraReplicaAdvertRefreshWindow::new(",
+          "active_window.contains(height) && state.urgent_heights.insert(height)",
+          "scheduled.checked_add(1)",
+          "state.next_cycle_at = now",
+          "u64::try_from(state.urgent_heights.len())",
+          ".is_ok_and(|count| count <= active_window.len())"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker/kura_replica_advert_refresh.rs",
+        "kind": "method",
+        "symbol": "KuraReplicaAdvertRefreshOwner::drive_turn",
+        "required_tokens": [
+          "if let Some(source) = state.retained_source.as_ref()",
+          "KuraReplicaAdvertRefreshWindow::new(",
+          "anchor.map_or(0, |tip| tip.height)",
+          "while outcome.probes < KURA_REPLICA_ADVERT_REFRESH_PROBES_PER_TURN",
+          "state.urgent_heights.pop_first()",
+          ".and_then(KuraReplicaAdvertRefreshCursor::next_height)",
+          "if transfer(&source)? == ExactFanoutOwnership::SourceRetained",
+          "cursor.anchor != state.observed_durable_tip",
+          "let next_cycle_at = now.checked_add(self.refresh_interval)",
+          "state.cursor = Some(KuraReplicaAdvertRefreshCursor::new(",
+          "state.next_cycle_at = next_cycle_at",
+          "state.cursor.is_some() || !state.urgent_heights.is_empty()"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "kind": "method",
+        "symbol": "ProductionV2Services::service_kura_replica_advert_refresh_turn",
+        "required_tokens": [
+          "self.exact_output_handoff_owner.is_sealed()",
+          ".exact_kura_replica_advert_tip()",
+          ".note_durable_tip(durable_tip, now)?",
+          ".begin_fail_stop_operation()",
+          ".probe_kura_replica_advert_source(source_height, &self.key_pair)",
+          "|source| self.post_kura_replica_advert_while_guarded(source, operation.permit())",
+          "operation.complete()"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "kind": "method",
+        "symbol": "PendingExactOutput::pending_kura_replica_advert_heights",
+        "required_tokens": [
+          "let mut heights = BTreeSet::new()",
+          "ExactOutputRolloverClaim::DurableKuraReplicaAdvert",
+          ".validate_fanout(&fanout.messages, &fanout.semantic_peers())?",
+          "if *source_height == 0",
+          "heights.insert(*source_height)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "kind": "method",
+        "symbol": "ProductionV2Services::handoff_applied_height_output_to_durable_reconstruction",
+        "required_tokens": [
+          "let retired_kura_replica_advert_heights =",
+          "pending.pending_kura_replica_advert_heights()?",
+          "pending.handoff_applied_height_to_durable_reconstruction(",
+          ".schedule_retired_exact_output_heights(",
+          "retired_kura_replica_advert_heights",
+          "operation.complete()"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "kind": "method",
+        "symbol": "ProductionV2Services::post_kura_replica_advert_while_guarded",
+        "required_tokens": [
+          "let source_height = source.height()",
+          "source_height == 0 || source_height > self.context.height",
+          ".build_signed_kura_replica_advert_from_source(source, &self.key_pair)",
+          "ExactOutputRolloverClaim::DurableKuraReplicaAdvert",
+          "advert_hash: HashOf::new(&advert)",
+          "BlockMessage::KuraReplicaAdvert(advert)",
+          "self.remote_voters()",
+          "self.enqueue_exact_fanout_while_guarded("
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "kind": "fn",
+        "symbol": "run_inner",
+        "required_tokens": [
+          "let kura_replica_advert_refresh = Arc::new(",
+          "KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())",
+          "Arc::clone(&kura_replica_advert_refresh)",
+          ".service_kura_replica_advert_refresh_turn(Instant::now())"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/retained_finality_replica_authority.rs",
+        "kind": "method",
+        "symbol": "Kura::deterministic_kura_replica_keepers",
+        "required_tokens": [
+          "artifact.height_context.quorum.min_signers",
+          "validator_count.checked_sub(quorum_count)",
+          ".saturating_add(1)",
+          ".max(self.eviction_required_replicas.get())",
+          "artifact.commit_qc.signers",
+          "KURA_REPLICA_KEEPER_SELECTION_DOMAIN_V1",
+          ".then_with(|| left.1.cmp(&right.1))",
+          ".take(required)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/retained_finality_replica_authority.rs",
+        "kind": "method",
+        "symbol": "Kura::verified_kura_replica_authority_for_eviction",
+        "required_tokens": [
+          "validate_v2_finality_wire_bindings",
+          "verify_v2_finality_artifact_at",
+          "finality_artifact_hash: HashOf::new(&record.artifact)",
+          "selected_keepers = self.deterministic_kura_replica_keepers"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/replica_advert_and_body_status.rs",
+        "kind": "method",
+        "symbol": "Kura::verified_kura_replica_advert_authority_under_guards",
+        "required_tokens": [
+          "canonical_hash != advert.block_hash",
+          "index.length != advert.executed_block_wire_len",
+          "advert.finality_artifact_hash != authority.key.finality_artifact_hash",
+          "advert.executed_block_wire_hash != authority.key.executed_block_wire_hash",
+          "*index == advert.keeper_index && peer == &advert.keeper"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/replica_advert_and_body_status.rs",
+        "kind": "method",
+        "symbol": "Kura::admit_kura_replica_advert",
+        "required_tokens": [
+          ".verify_keeper_signature()",
+          "verified_kura_replica_advert_authority_under_guards",
+          "self.replica_registry_height_horizon(canonical_tip)",
+          "now.saturating_duration_since(observation.observed_at) <= self.replica_advert_ttl",
+          "self.replica_registry_capacity()",
+          "prospective_keys > registry_cap",
+          "KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT",
+          "self.prune_replica_adverts_for_horizon(",
+          "key.height != authority.key.height || key == &authority.key",
+          "registry.entry(authority.key).or_default().insert"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/replica_advert_and_body_status.rs",
+        "kind": "method",
+        "symbol": "Kura::prune_replica_adverts_for_horizon",
+        "required_tokens": [
+          "now.saturating_duration_since(advert.observed_at) <= self.replica_advert_ttl",
+          "!peers.is_empty()",
+          "key.height >= minimum_height && key.height <= maximum_height"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/replica_advert_and_body_status.rs",
+        "kind": "method",
+        "symbol": "Kura::replica_registry_capacity",
+        "required_tokens": [
+          "self.replica_registry_key_capacity.get()"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/replica_advert_and_body_status.rs",
+        "kind": "method",
+        "symbol": "Kura::matching_selected_keeper_count",
+        "required_tokens": [
+          "self.replica_registry_height_horizon(canonical_tip)",
+          "self.prune_replica_adverts_for_horizon(",
+          ".selected_keepers",
+          "advert.keeper_index == *index"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/replica_advert_and_body_status.rs",
+        "kind": "method",
+        "symbol": "Kura::has_all_selected_remote_keepers",
+        "required_tokens": [
+          "self.local_peer_id.get()",
+          "authority.selected_keepers.is_empty()",
+          ".any(|(_, keeper)| keeper == local_peer)",
+          "self.matching_selected_keeper_count(authority, canonical_tip)",
+          "== authority.selected_keepers.len()"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
+        "symbol": "Kura::evict_block_bodies_unlocked",
+        "required_tokens": [
+          "verified_kura_replica_authority_for_eviction",
+          "has_all_selected_remote_keepers",
+          "maybe_pause_eviction_before_stage_publication_for_tests",
+          "current_authority.key == *expected_authority",
+          "cleanup_unpublished_eviction_compaction_files",
+          "write_eviction_compaction_stage"
+        ]
+      }
+    ],
+    "ordered_source_checks": [
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
+        "symbol": "Kura::evict_block_bodies_unlocked",
+        "required_tokens": [
+          "self.maybe_pause_eviction_before_stage_publication_for_tests();",
+          "let fresh_authority = if eviction_authorities.len() == evicted.len() {",
+          "current_authority.key == *expected_authority",
+          "&& self.has_all_selected_remote_keepers(",
+          "if !fresh_authority {",
+          "let stage = EvictionCompactionStageV1 {",
+          "block_store.write_eviction_compaction_stage(&stage)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "kind": "method",
+        "symbol": "ProductionV2Services::handoff_applied_height_output_to_durable_reconstruction",
+        "required_tokens": [
+          "let retired_kura_replica_advert_heights =",
+          "pending.pending_kura_replica_advert_heights()?;",
+          "let retired = pending.handoff_applied_height_to_durable_reconstruction(",
+          "let scheduled_kura_replica_adverts = self",
+          ".schedule_retired_exact_output_heights(",
+          "operation.complete();"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker/kura_replica_advert_refresh.rs",
+        "kind": "method",
+        "symbol": "KuraReplicaAdvertRefreshOwner::drive_turn",
+        "required_tokens": [
+          "let next_cycle_at = now.checked_add(self.refresh_interval).ok_or_else(|| {",
+          "state.cursor = Some(KuraReplicaAdvertRefreshCursor::new(",
+          "state.next_cycle_at = next_cycle_at;"
+        ]
+      }
+    ],
+    "pending_source_checks": []
   },
   "models": [
     {
@@ -1806,6 +2836,41 @@
           ]
         },
         {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "fn",
+          "symbol": "validate_native_amx_participant_groups",
+          "required_tokens": [
+            "for leg in &receipt.legs",
+            "native_amx_participant_application_role(receipt, leg)",
+            "NativeAmxParticipantApplicationRole::Coordinator",
+            "continue;",
+            "NativeAmxParticipantApplicationRole::SeparateParticipant",
+            "return Err(Self::execution_context_error",
+            "native AMX participant application identity is invalid at index",
+            "let descriptor = &leg.participant_proposal.descriptor",
+            "groups.get_mut(&key)",
+            "groups.insert("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "native_amx_participant_application_diagnostic_rows_from_native_receipt",
+          "required_tokens": [
+            "for leg in &receipt.legs",
+            "native_amx_participant_application_role(receipt, leg)",
+            "NativeAmxParticipantApplicationRole::Coordinator",
+            "continue;",
+            "NativeAmxParticipantApplicationRole::SeparateParticipant",
+            "return Err(MergeLedgerCommitError::ExecutionBatchInvalid",
+            "certified Native AMX participant diagnostics contain an invalid leg",
+            "let row = SumeragiNativeAmxParticipantApplication",
+            "SumeragiNativeAmxParticipantApplicationState::CertifiedPendingCarrier",
+            "row.validate().map_err",
+            "rows.push(row)"
+          ]
+        },
+        {
           "path": "crates/iroha_core/src/sumeragi/exec.rs",
           "kind": "fn",
           "symbol": "from_result_bearing_block",
@@ -1916,7 +2981,46 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "path": "crates/iroha_core/src/sumeragi/message.rs",
+          "kind": "struct",
+          "symbol": "CanonicalExecutedBlockNeedV1",
+          "required_tokens": [
+            "height: u64",
+            "block_hash: HashOf<BlockHeader>",
+            "finality_artifact_hash: HashOf<V2FinalityArtifact>",
+            "execution_commitment: ExecutionCommitment",
+            "executed_block_wire_len: u64",
+            "executed_block_wire_hash: Hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/message.rs",
+          "kind": "enum",
+          "symbol": "LaneHistoricalRecoveryKindV1",
+          "required_tokens": [
+            "Codec index 3 is intentionally retired",
+            "#[codec(index = 4)]",
+            "CanonicalExecutedBlock",
+            "need: Box<CanonicalExecutedBlockNeedV1>",
+            "chunk_index: u32"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/message.rs",
+          "kind": "enum",
+          "symbol": "LaneHistoricalRecoveryPayloadV1",
+          "required_tokens": [
+            "#[codec(index = 3)]",
+            "CanonicalExecutedBlockChunk",
+            "finality_artifact: V2FinalityArtifact",
+            "wire_len: u64",
+            "chunk_index: u32",
+            "chunk_count: u32",
+            "bytes: Vec<u8>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
           "kind": "fn",
           "symbol": "canonical_executed_block_need_for_height",
           "required_tokens": [
@@ -1929,7 +3033,72 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "fn",
+          "symbol": "validate_canonical_executed_block_need",
+          "required_tokens": [
+            "state.committed_height()",
+            "need.execution_commitment.validate()",
+            "STRICT_INIT_MAX_BLOCK_BYTES",
+            "state.committed_block_hash_at_height(need.height)",
+            "durable_block_payload_len_by_hash",
+            "v2_finality_artifact_with_header",
+            "HashOf::new(&finality) != need.finality_artifact_hash",
+            "finality.verify()",
+            "finality.validate_for_header(&header)",
+            "finality.commit_qc.execution_commitment != need.execution_commitment",
+            "finality.height_context.chain_id != context.chain_id"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "fn",
+          "symbol": "validate_canonical_executed_block_request",
+          "required_tokens": [
+            "LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock",
+            "LANE_HISTORICAL_RECOVERY_VERSION_V4",
+            "&request.requester != sender",
+            "request.certificate.is_some()",
+            "!request.signer_pops.is_empty()",
+            "CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES",
+            "CANONICAL_EXECUTED_BLOCK_MAX_CHUNKS",
+            "canonical_executed_block_request_fits_frame",
+            "validate_canonical_executed_block_need",
+            "requester_is_authorized"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "fn",
+          "symbol": "canonical_executed_block_matches_need",
+          "required_tokens": [
+            "block.encode_wire()",
+            "finality.verify()",
+            "finality.validate_for_header(&block.header())",
+            "finality.commit_qc.execution_commitment == need.execution_commitment",
+            "block.hash() == need.block_hash",
+            "Some(need.executed_block_wire_len)",
+            "Hash::new(&wire) == need.executed_block_wire_hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "fn",
+          "symbol": "build_canonical_executed_block_response",
+          "required_tokens": [
+            "validate_canonical_executed_block_request",
+            "peer_is_global_finality_signer",
+            "get_block_without_merge_sidecar",
+            "canonical_executed_block_matches_need",
+            "block.encode_wire()",
+            "CANONICAL_EXECUTED_BLOCK_MAX_CHUNKS",
+            "LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk",
+            "wire[start..end].to_vec()",
+            "canonical_executed_block_response_fits_frame"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
           "kind": "enum",
           "symbol": "LaneApplicationEvidenceRepairPlanning",
           "required_tokens": [
@@ -1938,12 +3107,13 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
           "kind": "struct",
           "symbol": "LaneApplicationEvidenceRepairPlan",
           "required_tokens": [
             "state_tip_height",
             "state_tip_hash",
+            "ordinary_pairs",
             "ordinary",
             "native_carriers",
             "merge_carriers",
@@ -1951,10 +3121,11 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
           "kind": "struct",
           "symbol": "LaneApplicationEvidenceRepairSummary",
           "required_tokens": [
+            "ordinary_pairs",
             "ordinary_receipts",
             "native_carriers",
             "native_routes",
@@ -1962,11 +3133,25 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "method",
+          "symbol": "LaneApplicationEvidenceRepairSummary::publication_count",
+          "required_tokens": [
+            "self.ordinary_pairs",
+            "saturating_add(self.ordinary_receipts)",
+            "saturating_add(self.native_carriers)",
+            "saturating_add(self.merge_carriers)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
           "kind": "fn",
           "symbol": "plan_lane_application_evidence_repair",
           "required_tokens": [
-            "earliest_unapplied_certified_lane_block_sessions_snapshot_cached",
+            "lane_application_certified_repair_snapshot_cached",
+            "certified_snapshot.pair_repairs",
+            "certified_snapshot.earliest_unapplied",
+            "ordinary_pairs.len().saturating_add(ordinary_sessions.len())",
             "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached",
             "preflight_finalized_merge_carrier_repairs",
             "missing_merge_carrier_bodies",
@@ -1985,16 +3170,22 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
           "kind": "fn",
           "symbol": "apply_lane_application_evidence_repair",
           "required_tokens": [
             "state.committed_height() != plan.state_tip_height",
             "state.latest_block_hash_fast() != plan.state_tip_hash",
+            "lane_application_certified_repair_snapshot_cached",
+            "current_certified.pair_repairs != plan.ordinary_pairs",
+            "current_certified.earliest_unapplied",
             "preflight_lane_block_application_receipt_repair",
             "preflight_native_amx_participant_application_evidence_repair",
             "preflight_finalized_merge_carrier_repairs",
             "current_merge_carriers != plan.merge_carriers",
+            "for artifact in &plan.ordinary_pairs",
+            "persist_committed_lane_block_session_lifecycle_bound",
+            "summary.ordinary_pairs",
             "apply_finalized_merge_carrier_repairs",
             "persist_preflighted_lane_block_application_receipt",
             "lane_block_application_receipt_available",
@@ -2004,21 +3195,90 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-          "kind": "method",
-          "symbol": "CanonicalExecutedBlockRecovery::reconcile_cached_front",
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "struct",
+          "symbol": "CanonicalExecutedBlockRecovery",
           "required_tokens": [
-            "get_block_without_merge_sidecar",
-            "canonical_executed_block_matches_need",
-            "preflight_cached_finalized_merge_carrier_reconstruction",
-            "self.needs.pop_front()"
+            "context: wire::HeightContext",
+            "local_peer: PeerId",
+            "state: Arc<State>",
+            "kura: Arc<Kura>",
+            "output_guard: Arc<ConsensusOutputGuard>",
+            "limits: V2LaneWorkLimits",
+            "needs: VecDeque<CanonicalExecutedBlockNeedV1>",
+            "assembly_responder",
+            "assembly_wire_len",
+            "assembly_chunk_count",
+            "outstanding",
+            "effects: VecDeque<V2LaneWorkEffect>"
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "method",
+          "symbol": "CanonicalExecutedBlockRecovery::new",
+          "required_tokens": [
+            "needs.is_empty()",
+            "Self::need_capacity(limits)",
+            "pair[0].height >= pair[1].height",
+            "V2LaneWorkError::InvalidContext(error.to_string())",
+            "validate_canonical_executed_block_need",
+            "finality.commit_qc.signers.iter().any",
+            "entry.validator != local_peer",
+            "needs: needs.into()",
+            "assembly: Vec::new()",
+            "effects: VecDeque::new()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "method",
+          "symbol": "CanonicalExecutedBlockRecovery::service_next",
+          "required_tokens": [
+            "guard.acquire()",
+            "self.reconcile_cached_front()",
+            "validate_canonical_executed_block_need",
+            "let eligible_peers = finality",
+            ".commit_qc",
+            ".signers",
+            "outstanding.retry_sent",
+            "self.advance_past_front_responder()",
+            "LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock",
+            "LANE_HISTORICAL_RECOVERY_VERSION_V4",
+            "canonical_executed_block_request_fits_frame",
+            "V2LaneWorkEffect::PostLaneBlock",
+            "OutstandingCanonicalExecutedBlockRequest"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "method",
+          "symbol": "CanonicalExecutedBlockRecovery::accept_with_ingress_ownership",
+          "required_tokens": [
+            "take_ingress_ownership",
+            "ownership.validate_exact()",
+            "ownership.matches_message(&message)",
+            "ownership.matches_semantic_origin",
+            "ownership.matches_reply_routes",
+            "build_canonical_executed_block_response",
+            "LaneHistoricalRecoveryResponse",
+            "V2LaneWorkEffect::PostLaneBlock",
+            "self.accept_response"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
           "kind": "method",
           "symbol": "CanonicalExecutedBlockRecovery::accept_response",
           "required_tokens": [
+            "LANE_HISTORICAL_RECOVERY_VERSION_V4",
+            "canonical_executed_block_response_fits_frame",
+            "HashOf::new(&outstanding.request)",
+            "LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock",
+            "LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk",
+            "peer_is_global_finality_signer",
+            "CANONICAL_EXECUTED_BLOCK_MAX_CHUNKS",
+            "decode_versioned_signed_block",
             "canonical_executed_block_matches_need",
             "cache_block_body",
             "preflight_cached_finalized_merge_carrier_reconstruction",
@@ -2027,18 +3287,127 @@
         },
         {
           "path": "crates/iroha_core/src/state.rs",
+          "kind": "struct",
+          "symbol": "LaneApplicationCertifiedRepairSnapshot",
+          "required_tokens": [
+            "pair_repairs",
+            "earliest_unapplied"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
           "kind": "method",
-          "symbol": "State::earliest_unapplied_certified_lane_block_sessions_snapshot_cached",
+          "symbol": "State::lane_application_certified_repair_snapshot_cached",
           "required_tokens": [
             "capacity == 0",
-            "latest_certified_lane_block_frontier_sessions_snapshot_cached",
-            "frontiers.len() > capacity",
+            "lane_consensus_lifecycle_snapshot",
+            "preflight_latest_certified_lane_block_frontier_with_authority",
+            "pair_repair_required",
             "lane_route_and_incarnation_matches",
             "previous_lane_block_height.checked_add(1)",
             "certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached",
-            "read_certified_lane_block_artifact",
+            "read_certified_lane_block_artifact_read_only",
             "previous_descriptor.lane_incarnation != descriptor.lane_incarnation",
-            "earliest.sort_by_key"
+            "traversed_total",
+            "earliest.sort_by_key",
+            "pair_repairs.sort_by_key"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "State::certified_lane_block_session_is_applied_or_snapshot_anchored_cached",
+          "required_tokens": [
+            "certified_lane_block_proposal_has_hash_only_snapshot_anchor",
+            "lane_block_application_receipt_available_without_sidecar_repair"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "State::certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached",
+          "required_tokens": [
+            "previous_height == 0",
+            "return false",
+            "read_lane_block_artifact_without_sidecar_repair",
+            "lane_block_predecessor_application_receipt_available_without_sidecar_repair"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "State::persist_committed_lane_block_session_lifecycle_bound",
+          "required_tokens": [
+            "state_write_lock.lock()",
+            "generation % 2 != 0",
+            "certified_lane_block_persistence_authority",
+            "persist_committed_lane_block_session_with_authority",
+            "self.state_view_generation() != generation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "preflight_latest_certified_lane_block_frontier_with_authority",
+          "required_tokens": [
+            "prune_lock.lock()",
+            "ensure_prune_recovery_not_required",
+            "read_latest_certified_lane_block_frontier_locked(&entry, false)",
+            "ensure_bound_progress_pair_has_no_recovery_artifacts_locked",
+            "read_certified_lane_block_artifact_structural_from_bound_locked",
+            "permits_slot_replacement",
+            "bound_progress_sidecar_unchanged",
+            "confirm_latest_certified_lane_block_frontier_read_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "read_certified_lane_block_artifact_read_only",
+          "required_tokens": [
+            "prune_lock.lock()",
+            "ensure_prune_recovery_not_required",
+            "ensure_bound_progress_pair_has_no_recovery_artifacts_locked",
+            "BoundProgressPair::Absent",
+            "read_active_certified_lane_block_artifact_from_bound_locked",
+            "bound_progress_sidecar_unchanged"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "read_lane_block_artifact_without_sidecar_repair",
+          "required_tokens": [
+            "read_active_lane_block_artifact_structural(lane_id, lane_block_height, false)",
+            "validate_lane_block_artifact_canonical",
+            "confirmed == artifact"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "read_lane_block_application_receipt_without_sidecar_repair",
+          "required_tokens": [
+            "read_active_lane_block_application_receipt_structural",
+            "lane_block_application_receipt_matches_available_evidence(&artifact, false)",
+            "confirmed == artifact"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "lane_block_application_receipt_available_without_sidecar_repair",
+          "required_tokens": [
+            "lane_block_application_receipt_available_with_repair_policy(proposal, false)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "lane_block_predecessor_application_receipt_available_without_sidecar_repair",
+          "required_tokens": [
+            "lane_block_predecessor_application_receipt_available_with_repair_policy",
+            "proposal, false"
           ]
         },
         {
@@ -2147,6 +3516,43 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
           "kind": "fn",
+          "symbol": "canonical_executed_block_recovery_batches",
+          "required_tokens": [
+            "capacity == 0",
+            "needs.is_empty()",
+            "pair[0].height >= pair[1].height",
+            "needs.chunks(capacity)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "fn",
+          "symbol": "drain_canonical_executed_block_recovery_ingress",
+          "required_tokens": [
+            "try_recv_if_checked",
+            "recovery.admits_message",
+            "recovery.accept_with_ingress_ownership",
+            "drained.saturating_add(1)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "fn",
+          "symbol": "dispatch_canonical_executed_block_recovery_effects",
+          "required_tokens": [
+            "recovery.effect_count()",
+            "recovery.drain_effects(1)",
+            "V2LaneWorkEffect::PostLaneBlock",
+            "can_retain_lane_work_effect",
+            "recovery.requeue_effect",
+            "dispatch_lane_work_effect",
+            "LaneWorkEffectDispatch::Complete",
+            "LaneWorkEffectDispatch::SourceRetained"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "fn",
           "symbol": "run_inner",
           "required_tokens": [
             "pending_tip_recovery_attempts",
@@ -2156,12 +3562,37 @@
             "plan.item_count()",
             "begin_fail_stop_operation",
             "apply_lane_application_evidence_repair",
+            "summary.publication_count()",
+            "summary.ordinary_pairs",
             "made no bounded progress",
             "LaneApplicationEvidenceRepairPlanning::RecoverCanonicalBodies",
             "canonical_executed_block_recovery_batches",
             "CanonicalExecutedBlockRecovery::new",
+            "body_recovery.service_next()",
+            "drain_canonical_executed_block_recovery_ingress",
+            "dispatch_canonical_executed_block_recovery_effects",
             "close_ingress_for_rollover",
             "plan_lane_reservation_ownership"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/tests/v2_lane_work_native_body_recovery.rs",
+          "kind": "fn",
+          "symbol": "native_participant_missing_carrier_uses_generic_chunk_recovery_then_repairs_receipt",
+          "required_tokens": [
+            "plan_lane_application_evidence_repair",
+            "LaneApplicationEvidenceRepairPlanning::RecoverCanonicalBodies",
+            "needs.len()",
+            "needs[0].finality_artifact_hash",
+            "needs[0].executed_block_wire_hash",
+            "kura.cache_block_body",
+            "LaneApplicationEvidenceRepairPlanning::Ready",
+            "apply_lane_application_evidence_repair",
+            "summary.native_carriers",
+            "summary.native_routes",
+            "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached",
+            "read_native_amx_participant_application_receipt",
+            "receipt.executed_block_wire_hash"
           ]
         },
         {
@@ -2198,7 +3629,7 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
           "kind": "fn",
           "symbol": "peer_is_global_finality_signer",
           "required_tokens": [
@@ -3270,7 +4701,7 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/kura.rs",
+          "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
           "kind": "fn",
           "symbol": "validate_autonomous_lane_merge_bundle",
           "required_tokens": [
@@ -3421,8 +4852,8 @@
           "required_tokens": [
             "canonical_merged_lane_frontier_from_world",
             "validate_merge_execution_predecessor_against_frontier",
-            "autonomous_lane_merge_bundle",
-            "read_lane_block_execution_input",
+            "durable_autonomous_lane_merge_source",
+            "MergeExecutionSource::from_durable",
             "merge_execution_canonical_order_key",
             "build_merge_execution_batch_from_source_prefix"
           ]
@@ -3533,7 +4964,7 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/kura.rs",
+          "path": "crates/iroha_core/src/kura/retained_finality_replica_authority.rs",
           "kind": "fn",
           "symbol": "validate_v2_finality_wire_bindings",
           "required_tokens": [
@@ -3590,7 +5021,7 @@
           "kind": "fn",
           "symbol": "apply_lane_reservation_reconciliation_plan",
           "required_tokens": [
-            "historical_autonomous_lane_recovery_matches",
+            "historical_autonomous_install_is_durable",
             "lane_reservation_reconciliation_snapshot",
             "lane_reservation_commit_barriers",
             "lane_reservation_release_barriers",
@@ -3603,26 +5034,9 @@
         {
           "path": "crates/iroha_core/src/kura.rs",
           "kind": "fn",
-          "symbol": "committed_merge_queue_reservations",
-          "required_tokens": [
-            "validate_indexed_file_length",
-            "transaction_entrypoint_index.lock",
-            "transaction_index.complete",
-            "heights_by_transaction",
-            "heights.next().is_some()",
-            "BTreeMap::<NonZeroUsize",
-            "requested_by_height",
-            "get_merge_entry_by_carrier_height",
-            "certified_merge_queue_reservations",
-            "hashes.contains",
-            "conflicting reservations"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/kura.rs",
-          "kind": "fn",
           "symbol": "get_merge_entry_by_carrier_height",
           "required_tokens": [
+            "validate_indexed_file_length",
             "get_block_hash",
             "merge_entry_for_carrier",
             "block_height.get()"
@@ -4424,7 +5838,7 @@
           "kind": "fn",
           "symbol": "apply_lane_reservation_reconciliation_plan",
           "required_tokens": [
-            "historical_autonomous_lane_recovery_matches",
+            "historical_autonomous_install_is_durable",
             "lane_reservation_reconciliation_snapshot",
             "lane_reservation_commit_barriers",
             "lane_reservation_release_barriers",

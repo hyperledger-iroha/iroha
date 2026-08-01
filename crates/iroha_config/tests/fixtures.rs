@@ -971,6 +971,15 @@ fn minimal_config_snapshot() {
                         enabled: false,
                         signer_handle: None,
                         signer_public_key: None,
+                        signer_revision: None,
+                        signer_policy_digest: None,
+                        admission_provider_handle: None,
+                        admission_provider_revision: None,
+                        admission_provider_policy_digest: None,
+                        admission_max_pending: 65536,
+                        admission_max_tracked_tokens: 65536,
+                        admission_reconcile_max_items: 256,
+                        admission_lease_ttl_ms: 120000,
                         key_version: 1,
                         default_ttl_secs: 900,
                         default_max_streams: 4,
@@ -1890,7 +1899,12 @@ fn minimal_config_snapshot() {
                 blocks_in_memory: 1024,
                 block_sync_roster_retention: 7200,
                 roster_sidecar_retention: 512,
-                eviction_required_replicas: 3,
+                replica_advert: KuraReplicaAdvertPolicy {
+                    eviction_required_replicas: 3,
+                    evictable_window: 4096,
+                    ttl: 3600s,
+                    refresh_interval: 900s,
+                },
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity: 256,
                 fsync_mode: Batched,
@@ -5142,24 +5156,7 @@ fn tls_fallback_defaults_to_tls_only() {
     );
 }
 
-#[test]
-fn torii_transport_trusted_proxy_cidrs_default_to_empty() {
-    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
-    use iroha_config_base::read::ConfigReader;
-
-    let cfg: Actual = ConfigReader::new()
-        .read_toml_with_extends(fixtures_dir().join("base.toml"))
-        .expect("base file should be valid")
-        .read_and_complete::<User>()
-        .expect("user config")
-        .parse()
-        .expect("actual config");
-
-    assert!(
-        cfg.torii.transport.trusted_proxy_cidrs.is_empty(),
-        "trusted proxy CIDRs should default to empty until operators opt in"
-    );
-}
+include!("fixtures/trusted_proxy_defaults_test.rs");
 
 #[test]
 fn network_defaults_carry_maximal_sumeragi_v2_progress_frames() {

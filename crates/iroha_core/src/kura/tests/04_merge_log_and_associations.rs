@@ -481,8 +481,7 @@
             fsync_interval: Duration::from_secs(3600),
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize kura");
         let block = DummyBlocks::new().next();
@@ -654,8 +653,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -813,8 +811,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -849,8 +846,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -889,8 +885,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -921,8 +916,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -1039,12 +1033,24 @@
     }
 
     #[test]
+    fn kura_start_rejects_unbound_local_peer_identity() {
+        let kura = Kura::blank_kura_for_testing();
+
+        assert!(matches!(
+            Kura::start(kura, ShutdownSignal::new()),
+            Err(Error::KuraReplicaLocalPeerUnbound)
+        ));
+    }
+
+    #[test]
     fn kura_background_eviction_retry_latency_threshold() {
         const BACKGROUND_EVICTION_RETRY_THRESHOLD: Duration = Duration::from_secs(2);
 
         let case = background_budget_eviction_case();
         let kura = case.kura;
         let block4 = case.retry_block;
+        kura.bind_local_peer_id(checked_peer_id())
+            .expect("bind local peer before Kura start");
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         let shutdown_signal = ShutdownSignal::new();
         let _handle = {
@@ -1111,8 +1117,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let lane_config = RuntimeLaneConfig::default();
         let (mut kura, _) = Kura::new(&kura_cfg, &lane_config).expect("initialize kura");
@@ -1168,6 +1173,8 @@
         Arc::get_mut(&mut kura)
             .expect("exclusive kura handle")
             .max_disk_usage_bytes = limit;
+        kura.bind_local_peer_id(checked_peer_id())
+            .expect("bind local peer before Kura start");
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         let _handle = {
             let _rt_guard = rt.enter();
@@ -1220,8 +1227,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -1406,8 +1412,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -1455,8 +1460,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -1860,8 +1864,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -1954,8 +1957,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("initialize kura");
 
@@ -1987,8 +1989,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -2265,8 +2266,7 @@
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let lane_cfg = RuntimeLaneConfig::default();
         let merge_path = lane_cfg.primary().merge_log_path(dir.path());

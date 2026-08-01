@@ -1,3 +1,5 @@
+rule_files:
+  - ../confidential_assets_rules.yml
 evaluation_interval: 1m
 tests:
   - interval: 1m
@@ -17,8 +19,19 @@ tests:
           - exp_labels:
               severity: page
               asset_id: 62Fk4FPcMuLvW5QjDGNF2a4jAmjM
+            exp_annotations:
+              summary: "Confidential commitment tree depth dropped to zero"
+              description: |
+                Asset 62Fk4FPcMuLvW5QjDGNF2a4jAmjM has commitments recorded but the reported tree depth is zero.
+                Inspect the frontier checkpoints and root history gauges before allowing additional
+                confidential traffic.
       - eval_time: 11m
         alertname: ConfidentialVerifierCacheMissSpike
         exp_alerts:
           - exp_labels:
               severity: warning
+            exp_annotations:
+              summary: "Verifier cache miss ratio above 40%"
+              description: |
+                More than 40% of verifier cache lookups are missing over the last 10 minutes.
+                Validate that Halo2 params and verifying keys are stable before tightening the gas schedule.

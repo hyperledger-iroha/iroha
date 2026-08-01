@@ -735,9 +735,32 @@ def _check_cargo_workflow(
     }
     native_consumer_step = {
         "name": "Privacy native bridge tests",
-        "run": (
-            "cargo test -p connect_norito_bridge privacy_ --lib "
-            "-- --test-threads=1"
+        "run": "\n".join(
+            (
+                "cargo test -p connect_norito_bridge privacy_ --lib "
+                "-- --test-threads=1",
+                "cargo build --locked --release -p connect_norito_bridge",
+                'host_target="$(rustc -vV | sed -n \'s/^host: //p\')"',
+                'if [[ "${host_target}" != "x86_64-unknown-linux-gnu" ]]; then',
+                '  echo "privacy C# bridge host ${host_target} is not the required Linux x86_64 target" >&2',
+                "  exit 1",
+                "fi",
+                'artifact_dir="${RUNNER_TEMP}/iroha-privacy-csharp-native"',
+                'artifact="${artifact_dir}/libconnect_norito_bridge.so"',
+                'manifest="${artifact_dir}/native-sdk-abi21.json"',
+                'mkdir -p "${artifact_dir}"',
+                'cp "${CARGO_TARGET_DIR}/release/libconnect_norito_bridge.so" "${artifact}"',
+                "python3 -I -B scripts/check_native_sdk_abi21_artifact.py record \\",
+                '  --artifact "${artifact}" \\',
+                '  --manifest "${manifest}" \\',
+                '  --source-root "${GITHUB_WORKSPACE}" \\',
+                "  --sdk csharp \\",
+                '  --target "${host_target}"',
+                "python3 -I -B scripts/check_native_sdk_abi21_artifact.py verify \\",
+                '  --artifact "${artifact}" \\',
+                '  --manifest "${manifest}" \\',
+                '  --source-root "${GITHUB_WORKSPACE}"',
+            )
         ),
     }
     python_consumer_step = {
@@ -1652,6 +1675,16 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "python/iroha_python/tests/package_import_fallback_test.py", overrides
     )
     python_pyproject_source = read("python/iroha_python/pyproject.toml", overrides)
+    csharp_privacy_test_source = read(
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs",
+        overrides,
+    )
+    csharp_sdk_guard_source = read(
+        "ci/check_privacy_csharp_sdk.sh", overrides
+    )
+    native_artifact_checker_source = read(
+        "scripts/check_native_sdk_abi21_artifact.py", overrides
+    )
     workflow = _check_cargo_workflow(workflow_source, errors)
     required_workflow_paths = (
         ".gitignore",
@@ -1686,6 +1719,8 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "crates/sorafs_chunker/**",
         "crates/sorafs_orchestrator/**",
         "ci/verify_privacy_python_wheel.py",
+        "scripts/check_native_sdk_abi21_artifact.py",
+        "scripts/tests/check_privacy_csharp_native_contract_test.py",
         "python/iroha_python/pyproject.toml",
         "python/iroha_python/iroha_python_rs/build.rs",
         "python/iroha_python/iroha_python_rs/src/**",
@@ -1705,6 +1740,66 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "python/iroha_torii_client/**/*.py",
     )
     _check_workflow_trigger_paths(workflow, required_workflow_paths, errors)
+    require(
+        "Exact12FixtureBundleRoundTripsAndRejectsAdversarialBytes()"
+        in csharp_privacy_test_source
+        and "Assert.True(\n            PrivacyNative.IsAvailable(),"
+        in csharp_privacy_test_source
+        and "WhenAvailable" not in csharp_privacy_test_source
+        and "if (!PrivacyNative.IsAvailable())" not in csharp_privacy_test_source
+        and "IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE"
+        not in csharp_privacy_test_source,
+        "C# exact-12 privacy tests must require the ABI-21 native bridge unconditionally",
+        errors,
+    )
+    require(
+        all(
+            marker in csharp_sdk_guard_source
+            for marker in (
+                '"${IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE:-}" != "1"',
+                "PRIVACY_CSHARP_NATIVE_ARTIFACT",
+                "PRIVACY_CSHARP_NATIVE_MANIFEST",
+                "scripts/check_native_sdk_abi21_artifact.py",
+                '"${PYTHON_BIN}" -I -B "${ABI21_ARTIFACT_CHECKER}" verify',
+                '"${LD_LIBRARY_PATH:-}" != "${NATIVE_DIRECTORY}"',
+            )
+        ),
+        "privacy C# SDK gate must authenticate and exclusively load its required native bridge",
+        errors,
+    )
+    require(
+        all(
+            symbol in native_artifact_checker_source
+            for symbol in (
+                '"iroha_privacy_capabilities_v1"',
+                '"iroha_privacy_validate_capabilities_v1"',
+                '"iroha_privacy_exact12_fixture_bundle_v1"',
+                '"iroha_privacy_validate_exact12_fixture_bundle_v1"',
+                '"iroha_privacy_free_buffer"',
+            )
+        ),
+        "ABI-21 C# artifact evidence must bind every privacy fixture symbol",
+        errors,
+    )
+    require(
+        all(
+            marker in workflow_source
+            for marker in (
+                "cargo build --locked --release -p connect_norito_bridge",
+                "scripts/check_native_sdk_abi21_artifact.py record",
+                "--sdk csharp",
+                "Upload authenticated C# privacy bridge",
+                "needs: privacy_native_bridge_tests",
+                "Download authenticated C# privacy bridge",
+                "python3 -I -B scripts/tests/check_privacy_csharp_native_contract_test.py",
+                'IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE: "1"',
+                "PRIVACY_CSHARP_NATIVE_ARTIFACT:",
+                "PRIVACY_CSHARP_NATIVE_MANIFEST:",
+            )
+        ),
+        "privacy workflow must build, authenticate, transfer, and require the C# ABI-21 bridge",
+        errors,
+    )
     lock_helper_executable_source = "\n".join(
         line
         for line in lock_helper_source.splitlines()

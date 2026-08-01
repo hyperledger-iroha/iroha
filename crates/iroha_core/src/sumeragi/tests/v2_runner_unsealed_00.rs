@@ -385,6 +385,10 @@
             self.record("lane-local")
         }
 
+        fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError> {
+            self.record("kura-replica-advert")
+        }
+
         fn commit_current_serve(
             &mut self,
             current: DecidedLaneRecoveryCurrentDrain<Self::Admission>,
@@ -520,6 +524,17 @@
 
     #[test]
     fn decided_lane_commit_orders_bind_before_history_or_volatile_retirement() {
+        let mut replica_advert = RecordingDecidedLaneCommitter::new(None);
+        assert_eq!(
+            commit_decided_lane_recovery_drain(
+                DecidedLaneRecoveryDrainAuthorization::KuraReplicaAdvert,
+                &mut replica_advert,
+            )
+            .expect("route Kura replica advert outside the reducer"),
+            DecidedLaneRecoveryDrainCommitOutcome::KuraReplicaAdvert
+        );
+        assert_eq!(replica_advert.calls, ["kura-replica-advert"]);
+
         let mut exact = RecordingDecidedLaneCommitter::new(None);
         assert_eq!(
             commit_decided_lane_recovery_drain(
@@ -583,6 +598,25 @@
             ["bind-leader-wire"],
             "a failed bind cannot publish VolatileTerminal"
         );
+    }
+
+    #[test]
+    fn kura_replica_advert_error_classification_retires_only_invalid_remote_claims() {
+        assert!(matches!(
+            classify_kura_replica_advert_admission_error(
+                crate::kura::Error::InvalidKuraReplicaAdvert("forged advert".to_owned())
+            ),
+            KuraReplicaAdvertAdmissionError::InvalidAdvert(reason)
+                if reason == "forged advert"
+        ));
+        assert!(matches!(
+            classify_kura_replica_advert_admission_error(
+                crate::kura::Error::CanonicalStoragePoisoned
+            ),
+            KuraReplicaAdvertAdmissionError::Fatal(
+                crate::kura::Error::CanonicalStoragePoisoned
+            )
+        ));
     }
 
     #[test]
@@ -862,10 +896,11 @@
             ownership.leader_wire_runtime_receipt().is_some(),
             "the synthetic stale Coalesce result carries a fresh runtime receipt"
         );
-        assert!(
+        assert_eq!(
             gate.earliest_ingress_scheduler_ordinal()
-                .expect("read runner leader-wire minimum")
-                .is_some()
+                .expect("read runner leader-wire minimum"),
+            None,
+            "a runtime-bound owner has already left the durable Ingress selector"
         );
 
         assert!(matches!(

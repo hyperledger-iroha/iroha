@@ -1490,6 +1490,8 @@ struct RuntimeSchedulerArbitrationInputs {
     completion_ready: bool,
     progress_ready: bool,
     normal_ready: bool,
+    fence_completion_bypass: bool,
+    fence_predecessor_lifecycle_ordinal: Option<u128>,
 }
 
 /// Exact source selected for one live or recovery scheduler turn.
@@ -1497,6 +1499,9 @@ struct RuntimeSchedulerArbitrationInputs {
 pub(crate) enum RuntimeSelectedOwnerKind {
     /// One older adapter-owned Busy-deferred occurrence.
     Deferred,
+    /// The exact causally owned signature completion which opens an active
+    /// reducer fence for strictly older unserviceable adapter debt.
+    FenceCompletion,
     /// Absolute round timeout.
     Timeout,
     /// Periodic retransmission timer.
@@ -1573,6 +1578,12 @@ pub(crate) struct RuntimeSchedulerOwnershipEvidence {
     pub(crate) progress_ready: bool,
     /// Whether the Normal class had an admitted owner.
     pub(crate) normal_ready: bool,
+    /// Whether this turn used the narrow dependency edge from older
+    /// unserviceable adapter debt to its exact signing completion.
+    pub(crate) fence_completion_bypass: bool,
+    /// Oldest exact adapter-deferred lifecycle which depended on the selected
+    /// fence completion. Present only for the exceptional dependency edge.
+    pub(crate) fence_predecessor_lifecycle_ordinal: Option<u128>,
     /// Scheduler FIFO debt before selection.
     pub(crate) fifo_owed_before: bool,
     /// Scheduler FIFO debt after selection.
@@ -1611,6 +1622,7 @@ impl RuntimeSelectedOwnerKind {
             Self::RecoveryIdle => 7,
             Self::FifoRetryRetained => 8,
             Self::RecoveryFifoRetryRetained => 9,
+            Self::FenceCompletion => 10,
         }
     }
 }
@@ -1684,6 +1696,14 @@ fn runtime_scheduler_projection_hash(
     projection.push(u8::from(evidence.completion_ready));
     projection.push(u8::from(evidence.progress_ready));
     projection.push(u8::from(evidence.normal_ready));
+    projection.push(u8::from(evidence.fence_completion_bypass));
+    match evidence.fence_predecessor_lifecycle_ordinal {
+        None => projection.push(0),
+        Some(ordinal) => {
+            projection.push(1);
+            append_runtime_identity_field(&mut projection, &ordinal.to_le_bytes());
+        }
+    }
     projection.push(u8::from(evidence.live_mode));
     projection.push(u8::from(evidence.fifo_owed_before));
     projection.push(u8::from(evidence.fifo_owed_after));
@@ -1705,6 +1725,9 @@ impl RuntimeSchedulerOwnershipEvidence {
             || self.fifo_ready
                 != (self.completion_ready || self.progress_ready || self.normal_ready)
             || (!self.live_mode && (self.timeout_due || self.periodic_timer_due))
+            || (self.fence_completion_bypass
+                != matches!(self.selected, RuntimeSelectedOwnerKind::FenceCompletion))
+            || (self.fence_completion_bypass != self.fence_predecessor_lifecycle_ordinal.is_some())
         {
             return Err(RuntimeSchedulerEvidenceError::InvalidProjection);
         }
@@ -1733,6 +1756,49 @@ impl RuntimeSchedulerOwnershipEvidence {
             } else {
                 Err(RuntimeSchedulerEvidenceError::InvalidProjection)
             };
+        }
+        if let (
+            RuntimeSelectedOwnerKind::FenceCompletion,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+        ) = (&self.selected, &self.candidate)
+        {
+            let exact = self.live_mode
+                && self.fence_completion_bypass
+                && self.round_tag == candidate.tag
+                // Fence completion is an explicit dependency branch, not an
+                // ordinary FIFO or clock selection. Its carrier must not
+                // claim that normal arbitration was simultaneously ready.
+                && !self.timeout_due
+                && !self.periodic_timer_due
+                && !self.fifo_ready
+                && !self.completion_ready
+                && !self.progress_ready
+                && !self.normal_ready
+                && candidate.identity.validate_exact()
+                && candidate.kind == RuntimeCommandKind::SignatureCompleted
+                && candidate.kind == candidate.identity.kind
+                && candidate.class == SERVICE_CLASS_COMPLETION
+                && candidate.ingress_projection_hash.is_none()
+                && candidate.projection_hash == runtime_fifo_candidate_projection_hash(candidate)
+                && candidate.causal_origin.validate_exact()
+                && candidate.causal_origin.root_lifecycle_ordinal
+                    == Some(candidate.lifecycle_ordinal)
+                // A callback minted as an independent SignatureCompleted root
+                // did not inherit the Sign effect and cannot bypass lifecycle
+                // order even if its bytes happen to clear the reducer fence.
+                && candidate.causal_origin.root_identity.kind
+                    != RuntimeCommandKind::SignatureCompleted
+                && self
+                    .fence_predecessor_lifecycle_ordinal
+                    .is_some_and(|predecessor| predecessor < candidate.lifecycle_ordinal)
+                && candidate.fifo_position < self.queue_before.len
+                && candidate.eligible_skips_after == 0
+                && self.queue_before.service_cursor == self.queue_after.service_cursor
+                && self.fifo_owed_before == self.fifo_owed_after
+                && self.queue_after.len.checked_add(1) == Some(self.queue_before.len);
+            return exact
+                .then_some(())
+                .ok_or(RuntimeSchedulerEvidenceError::InvalidProjection);
         }
         let schedule_before = ScheduleState {
             fifo_owed: self.fifo_owed_before,
@@ -2765,6 +2831,83 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             class_ready(CommandClass::Progress),
             class_ready(CommandClass::Normal),
         )
+    }
+
+    /// Remove the first exact Completion command which satisfies a
+    /// runtime-validated dependency predicate without changing class-service
+    /// cursor or debt. This is reserved for the one callback which opens a
+    /// signing fence for strictly older, otherwise unserviceable adapter debt.
+    fn pop_fence_completion_with_ownership(
+        &mut self,
+        mut matches_fence: impl FnMut(&TaggedCommand<C>) -> bool,
+    ) -> Result<Option<(TaggedCommand<C>, RuntimeFifoCandidateOwnership)>, EnqueueError> {
+        // Validate the complete retained set before a dependency edge can
+        // bypass its ordinary minimum-lifecycle selection.
+        let _ = self.oldest_lifecycle_ordinal()?;
+        let queue_before = self.ownership_projection();
+        let Some(index) = self
+            .commands
+            .iter()
+            .position(|queued| queued.class == CommandClass::Completion && matches_fence(queued))
+        else {
+            return Ok(None);
+        };
+        let selected = self
+            .commands
+            .get(index)
+            .expect("selected fence completion remains present");
+        let admission_ordinal = selected.admission_ordinal.ok_or(EnqueueError::FailClosed)?;
+        let lifecycle_ordinal = selected.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
+        let identity = selected.identity;
+        if !selected.identity_deep_validated
+            || !identity.validate_exact()
+            || identity.kind != RuntimeCommandKind::SignatureCompleted
+            || selected.ingress_ownership.is_some()
+            || !selected.causal_origin.validate_exact()
+            || selected.causal_origin.root_lifecycle_ordinal != Some(lifecycle_ordinal)
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let mut candidate = RuntimeFifoCandidateOwnership {
+            kind: identity.kind,
+            identity,
+            class: selected.class.service_code(),
+            tag: selected.tag,
+            admission_ordinal,
+            lifecycle_ordinal,
+            causal_origin: selected.causal_origin.clone(),
+            ingress_projection_hash: None,
+            fifo_position: u64::try_from(index)
+                .expect("bounded runtime FIFO position is representable as u64"),
+            eligible_skips_before: selected.eligible_skips,
+            eligible_skips_after: 0,
+            projection_hash: iroha_crypto::Hash::new([]),
+        };
+        candidate.projection_hash = runtime_fifo_candidate_projection_hash(&candidate);
+        let command = self
+            .commands
+            .remove(index)
+            .expect("selected fence completion remains present");
+        debug_assert_eq!(queue_before.len, self.ownership_projection().len + 1);
+        Ok(Some((command, candidate)))
+    }
+
+    /// Return exact owners of queued commands which the driver proves cannot
+    /// cross its active reducer fence. The caller may remove only these aliases
+    /// from one dependency-minimum calculation; no queue item is consumed or
+    /// reordered here.
+    fn fence_blocked_lifecycle_owners(
+        &self,
+        mut is_blocked: impl FnMut(&TaggedCommand<C>) -> bool,
+    ) -> Result<Vec<RuntimeLifecycleOwner>, EnqueueError> {
+        // Validate the complete queue before any owner can be excluded from a
+        // lifecycle comparison, including entries which do not match.
+        let _ = self.oldest_lifecycle_ordinal()?;
+        self.commands
+            .iter()
+            .filter(|queued| is_blocked(queued))
+            .map(TaggedCommand::lifecycle_owner)
+            .collect()
     }
 
     fn pop_next_with_ownership(
@@ -3850,15 +3993,6 @@ impl BoundedIngress<AdapterCommand> {
         self.reserve_canonical_body_available_internal(tag, manifest, None, None)
     }
 
-    fn reserve_canonical_body_available_with_owner(
-        &mut self,
-        tag: EventTag,
-        manifest: wire::PayloadManifest,
-        owner: &RuntimeLifecycleOwner,
-    ) -> Result<BodyAvailableReservation, EnqueueError> {
-        self.reserve_canonical_body_available_internal(tag, manifest, Some(owner), None)
-    }
-
     fn reserve_canonical_body_available_internal(
         &mut self,
         tag: EventTag,
@@ -4630,6 +4764,31 @@ pub(crate) trait RuntimeDriver {
         &mut self,
         tag: EventTag,
     ) -> Result<RuntimeDriverDispatch<Self::Effect>, Self::Error>;
+    /// Return whether this exact causally owned completion is the sole command
+    /// which can open the adapter's current Busy-deferred signing fence.
+    ///
+    /// The runtime uses this only when strictly older adapter debt is present
+    /// but unserviceable. Ordinary completions and stale or independent
+    /// signature callbacks remain governed by immutable FIFO lifecycle order.
+    /// Returning `true` also promises that dispatch consumes the signing fence;
+    /// retry or insertion into another deferred lane is a contract failure.
+    fn completion_unblocks_deferred_fence(&self, _tag: EventTag, _command: &Self::Command) -> bool {
+        false
+    }
+    /// Return whether this exact queued command is demonstrably blocked by the
+    /// same active fence as [`Self::completion_unblocks_deferred_fence`].
+    ///
+    /// The runtime uses this proof only to ignore that command's queue alias
+    /// while locating the exact causal completion. External tasks, producer
+    /// reservations, timers, and commands which can terminate before the
+    /// reducer remain ordered blockers.
+    fn command_is_blocked_by_deferred_fence(
+        &self,
+        _tag: EventTag,
+        _command: &Self::Command,
+    ) -> bool {
+        false
+    }
     /// Return whether older adapter-owned Busy-deferred work can cross the
     /// reducer boundary without spinning behind a persistence/signing fence.
     fn deferred_work_is_serviceable(&self) -> bool;
@@ -4873,6 +5032,14 @@ impl RuntimeDriver for SumeragiV2Adapter {
                 producer_handoff,
             }
         })
+    }
+
+    fn completion_unblocks_deferred_fence(&self, tag: EventTag, command: &Self::Command) -> bool {
+        SumeragiV2Adapter::completion_unblocks_deferred_fence(self, tag, command)
+    }
+
+    fn command_is_blocked_by_deferred_fence(&self, tag: EventTag, command: &Self::Command) -> bool {
+        SumeragiV2Adapter::command_is_blocked_by_deferred_fence(self, tag, command)
     }
 
     fn deferred_work_is_serviceable(&self) -> bool {
@@ -6039,33 +6206,72 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         let raw_retransmit_due =
             now.saturating_duration_since(self.retransmit_started_at) >= self.retransmit_interval;
-        // A retransmission owner which was already frozen before the absolute
-        // deadline may finish its one bounded episode. Once timeout is due,
-        // however, do not replenish that lower-ordinal producer: otherwise
-        // the dormant retry alias could be resurrected ahead of the timeout on
-        // every call and form a proofless scheduling lasso.
+        // A periodic owner frozen before the absolute deadline may complete
+        // its one bounded episode. Once that episode drains, do not replenish
+        // the cached lower-ordinal root while the one-shot timeout is still
+        // waiting to emit: otherwise every late call can recreate the same
+        // older owner and starve the frozen timeout forever. `raw_timeout_due`
+        // is false immediately after timeout emission, so post-timeout
+        // TimeoutVote and decided-body recovery remain fully enabled.
         if raw_retransmit_due && !raw_timeout_due && self.retransmit_owner.is_none() {
-            self.retransmit_owner = Some(self.mint_fresh_lifecycle_owner(
+            let owner = self.mint_fresh_lifecycle_owner(
                 self.round_tag,
                 CommandClass::Progress,
                 RuntimeFreshRootKind::Retransmit,
                 b"periodic-retransmit",
-            )?);
+            )?;
+            // A prior occurrence of this exact cached timer root may already
+            // be retained by the adapter's Busy-deferred queue. Installing a
+            // second runtime alias would make the same immutable owner compete
+            // with itself and keep the nondeferred alias at the global
+            // minimum while its signing dependency waits.
+            if !self
+                .deferred_lifecycle_ownership
+                .values()
+                .any(|deferred| deferred == &owner)
+            {
+                self.retransmit_owner = Some(owner);
+            }
         }
         Ok(())
     }
 
     fn minimum_active_lifecycle_ordinal(&self) -> Result<Option<u128>, EnqueueError> {
-        let mut minimum = self.ingress.oldest_active_lifecycle_ordinal()?;
+        self.minimum_active_lifecycle_ordinal_excluding(&[])
+    }
+
+    /// Return the oldest exact active owner after removing only aliases of the
+    /// supplied blocked adapter-deferred set.
+    fn minimum_active_lifecycle_ordinal_excluding(
+        &self,
+        excluded: &[RuntimeLifecycleOwner],
+    ) -> Result<Option<u128>, EnqueueError> {
+        // Deeply validate every physical FIFO owner and every restart-dormant
+        // local producer reservation before an exclusion can affect rank.
+        // Dormant reservations have no command whose reducer path can be
+        // proved fence-blocked, so they remain unconditional predecessors.
+        let _ = self.ingress.oldest_active_lifecycle_ordinal()?;
+        let mut minimum = self
+            .ingress
+            .dormant_local_fifo_reservations
+            .iter()
+            .map(|reservation| reservation.admission_ordinal)
+            .min();
         let mut observe = |owner: &RuntimeLifecycleOwner| -> Result<(), EnqueueError> {
             if !owner.validate_exact() {
                 return Err(EnqueueError::FailClosed);
+            }
+            if excluded.iter().any(|blocked| blocked == owner) {
+                return Ok(());
             }
             minimum = Some(minimum.map_or(owner.lifecycle_ordinal(), |ordinal| {
                 ordinal.min(owner.lifecycle_ordinal())
             }));
             Ok(())
         };
+        for queued in &self.ingress.commands {
+            observe(&queued.lifecycle_owner()?)?;
+        }
         for owner in self.deferred_lifecycle_ownership.values() {
             observe(owner)?;
         }
@@ -6237,6 +6443,8 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             completion_ready,
             progress_ready,
             normal_ready,
+            fence_completion_bypass: false,
+            fence_predecessor_lifecycle_ordinal: None,
         })
     }
 
@@ -6268,6 +6476,8 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             completion_ready: arbitration.completion_ready,
             progress_ready: arbitration.progress_ready,
             normal_ready: arbitration.normal_ready,
+            fence_completion_bypass: arbitration.fence_completion_bypass,
+            fence_predecessor_lifecycle_ordinal: arbitration.fence_predecessor_lifecycle_ordinal,
             fifo_owed_before: schedule_before.fifo_owed,
             fifo_owed_after: schedule_after.fifo_owed,
             projection_hash: iroha_crypto::Hash::new([]),
@@ -6319,6 +6529,17 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if self.freeze_due_clock_owners(now).is_err() {
             self.latch_fail_closed("clock lifecycle ownership could not be frozen");
             return Err(RuntimeError::FailClosed);
+        }
+
+        // An older timer or ingress occurrence can already belong to the
+        // adapter's Busy-deferred set while a later Sign effect owns the only
+        // completion which can open that reducer fence. Immutable lifecycle
+        // order alone would then select the older occurrence forever, observe
+        // Busy again, and starve its dependency. Give only the exact causally
+        // owned fence completion one bounded turn; every frozen timer and
+        // scheduler debt remains intact for the immediately following call.
+        if let Some(step) = self.dispatch_one_fence_dependency(now)? {
+            return Ok(step);
         }
 
         // Work which already crossed runtime ingress and acquired the
@@ -6589,6 +6810,220 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Err(RuntimeError::FailClosed);
         }
         Ok(RuntimeStep::Advanced(effects))
+    }
+
+    /// Dispatch the exact owned signature callback required by strictly
+    /// older, currently unserviceable adapter debt.
+    ///
+    /// This is not Completion-class priority in general. The production
+    /// driver must prove that the callback matches its active signing fence,
+    /// the command must inherit a non-SignatureCompleted causal root, and at
+    /// least one exact older deferred lifecycle must remain blocked. The
+    /// completion must also be the oldest active lifecycle after excluding
+    /// only queued owners which the adapter proves are blocked by this same
+    /// fence. External tasks, active producers, reservations, and unrelated
+    /// or serviceable FIFO owners cannot be bypassed. The ownership carrier
+    /// records the exceptional dependency edge explicitly.
+    fn dispatch_one_fence_dependency(
+        &mut self,
+        now: Instant,
+    ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
+        if self.driver.deferred_work_is_serviceable() {
+            return Ok(None);
+        }
+        let active_deferred = self.driver.all_deferred_admission_ordinals();
+        if active_deferred.is_empty() {
+            return Ok(None);
+        }
+        if self.deferred_lifecycle_ownership.len() != active_deferred.len()
+            || !active_deferred
+                .iter()
+                .all(|ordinal| self.deferred_lifecycle_ownership.contains_key(ordinal))
+            || self
+                .deferred_lifecycle_ownership
+                .values()
+                .any(|owner| !owner.validate_exact())
+        {
+            self.latch_fail_closed("unserviceable deferred work lost lifecycle ownership");
+            return Err(RuntimeError::FailClosed);
+        }
+        let Some(oldest_deferred_lifecycle) = self
+            .deferred_lifecycle_ownership
+            .values()
+            .map(RuntimeLifecycleOwner::lifecycle_ordinal)
+            .min()
+        else {
+            return Ok(None);
+        };
+        let global_minimum = self.minimum_active_lifecycle_ordinal().map_err(|_| {
+            self.latch_fail_closed("fence-completion global ownership was invalid");
+            RuntimeError::FailClosed
+        })?;
+        if global_minimum != Some(oldest_deferred_lifecycle) {
+            return Ok(None);
+        }
+        let blocked_deferred_owners = self
+            .deferred_lifecycle_ownership
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let blocked_fifo_owners = self
+            .ingress
+            .fence_blocked_lifecycle_owners(|queued| {
+                self.driver
+                    .command_is_blocked_by_deferred_fence(queued.tag, &queued.command)
+            })
+            .map_err(|_| {
+                self.latch_fail_closed("fence-blocked FIFO ownership was invalid");
+                RuntimeError::FailClosed
+            })?;
+        let mut blocked_dependency_owners = blocked_deferred_owners;
+        blocked_dependency_owners.extend(blocked_fifo_owners);
+        let Some(oldest_unblocked_lifecycle) = self
+            .minimum_active_lifecycle_ordinal_excluding(&blocked_dependency_owners)
+            .map_err(|_| {
+                self.latch_fail_closed("fence-completion successor ownership was invalid");
+                RuntimeError::FailClosed
+            })?
+        else {
+            return Ok(None);
+        };
+
+        let round_tag = self.round_tag;
+        let queue_before = self.ingress.ownership_projection();
+        let schedule = self.schedule;
+        let mut arbitration = match self.scheduler_arbitration_inputs(now) {
+            Ok(arbitration) => arbitration,
+            Err(_) => {
+                self.latch_fail_closed("fence-completion scheduler ownership was invalid");
+                return Err(RuntimeError::FailClosed);
+            }
+        };
+        // This exceptional dependency edge is deliberately outside ordinary
+        // FIFO/timer arbitration. Keep those readiness claims closed in the
+        // retained carrier so validation cannot confuse the bypass with a
+        // normal scheduling result.
+        arbitration.timeout_due = false;
+        arbitration.periodic_timer_due = false;
+        arbitration.fifo_ready = false;
+        arbitration.completion_ready = false;
+        arbitration.progress_ready = false;
+        arbitration.normal_ready = false;
+        let selected_result = {
+            let driver = &self.driver;
+            self.ingress.pop_fence_completion_with_ownership(|queued| {
+                queued.lifecycle_ordinal.is_some_and(|ordinal| {
+                    ordinal > oldest_deferred_lifecycle && ordinal == oldest_unblocked_lifecycle
+                }) && queued.causal_origin.root_identity.kind
+                    != RuntimeCommandKind::SignatureCompleted
+                    && driver.completion_unblocks_deferred_fence(queued.tag, &queued.command)
+            })
+        };
+        let selected = match selected_result {
+            Ok(selected) => selected,
+            Err(_) => {
+                self.latch_fail_closed("fence completion lost exact FIFO ownership");
+                return Err(RuntimeError::FailClosed);
+            }
+        };
+        let Some((command, candidate)) = selected else {
+            return Ok(None);
+        };
+        arbitration.fence_completion_bypass = true;
+        arbitration.fence_predecessor_lifecycle_ordinal = Some(oldest_deferred_lifecycle);
+        let owner = match command.lifecycle_owner() {
+            Ok(owner) => owner,
+            Err(_) => {
+                self.latch_fail_closed("fence completion lost causal lifecycle ownership");
+                return Err(RuntimeError::FailClosed);
+            }
+        };
+        if owner.lifecycle_ordinal() != candidate.lifecycle_ordinal
+            || owner.causal_origin() != &candidate.causal_origin
+        {
+            self.latch_fail_closed("selected fence completion changed its lifecycle owner");
+            return Err(RuntimeError::FailClosed);
+        }
+        let dispatch = match self.driver.dispatch(command) {
+            Ok(dispatch) => dispatch,
+            Err(error) => return Err(self.close(error)),
+        };
+        // `completion_unblocks_deferred_fence` is a production adapter
+        // contract: matcher-true means this exact callback consumes the active
+        // signing fence. Retrying or inserting that callback into another Busy
+        // lane would recreate the dependency cycle under a different owner.
+        if dispatch.retry_unadmitted
+            || dispatch.deferred_ordinal.is_some()
+            || dispatch.deferred_ingress.is_some()
+        {
+            self.latch_fail_closed("matching fence completion retried or became adapter-deferred");
+            return Err(RuntimeError::FailClosed);
+        }
+        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) =
+            self.accept_driver_dispatch(dispatch, &owner)?;
+        if retry_unadmitted {
+            self.latch_fail_closed("matching fence completion retained retry state");
+            return Err(RuntimeError::FailClosed);
+        }
+        let queue_after = self.ingress.ownership_projection();
+        self.retain_scheduler_ownership(
+            RuntimeSelectedOwnerKind::FenceCompletion,
+            round_tag,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+            queue_before,
+            queue_after,
+            arbitration,
+            schedule,
+            schedule,
+        )?;
+        if self
+            .retain_effect_ownership(RuntimeEffectSource::Fifo, Some(&owner), &effects)
+            .is_err()
+        {
+            self.latch_fail_closed("fence-completion effect ownership could not be retained");
+            return Err(RuntimeError::FailClosed);
+        }
+        let mut completed_producer_handoff = None;
+        if let Some(token) = producer_handoff {
+            if token.identity().admission_ordinal() != owner.lifecycle_ordinal()
+                || token.identity().causal_lifecycle_key() != owner.causal_origin().lifecycle_key
+            {
+                self.latch_fail_closed("fence completion changed its producer handoff lifecycle");
+                return Err(RuntimeError::FailClosed);
+            }
+            let evidence = match self
+                .driver
+                .producer_handoff_evidence(token, !effects.is_empty())
+            {
+                Ok(evidence) => evidence,
+                Err(error) => {
+                    self.latch_fail_closed(format!(
+                        "fence-completion producer handoff evidence failed: {error}"
+                    ));
+                    return Err(RuntimeError::FailClosed);
+                }
+            };
+            let terminal = match self.driver.acknowledge_producer_handoff(token, evidence) {
+                Ok(terminal) => terminal,
+                Err(error) => {
+                    self.latch_fail_closed(format!(
+                        "fence-completion producer handoff acknowledgement failed: {error}"
+                    ));
+                    return Err(RuntimeError::FailClosed);
+                }
+            };
+            completed_producer_handoff = Some((evidence, terminal));
+        }
+        if !retained_deferred_ingress {
+            self.complete_leader_wire_runtime_owner(&owner, completed_producer_handoff)?;
+        }
+        if self.observe_effects(now, &effects).is_err() {
+            self.latch_fail_closed(
+                "fence-completion effect observation lost active-view producer ownership",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        Ok(Some(RuntimeStep::Advanced(effects)))
     }
 
     /// Drain at most one adapter-deferred transition or startup-recovery

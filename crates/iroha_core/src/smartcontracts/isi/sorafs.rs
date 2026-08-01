@@ -14566,15 +14566,7 @@ mod sorafs_tests {
         );
     }
 
-    #[test]
-    fn storage_class_metadata_defaults_when_missing() {
-        let metadata = Metadata::default();
-        let provider = ProviderId::new([0x11; 32]);
-        let class =
-            super::storage_class_from_declaration_metadata(provider, &metadata, StorageClass::Warm)
-                .expect("fallback must succeed");
-        assert_eq!(class, StorageClass::Warm);
-    }
+    include!("sorafs/storage_class_default_test.rs");
 
     #[test]
     fn storage_class_metadata_overrides_case_insensitively() {

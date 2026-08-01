@@ -3,6 +3,10 @@
 
 //! HTTP handlers for SoraFS discovery endpoints.
 
+mod stream_token_enforcement;
+
+use stream_token_enforcement::{RangeFetchConcurrencyGuard, enforce_stream_token_for_request};
+
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -131,6 +135,7 @@ use iroha_data_model::{
             PdpOutcomeStatusV1, PotrOutcomeStatusV1, ProofOutcomeFinalizedCursorV1,
             ProofOutcomeFinalizedRecordV1, ProofOutcomeKindV1, ProofOutcomeProjectionV1,
         },
+        reputation::StreamTokenRequestRouteV1,
         transparency::{
             ModerationLedgerCyclePublicationV1, ModerationLedgerEntryKindV1,
             ModerationLedgerMetadataV1, ProofTokenIssuanceV1,
@@ -239,8 +244,7 @@ use crate::{
         AdmissionRegistry, AliasCacheEnforcement, AliasCachePolicyExt, AliasCachePolicyHttpExt,
         AliasProofEvaluationExt, AliasProofState, BLINDED_CID_LEN, CacheDecision,
         MAX_CLIENT_ID_BYTES, MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES,
-        MAX_TOKEN_FUTURE_SKEW_SECS, SorafsAction, StreamTokenConcurrencyPermit,
-        StreamTokenHeaderError, StreamTokenIssuerError, StreamTokenQuotaError,
+        MAX_TOKEN_FUTURE_SKEW_SECS, SorafsAction, StreamTokenHeaderError, StreamTokenIssuerError,
         StreamTokenQuotaSubject, TokenOverrides, decode_token_base64,
         discovery::{
             AdvertError, AdvertIngest, AdvertIngestResult, AdvertWarning, ProviderAdvertCache,
@@ -10097,7 +10101,13 @@ pub(crate) async fn handle_get_sorafs_moderation_model_registry(
         Err(err) => return err.into_response(),
     };
     let limit = normalize_limit(query.limit);
-    let snapshot = state.sorafs_node.moderation_model_registry_snapshot();
+    let snapshot = match state
+        .sorafs_node
+        .export_moderation_model_registry_snapshot()
+    {
+        Ok(snapshot) => snapshot,
+        Err(err) => return moderation_model_registry_error_response(err),
+    };
     JsonBody(moderation_model_registry_snapshot_json(&snapshot, limit)).into_response()
 }
 
@@ -10201,7 +10211,10 @@ pub(crate) async fn handle_get_sorafs_moderation_screening_results(
         Err(err) => return err.into_response(),
     };
     let limit = normalize_limit(query.limit);
-    let snapshot = state.sorafs_node.moderation_screening_snapshot();
+    let snapshot = match state.sorafs_node.export_moderation_screening_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(err) => return moderation_screening_error_response(err),
+    };
     JsonBody(moderation_screening_snapshot_json(&snapshot, limit)).into_response()
 }
 
@@ -10260,7 +10273,10 @@ pub(crate) async fn handle_get_sorafs_moderation_quarantine(
         Err(err) => return err.into_response(),
     };
     let limit = normalize_limit(query.limit);
-    let snapshot = state.sorafs_node.moderation_screening_snapshot();
+    let snapshot = match state.sorafs_node.export_moderation_screening_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(err) => return moderation_screening_error_response(err),
+    };
     JsonBody(moderation_quarantine_snapshot_json(&snapshot, limit)).into_response()
 }
 
@@ -10295,7 +10311,10 @@ pub(crate) async fn handle_get_sorafs_moderation_quarantine_operator_panel(
         Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
     };
     let quarantine_id_hex = hex::encode(quarantine_id);
-    let snapshot = state.sorafs_node.moderation_screening_snapshot();
+    let snapshot = match state.sorafs_node.export_moderation_screening_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(err) => return moderation_screening_error_response(err),
+    };
     let Some(record) = snapshot
         .quarantine_records
         .iter()
@@ -10307,9 +10326,14 @@ pub(crate) async fn handle_get_sorafs_moderation_quarantine_operator_panel(
             format!("SoraFS moderation quarantine record `{quarantine_id_hex}` was not found"),
         );
     };
-    let object = state
+    let object_snapshot = match state
         .sorafs_node
-        .moderation_quarantine_object_snapshot()
+        .export_moderation_quarantine_object_snapshot()
+    {
+        Ok(snapshot) => snapshot,
+        Err(err) => return moderation_quarantine_object_error_response(err),
+    };
+    let object = object_snapshot
         .objects
         .into_iter()
         .find(|object| object.quarantine_id == quarantine_id);
@@ -10470,7 +10494,10 @@ pub(crate) async fn handle_post_sorafs_moderation_quarantine_appeal_handoff(
         Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
     };
     let quarantine_id_hex = hex::encode(quarantine_id);
-    let snapshot = state.sorafs_node.moderation_screening_snapshot();
+    let snapshot = match state.sorafs_node.export_moderation_screening_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(err) => return moderation_screening_error_response(err),
+    };
     let Some(record) = snapshot
         .quarantine_records
         .iter()
@@ -20087,6 +20114,20 @@ fn moderation_resource_exhaustion_errors_map_to_too_many_requests() {
 
 #[cfg(test)]
 #[test]
+fn moderation_state_lock_failures_map_to_internal_server_error() {
+    let responses = [
+        moderation_screening_error_response(ModerationScreeningError::StateLockPoisoned),
+        moderation_quarantine_object_error_response(
+            ModerationQuarantineObjectError::StateLockPoisoned,
+        ),
+    ];
+    for response in responses {
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+}
+
+#[cfg(test)]
+#[test]
 fn moderation_checkpoint_store_failures_map_to_service_unavailable() {
     let responses = [
         ModerationOrchestratorError::CheckpointStoreUnavailable,
@@ -25692,7 +25733,8 @@ pub(crate) async fn handle_post_sorafs_storage_token(
                         .insert(RETRY_AFTER, HeaderValue::from_static("1"));
                     response
                 }
-                StreamTokenIssuerError::RuntimeSignerUnavailable => {
+                StreamTokenIssuerError::RuntimeSignerUnavailable
+                | StreamTokenIssuerError::RuntimeSignerQualificationChanged => {
                     error!("stream token runtime signer unavailable");
                     let mut response = json_error(
                         StatusCode::SERVICE_UNAVAILABLE,
@@ -25811,12 +25853,6 @@ fn stream_token_body_json(body: &StreamTokenBodyV1) -> Value {
 }
 
 #[derive(Debug)]
-struct RangeFetchConcurrencyGuard {
-    telemetry: MaybeTelemetry,
-    permit: Option<StreamTokenConcurrencyPermit>,
-}
-
-#[derive(Debug)]
 struct ProofStreamInflightGuard {
     telemetry: MaybeTelemetry,
     kind: &'static str,
@@ -25857,273 +25893,6 @@ fn round_clamped_u64(value: f64) -> u64 {
     {
         bounded as u64
     }
-}
-
-impl RangeFetchConcurrencyGuard {
-    fn new(telemetry: MaybeTelemetry, permit: Option<StreamTokenConcurrencyPermit>) -> Self {
-        if permit.is_some() {
-            telemetry
-                .with_metrics(iroha_core::telemetry::Telemetry::inc_sorafs_range_fetch_concurrency);
-        }
-        Self { telemetry, permit }
-    }
-
-    #[cfg(test)]
-    fn has_permit(&self) -> bool {
-        self.permit.is_some()
-    }
-}
-
-impl Drop for RangeFetchConcurrencyGuard {
-    fn drop(&mut self) {
-        if self.permit.is_some() {
-            self.telemetry
-                .with_metrics(iroha_core::telemetry::Telemetry::dec_sorafs_range_fetch_concurrency);
-        }
-    }
-}
-
-#[allow(clippy::result_large_err)]
-fn enforce_stream_token_for_request(
-    state: &SharedAppState,
-    headers: &HeaderMap,
-    manifest: &StoredManifest,
-    requested_bytes: u64,
-) -> Result<(RangeFetchConcurrencyGuard, StreamTokenBodyV1), Response> {
-    let Some(issuer) = state.stream_token_issuer() else {
-        return Err(feature_disabled(
-            "stream token enforcement is not enabled on this node",
-        ));
-    };
-    let telemetry = state.telemetry.clone();
-
-    let token_header = headers.get(HEADER_SORA_STREAM_TOKEN).ok_or_else(|| {
-        json_error(
-            StatusCode::UNAUTHORIZED,
-            "missing X-SoraFS-Stream-Token header",
-        )
-    })?;
-    let token_str = token_header.to_str().map_err(|_| {
-        json_error(
-            StatusCode::BAD_REQUEST,
-            "X-SoraFS-Stream-Token header must contain valid ASCII",
-        )
-    })?;
-
-    if token_str.is_empty() {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "X-SoraFS-Stream-Token header must not be empty",
-        ));
-    }
-    if token_str.len() > MAX_STREAM_TOKEN_BASE64_BYTES {
-        return Err(json_error(
-            StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
-            "X-SoraFS-Stream-Token header exceeds the protocol limit",
-        ));
-    }
-
-    let token = match decode_token_base64(token_str) {
-        Ok(token) => token,
-        Err(StreamTokenHeaderError::InvalidEncoding) => {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                "stream token must be base64 encoded",
-            ));
-        }
-        Err(StreamTokenHeaderError::HeaderTooLong { .. }) => {
-            return Err(json_error(
-                StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
-                "stream token header exceeds the protocol limit",
-            ));
-        }
-        Err(StreamTokenHeaderError::NonCanonicalEncoding) => {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                "stream token must use canonical padded base64",
-            ));
-        }
-        Err(StreamTokenHeaderError::PayloadTooLong { .. }) => {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                "decoded stream token exceeds the protocol limit",
-            ));
-        }
-        Err(StreamTokenHeaderError::InvalidPayload(_)) => {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                "invalid stream token payload",
-            ));
-        }
-        Err(
-            StreamTokenHeaderError::InvalidBody(_) | StreamTokenHeaderError::InvalidSignatureLength,
-        ) => {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                "invalid stream token policy",
-            ));
-        }
-    };
-
-    if let Err(err) = token.verify(issuer.verifying_key()) {
-        error!(?err, "stream token signature verification failed");
-        return Err(json_error(
-            StatusCode::UNAUTHORIZED,
-            "stream token signature invalid",
-        ));
-    }
-
-    if token.body.token_pk_version != issuer.key_version() {
-        return Err(json_error(
-            StatusCode::UNAUTHORIZED,
-            "stream token signed with unexpected key version",
-        ));
-    }
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|err| {
-            error!(
-                ?err,
-                "system clock before UNIX epoch while validating token"
-            );
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to validate stream token",
-            )
-        })?
-        .as_secs();
-    if token.body.issued_at > now.saturating_add(MAX_TOKEN_FUTURE_SKEW_SECS) {
-        return Err(json_error(
-            StatusCode::UNAUTHORIZED,
-            "stream token was issued too far in the future",
-        ));
-    }
-    if token.body.manifest_cid.as_slice() != manifest.manifest_cid() {
-        return Err(json_error(
-            StatusCode::FORBIDDEN,
-            "stream token does not authorise this manifest",
-        ));
-    }
-    if token.body.profile_handle != manifest.chunk_profile_handle() {
-        return Err(json_error(
-            StatusCode::CONFLICT,
-            "stream token chunker handle mismatch",
-        ));
-    }
-
-    match state.sorafs_node.capacity_usage().provider_id {
-        Some(provider_id) if provider_id == token.body.provider_id => {}
-        Some(_) => {
-            return Err(json_error(
-                StatusCode::FORBIDDEN,
-                "stream token provider mismatch",
-            ));
-        }
-        None => {
-            return Err(json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "stream token provider identity is not configured",
-            ));
-        }
-    }
-
-    let concurrency_permit = match state
-        .stream_token_concurrency()
-        .try_acquire(&token.body.token_id, token.body.max_streams)
-    {
-        Ok(guard) => guard,
-        Err(_) => {
-            telemetry.with_metrics(|metrics| {
-                metrics.inc_sorafs_range_fetch_throttle(RANGE_THROTTLE_REASON_CONCURRENCY)
-            });
-            return Err(json_error(
-                StatusCode::TOO_MANY_REQUESTS,
-                "stream token max_streams exceeded",
-            ));
-        }
-    };
-    let concurrency_guard = RangeFetchConcurrencyGuard::new(telemetry.clone(), concurrency_permit);
-
-    let token_fingerprint = token.body_hash().map_err(|err| {
-        error!(?err, "failed to hash validated stream token body");
-        json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to validate stream token",
-        )
-    })?;
-    match state.stream_token_quota().try_acquire(
-        &token.body.token_id,
-        *token_fingerprint.as_bytes(),
-        token.body.requests_per_minute,
-        token.body.rate_limit_bytes,
-        requested_bytes,
-        token.body.ttl_epoch,
-        now,
-    ) {
-        Ok(()) => {}
-        Err(StreamTokenQuotaError::Exceeded { retry_after_secs }) => {
-            telemetry.with_metrics(|metrics| {
-                metrics.inc_sorafs_range_fetch_throttle(RANGE_THROTTLE_REASON_QUOTA)
-            });
-            let mut response = json_error(
-                StatusCode::TOO_MANY_REQUESTS,
-                "stream token request quota exceeded",
-            );
-            if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
-                response.headers_mut().insert(RETRY_AFTER, value);
-            }
-            return Err(response);
-        }
-        Err(StreamTokenQuotaError::ByteRateExceeded { retry_after_secs }) => {
-            telemetry.with_metrics(|metrics| {
-                metrics.inc_sorafs_range_fetch_throttle(RANGE_THROTTLE_REASON_BYTE_RATE)
-            });
-            let mut response = json_error(
-                StatusCode::TOO_MANY_REQUESTS,
-                "stream token rate limit exceeded",
-            );
-            if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
-                response.headers_mut().insert(RETRY_AFTER, value);
-            }
-            return Err(response);
-        }
-        Err(
-            err @ (StreamTokenQuotaError::CapacityExceeded { .. }
-            | StreamTokenQuotaError::StateUnavailable
-            | StreamTokenQuotaError::ClockRollback { .. }),
-        ) => {
-            error!(?err, "stream token quota state unavailable");
-            let mut response = json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "stream token quota admission is temporarily unavailable",
-            );
-            response
-                .headers_mut()
-                .insert(RETRY_AFTER, HeaderValue::from_static("1"));
-            return Err(response);
-        }
-        Err(StreamTokenQuotaError::PolicyConflict) => {
-            return Err(json_error(
-                StatusCode::UNAUTHORIZED,
-                "stream token identifier conflicts with existing signed state",
-            ));
-        }
-        Err(StreamTokenQuotaError::Expired) => {
-            return Err(json_error(
-                StatusCode::UNAUTHORIZED,
-                "stream token has expired",
-            ));
-        }
-        Err(StreamTokenQuotaError::InvalidTokenId | StreamTokenQuotaError::InvalidPolicy(_)) => {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                "invalid stream token quota policy",
-            ));
-        }
-    }
-
-    Ok((concurrency_guard, token.body))
 }
 
 #[cfg(feature = "app_api")]
@@ -27849,6 +27618,15 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         Some(value) => value.clone(),
         None => return json_error(StatusCode::BAD_REQUEST, "missing X-SoraFS-Nonce header"),
     };
+    let request_nonce = match nonce_header.to_str() {
+        Ok(value) => value,
+        Err(_) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "X-SoraFS-Nonce header must contain valid ASCII",
+            );
+        }
+    };
 
     let chunker_header = match headers.get(HEADER_SORA_CHUNKER) {
         Some(value) => match value.to_str() {
@@ -27957,11 +27735,19 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         Err(message) => return range_not_satisfiable(total_length, message),
     };
 
-    let (stream_token_guard, stream_token_body) =
-        match enforce_stream_token_for_request(&state, &headers, &manifest, length) {
-            Ok(result) => result,
-            Err(response) => return response,
-        };
+    let stream_token_route =
+        StreamTokenRequestRouteV1::car_range(byte_range.start, byte_range.end_inclusive)
+            .expect("the parsed bounded range is a canonical stream-token route");
+    let (stream_token_guard, stream_token_body) = match enforce_stream_token_for_request(
+        &state,
+        &headers,
+        &manifest,
+        request_nonce,
+        stream_token_route,
+    ) {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
     let provider_id = Some(stream_token_body.provider_id);
     if let Err(response) =
         enforce_gateway_policy_for_request(&state, &headers, &manifest, provider_id, remote)
@@ -28371,6 +28157,15 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
         Some(value) => value.clone(),
         None => return json_error(StatusCode::BAD_REQUEST, "missing X-SoraFS-Nonce header"),
     };
+    let request_nonce = match nonce_header.to_str() {
+        Ok(value) => value,
+        Err(_) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "X-SoraFS-Nonce header must contain valid ASCII",
+            );
+        }
+    };
 
     let manifest = match state.sorafs_node.manifest_metadata(&storage_manifest_id) {
         Ok(manifest) => manifest,
@@ -28427,11 +28222,18 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
         Err(err) => return node_storage_error_response(err),
     };
 
-    let (stream_token_guard, stream_token_body) =
-        match enforce_stream_token_for_request(&state, &headers, &manifest, record.length as u64) {
-            Ok(result) => result,
-            Err(response) => return response,
-        };
+    let stream_token_route = StreamTokenRequestRouteV1::chunk(digest, u64::from(record.length))
+        .expect("stored non-empty chunk metadata is a canonical stream-token route");
+    let (stream_token_guard, stream_token_body) = match enforce_stream_token_for_request(
+        &state,
+        &headers,
+        &manifest,
+        request_nonce,
+        stream_token_route,
+    ) {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
     let provider_id = Some(stream_token_body.provider_id);
     if let Err(response) =
         enforce_gateway_policy_for_request(&state, &headers, &manifest, provider_id, remote)
@@ -45149,11 +44951,13 @@ mod advert_tests {
         Unavailable,
         Refused,
         WrongSignature,
+        QualificationDrift,
     }
 
     struct ApiTestStreamTokenSigner {
         signing_key: SigningKey,
         mode: ApiTestStreamTokenSignerMode,
+        qualification_calls: std::sync::atomic::AtomicUsize,
     }
 
     impl ApiTestStreamTokenSigner {
@@ -45163,6 +44967,7 @@ mod advert_tests {
             Self {
                 signing_key: SigningKey::from_bytes(&[0x51; 32]),
                 mode,
+                qualification_calls: std::sync::atomic::AtomicUsize::new(0),
             }
         }
     }
@@ -45174,6 +44979,27 @@ mod advert_tests {
 
         fn public_key(&self) -> [u8; 32] {
             self.signing_key.verifying_key().to_bytes()
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            StreamTokenRuntimeSignerQualificationV1,
+            StreamTokenRuntimeSignerProbeErrorV1,
+        > {
+            let call = self
+                .qualification_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(StreamTokenRuntimeSignerQualificationV1::new(
+                if matches!(self.mode, ApiTestStreamTokenSignerMode::QualificationDrift)
+                    && call >= 3
+                {
+                    5
+                } else {
+                    4
+                },
+                [0xb4; 32],
+            ))
         }
 
         fn sign(
@@ -45193,6 +45019,9 @@ mod advert_tests {
                         .sign(signing_payload)
                         .to_bytes())
                 }
+                ApiTestStreamTokenSignerMode::QualificationDrift => {
+                    Ok(self.signing_key.sign(signing_payload).to_bytes())
+                }
             }
         }
     }
@@ -45205,6 +45034,8 @@ mod advert_tests {
             enabled: true,
             signer_handle: Some(ApiTestStreamTokenSigner::HANDLE.to_owned()),
             signer_public_key: Some(signer.public_key()),
+            signer_revision: Some(4),
+            signer_policy_digest: Some([0xb4; 32]),
             default_requests_per_minute: 3,
             ..iroha_config::parameters::actual::SorafsTokenConfig::default()
         };
@@ -45555,6 +45386,8 @@ mod advert_tests {
             enabled: true,
             signer_handle: Some(ApiTestStreamTokenSigner::HANDLE.to_owned()),
             signer_public_key: Some(signer.public_key()),
+            signer_revision: Some(4),
+            signer_policy_digest: Some([0xb4; 32]),
             key_version: 7,
             default_requests_per_minute: 3,
             ..SorafsTokenConfig::default()
@@ -45657,6 +45490,11 @@ mod advert_tests {
             header_value(token_base64, "X-SoraFS-Stream-Token"),
         );
         headers
+    }
+
+    fn enforcement_route(requested_bytes: u64) -> StreamTokenRequestRouteV1 {
+        StreamTokenRequestRouteV1::car_range(0, requested_bytes - 1)
+            .expect("test range must be canonical")
     }
 
     fn sample_por_artifacts() -> (PorChallengeV1, PorProofV1, AuditVerdictV1) {
@@ -48518,6 +48356,26 @@ mod advert_tests {
             Some("stream token issuance is temporarily unavailable")
         );
 
+        let drifted = issue_with_mode(ApiTestStreamTokenSignerMode::QualificationDrift).await;
+        assert_eq!(drifted.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            drifted
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+        let drifted_body = body::to_bytes(drifted.into_body(), usize::MAX)
+            .await
+            .expect("collect drifted response");
+        let drifted_value: Value =
+            norito::json::from_slice(&drifted_body).expect("decode drifted response");
+        assert_eq!(
+            drifted_value.get("error").and_then(Value::as_str),
+            Some("stream token issuance is temporarily unavailable")
+        );
+        assert!(!String::from_utf8_lossy(&drifted_body).contains("qualification"));
+
         for mode in [
             ApiTestStreamTokenSignerMode::Refused,
             ApiTestStreamTokenSignerMode::WrongSignature,
@@ -48775,7 +48633,8 @@ mod advert_tests {
                 &context.app,
                 &enforcement_headers(&encoded),
                 &manifest,
-                1,
+                "test-enforcement-nonce",
+                enforcement_route(1),
             )
             .expect_err("adversarial token must be rejected");
             assert_eq!(response.status(), expected_status);
@@ -48788,7 +48647,8 @@ mod advert_tests {
             &context.app,
             &enforcement_headers(&tampered),
             &manifest,
-            1,
+            "test-enforcement-nonce",
+            enforcement_route(1),
         )
         .expect_err("tampered signature rejected");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -48798,7 +48658,8 @@ mod advert_tests {
             &context.app,
             &enforcement_headers(&oversized),
             &manifest,
-            1,
+            "test-enforcement-nonce",
+            enforcement_route(1),
         )
         .expect_err("oversized token header rejected");
         assert_eq!(
@@ -48810,9 +48671,25 @@ mod advert_tests {
             &context.app,
             &enforcement_headers("not-base64"),
             &manifest,
-            1,
+            "test-enforcement-nonce",
+            enforcement_route(1),
         )
         .expect_err("malformed token header rejected");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let mut duplicate_headers = enforcement_headers(&valid_encoded);
+        duplicate_headers.append(
+            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
+            header_value(&valid_encoded, "X-SoraFS-Stream-Token"),
+        );
+        let response = enforce_stream_token_for_request(
+            &context.app,
+            &duplicate_headers,
+            &manifest,
+            "test-duplicate-token-header",
+            enforcement_route(1),
+        )
+        .expect_err("duplicate token headers must be rejected before admission");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -51308,24 +51185,40 @@ mod advert_tests {
         );
 
         let requested_bytes = manifest.content_length();
-        let (first_guard, _) =
-            enforce_stream_token_for_request(&context.app, &headers, &manifest, requested_bytes)
-                .expect("first request permitted");
+        let route = enforcement_route(requested_bytes);
+        let (first_guard, _) = enforce_stream_token_for_request(
+            &context.app,
+            &headers,
+            &manifest,
+            "test-concurrency-nonce-1",
+            route,
+        )
+        .expect("first request permitted");
         assert!(
             first_guard.has_permit(),
             "finite limit should produce a concurrency permit"
         );
 
-        let second =
-            enforce_stream_token_for_request(&context.app, &headers, &manifest, requested_bytes)
-                .expect_err("second request must be rejected while guard held");
+        let second = enforce_stream_token_for_request(
+            &context.app,
+            &headers,
+            &manifest,
+            "test-concurrency-nonce-2",
+            route,
+        )
+        .expect_err("second request must be rejected while guard held");
         assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
 
         drop(first_guard);
 
-        let (retry_guard, _) =
-            enforce_stream_token_for_request(&context.app, &headers, &manifest, requested_bytes)
-                .expect("request should succeed after guard dropped");
+        let (retry_guard, _) = enforce_stream_token_for_request(
+            &context.app,
+            &headers,
+            &manifest,
+            "test-concurrency-nonce-3",
+            route,
+        )
+        .expect("request should succeed after guard dropped");
         assert!(
             retry_guard.has_permit(),
             "finite limit should produce a concurrency permit"
@@ -51434,14 +51327,25 @@ mod advert_tests {
             header_value(&token_quota, "X-SoraFS-Stream-Token"),
         );
 
-        let (quota_guard, _) =
-            enforce_stream_token_for_request(&context.app, &headers, &manifest, requested_bytes)
-                .expect("first quota request permitted");
+        let route = enforcement_route(requested_bytes);
+        let (quota_guard, _) = enforce_stream_token_for_request(
+            &context.app,
+            &headers,
+            &manifest,
+            "test-quota-nonce-1",
+            route,
+        )
+        .expect("first quota request permitted");
         drop(quota_guard);
 
-        let quota_retry =
-            enforce_stream_token_for_request(&context.app, &headers, &manifest, requested_bytes)
-                .expect_err("quota enforcement should reject second request");
+        let quota_retry = enforce_stream_token_for_request(
+            &context.app,
+            &headers,
+            &manifest,
+            "test-quota-nonce-2",
+            route,
+        )
+        .expect_err("quota enforcement should reject second request");
         assert_eq!(quota_retry.status(), StatusCode::TOO_MANY_REQUESTS);
 
         let quota_metrics = context.app.telemetry.metrics().await;
@@ -51471,7 +51375,8 @@ mod advert_tests {
             &context.app,
             &rate_headers,
             &manifest,
-            requested_bytes,
+            "test-rate-nonce",
+            route,
         )
         .expect_err("rate limit should reject oversized fetch");
         assert_eq!(rate_error.status(), StatusCode::TOO_MANY_REQUESTS);

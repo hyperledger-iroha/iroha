@@ -34,6 +34,8 @@ on:
       - "ci/verify_privacy_python_wheel.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
+      - "scripts/check_native_sdk_abi21_artifact.py"
+      - "scripts/tests/check_privacy_csharp_native_contract_test.py"
       - "scripts/tests/mobile_sdk_python312_contract.sh"
       - "crates/connect_norito_bridge/Cargo.toml"
       - "crates/connect_norito_bridge/include/connect_norito_bridge.h"
@@ -159,7 +161,7 @@ concurrency:
 jobs:
   privacy_native_bridge_tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Install host-qualified privacy SDK Rust toolchain
@@ -190,10 +192,39 @@ jobs:
           CARGO_NET_OFFLINE: "false"
         run: cargo fetch --locked
       - name: Privacy native bridge tests
-        run: cargo test -p connect_norito_bridge privacy_ --lib -- --test-threads=1
+        run: |
+          cargo test -p connect_norito_bridge privacy_ --lib -- --test-threads=1
+          cargo build --locked --release -p connect_norito_bridge
+          host_target="$(rustc -vV | sed -n 's/^host: //p')"
+          if [[ "${host_target}" != "x86_64-unknown-linux-gnu" ]]; then
+            echo "privacy C# bridge host ${host_target} is not the required Linux x86_64 target" >&2
+            exit 1
+          fi
+          artifact_dir="${RUNNER_TEMP}/iroha-privacy-csharp-native"
+          artifact="${artifact_dir}/libconnect_norito_bridge.so"
+          manifest="${artifact_dir}/native-sdk-abi21.json"
+          mkdir -p "${artifact_dir}"
+          cp "${CARGO_TARGET_DIR}/release/libconnect_norito_bridge.so" "${artifact}"
+          python3 -I -B scripts/check_native_sdk_abi21_artifact.py record \
+            --artifact "${artifact}" \
+            --manifest "${manifest}" \
+            --source-root "${GITHUB_WORKSPACE}" \
+            --sdk csharp \
+            --target "${host_target}"
+          python3 -I -B scripts/check_native_sdk_abi21_artifact.py verify \
+            --artifact "${artifact}" \
+            --manifest "${manifest}" \
+            --source-root "${GITHUB_WORKSPACE}"
       - name: Verify final privacy SDK Cargo lock isolation
         if: always()
         run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}"
+      - name: Upload authenticated C# privacy bridge
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: privacy-csharp-native-${{ github.sha }}
+          path: ${{ runner.temp }}/iroha-privacy-csharp-native
+          if-no-files-found: error
+          retention-days: 1
 
   privacy_swift_sdk_parse:
     runs-on: macos-latest
@@ -216,14 +247,28 @@ jobs:
         run: ci/check_privacy_jvm_sdk.sh
 
   privacy_csharp_sdk_tests:
+    needs: privacy_native_bridge_tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: 8.0.x
+      - name: Download authenticated C# privacy bridge
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: privacy-csharp-native-${{ github.sha }}
+          path: ${{ runner.temp }}/iroha-privacy-csharp-native
+      - name: C# privacy native fail-closed contract
+        run: python3 -I -B scripts/tests/check_privacy_csharp_native_contract_test.py
       - name: Privacy C# SDK tests
+        env:
+          IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE: "1"
+          LD_LIBRARY_PATH: ${{ runner.temp }}/iroha-privacy-csharp-native
+          PRIVACY_CSHARP_NATIVE_ARTIFACT: ${{ runner.temp }}/iroha-privacy-csharp-native/libconnect_norito_bridge.so
+          PRIVACY_CSHARP_NATIVE_MANIFEST: ${{ runner.temp }}/iroha-privacy-csharp-native/native-sdk-abi21.json
+          PRIVACY_CSHARP_PYTHON_BIN: python3
         run: ci/check_privacy_csharp_sdk.sh
 
   privacy_javascript_sdk_tests:

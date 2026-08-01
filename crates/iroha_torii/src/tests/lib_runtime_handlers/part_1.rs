@@ -2042,6 +2042,8 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         #[cfg(feature = "app_api")]
         stream_token_issuer,
         #[cfg(feature = "app_api")]
+        stream_token_admission_capture: None,
+        #[cfg(feature = "app_api")]
         stream_token_concurrency: sorafs::StreamTokenConcurrencyTracker::default(),
         #[cfg(feature = "app_api")]
         stream_token_quota: sorafs::StreamTokenQuotaTracker::default(),

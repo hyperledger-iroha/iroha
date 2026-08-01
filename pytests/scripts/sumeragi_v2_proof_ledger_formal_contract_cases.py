@@ -5,24 +5,42 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/bound_progress_and_retained_support.rs"),
     Path("crates/iroha_core/src/kura/autonomous_reservation_bounds.rs"),
     Path("crates/iroha_core/src/kura/prune_commit_merge_support.rs"),
+    Path("crates/iroha_core/src/kura/replica_advert_and_body_status.rs"),
+    Path("crates/iroha_core/src/kura/retained_finality_replica_authority.rs"),
+    Path("crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs"),
     Path("crates/iroha_core/src/kura/autonomous_reservation_types.rs"),
     Path("crates/iroha_core/src/kura/autonomous_reservation_inventory.rs"),
     Path("crates/iroha_core/src/kura/autonomous_reservation_classifier.rs"),
+    Path("crates/iroha_core/src/kura/historical_autonomous_recovery.rs"),
 )
 REVIEWED_RUST_INCLUDE_MANIFESTS = {
+    Path("crates/iroha_config/src/parameters/actual.rs"): (
+        Path("actual/tests.rs"),
+    ),
+    Path("crates/iroha_config/src/parameters/user.rs"): (
+        Path("user/kura.rs"),
+        Path("user/kura_and_snapshot_tests.rs"),
+    ),
     Path("crates/iroha_core/src/kura.rs"): (
         Path("kura/startup_finality_support.rs"),
         Path("kura/bound_progress_and_retained_support.rs"),
         Path("kura/autonomous_reservation_bounds.rs"),
         Path("kura/prune_commit_merge_support.rs"),
+        Path("kura/replica_advert_and_body_status.rs"),
+        Path("kura/retained_finality_replica_authority.rs"),
+        Path("kura/autonomous_merge_bundle_support.rs"),
         Path("kura/autonomous_reservation_types.rs"),
         Path("kura/autonomous_reservation_inventory.rs"),
         Path("kura/autonomous_reservation_classifier.rs"),
+        Path("kura/historical_autonomous_recovery.rs"),
         Path("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs"),
+        Path("kura/tests/01a_retained_eviction_and_rewrite_tail.rs"),
         Path("kura/tests/02_replacement_and_preflight.rs"),
         Path("kura/tests/03_preflight_and_merge_entry.rs"),
+        Path("kura/tests/03a_preflight_and_merge_entry_tail.rs"),
         Path("kura/tests/04_merge_log_and_associations.rs"),
         Path("kura/tests/05_merge_resolution_and_eviction.rs"),
+        Path("kura/tests/05a_replica_advert_and_body_eviction.rs"),
         Path("kura/tests/06_eviction_and_autonomous_lanes.rs"),
         Path("kura/tests/07a_autonomous_reservation_reconciliation_support.rs"),
         Path("kura/tests/07_autonomous_lanes_and_sidecars.rs"),
@@ -36,12 +54,25 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("kura/tests/13_manifests_and_fsync.rs"),
     ),
     Path("crates/iroha_core/src/kura/lane_geometry.rs"): (
+        Path("lane_geometry_tests/00_support.rs"),
         Path("lane_geometry/native_amx_retained_window_tests.rs"),
+        Path("lane_geometry_tests/00_retirement.rs"),
+        Path("lane_geometry_tests/01_retirement_and_recovery.rs"),
+        Path("lane_geometry_tests/02_geometry_moves_and_journal.rs"),
+        Path("lane_geometry_tests/03_gc_and_startup.rs"),
+    ),
+    Path("crates/iroha_core/src/snapshot.rs"): (
+        Path("snapshot/support_policy_tests.rs"),
+        Path("snapshot/write_roundtrip_tests.rs"),
+        Path("snapshot/reconciliation_generation_tests.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_worker.rs"): (
+        Path("v2_worker/exact_output_rollover_claim.rs"),
+        Path("v2_worker/kura_replica_advert_refresh.rs"),
         Path("tests/v2_worker_reply_route_cases.rs"),
         Path("tests/v2_worker_backpressure_cases.rs"),
         Path("tests/v2_worker_serve_unsealed_cases.rs"),
+        Path("tests/v2_worker_serve_decision_restart_cases.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"): tuple(
         Path(f"tests/v2_runtime_unsealed_{index:02}.rs") for index in range(7)
@@ -57,9 +88,13 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path("crates/iroha_core/src/sumeragi/v2_core/tests.rs"): (
         Path("tests/v2_core_view_zero_parent_binding.rs"),
+        Path("tests/empty_replay_resume_test.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"): (
+        Path("v2_lane_work/canonical_executed_block_application_repair.rs"),
         Path("tests/v2_lane_work_observer_role.rs"),
+        Path("tests/v2_lane_work_native_body_recovery.rs"),
+        Path("tests/v2_lane_work_effect_queue.rs"),
     ),
 }
 def copy_merge_runtime_config_fixture(tmp_path: Path) -> Path:
@@ -1982,3 +2017,320 @@ def test_transport_geometry_rejects_ordinal_equivalent_weak_authority_mutant(
         in error
         for error in errors
     ), errors
+
+
+def _synthetic_production_trace_certificate(module) -> dict[str, object]:
+    digest = "a" * 64
+    symbol = {
+        "path": "production.rs",
+        "kind": "method",
+        "symbol": "Runtime::authorize",
+        "source_sha256": digest,
+        "token_sha256": "b" * 64,
+    }
+    theorem = {
+        "path": "proofs.rs",
+        "kind": "verus_proof_fn",
+        "symbol": "runtime_refines_next",
+        "source_sha256": "c" * 64,
+        "token_sha256": "d" * 64,
+    }
+    return {
+        "schema_version": module.PRODUCTION_TRACE_EXTRACTION_EVIDENCE_SCHEMA_VERSION,
+        "certificate_type": "production_trace_extraction_theorem",
+        "theorem": module.PRODUCTION_TRACE_EXTRACTION_THEOREM,
+        "canonical_encoding": module.PRODUCTION_TRACE_EXTRACTION_CANONICAL_ENCODING,
+        "backend_verification": True,
+        "workspace_source_manifest_sha256": "e" * 64,
+        "formal_source_manifest_sha256": "f" * 64,
+        "multilane_source_manifest_sha256": "1" * 64,
+        "artifacts": [
+            {"role": "proof_ledger", "sha256": "2" * 64, "size_bytes": 17}
+        ],
+        "model_sources": [
+            {"path": "model.tla", "sha256": "3" * 64, "size_bytes": 31}
+        ],
+        "model_symbols": [
+            {
+                "path": "model.tla",
+                "kind": "tla_operator",
+                "symbol": "ApplyCarrier",
+                "token_sha256": "4" * 64,
+            }
+        ],
+        "refinement_symbols": [copy.deepcopy(symbol)],
+        "production_symbols": [copy.deepcopy(symbol)],
+        "verus_theorems": [copy.deepcopy(theorem)],
+        "source_bindings": [
+            {
+                "id": "canonical_wsv_commit_authorization",
+                "action_tags": ["APPLY_CARRIER"],
+                "model_symbols": ["ApplyCarrier"],
+                "production_symbol": copy.deepcopy(symbol),
+                "canonical_commit_sink": copy.deepcopy(symbol),
+                "refinement_kernel": copy.deepcopy(symbol),
+                "verus_theorem": copy.deepcopy(theorem),
+                "authenticated": True,
+            }
+        ],
+        "proof_linkage": {
+            "ledger_document_sha256": "5" * 64,
+            "tlaps_document_sha256": "6" * 64,
+            "verus_document_sha256": "7" * 64,
+            "cross_tool_document_sha256": "8" * 64,
+            "cross_tool_ledger_sha256": "5" * 64,
+            "cross_tool_component_evidence": {
+                "tlaps_sha256": "6" * 64,
+                "verus_sha256": "7" * 64,
+            },
+            "verus_log_sha256": "9" * 64,
+            "machine_checked_completion": True,
+        },
+    }
+
+
+def _synthetic_trace_artifact_paths(module, path: Path):
+    return module.ProductionTraceExtractionArtifactPaths(
+        ledger=path,
+        evidence=path,
+        verus_evidence=path,
+        verus_log=path,
+        cross_tool_evidence=path,
+    )
+
+
+def test_production_trace_certificate_stays_blocked_on_all_missing_runtime_links(
+) -> None:
+    module = load_checker()
+
+    with pytest.raises(ValueError) as failure:
+        module._production_trace_extraction_source_snapshot()
+
+    message = str(failure.value)
+    assert "reservation_cleanup_prefixes" in message
+    assert "durable_autonomous_bundle" in message
+    assert "ready_authorization" in message
+    assert "canonical_wsv_commit_authorization" in message
+    assert "found 0" in message
+
+
+def test_production_trace_certificate_writer_emits_one_canonical_encoding(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    certificate = _synthetic_production_trace_certificate(module)
+    path = tmp_path / "production_trace_extraction_evidence.json"
+
+    module.write_production_trace_extraction_evidence(path, certificate)
+
+    assert module.load_production_trace_extraction_evidence(path) == certificate
+    assert path.read_bytes() == module._production_trace_canonical_json_bytes(
+        certificate
+    )
+
+
+def test_production_trace_certificate_rejects_duplicate_json_keys(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    path = tmp_path / "duplicate.json"
+    path.write_text('{"schema_version":1,"schema_version":1}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate JSON key"):
+        module.load_production_trace_extraction_evidence(path)
+
+
+def test_production_trace_certificate_rejects_malformed_and_noncanonical_json(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text('{"schema_version":\n', encoding="utf-8")
+    noncanonical = tmp_path / "noncanonical.json"
+    noncanonical.write_text('{ "schema_version": 1 }\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid JSON"):
+        module.load_production_trace_extraction_evidence(malformed)
+    with pytest.raises(ValueError, match="not canonical"):
+        module.load_production_trace_extraction_evidence(noncanonical)
+
+
+def test_production_trace_certificate_rejects_oversize_and_symlink_inputs(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    oversized = tmp_path / "oversized.json"
+    oversized.write_bytes(
+        b"{" + b" " * module.PRODUCTION_TRACE_EXTRACTION_EVIDENCE_MAX_BYTES + b"}\n"
+    )
+    target = tmp_path / "target.json"
+    target.write_text("{}\n", encoding="utf-8")
+    alias = tmp_path / "alias.json"
+    alias.symlink_to(target)
+
+    with pytest.raises(ValueError, match="at most"):
+        module.load_production_trace_extraction_evidence(oversized)
+    with pytest.raises(ValueError, match="non-symlink"):
+        module.load_production_trace_extraction_evidence(alias)
+    with pytest.raises(ValueError, match="non-symlink"):
+        module._production_trace_artifact_entry("proof_ledger", alias)
+
+
+def test_production_trace_certificate_rejects_hardlink_inputs_and_output(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    certificate = _synthetic_production_trace_certificate(module)
+    original = tmp_path / "original.json"
+    original.write_bytes(module._production_trace_canonical_json_bytes(certificate))
+    input_alias = tmp_path / "input-hardlink.json"
+    output_alias = tmp_path / "output-hardlink.json"
+    try:
+        os.link(original, input_alias)
+        os.link(original, output_alias)
+    except OSError as error:
+        pytest.skip(f"hard links unavailable: {error}")
+
+    with pytest.raises(ValueError, match="exactly one hard link"):
+        module.load_production_trace_extraction_evidence(input_alias)
+    with pytest.raises(ValueError, match="exactly one hard link"):
+        module._production_trace_artifact_entry("proof_ledger", input_alias)
+    with pytest.raises(ValueError, match="exactly one hard link"):
+        module.write_production_trace_extraction_evidence(
+            output_alias, certificate
+        )
+    assert output_alias.samefile(original)
+
+
+def test_production_trace_certificate_rejects_symlinked_parent_components(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    certificate = _synthetic_production_trace_certificate(module)
+    real_parent = tmp_path / "real"
+    real_parent.mkdir()
+    real_certificate = real_parent / "certificate.json"
+    real_certificate.write_bytes(
+        module._production_trace_canonical_json_bytes(certificate)
+    )
+    linked_parent = tmp_path / "linked-parent"
+    try:
+        linked_parent.symlink_to(real_parent, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"symlinks unavailable: {error}")
+
+    with pytest.raises(ValueError, match="parent path contains a symlink component"):
+        module.load_production_trace_extraction_evidence(
+            linked_parent / real_certificate.name
+        )
+    with pytest.raises(ValueError, match="parent path contains a symlink component"):
+        module.write_production_trace_extraction_evidence(
+            linked_parent / "output.json", certificate
+        )
+
+
+def test_production_trace_certificate_rejects_every_top_level_field_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_checker()
+    expected = _synthetic_production_trace_certificate(module)
+    artifact = tmp_path / "artifact"
+    artifact.write_bytes(b"evidence\n")
+    paths = _synthetic_trace_artifact_paths(module, artifact)
+    monkeypatch.setattr(
+        module,
+        "build_production_trace_extraction_evidence",
+        lambda *args, **kwargs: expected,
+    )
+
+    for field in expected:
+        observed = copy.deepcopy(expected)
+        del observed[field]
+        errors = module._production_trace_extraction_evidence_errors(
+            {},
+            observed,
+            tlaps_evidence={},
+            verus_evidence={},
+            cross_tool_evidence={},
+            artifacts=paths,
+        )
+        assert errors and "canonical current theorem certificate" in errors[0], field
+
+
+def test_production_trace_certificate_rejects_every_nested_field_hash_and_source_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_checker()
+    expected = _synthetic_production_trace_certificate(module)
+    artifact = tmp_path / "artifact"
+    artifact.write_bytes(b"evidence\n")
+    paths = _synthetic_trace_artifact_paths(module, artifact)
+    monkeypatch.setattr(
+        module,
+        "build_production_trace_extraction_evidence",
+        lambda *args, **kwargs: expected,
+    )
+
+    def leaf_paths(value, prefix=()):
+        if isinstance(value, dict):
+            for key in sorted(value):
+                yield from leaf_paths(value[key], (*prefix, key))
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                yield from leaf_paths(item, (*prefix, index))
+        else:
+            yield prefix
+
+    for path in leaf_paths(expected):
+        observed = copy.deepcopy(expected)
+        owner = observed
+        for component in path[:-1]:
+            owner = owner[component]
+        original = owner[path[-1]]
+        if isinstance(original, bool):
+            replacement = not original
+        elif isinstance(original, int):
+            replacement = original + 1
+        else:
+            replacement = f"{original}-drift"
+        owner[path[-1]] = replacement
+        errors = module._production_trace_extraction_evidence_errors(
+            {},
+            observed,
+            tlaps_evidence={},
+            verus_evidence={},
+            cross_tool_evidence={},
+            artifacts=paths,
+        )
+        assert errors and "canonical current theorem certificate" in errors[0], path
+
+
+def test_production_trace_certificate_rejects_missing_proof_linkage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_checker()
+    expected = _synthetic_production_trace_certificate(module)
+    artifact = tmp_path / "artifact"
+    artifact.write_bytes(b"evidence\n")
+    paths = _synthetic_trace_artifact_paths(module, artifact)
+    monkeypatch.setattr(
+        module,
+        "build_production_trace_extraction_evidence",
+        lambda *args, **kwargs: expected,
+    )
+    observed = copy.deepcopy(expected)
+    del observed["proof_linkage"]["cross_tool_component_evidence"]
+
+    errors = module._production_trace_extraction_evidence_errors(
+        {},
+        observed,
+        tlaps_evidence={},
+        verus_evidence={},
+        cross_tool_evidence={},
+        artifacts=paths,
+    )
+
+    assert errors == [
+        "production trace-extraction evidence does not match the canonical "
+        "current theorem certificate at $.proof_linkage"
+    ]

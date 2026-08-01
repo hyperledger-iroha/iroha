@@ -7,9 +7,10 @@ These guidelines apply to the `scripts/` directory.
 - `test_env.py` provisions a local multi-peer network that is consumed by the Python test suites and manual QA.
 - `requirements.txt` is the exact pinned Python dependency set shared by the
   scripts (BLAKE3, pytest, requests, the pre-3.11 TOML backport, and
-  `tomli_w`). Install it with
-  `python3 -m pip install -r scripts/requirements.txt` before running helpers
-  that import Python modules.
+  `tomli_w`). Its security-patched pytest and HTTP stack require Python 3.10+
+  even though dependency-free helpers may retain an older syntax floor.
+  Install it with `python3 -m pip install -r scripts/requirements.txt` before
+  running helpers that import Python modules.
 
 ## Development workflow
 - Keep scripts idempotent and portable across macOS/Linux. Prefer POSIX shell or Python 3.11+; for long workflows use Python so we can add tests.

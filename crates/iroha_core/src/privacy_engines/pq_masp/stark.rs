@@ -39,8 +39,7 @@ use crate::privacy_engines::{
         PROOF_MANAGED_NOTE_SECURITY_LANES_V1, PROOF_MANAGED_NOTE_TERMINAL_DEGREE_BOUND_V1,
         PROOF_MANAGED_NOTE_TERMINAL_LOG2_V1, ProofManagedNoteStarkAdapterV1,
         ProofManagedNoteStarkErrorV1, ProofManagedNoteStarkProtocolV1,
-        prove_proof_managed_note_stark_v1, prove_proof_managed_note_stark_v1_with_rng,
-        verify_proof_managed_note_stark_v1,
+        prove_proof_managed_note_stark_v1_with_rng, verify_proof_managed_note_stark_v1,
     },
     transparent_stark::{GoldilocksFieldV1 as F, TransparentTranscriptV1, sha256_frame_v1},
 };
@@ -172,7 +171,8 @@ fn pq_masp_protocol_v1() -> ProofManagedNoteStarkProtocolV1 {
 
 /// Validate the complete compiled proof-system and relation profile.
 pub(crate) fn validate_pq_masp_stark_profile_v1() -> Result<(), ProofManagedNoteStarkErrorV1> {
-    pq_masp_protocol_v1().validate()
+    pq_masp_protocol_v1().validate()?;
+    validate_reserved_vm_row_contract_v1()
 }
 
 fn map_air_error_v1(error: PqMaspAirErrorV1) -> ProofManagedNoteStarkErrorV1 {
@@ -219,6 +219,62 @@ fn vm_same_instruction_transition(current: &PqMaspFixedRowV1, next: &PqMaspFixed
         ) => instruction == next_instruction && usize::from(*byte) + 1 == usize::from(*next_byte),
         _ => false,
     }
+}
+
+fn reserved_vm_type_column_v1(row: &PqMaspFixedRowV1) -> Option<usize> {
+    match row {
+        PqMaspFixedRowV1::VmHeader => Some(TYPE_VM_HEADER),
+        PqMaspFixedRowV1::VmProgram { .. } => Some(TYPE_VM_PROGRAM),
+        PqMaspFixedRowV1::VmPrevious { .. } => Some(TYPE_VM_PREVIOUS),
+        PqMaspFixedRowV1::VmNext { .. } => Some(TYPE_VM_NEXT),
+        _ => None,
+    }
+}
+
+fn validate_reserved_vm_row_contract_v1() -> Result<(), ProofManagedNoteStarkErrorV1> {
+    let rows = [
+        PqMaspFixedRowV1::VmHeader,
+        PqMaspFixedRowV1::VmProgram { instruction: 7 },
+        PqMaspFixedRowV1::VmPrevious {
+            instruction: 7,
+            byte: 0,
+        },
+        PqMaspFixedRowV1::VmNext {
+            instruction: 7,
+            byte: 0,
+        },
+        PqMaspFixedRowV1::VmPrevious {
+            instruction: 7,
+            byte: 1,
+        },
+    ];
+    let type_columns = [
+        reserved_vm_type_column_v1(&rows[0]),
+        reserved_vm_type_column_v1(&rows[1]),
+        reserved_vm_type_column_v1(&rows[2]),
+        reserved_vm_type_column_v1(&rows[3]),
+    ];
+    if [
+        TYPE_VM_HEADER,
+        TYPE_VM_PROGRAM,
+        TYPE_VM_PREVIOUS,
+        TYPE_VM_NEXT,
+    ] != [7, 8, 9, 10]
+        || type_columns
+            != [
+                Some(TYPE_VM_HEADER),
+                Some(TYPE_VM_PROGRAM),
+                Some(TYPE_VM_PREVIOUS),
+                Some(TYPE_VM_NEXT),
+            ]
+        || vm_same_instruction_transition(&rows[0], &rows[1])
+        || !vm_same_instruction_transition(&rows[1], &rows[2])
+        || !vm_same_instruction_transition(&rows[2], &rows[3])
+        || !vm_same_instruction_transition(&rows[3], &rows[4])
+    {
+        return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
+    }
+    Ok(())
 }
 
 pub(super) fn pq_masp_profile_fixed_columns_v1(
@@ -1573,20 +1629,6 @@ pub(super) fn prove_pq_masp_stark_v1_with_rng<R: TryRngCore>(
     )
 }
 
-/// Construct the canonical PQ-MASP proof with operating-system entropy.
-pub(super) fn prove_pq_masp_stark_v1(
-    statement: &PqMaspStarkStatementV1,
-    consensus_binding: &PrivacyNativeConsensusBindingV1,
-    consensus_limits: &PrivacyConsensusLimitsV1,
-    witness: &PqMaspWitnessV1,
-) -> Result<Vec<u8>, ProofManagedNoteStarkErrorV1> {
-    let base_columns = compile_pq_masp_prover_columns_v1(statement, witness)?;
-    prove_proof_managed_note_stark_v1(
-        &PqMaspStarkAdapterV1::new(statement, consensus_binding, consensus_limits),
-        &base_columns,
-    )
-}
-
 /// Verify the exact PQ-MASP proof against the statement and consensus binding.
 pub(crate) fn verify_pq_masp_stark_v1(
     statement: &PqMaspStarkStatementV1,
@@ -1670,6 +1712,19 @@ mod tests {
             pq_masp_profile_aux_columns_v1(statement, &base).expect("profile auxiliary columns"),
         );
         (trace, base, aux, fixed, copy_challenges)
+    }
+
+    #[test]
+    fn reserved_vm_row_contract_pins_selector_and_sequence_mapping() {
+        validate_reserved_vm_row_contract_v1().expect("reserved VM row contract");
+        assert_eq!(reserved_vm_type_column_v1(&PqMaspFixedRowV1::Padding), None);
+        assert!(!vm_same_instruction_transition(
+            &PqMaspFixedRowV1::VmProgram { instruction: 7 },
+            &PqMaspFixedRowV1::VmPrevious {
+                instruction: 8,
+                byte: 0,
+            }
+        ));
     }
 
     #[test]
@@ -1785,15 +1840,11 @@ mod tests {
             &mut rng,
         )
         .expect("full-domain authorized PQ-MASP facade proof");
-        super::super::verify_pq_masp_v1(&statement, &binding, &limits, &authorized_proof)
-            .expect("full-domain PQ-MASP facade verification");
         let decoded = decode_pq_masp_authorization_proof_v1(&authorized_proof)
             .expect("canonical authorization wrapper");
         let proof = decoded.stark_proof.to_vec();
         assert!(!proof.is_empty());
         assert!(proof.len() <= super::super::wire::PQ_MASP_MAX_STARK_PROOF_BYTES_V1);
-        verify_pq_masp_stark_v1(&statement, &binding, &limits, &proof)
-            .expect("full-domain PQ-MASP verification");
         let proof_digest: [u8; 32] = Sha256::digest(&proof).into();
         let authorized_proof_digest: [u8; 32] = Sha256::digest(&authorized_proof).into();
         assert_eq!(proof_digest, PQ_MASP_STARK_KAT_PROOF_SHA256_V1);
@@ -1801,6 +1852,10 @@ mod tests {
             authorized_proof_digest,
             PQ_MASP_AUTHORIZED_KAT_PROOF_SHA256_V1
         );
+        super::super::verify_pq_masp_v1(&statement, &binding, &limits, &authorized_proof)
+            .expect("full-domain PQ-MASP facade verification");
+        verify_pq_masp_stark_v1(&statement, &binding, &limits, &proof)
+            .expect("full-domain PQ-MASP verification");
 
         assert!(
             verify_pq_masp_stark_v1(&statement, &binding, &limits, &vec![0; proof.len()],).is_err(),

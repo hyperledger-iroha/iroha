@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fail-closed bounded Apalache gate for the four Sumeragi v2 multilane
+# Fail-closed bounded Apalache gate for the five Sumeragi v2 multilane
 # refinement kernels plus the layout-only in-flight carrier kernel. The fixed
 # bounds are part of the reviewed contract and are not configurable.
 
@@ -183,12 +183,14 @@ readonly AUTOSCALE_MODULE="SumeragiV2AutoscaleLifecycle"
 readonly NATIVE_MODULE="SumeragiV2NativeApplicationEvidence"
 readonly AUTONOMOUS_MODULE="SumeragiV2AutonomousReservationCarrier"
 readonly QUEUE_PLAN_ADMISSION_MODULE="SumeragiV2QueuePlanAdmissionRegistry"
+readonly KURA_RETENTION_MODULE="SumeragiV2KuraReplicaRetention"
 readonly INFLIGHT_FIRST_RELEASE_MODULE="SumeragiV2InFlightFirstRelease"
 
 run_typecheck "$AUTOSCALE_MODULE"
 run_typecheck "$NATIVE_MODULE"
 run_typecheck "$AUTONOMOUS_MODULE"
 run_typecheck "$QUEUE_PLAN_ADMISSION_MODULE"
+run_typecheck "$KURA_RETENTION_MODULE"
 run_typecheck "$INFLIGHT_FIRST_RELEASE_MODULE"
 
 run_positive \
@@ -216,6 +218,12 @@ run_positive \
   8 \
   "QueuePlanAdmissionTypeInvariant, MLAdmissionCasUnique, MLCertificateDurable, MLPublic202Exact, MLExecutionRequiresExactBinding, MLQueueEligibilityExact, MLAdmissionAtMostOnceExecution, MLImmutableAdmissionTombstone, MLCancellationStopsExecution"
 run_positive \
+  kura-replica-retention \
+  "$KURA_RETENTION_MODULE" \
+  kura_replica_retention_fixed.cfg \
+  8 \
+  "KuraReplicaRetentionTypeInvariant, KRAdmittedAdvertsSigned, KRAdmittedAdvertsDirectAuthenticated, KRAdmittedAdvertsBindExactFinality, KRAdmittedAdvertsBindExactWire, KRDeterministicFPlusOneKeepers, KRLocalSelectedKeeperPinsBody, KREvictionRequiresAllSelectedRemoteFresh, KRExpiredAdvertsCannotAuthorize, KRRestartClearsAdvertRegistry, KRRegistryCapacityBounded, KRRefreshWindowBounded, KRRefreshCursorExact, KRFinalPreStageRecheck"
+run_positive \
   inflight-first-release-layout \
   "$INFLIGHT_FIRST_RELEASE_MODULE" \
   inflight_first_release_fixed.cfg \
@@ -238,7 +246,7 @@ evidence_tmp="$(mktemp "${EVIDENCE_DIR}/.multilane_apalache_evidence.XXXXXX")"
   printf 'launcher_sha256\t%s\n' "$APALACHE_LAUNCHER_SHA256"
   printf 'jar_sha256\t%s\n' "$APALACHE_JAR_SHA256"
   printf 'source_manifest_sha256\t%s\n' "$source_manifest_sha256"
-  printf 'result_count\t5\n'
+  printf 'result_count\t6\n'
   printf 'result\tautoscale-lifecycle\t%s\t%s\t8\tNoError\t%s\t%s\t%s\n' \
     "$AUTOSCALE_MODULE" \
     "multilane_autoscale_lifecycle_fixed.cfg" \
@@ -263,6 +271,12 @@ evidence_tmp="$(mktemp "${EVIDENCE_DIR}/.multilane_apalache_evidence.XXXXXX")"
     "$(hash_file "${FORMAL_DIR}/${QUEUE_PLAN_ADMISSION_MODULE}.tla")" \
     "$(hash_file "${FORMAL_DIR}/multilane_queue_plan_admission_registry_fixed.cfg")" \
     "$(hash_file "${LOG_DIR}/queue-plan-admission-registry.check.log")"
+  printf 'result\tkura-replica-retention\t%s\t%s\t8\tNoError\t%s\t%s\t%s\n' \
+    "$KURA_RETENTION_MODULE" \
+    "kura_replica_retention_fixed.cfg" \
+    "$(hash_file "${FORMAL_DIR}/${KURA_RETENTION_MODULE}.tla")" \
+    "$(hash_file "${FORMAL_DIR}/kura_replica_retention_fixed.cfg")" \
+    "$(hash_file "${LOG_DIR}/kura-replica-retention.check.log")"
   printf 'result\tinflight-first-release-layout\t%s\t%s\t18\tNoError\t%s\t%s\t%s\n' \
     "$INFLIGHT_FIRST_RELEASE_MODULE" \
     "inflight_first_release_fixed.cfg" \
@@ -272,4 +286,4 @@ evidence_tmp="$(mktemp "${EVIDENCE_DIR}/.multilane_apalache_evidence.XXXXXX")"
 } >"$evidence_tmp"
 mv -- "$evidence_tmp" "$EVIDENCE_PATH"
 
-echo "[apalache] all 4 source-bound refinement kernels plus the layout-only in-flight carrier passed pinned v${APALACHE_VERSION} bounded checks; no proof status was changed; evidence=${EVIDENCE_PATH}"
+echo "[apalache] all 5 source-bound refinement kernels plus the layout-only in-flight carrier passed pinned v${APALACHE_VERSION} bounded checks; no proof status was changed; evidence=${EVIDENCE_PATH}"

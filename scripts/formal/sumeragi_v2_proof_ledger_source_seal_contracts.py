@@ -60,19 +60,33 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/bound_progress_and_retained_support.rs",
     "kura/autonomous_reservation_bounds.rs",
     "kura/prune_commit_merge_support.rs",
+    "kura/replica_advert_and_body_status.rs",
+    "kura/retained_finality_replica_authority.rs",
+    "kura/autonomous_merge_bundle_support.rs",
     "kura/autonomous_reservation_types.rs",
     "kura/autonomous_reservation_inventory.rs",
     "kura/autonomous_reservation_classifier.rs",
+    "kura/historical_autonomous_recovery.rs",
 )
 
 _REVIEWED_RUST_INCLUDE_MANIFESTS = {
+    "crates/iroha_config/src/parameters/actual.rs": (
+        "actual/tests.rs",
+    ),
+    "crates/iroha_config/src/parameters/user.rs": (
+        "user/kura.rs",
+        "user/kura_and_snapshot_tests.rs",
+    ),
     "crates/iroha_core/src/kura.rs": (
         *_KURA_PRODUCTION_COMPONENT_FILES,
         "kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs",
+        "kura/tests/01a_retained_eviction_and_rewrite_tail.rs",
         "kura/tests/02_replacement_and_preflight.rs",
         "kura/tests/03_preflight_and_merge_entry.rs",
+        "kura/tests/03a_preflight_and_merge_entry_tail.rs",
         "kura/tests/04_merge_log_and_associations.rs",
         "kura/tests/05_merge_resolution_and_eviction.rs",
+        "kura/tests/05a_replica_advert_and_body_eviction.rs",
         "kura/tests/06_eviction_and_autonomous_lanes.rs",
         "kura/tests/07a_autonomous_reservation_reconciliation_support.rs",
         "kura/tests/07_autonomous_lanes_and_sidecars.rs",
@@ -86,13 +100,39 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "kura/tests/13_manifests_and_fsync.rs",
     ),
     "crates/iroha_core/src/kura/lane_geometry.rs": (
+        "lane_geometry_tests/00_support.rs",
         "lane_geometry/native_amx_retained_window_tests.rs",
+        "lane_geometry_tests/00_retirement.rs",
+        "lane_geometry_tests/01_retirement_and_recovery.rs",
+        "lane_geometry_tests/02_geometry_moves_and_journal.rs",
+        "lane_geometry_tests/03_gc_and_startup.rs",
+    ),
+    "crates/iroha_core/src/snapshot.rs": (
+        "snapshot/support_policy_tests.rs",
+        "snapshot/write_roundtrip_tests.rs",
+        "snapshot/reconciliation_generation_tests.rs",
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
+        "v2_worker/exact_output_rollover_claim.rs",
+        "v2_worker/kura_replica_advert_refresh.rs",
         "tests/v2_worker_reply_route_cases.rs",
         "tests/v2_worker_backpressure_cases.rs",
         "tests/v2_worker_serve_unsealed_cases.rs",
         "tests/v2_worker_serve_decision_restart_cases.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_runtime.rs": (
+        "tests/v2_runtime_unsealed_00.rs",
+        "tests/v2_runtime_unsealed_01.rs",
+        "tests/v2_runtime_unsealed_02.rs",
+        "tests/v2_runtime_unsealed_03.rs",
+        "tests/v2_runtime_unsealed_04.rs",
+        "tests/v2_runtime_unsealed_05.rs",
+        "tests/v2_runtime_unsealed_06.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_runner.rs": (
+        "tests/v2_runner_unsealed_00.rs",
+        "tests/v2_runner_unsealed_01.rs",
+        "tests/v2_runner_unsealed_02.rs",
     ),
     "crates/iroha_core/src/sumeragi/v2_apply.rs": (
         "tests/v2_apply_unsealed_00.rs",
@@ -104,9 +144,13 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     "crates/iroha_core/src/sumeragi/v2_core/tests.rs": (
         "tests/v2_core_view_zero_parent_binding.rs",
+        "tests/empty_replay_resume_test.rs",
     ),
     "crates/iroha_core/src/sumeragi/v2_lane_work.rs": (
+        "v2_lane_work/canonical_executed_block_application_repair.rs",
         "tests/v2_lane_work_observer_role.rs",
+        "tests/v2_lane_work_native_body_recovery.rs",
+        "tests/v2_lane_work_effect_queue.rs",
     ),
 }
 
@@ -338,6 +382,15 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     "deferred_work_is_serviceable": (
         "1036f93b127acad65512fcb095d7f19bdc547f93d22ebebbd227277a0a30405c"
     ),
+    "completion_unblocks_deferred_fence": (
+        "0964e3e5d76ef3f72a240c03c46c3c15a71c52572acaa34784276c97858d3ab7"
+    ),
+    "command_is_blocked_by_deferred_fence": (
+        "05f8139fb6d9566a2749cc01e8e906c180ebca304448d635f2d276a5935f3757"
+    ),
+    "authenticated_command_reaches_fenced_reducer": (
+        "9a4aa6932087f18a3b4897e3946bb40a9e600c99fd4841ebce7a801247ee9835"
+    ),
     "ready_to_finish": (
         "039df6143d8b4505489db3c75ab2d3d24c01a30a4da0f0d277d865f44cfa0ffa"
     ),
@@ -352,14 +405,38 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     "drive_effects": (
         "98ff14c212f7c5f8b1756e7d8661a3ea502dfc334fc22ca592a7f85958909f29"
     ),
+    "pop_fence_completion_with_ownership": (
+        "8fc875ae966aef68a30bec6fb163c10895449a367a9d5731e5e3f8c78594bd64"
+    ),
+    "fence_blocked_lifecycle_owners": (
+        "a6ab663afdf61312dd4da128d54967c262f749f966a953dc63abc77d3751c83d"
+    ),
+    "freeze_due_clock_owners": (
+        "f097b1ce583dcb9d94293366cab9828f648c376dd586f7af28635b003f92c855"
+    ),
+    "minimum_active_lifecycle_ordinal": (
+        "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
+    ),
+    "minimum_active_lifecycle_ordinal_excluding": (
+        "204a88b77ef7853327a2313583c25ef32f9bdea705dd57e0fc7bbd17b30afa1a"
+    ),
     "runtime_step": (
-        "25956cf04532441fca915496116cc9c6913df8743292c857fd478a2ba7b07bcc"
+        "82e349d880d8ff39c7438e8c06b301f5abcae332d25265285213a099b7ad8ce3"
     ),
     "runtime_step_recovery": (
         "1e3243e36d27d9d0fb510048485350c2401d56ba02f1ef274b027c63e06847bd"
     ),
     "dispatch_one_adapter_deferred": (
         "20d4d698e8566e7df3ba96d0f6cc136ad87c05f10d95931b886aa174ae45b7b9"
+    ),
+    "dispatch_one_fence_dependency": (
+        "1109cb4b250d3115032fc5d5ed196182b53b9020ea4142f0f87e06b197731f00"
+    ),
+    "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo": (
+        "7f93137f29f8c8afcf06e45935c979dc10ad786b88e87f617415adc67df0d242"
+    ),
+    "real_adapter_fence_completion_breaks_pre_and_post_timeout_retransmit_debt": (
+        "89324b884105cbcb609cf18945c41719ff47edeaf315ad3549b316ea0d0744e7"
     ),
     "tc_promoted_lock_requires_same_subject_reproposal_before_commit": (
         "4a6ae3cd80c629e1ec63e32eadc6d6cfcb68a9ccc77a15997a4915931818279c"
@@ -494,10 +571,10 @@ _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 305
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 306
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 390
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 391
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "def60f4a4c04b995a11d8e75fd6ef920d7fb1b8c4ce397f883a35412087f9bd6"
+    "1ea0b8f3ebf914e7aab0a1a680450e7decfbcf20242243580a94e17de456fcf4"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -1587,7 +1664,10 @@ _EXACT_SERVE_RUNTIME_EPISODE_EFFECT_ITEM_SHA256 = {
 
 _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256 = {
     "minimum_active_lifecycle_ordinal": (
-        "0c38e2c8725a12a05c06884f8ae22d3ea7c6395243dc08800afdbf4d1190d812"
+        "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
+    ),
+    "minimum_active_lifecycle_ordinal_excluding": (
+        "204a88b77ef7853327a2313583c25ef32f9bdea705dd57e0fc7bbd17b30afa1a"
     ),
     "active_lifecycle_uses_ordinal": (
         "3383cbf7969a7f8d792f56ed9c148c4ca523f6366bfac8c60b53a68af427a4fc"

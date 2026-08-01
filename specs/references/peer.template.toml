@@ -289,6 +289,10 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # blocks_in_memory = 1024
 # block_sync_roster_retention = 7200  # Certified commit-roster snapshots retained for block-sync recovery
 # roster_sidecar_retention = 512      # Roster sidecars retained in pipeline/roster_sidecars.* before GC
+# eviction_required_replicas = 3      # Minimum selected CommitQC keepers required for body eviction
+# replica_advert_evictable_window = 4096  # Historical evictable heights retained beyond the protected tail
+# replica_advert_ttl_ms = 3_600_000       # Authenticated observation lifetime (2 ms through one hour)
+# replica_advert_refresh_interval_ms = 900_000  # At least 1 ms and at most half the configured TTL
 
 [logger]
 # level = "INFO"

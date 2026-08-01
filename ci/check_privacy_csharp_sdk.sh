@@ -3,6 +3,40 @@ set -euo pipefail
 
 ROOT_DIR="${PRIVACY_CSHARP_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 DOTNET_BIN="${PRIVACY_CSHARP_DOTNET_BIN:-dotnet}"
+PYTHON_BIN="${PRIVACY_CSHARP_PYTHON_BIN:-python3}"
+ABI21_ARTIFACT_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi21_artifact.py"
+
+if [[ "${IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE:-}" != "1" ]]; then
+  echo "error: IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE=1 is required" >&2
+  exit 1
+fi
+if [[ -z "${PRIVACY_CSHARP_NATIVE_ARTIFACT:-}" || \
+  -z "${PRIVACY_CSHARP_NATIVE_MANIFEST:-}" ]]; then
+  echo "error: authenticated C# privacy native artifact and manifest are required" >&2
+  exit 1
+fi
+if ! NATIVE_DIRECTORY="$(
+  cd "$(dirname "${PRIVACY_CSHARP_NATIVE_ARTIFACT}")" && pwd -P
+)"; then
+  echo "error: C# privacy native artifact directory is unavailable" >&2
+  exit 1
+fi
+if [[ "${PRIVACY_CSHARP_NATIVE_ARTIFACT}" != \
+    "${NATIVE_DIRECTORY}/libconnect_norito_bridge.so" || \
+  "${PRIVACY_CSHARP_NATIVE_MANIFEST}" != \
+    "${NATIVE_DIRECTORY}/native-sdk-abi21.json" ]]; then
+  echo "error: C# privacy native paths are not canonical Linux ABI-21 paths" >&2
+  exit 1
+fi
+if [[ "${LD_LIBRARY_PATH:-}" != "${NATIVE_DIRECTORY}" ]]; then
+  echo "error: LD_LIBRARY_PATH must select only the authenticated C# privacy bridge" >&2
+  exit 1
+fi
+
+"${PYTHON_BIN}" -I -B "${ABI21_ARTIFACT_CHECKER}" verify \
+  --artifact "${PRIVACY_CSHARP_NATIVE_ARTIFACT}" \
+  --manifest "${PRIVACY_CSHARP_NATIVE_MANIFEST}" \
+  --source-root "${ROOT_DIR}"
 
 export DOTNET_CLI_TELEMETRY_OPTOUT="${DOTNET_CLI_TELEMETRY_OPTOUT:-1}"
 export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-${TMPDIR:-/tmp}/iroha-dotnet-home}"

@@ -189,24 +189,6 @@ fn put_rejects_same_hash_reuse_behind_commit_barrier() {
 }
 
 #[test]
-fn prune_is_exact_to_lane_incarnation() {
-    let retired = record(1, 1);
-    let recreated = record(2, 2);
-    let mut records = vec![retired.clone(), recreated.clone()];
-    let mut committed = Vec::new();
-    apply_unprotected_frame(
-        &mut records,
-        &mut committed,
-        LaneQueueReservationJournalFrameV5::Prune {
-            lane_id: retired.key.lane_id,
-            lane_incarnation: retired.key.lane_incarnation,
-        },
-    )
-    .expect("apply prune");
-    assert_eq!(records, vec![recreated]);
-}
-
-#[test]
 fn compaction_is_replay_equivalent() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("reservations.norito");
@@ -1315,39 +1297,6 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
         "failed commit preflight must preserve live and committed ownership"
     );
 
-    let prune_frame = LaneQueueReservationJournalFrameV5::Prune {
-        lane_id: first.key.lane_id,
-        lane_incarnation: first.key.lane_incarnation,
-    };
-    let mut prune_state = IndexedReservationReplayState::default();
-    prune_state
-        .transition(
-            &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone(), second.clone()]),
-            8,
-        )
-        .expect("seed two exact live reservations before prune corruption");
-    let prune_authorization = prune_state
-        .prepare_checked_transition(&prune_frame, 8)
-        .expect("prepare multi-record prune before corrupting its later target");
-    assert_eq!(
-        prune_state
-            .fifo_ordinals
-            .insert(second.fifo_order.ordinal, first.key.signed_transaction_hash),
-        Some(second.key.signed_transaction_hash)
-    );
-    let prune_before = prune_state.clone();
-    let error = prune_state
-        .apply_checked_transition(&prune_frame, 8, prune_authorization)
-        .expect_err("multi-record prune must preflight every target before removal");
-    assert!(
-        error.to_string().contains("FIFO index"),
-        "unexpected prune-index rejection: {error}"
-    );
-    assert_eq!(
-        prune_state, prune_before,
-        "failed prune preflight must preserve every indexed live reservation"
-    );
-
     let release = release_barrier(&[first.clone(), second.clone()], 91);
     let release_digest = release.digest();
     let completion = release_completion(&[first.clone(), second.clone()], 91);
@@ -1393,32 +1342,6 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
         "failed completion preflight must preserve the barrier and every live record"
     );
 
-    let mut hash_binding_state = IndexedReservationReplayState::default();
-    hash_binding_state
-        .transition(
-            &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]),
-            8,
-        )
-        .expect("seed an exact live reservation before key/hash substitution");
-    let hash_binding_authorization = hash_binding_state
-        .prepare_checked_transition(&prune_frame, 8)
-        .expect("prepare prune before key/hash substitution");
-    hash_binding_state.ownership.insert(
-        first.key.signed_transaction_hash,
-        DurableReservationOwnership::Live(second.key),
-    );
-    let hash_binding_before = hash_binding_state.clone();
-    let error = hash_binding_state
-        .apply_checked_transition(&prune_frame, 8, hash_binding_authorization)
-        .expect_err("preflight must bind the lane-index lookup hash to the exact owner key");
-    assert!(
-        error.to_string().contains("exact reservation hash"),
-        "unexpected key/hash rejection: {error}"
-    );
-    assert_eq!(
-        hash_binding_state, hash_binding_before,
-        "key/hash rejection must occur before indexed mutation"
-    );
 }
 
 #[test]
@@ -1446,7 +1369,6 @@ fn indexed_replay_matches_reference_vector_transitions_and_ordering() {
     let second = indexed_record(1);
     let third = indexed_record(2);
     let fourth = indexed_record(3);
-    let fifth = indexed_record(4);
     let release = release_barrier(&[first.clone(), second.clone()], 71);
     let completion = release_completion(&[first.clone(), second.clone()], 71);
     let mut stale_forget = release.clone();
@@ -1468,15 +1390,10 @@ fn indexed_replay_matches_reference_vector_transitions_and_ordering() {
         LaneQueueReservationJournalFrameV5::PutBatch(vec![
             third.clone(),
             fourth.clone(),
-            fifth.clone(),
         ]),
         LaneQueueReservationJournalFrameV5::Commit(third.key),
         LaneQueueReservationJournalFrameV5::ForgetCommit(third.key),
         LaneQueueReservationJournalFrameV5::ReleaseBatch(vec![fourth.key]),
-        LaneQueueReservationJournalFrameV5::Prune {
-            lane_id: fifth.key.lane_id,
-            lane_incarnation: fifth.key.lane_incarnation,
-        },
     ];
     let mut indexed = IndexedReservationReplayState::default();
     let mut live = Vec::new();
@@ -1530,10 +1447,6 @@ fn indexed_transition_rejections_are_atomic_and_match_reference_replay() {
     let invalid_frames = vec![
         LaneQueueReservationJournalFrameV5::ReleaseBatch(vec![first.key]),
         LaneQueueReservationJournalFrameV5::Commit(first.key),
-        LaneQueueReservationJournalFrameV5::Prune {
-            lane_id: first.key.lane_id,
-            lane_incarnation: first.key.lane_incarnation,
-        },
         LaneQueueReservationJournalFrameV5::PrepareRelease(conflicting_release),
         LaneQueueReservationJournalFrameV5::ForgetRelease(release.clone()),
         LaneQueueReservationJournalFrameV5::CompleteRelease({
@@ -1601,11 +1514,6 @@ fn runtime_semantic_preflight_rejects_invalid_frames_before_durable_append() {
     conflicting_barrier.retirement_hash = Hash::new(b"runtime-preflight-conflicting-release");
 
     assert!(journal.release(first.key).is_err());
-    assert!(
-        journal
-            .prune(first.key.lane_id, first.key.lane_incarnation)
-            .is_err()
-    );
     assert!(journal.prepare_release(conflicting_barrier).is_err());
     assert!(journal.forget_release(barrier).is_err());
     assert!(journal.complete_release(wrong_completion).is_err());

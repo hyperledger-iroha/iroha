@@ -1,6 +1,7 @@
 README.md
 __init__.py
 client.py
+identifier_receipts.py
 mock.py
 native_amx.py
 norito_frame.py
@@ -8,6 +9,7 @@ pyproject.toml
 sccp.py
 ./__init__.py
 ./client.py
+./identifier_receipts.py
 ./mock.py
 ./native_amx.py
 ./norito_frame.py
@@ -18,3 +20,4 @@ iroha_torii_client.egg-info/dependency_links.txt
 iroha_torii_client.egg-info/requires.txt
 iroha_torii_client.egg-info/top_level.txt
 tests/test_client.py
+tests/test_strict_wire_profiles.py

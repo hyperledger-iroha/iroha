@@ -406,6 +406,8 @@ pub struct RuntimeProviderBrokerBackendsV1 {
     pub(super) governance_dag_checkpoint_store:
         Option<Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore>>,
     pub(super) stream_token_signer: Option<Arc<dyn iroha_torii::sorafs::StreamTokenRuntimeSigner>>,
+    pub(super) stream_token_gateway_admission:
+        Option<Arc<dyn iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1>>,
     pub(super) appeal_finance_transaction_signers:
         Vec<Arc<dyn iroha_torii::SoraFsAppealFinanceTransactionSigner>>,
     pub(super) appeal_finance_checkpoint:
@@ -580,6 +582,10 @@ impl fmt::Debug for RuntimeProviderBrokerBackendsV1 {
                 &self.governance_dag_checkpoint_store.is_some(),
             )
             .field("stream_token_signer", &self.stream_token_signer.is_some())
+            .field(
+                "stream_token_gateway_admission",
+                &self.stream_token_gateway_admission.is_some(),
+            )
             .field(
                 "appeal_finance_transaction_signer_count",
                 &self.appeal_finance_transaction_signers.len(),
@@ -760,6 +766,7 @@ impl RuntimeProviderBrokerBackendsV1 {
             governance_dag_head_authenticator: None,
             governance_dag_checkpoint_store: None,
             stream_token_signer: None,
+            stream_token_gateway_admission: None,
             appeal_finance_transaction_signers: Vec::new(),
             appeal_finance_checkpoint: None,
             proof_outcome_transaction_signer: None,
@@ -931,6 +938,17 @@ impl RuntimeProviderBrokerBackendsV1 {
         signer: Arc<dyn iroha_torii::sorafs::StreamTokenRuntimeSigner>,
     ) -> Self {
         self.stream_token_signer = Some(signer);
+        self
+    }
+
+    /// Attach the deployment-owned stream-token quota, sealed-sequence, and
+    /// ordered callback-outbox provider.
+    #[must_use]
+    pub fn with_stream_token_gateway_admission(
+        mut self,
+        provider: Arc<dyn iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1>,
+    ) -> Self {
+        self.stream_token_gateway_admission = Some(provider);
         self
     }
 

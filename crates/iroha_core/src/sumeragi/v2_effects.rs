@@ -761,10 +761,6 @@ impl ConsensusSignTask {
     pub(crate) const fn lifecycle_ordinal(&self) -> u128 {
         self.ownership.owner().lifecycle_ordinal()
     }
-
-    fn ownership(&self) -> &RuntimeEffectOwnership {
-        &self.ownership
-    }
 }
 
 /// Body reconstruction or certified-fetch request.
@@ -2324,11 +2320,6 @@ pub(crate) trait EffectRuntime {
         )>,
         String,
     >;
-    fn enqueue_body_available(
-        &mut self,
-        tag: EventTag,
-        manifest: wire::PayloadManifest,
-    ) -> Result<(), EnqueueError>;
     /// Reserve an exact body completion without exposing it to the reducer.
     fn reserve_body_available(
         &mut self,
@@ -2613,14 +2604,6 @@ impl EffectRuntime for SerializedV2Runtime {
     > {
         self.replayed_decision_key()
             .map_err(|error| error.to_string())
-    }
-
-    fn enqueue_body_available(
-        &mut self,
-        tag: EventTag,
-        manifest: wire::PayloadManifest,
-    ) -> Result<(), EnqueueError> {
-        SerializedV2Runtime::enqueue_body_available(self, tag, manifest)
     }
 
     fn reserve_body_available(
@@ -10098,14 +10081,6 @@ mod tests {
 
         fn decided_body(&self) -> Result<Option<DurableDecision>, String> {
             Ok(self.decided_body)
-        }
-
-        fn enqueue_body_available(
-            &mut self,
-            tag: EventTag,
-            manifest: wire::PayloadManifest,
-        ) -> Result<(), EnqueueError> {
-            self.push(RuntimeCompletion::BodyAvailable(tag, manifest))
         }
 
         fn reserve_body_available(

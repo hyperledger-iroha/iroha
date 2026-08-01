@@ -1,3 +1,8 @@
+// Keep the canonical UTF-16 ordering primitive inside the audited browser graph.
+import { compareUtf16 } from "./ordering.js";
+
+void compareUtf16;
+
 export {
   AccountAddress,
   AccountAddressError,

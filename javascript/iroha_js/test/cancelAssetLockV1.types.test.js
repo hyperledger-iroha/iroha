@@ -21,7 +21,7 @@ test("CancelAssetLockV1 declarations preserve the bare hard cut", () => {
       "ES2022",
       "--types",
       "node",
-      "./test/fixtures/typescript/cancelAssetLockV1.types.ts",
+      "./fixtures/typescript/cancelAssetLockV1.types.ts",
     ],
     {
       cwd: packageRoot,

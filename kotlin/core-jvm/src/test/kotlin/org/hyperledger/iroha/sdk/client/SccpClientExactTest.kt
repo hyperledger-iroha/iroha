@@ -1192,7 +1192,7 @@ class SccpClientExactTest {
         assertEquals(upper(0xa2, 32), request.soraFinalityAnchor.checkpointContextId)
         assertEquals(upper(0xa3, 32), request.soraFinalityAnchor.checkpointFinalityArtifactHash)
         assertEquals(
-            "0xec6c821caf5fa74368c08e9101ab310f132fb7f627a09f6f9481aa9484054bba",
+            "0x4410ee4ccfd06f2d0e3a658615d516ac8cf65255d8a8716ce511ea95e135c8c3",
             request.soraFinalityAnchor.anchorHash,
         )
         assertEquals("0x${finalityAnchorHash().lowercase()}", request.soraFinalityAnchor.anchorHash)
@@ -2061,7 +2061,7 @@ class SccpClientExactTest {
         val canonical = ByteArrayOutputStream().also { output ->
             output.write(1)
             output.write(1)
-            writeU16(output, 3)
+            writeU16(output, 4)
             output.write(tairaChainIdHash().hexToBytes())
             writeU64(output, 7)
             output.write(upper(0xa1, 32).hexToBytes())
@@ -2121,9 +2121,9 @@ class SccpClientExactTest {
         const val TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
         // These authenticate this fixture's semantic commitments and deployment code hashes.
         const val DEFAULT_ROUTE_CONFIG_HASH =
-            "77D2C235AABDFFE9125F27F960FE58F34E9C418BBE452CCC926B10DE18B22BD1"
+            "65ABF3081D137062860FD712B5414A17C3664FD42C7567373FF3302BA331EFDD"
         const val TRON_ROUTE_CONFIG_HASH =
-            "6D14339A4E342F0F5E72947A19133426EAC1DA9F9A01FB15DCAC55078A842AE2"
+            "1BB8C081AA96766CF63FFE063E5B506FF17005E033C7B47E9760214C4C8D5519"
         val MESSAGE_ID: String = "11".repeat(32)
     }
 }

@@ -50,17 +50,12 @@ use thiserror::Error;
 use super::{
     accumulator_air::{
         ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1, ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1,
-        ZkX509CaAccumulatorTraceV1,
     },
     accumulator_stark::{
-        ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1, ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1,
-        ZK_X509_CA_ACCUMULATOR_CHUNKS_V1, ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1,
-        ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1, ZK_X509_CA_ACCUMULATOR_FIXED_WIDTH_V1,
-        ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1, ZkX509AccumulatorStarkErrorV1,
-        ZkX509CaAccumulatorStarkMaterialV1, ZkX509CaAccumulatorStarkPublicV1,
-        ZkX509CaAccumulatorStarkTerminalClaimsV1, build_ca_accumulator_stark_material_v1,
-        ca_accumulator_stark_public_v1, compile_ca_accumulator_fixed_row_v1,
-        evaluate_ca_accumulator_stark_residues_v1,
+        ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1, ZK_X509_CA_ACCUMULATOR_CHUNKS_V1,
+        ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1, ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1,
+        ZK_X509_CA_ACCUMULATOR_FIXED_WIDTH_V1, ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
+        ZkX509AccumulatorStarkErrorV1, ca_accumulator_stark_public_v1,
     },
     credential_pre_aux::{
         ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPostBaseChallengesV1,
@@ -157,7 +152,7 @@ use super::{
         p256_window_last_selector_v1, p256_window_scalar_terminal_v1,
         validate_p256_main_registration_order_v1,
     },
-    p256_air::P256_ARITHMETIC_BASE_WIDTH_V1,
+    p256_air::{P256_ARITHMETIC_BASE_WIDTH_V1, P256_ARITHMETIC_STARK_CONSTRAINT_DEGREE_V1},
     p256_cross_trace_bus::{
         P256_CROSS_TRACE_LANES_V1, P256CrossTraceChallengesV1,
         derive_zk_x509_p256_cross_trace_challenges_v1,
@@ -167,17 +162,18 @@ use super::{
     p256_scalar_bit_bus::{
         P256_SCALAR_BIT_BUS_LANES_V1, P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1,
         P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1, P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1,
-        P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1, P256ScalarBitBusChallengesV1,
-        derive_zk_x509_p256_scalar_bit_bus_challenges_v1, p256_scalar_bit_bus_opened_terminals_v1,
-        p256_scalar_bit_bus_stark_last_active_selector_v1,
+        P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_DEGREE_V1, P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1,
+        P256ScalarBitBusChallengesV1, derive_zk_x509_p256_scalar_bit_bus_challenges_v1,
+        p256_scalar_bit_bus_opened_terminals_v1, p256_scalar_bit_bus_stark_last_active_selector_v1,
     },
     p256_value_bus::{
         P256_VALUE_BUS_STARK_AUX_WIDTH_V1, P256_VALUE_BUS_STARK_BASE_WIDTH_V1,
-        P256_VALUE_BUS_STARK_FIXED_WIDTH_V1, P256ValueBusChallengesV1,
-        derive_zk_x509_p256_value_bus_challenges_v1, evaluate_p256_value_bus_stark_residues_v1,
-        p256_value_bus_stark_last_domain_selector_v1, p256_value_bus_stark_opened_terminal_v1,
+        P256_VALUE_BUS_STARK_CONSTRAINT_DEGREE_V1, P256_VALUE_BUS_STARK_FIXED_WIDTH_V1,
+        P256ValueBusChallengesV1, derive_zk_x509_p256_value_bus_challenges_v1,
+        evaluate_p256_value_bus_stark_residues_v1, p256_value_bus_stark_last_domain_selector_v1,
+        p256_value_bus_stark_opened_terminal_v1,
     },
-    p256_window_air::P256_WINDOW_BASE_WIDTH_V1,
+    p256_window_air::{P256_WINDOW_BASE_WIDTH_V1, P256_WINDOW_STARK_CONSTRAINT_DEGREE_V1},
     profile::{
         ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1, ZK_X509_CA_FRI_LDE_LOG2_V1,
         ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1, ZK_X509_CA_FRI_TERMINAL_LOG2_V1,
@@ -212,8 +208,8 @@ use super::{
         ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1, ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1,
         ZkX509P256TerminalClaimsV1, ZkX509Rfc5280OutputRoleV1, ZkX509Rfc5280StarkAuxRowV1,
         ZkX509Rfc5280StarkBaseMaterialV1, ZkX509Rfc5280StarkBaseRowV1,
-        ZkX509Rfc5280StarkChallengesV1, ZkX509Rfc5280StarkColumnProviderV1,
-        ZkX509Rfc5280StarkFixedRowV1, ZkX509Rfc5280StarkFixedScheduleV1, ZkX509Rfc5280StarkShapeV1,
+        ZkX509Rfc5280StarkColumnProviderV1, ZkX509Rfc5280StarkFixedRowV1,
+        ZkX509Rfc5280StarkFixedScheduleV1, ZkX509Rfc5280StarkShapeV1,
         ZkX509Rfc5280StarkTerminalClaimsV1, ZkX509ShaSegmentTerminalClaimsV1,
         compile_zk_x509_rfc5280_stark_fixed_schedule_v1,
         evaluate_zk_x509_rfc5280_stark_residues_v1,
@@ -223,13 +219,11 @@ use super::{
         ZK_X509_SHA_BATCH_AUX_WIDTH_V1, ZK_X509_SHA_BATCH_BASE_CHUNKS_PER_SEGMENT_V1,
         ZK_X509_SHA_BATCH_BASE_WIDTH_V1, ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1,
         ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1, ZK_X509_SHA_BATCH_FIXED_WIDTH_V1,
-        ZK_X509_SHA_CA_CALL_COUNT_V1, ZK_X509_SHA_CA_LEAF_CALL_V1,
-        ZK_X509_SHA_CA_NODE_CALL_START_V1, ZK_X509_SHA_FIXED_RFC_LENGTH_PAIR_V1,
+        ZK_X509_SHA_CA_CALL_COUNT_V1, ZK_X509_SHA_FIXED_RFC_LENGTH_PAIR_V1,
         ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1, ZK_X509_SHA_SEGMENT_COUNT_V1,
         ZkX509ShaBatchFixedProviderV1, ZkX509ShaBatchRowV1, ZkX509ShaBatchSegmentAuxSourceV1,
-        ZkX509ShaBatchSegmentBaseSourceV1, ZkX509ShaCallActivationV1,
-        ZkX509ShaCallBoundaryTerminalV1, ZkX509ShaCallBusChallengesV1, ZkX509ShaCallPublicShapeV1,
-        ZkX509ShaCallRoleV1, ZkX509ShaCallScheduleV1, ZkX509ShaCallWitnessV1,
+        ZkX509ShaBatchSegmentBaseSourceV1, ZkX509ShaCallBoundaryTerminalV1,
+        ZkX509ShaCallPublicShapeV1, ZkX509ShaCallScheduleV1, ZkX509ShaCallWitnessV1,
         ZkX509ShaSegmentTerminalV1, evaluate_zk_x509_sha_batch_residues_v1,
     },
 };
@@ -447,13 +441,7 @@ const MAIN_TERMINAL_CLAIMS_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:stark:main-terminal-claims:v1";
 const DER_PUBLIC_DIGEST_DOMAIN: &[u8] = b"iroha:privacy:zk-x509:stark:der-public:v1";
 const PROJECTION_PUBLIC_DIGEST_DOMAIN: &[u8] = b"iroha:privacy:zk-x509:stark:projection-public:v1";
-const ACCUMULATOR_LAYOUT_DOMAIN_V1: &[u8] =
-    b"iroha:privacy:zk-x509:stark:accumulator-aggregate-layout:v1";
 const MAIN_LAYOUT_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:stark:main-aggregate-layout:v1";
-const ACCUMULATOR_REGISTRATION_DOMAIN_V1: &[u8] =
-    b"iroha:privacy:zk-x509:stark:accumulator-registration:v1";
-const ACCUMULATOR_SCHEDULE_DIGEST_DOMAIN_V1: &[u8] =
-    b"iroha:privacy:zk-x509:stark:accumulator-schedule:v1";
 const P256_LAYOUT_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:stark:p256-aggregate-layout:v1";
 const P256_REGISTRATION_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:stark:p256-registration:v1";
 
@@ -1539,7 +1527,7 @@ impl SegmentLayoutV1 {
                     && self.aux_width == P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1
                     && self.fixed_width == P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1
                     && self.constraint_count == P256_ARITHMETIC_REGISTERED_CONSTRAINT_COUNT_V1
-                    && self.constraint_degree == 4 => {}
+                    && self.constraint_degree == P256_ARITHMETIC_STARK_CONSTRAINT_DEGREE_V1 => {}
             SegmentAdapterIdV1::P256Reduction
                 if p256_instance_parts_v1(self.instance).is_some_and(|(_, local)| local < 2)
                     && self.trace_log2 == P256_REDUCTION_AGGREGATE_TRACE_LOG2_V1
@@ -1567,7 +1555,7 @@ impl SegmentLayoutV1 {
                     && self.aux_width == P256_WINDOW_AGGREGATE_AUX_WIDTH_V1
                     && self.fixed_width == P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1
                     && self.constraint_count == P256_WINDOW_REGISTERED_CONSTRAINT_COUNT_V1
-                    && self.constraint_degree == 4 => {}
+                    && self.constraint_degree == P256_WINDOW_STARK_CONSTRAINT_DEGREE_V1 => {}
             SegmentAdapterIdV1::P256ValueBus
                 if (p256_instance_parts_v1(self.instance).is_some_and(|(_, local)| local == 0)
                     && self.trace_log2 == P256_VALUE_BUS_AGGREGATE_TRACE_LOG2_V1
@@ -1587,7 +1575,7 @@ impl SegmentLayoutV1 {
                         && self.fixed_width == P256_VALUE_BUS_STARK_FIXED_WIDTH_V1
                         && self.constraint_count
                             == P256_VALUE_SORTED_REGISTERED_CONSTRAINT_COUNT_V1
-                        && self.constraint_degree == 2)
+                        && self.constraint_degree == P256_VALUE_BUS_STARK_CONSTRAINT_DEGREE_V1)
                     || (p256_instance_parts_v1(self.instance)
                         .is_some_and(|(_, local)| local == 2)
                         && self.trace_log2 == P256_BINDING_SINK_AGGREGATE_TRACE_LOG2_V1
@@ -1608,7 +1596,8 @@ impl SegmentLayoutV1 {
                     && self.fixed_width == P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1
                     && self.constraint_count
                         == P256_SCALAR_BIT_BUS_REGISTERED_CONSTRAINT_COUNT_V1
-                    && self.constraint_degree == 3 => {}
+                    && self.constraint_degree == P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_DEGREE_V1 => {
+            }
             _ => return Err(ZkX509StarkErrorV1::ProfileMismatch),
         }
         Ok(())
@@ -1672,7 +1661,7 @@ fn canonical_p256_segment_layouts_for_signature_v1(
         P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1,
         P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1,
         P256_SCALAR_BIT_BUS_REGISTERED_CONSTRAINT_COUNT_V1,
-        3,
+        P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_DEGREE_V1,
     )?);
     segments.push(SegmentLayoutV1::for_p256_component(
         SegmentAdapterIdV1::P256Window,
@@ -1682,7 +1671,7 @@ fn canonical_p256_segment_layouts_for_signature_v1(
         P256_WINDOW_AGGREGATE_AUX_WIDTH_V1,
         P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1,
         P256_WINDOW_REGISTERED_CONSTRAINT_COUNT_V1,
-        4,
+        P256_WINDOW_STARK_CONSTRAINT_DEGREE_V1,
     )?);
     segments.push(SegmentLayoutV1::for_p256_component(
         SegmentAdapterIdV1::P256ValueBus,
@@ -1702,7 +1691,7 @@ fn canonical_p256_segment_layouts_for_signature_v1(
         P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1,
         P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1,
         P256_ARITHMETIC_REGISTERED_CONSTRAINT_COUNT_V1,
-        4,
+        P256_ARITHMETIC_STARK_CONSTRAINT_DEGREE_V1,
     )?);
     for (instance, aux_width, fixed_width, constraint_count, degree) in [
         (
@@ -1717,7 +1706,7 @@ fn canonical_p256_segment_layouts_for_signature_v1(
             P256_VALUE_BUS_STARK_AUX_WIDTH_V1,
             P256_VALUE_BUS_STARK_FIXED_WIDTH_V1,
             P256_VALUE_SORTED_REGISTERED_CONSTRAINT_COUNT_V1,
-            2,
+            P256_VALUE_BUS_STARK_CONSTRAINT_DEGREE_V1,
         ),
     ] {
         segments.push(SegmentLayoutV1::for_p256_component(
@@ -2696,59 +2685,6 @@ struct ProjectionTraceMaterialV1 {
     fixed_columns: Vec<Vec<F>>,
 }
 
-/// Verifier-bound public terminals for the sole canonical accumulator set.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct AccumulatorRegistrationPublicV1 {
-    ca_membership: ZkX509CaAccumulatorStarkPublicV1,
-}
-
-impl AccumulatorRegistrationPublicV1 {
-    fn validate(self) -> Result<(), ZkX509StarkErrorV1> {
-        if self
-            .ca_membership
-            .governed_root
-            .iter()
-            .any(|value| F::canonical(value.0).is_none() || value.0 > u64::from(u8::MAX))
-        {
-            return Err(ZkX509StarkErrorV1::InvalidStatement);
-        }
-        Ok(())
-    }
-}
-
-/// Trace-derived registration compiled before any challenge-dependent columns.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct AccumulatorTraceRegistrationV1 {
-    layout: AggregateProofLayoutV1,
-    schedule: ZkX509ShaCallScheduleV1,
-    public: AccumulatorRegistrationPublicV1,
-}
-
-impl AccumulatorTraceRegistrationV1 {
-    fn validate(&self) -> Result<(), ZkX509StarkErrorV1> {
-        self.layout.validate_accumulator_registration_v1()?;
-        self.public.validate()?;
-        validate_accumulator_schedule_v1(&self.schedule)
-    }
-}
-
-/// Exact compact-CA numeric material consumed by the aggregate commitment path.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct AccumulatorTraceMaterialV1 {
-    registration: AccumulatorTraceRegistrationV1,
-    ca_membership: ZkX509CaAccumulatorStarkMaterialV1,
-}
-
-impl AccumulatorTraceMaterialV1 {
-    fn validate(&self) -> Result<(), ZkX509StarkErrorV1> {
-        self.registration.validate()?;
-        validate_accumulator_material_shape_v1(
-            &self.ca_membership,
-            canonical_accumulator_segment_layouts_v1()?[0],
-        )
-    }
-}
-
 /// Verifier-derived registration for one complete, one-signature P-256 AIR.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct P256TraceRegistrationV1 {
@@ -2897,143 +2833,6 @@ impl P256OpenedMaterialV1 {
         }
         Ok(())
     }
-}
-
-fn validate_accumulator_material_shape_v1(
-    material: &ZkX509CaAccumulatorStarkMaterialV1,
-    layout: SegmentLayoutV1,
-) -> Result<(), ZkX509StarkErrorV1> {
-    if material.base_columns.len() != layout.base_width
-        || material.aux_columns.len() != layout.aux_width
-        || material.fixed_columns.len() != layout.fixed_width
-        || material
-            .base_columns
-            .iter()
-            .chain(&material.aux_columns)
-            .chain(&material.fixed_columns)
-            .any(|column| column.len() != layout.trace_size())
-    {
-        return Err(ZkX509StarkErrorV1::AccumulatorWitness);
-    }
-    Ok(())
-}
-
-fn canonical_accumulator_manifest_address_v1(
-    call: usize,
-) -> Result<ZkX509ShaCallRoleV1, ZkX509StarkErrorV1> {
-    if call == ZK_X509_SHA_CA_LEAF_CALL_V1 {
-        return Ok(ZkX509ShaCallRoleV1::CaLeaf);
-    }
-    call.checked_sub(ZK_X509_SHA_CA_NODE_CALL_START_V1)
-        .filter(|level| *level + 1 < ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1)
-        .and_then(|level| u8::try_from(level).ok())
-        .map(ZkX509ShaCallRoleV1::CaNode)
-        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
-}
-
-fn validate_accumulator_schedule_v1(
-    schedule: &ZkX509ShaCallScheduleV1,
-) -> Result<(), ZkX509StarkErrorV1> {
-    for call in ZK_X509_SHA_CA_LEAF_CALL_V1
-        ..ZK_X509_SHA_CA_LEAF_CALL_V1 + ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1
-    {
-        let manifest = schedule
-            .call(call)
-            .map_err(|_| ZkX509StarkErrorV1::AccumulatorWitness)?;
-        if usize::from(manifest.call) != call
-            || manifest.role != canonical_accumulator_manifest_address_v1(call)?
-            || manifest.activation != ZkX509ShaCallActivationV1::Required
-            || manifest.maximum_message_bytes == 0
-            || manifest.maximum_blocks != 3
-        {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-    }
-    Ok(())
-}
-
-fn accumulator_schedule_digest_v1(
-    schedule: &ZkX509ShaCallScheduleV1,
-) -> Result<[u8; 32], ZkX509StarkErrorV1> {
-    validate_accumulator_schedule_v1(schedule)?;
-    let mut encoding = Vec::new();
-    encoding
-        .try_reserve_exact(4 + schedule.calls().len() * 36)
-        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-    append_u32_v1(
-        &mut encoding,
-        u32::try_from(schedule.shape().disclosed_attributes)
-            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-    );
-    for manifest in schedule.calls() {
-        encoding.push(manifest.call);
-        encoding.push(manifest.role.role_code());
-        encoding.push(match manifest.activation {
-            ZkX509ShaCallActivationV1::Required => 0,
-            ZkX509ShaCallActivationV1::OptionalPrivate => 1,
-            ZkX509ShaCallActivationV1::Inactive => 2,
-        });
-        append_u64_v1(
-            &mut encoding,
-            u64::try_from(manifest.maximum_message_bytes)
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-        );
-        append_u64_v1(
-            &mut encoding,
-            u64::try_from(manifest.maximum_blocks)
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-        );
-        append_u64_v1(
-            &mut encoding,
-            u64::try_from(manifest.first_event).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-        );
-        append_u64_v1(
-            &mut encoding,
-            u64::try_from(manifest.first_logical_row)
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-        );
-    }
-    sha256_frame_v1(ACCUMULATOR_SCHEDULE_DIGEST_DOMAIN_V1, &[&encoding])
-        .map_err(map_transparent_error_v1)
-}
-
-fn compile_accumulator_trace_registration_v1(
-    ca_membership: &ZkX509CaAccumulatorTraceV1,
-    schedule: &ZkX509ShaCallScheduleV1,
-) -> Result<AccumulatorTraceRegistrationV1, ZkX509StarkErrorV1> {
-    ca_membership
-        .validate()
-        .map_err(|_| ZkX509StarkErrorV1::AccumulatorWitness)?;
-    validate_accumulator_schedule_v1(schedule)?;
-    let registration = AccumulatorTraceRegistrationV1 {
-        layout: AggregateProofLayoutV1::for_accumulators_v1()?,
-        public: AccumulatorRegistrationPublicV1 {
-            ca_membership: ca_accumulator_stark_public_v1(ca_membership, schedule)?,
-        },
-        schedule: schedule.clone(),
-    };
-    registration.validate()?;
-    Ok(registration)
-}
-
-fn build_accumulator_trace_material_v1(
-    ca_membership: &ZkX509CaAccumulatorTraceV1,
-    schedule: &ZkX509ShaCallScheduleV1,
-    sha_challenges: ZkX509ShaCallBusChallengesV1,
-    io_challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> Result<AccumulatorTraceMaterialV1, ZkX509StarkErrorV1> {
-    let registration = compile_accumulator_trace_registration_v1(ca_membership, schedule)?;
-    let material = AccumulatorTraceMaterialV1 {
-        ca_membership: build_ca_accumulator_stark_material_v1(
-            ca_membership,
-            &registration.schedule,
-            sha_challenges,
-            io_challenges,
-        )?,
-        registration,
-    };
-    material.validate()?;
-    Ok(material)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3331,21 +3130,6 @@ impl MainIoFixedScheduleV1 {
         }
         Ok(())
     }
-}
-
-fn transpose_rows_v1(rows: &[Vec<F>], width: usize) -> Result<Vec<Vec<F>>, ZkX509StarkErrorV1> {
-    if rows.is_empty() || rows.iter().any(|row| row.len() != width) {
-        return Err(ZkX509StarkErrorV1::InternalInvariant);
-    }
-    let mut columns = (0..width)
-        .map(|_| Vec::with_capacity(rows.len()))
-        .collect::<Vec<_>>();
-    for row in rows {
-        for (column, value) in columns.iter_mut().zip(row.iter().copied()) {
-            column.push(value);
-        }
-    }
-    Ok(columns)
 }
 
 fn transpose_array_rows_v1<const WIDTH: usize>(
@@ -4224,20 +4008,6 @@ fn sampled_verifier_generated_fixed_openings_v1<const WIDTH: usize>(
         }
     }
     Ok(openings)
-}
-
-fn accumulator_fixed_openings_v1(
-    layout: &AggregateProofLayoutV1,
-    opening_indices: &[Vec<usize>; ACCUMULATOR_REGISTRATION_COUNT_V1],
-) -> Result<[BTreeMap<usize, Vec<F>>; ACCUMULATOR_REGISTRATION_COUNT_V1], ZkX509StarkErrorV1> {
-    layout.validate_accumulator_registration_v1()?;
-    let segments = canonical_accumulator_segment_layouts_v1()?;
-    Ok([sampled_verifier_generated_fixed_openings_v1(
-        segments[0],
-        layout.common_lde_log2,
-        &opening_indices[0],
-        |index| compile_ca_accumulator_fixed_row_v1(index).map_err(ZkX509StarkErrorV1::from),
-    )?])
 }
 
 #[cfg(test)]
@@ -5290,64 +5060,6 @@ fn absorb_aggregate_layout_v1(
         &layout.as_shared()?,
     )
     .map_err(map_aggregate_error_v1)
-}
-
-fn append_accumulator_public_digest_v1(
-    encoding: &mut Vec<u8>,
-    digest: &[F; 32],
-) -> Result<(), ZkX509StarkErrorV1> {
-    for value in digest {
-        if F::canonical(value.0).is_none() || value.0 > u64::from(u8::MAX) {
-            return Err(ZkX509StarkErrorV1::InvalidStatement);
-        }
-        append_u64_v1(encoding, value.0);
-    }
-    Ok(())
-}
-
-/// Bind the sole compact-CA registration before trace roots.
-///
-/// The schedule digest covers every verifier-fixed SHA call manifest but no
-/// private preimage or digest byte. Those bytes remain committed in the
-/// compact-CA and SHA traces and are joined by four-lane call-bus products.
-fn absorb_accumulator_registration_v1(
-    transcript: &mut TransparentTranscriptV1,
-    registration: &AccumulatorTraceRegistrationV1,
-) -> Result<(), ZkX509StarkErrorV1> {
-    registration.validate()?;
-    let schedule_digest = accumulator_schedule_digest_v1(&registration.schedule)?;
-    let mut encoding = Vec::new();
-    encoding
-        .try_reserve_exact(4 + 2 + 2 + 2 + 32 * 8 + 32)
-        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-    encoding.extend_from_slice(b"X5A1");
-    append_u16_v1(
-        &mut encoding,
-        u16::try_from(ACCUMULATOR_REGISTRATION_COUNT_V1)
-            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-    );
-    append_u16_v1(&mut encoding, SegmentAdapterIdV1::CaAccumulator.wire());
-    append_u16_v1(&mut encoding, 0);
-    append_accumulator_public_digest_v1(
-        &mut encoding,
-        &registration.public.ca_membership.governed_root,
-    )?;
-    encoding.extend_from_slice(&schedule_digest);
-
-    absorb_aggregate_layout_v1(
-        transcript,
-        ACCUMULATOR_LAYOUT_DOMAIN_V1,
-        &registration.layout,
-    )?;
-    transcript
-        .absorb(
-            b"zk-x509-accumulator-stark-profile-v1",
-            &[ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1],
-        )
-        .map_err(map_transparent_error_v1)?;
-    transcript
-        .absorb(ACCUMULATOR_REGISTRATION_DOMAIN_V1, &[&encoding])
-        .map_err(map_transparent_error_v1)
 }
 
 /// Bind one exact role-specific P-256 registration before base commitments.
@@ -9634,8 +9346,6 @@ const MAIN_LOG19_SHA_PUBLIC_FIXED_WIDTH_V1: usize =
 const MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1: usize = ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1
     + ZK_X509_SHA_SEGMENT_COUNT_V1 * MAIN_LOG19_SHA_PUBLIC_FIXED_WIDTH_V1;
 const MAIN_LOG19_AFFINE_SEGMENT_GROWTH_V1: usize = 4_096;
-#[cfg(test)]
-const MAIN_LOG19_CSR_GROWTH_V1: usize = 4_096;
 const _: () = assert!(MAIN_LOG19_SHA_PUBLIC_FIXED_START_V1 == 91);
 const _: () = assert!(MAIN_LOG19_SHA_PUBLIC_FIXED_WIDTH_V1 == 27);
 const _: () = assert!(MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1 == 189);
@@ -9644,167 +9354,6 @@ const _: () = assert!(
     P256_MAIN_LOG19_NEXT_STRIDE_V1
         == 1_usize << (ZK_X509_MAIN_COMMON_LDE_LOG2_V1 - ZK_X509_MAX_NATIVE_TRACE_LOG2_V1)
 );
-
-/// Sparse verifier-generated log19 fixed schedule.
-///
-/// The algebraic SHA schedule owns the complete fixed row. This independent
-/// public schedule retains RFC's complete fixed row and the four SHA public
-/// suffixes so installation can differentially check the algebraic openings
-/// at the exact transcript-derived points.
-#[cfg(test)]
-struct MainLog19PublicFixedCsrV1 {
-    row_offsets: Vec<u32>,
-    columns: Vec<u8>,
-    values: Vec<F>,
-}
-
-#[cfg(test)]
-impl MainLog19PublicFixedCsrV1 {
-    fn push_v1(&mut self, column: usize, value: F) -> Result<(), ZkX509StarkErrorV1> {
-        if value == F::ZERO {
-            return Ok(());
-        }
-        if column >= MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1
-            || F::canonical(value.0).is_none()
-            || self.columns.len() != self.values.len()
-        {
-            return Err(ZkX509StarkErrorV1::InternalInvariant);
-        }
-        if self.columns.len() == self.columns.capacity() {
-            self.columns
-                .try_reserve(MAIN_LOG19_CSR_GROWTH_V1)
-                .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        }
-        if self.values.len() == self.values.capacity() {
-            self.values
-                .try_reserve(MAIN_LOG19_CSR_GROWTH_V1)
-                .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        }
-        self.columns
-            .push(u8::try_from(column).map_err(|_| ZkX509StarkErrorV1::InternalInvariant)?);
-        self.values.push(value);
-        Ok(())
-    }
-
-    fn compile_v1(
-        rfc: &ZkX509Rfc5280StarkFixedScheduleV1,
-        sha: &ZkX509ShaBatchFixedProviderV1,
-    ) -> Result<Self, ZkX509StarkErrorV1> {
-        let mut schedule = Self {
-            row_offsets: Vec::new(),
-            columns: Vec::new(),
-            values: Vec::new(),
-        };
-        schedule
-            .row_offsets
-            .try_reserve_exact(ZK_X509_DER_STARK_TRACE_SIZE_V1 + 1)
-            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        schedule.row_offsets.push(0);
-        for row in 0..ZK_X509_DER_STARK_TRACE_SIZE_V1 {
-            let rfc_row = rfc
-                .fixed_row(row)
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            for (column, value) in rfc_row.into_iter().enumerate() {
-                schedule.push_v1(column, value)?;
-            }
-            for segment in 0..ZK_X509_SHA_SEGMENT_COUNT_V1 {
-                let sha_row = sha
-                    .fixed_row_v1(segment, row)
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-                for (local, value) in sha_row[MAIN_LOG19_SHA_PUBLIC_FIXED_START_V1..]
-                    .iter()
-                    .copied()
-                    .enumerate()
-                {
-                    let column = ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1
-                        .checked_add(
-                            segment
-                                .checked_mul(MAIN_LOG19_SHA_PUBLIC_FIXED_WIDTH_V1)
-                                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
-                        )
-                        .and_then(|start| start.checked_add(local))
-                        .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
-                    schedule.push_v1(column, value)?;
-                }
-            }
-            schedule.row_offsets.push(
-                u32::try_from(schedule.values.len())
-                    .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?,
-            );
-        }
-        schedule.validate_v1()?;
-        Ok(schedule)
-    }
-
-    fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
-        if self.row_offsets.len() != ZK_X509_DER_STARK_TRACE_SIZE_V1 + 1
-            || self.row_offsets.first() != Some(&0)
-            || self.columns.len() != self.values.len()
-            || self
-                .row_offsets
-                .last()
-                .copied()
-                .map(|offset| offset as usize)
-                != Some(self.values.len())
-            || self.row_offsets.windows(2).any(|pair| pair[0] > pair[1])
-            || self
-                .columns
-                .iter()
-                .any(|column| usize::from(*column) >= MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1)
-            || self
-                .values
-                .iter()
-                .any(|value| *value == F::ZERO || F::canonical(value.0).is_none())
-        {
-            return Err(ZkX509StarkErrorV1::InternalInvariant);
-        }
-        Ok(())
-    }
-
-    fn opened_pair_v1(
-        &self,
-        weights: &[F],
-    ) -> Result<
-        (
-            [F; MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1],
-            [F; MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1],
-        ),
-        ZkX509StarkErrorV1,
-    > {
-        self.validate_v1()?;
-        if weights.len() != ZK_X509_DER_STARK_TRACE_SIZE_V1
-            || weights.iter().any(|value| F::canonical(value.0).is_none())
-        {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
-        let mut current = [F::ZERO; MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1];
-        let mut next = [F::ZERO; MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1];
-        for row in 0..ZK_X509_DER_STARK_TRACE_SIZE_V1 {
-            let start = usize::try_from(self.row_offsets[row])
-                .map_err(|_| ZkX509StarkErrorV1::InternalInvariant)?;
-            let end = usize::try_from(self.row_offsets[row + 1])
-                .map_err(|_| ZkX509StarkErrorV1::InternalInvariant)?;
-            let current_weight = weights[row];
-            let next_weight = weights
-                [(row + ZK_X509_DER_STARK_TRACE_SIZE_V1 - 1) % ZK_X509_DER_STARK_TRACE_SIZE_V1];
-            for entry in start..end {
-                let column = usize::from(
-                    *self
-                        .columns
-                        .get(entry)
-                        .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
-                );
-                let value = *self
-                    .values
-                    .get(entry)
-                    .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
-                current[column] = current[column].add(value.mul(current_weight));
-                next[column] = next[column].add(value.mul(next_weight));
-            }
-        }
-        Ok((current, next))
-    }
-}
 
 /// One maximal affine range in a verifier-owned fixed column.
 ///
@@ -10334,57 +9883,6 @@ fn main_log19_lagrange_weights_v1(query_index: usize) -> Result<Vec<F>, ZkX509St
         return Err(ZkX509StarkErrorV1::InternalInvariant);
     }
     Ok(denominators)
-}
-
-#[cfg(test)]
-fn main_log19_der_fixed_opening_v1(
-    weights: &[F],
-    next: bool,
-) -> Result<[F; ZK_X509_DER_STARK_FIXED_WIDTH_V1], ZkX509StarkErrorV1> {
-    if weights.len() != ZK_X509_DER_STARK_TRACE_SIZE_V1 {
-        return Err(ZkX509StarkErrorV1::ProfileMismatch);
-    }
-    let weight = |row: usize| {
-        let index = if next {
-            (row + ZK_X509_DER_STARK_TRACE_SIZE_V1 - 1) % ZK_X509_DER_STARK_TRACE_SIZE_V1
-        } else {
-            row
-        };
-        weights[index]
-    };
-    let mut fixed = [F::ZERO; ZK_X509_DER_STARK_FIXED_WIDTH_V1];
-    fixed[FIX_FIRST_AGGREGATE] = weight(0);
-    fixed[FIX_LAST_AGGREGATE] = weight(ZK_X509_DER_STARK_TRACE_SIZE_V1 - 1);
-    fixed[FIX_FIRST_ACTIVE] = weight(0);
-    fixed[DER_FIX_LAST_ACTIVE] = weight(ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1 - 1);
-    fixed[FIX_FIRST_PARSER] = weight(0);
-    fixed[FIX_LAST_PARSER] = weight(super::der_stark::ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 - 1);
-    fixed[FIX_FIRST_COMPARATOR] = weight(super::der_stark::ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1);
-    fixed[FIX_LAST_COMPARATOR] = weight(ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1 - 1);
-    for row in 0..ZK_X509_DER_STARK_TRACE_SIZE_V1 {
-        let value = weight(row);
-        if row < ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1 {
-            fixed[DER_FIX_ACTIVE] = fixed[DER_FIX_ACTIVE].add(value);
-            if row < super::der_stark::ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 {
-                fixed[FIX_PARSER] = fixed[FIX_PARSER].add(value);
-                if row + 1 < super::der_stark::ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 {
-                    fixed[FIX_PARSER_CONTINUE] = fixed[FIX_PARSER_CONTINUE].add(value);
-                }
-            } else {
-                fixed[FIX_COMPARATOR] = fixed[FIX_COMPARATOR].add(value);
-            }
-        } else {
-            fixed[FIX_PADDING] = fixed[FIX_PADDING].add(value);
-        }
-    }
-    if fixed[DER_FIX_ACTIVE].add(fixed[FIX_PADDING]) != F::ONE
-        || fixed[FIX_PARSER].add(fixed[FIX_COMPARATOR]) != fixed[DER_FIX_ACTIVE]
-        || fixed[FIX_PARSER_CONTINUE].add(fixed[FIX_LAST_PARSER]) != fixed[FIX_PARSER]
-        || fixed[FIX_FINAL_DOCUMENT] != F::ZERO
-    {
-        return Err(ZkX509StarkErrorV1::InternalInvariant);
-    }
-    Ok(fixed)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -293,4 +293,36 @@ run_mutant queue-plan-duplicate-execution "$QUEUE_PLAN_ADMISSION_MODULE" \
   multilane_queue_plan_duplicate_execution_bug.cfg \
   MLAdmissionAtMostOnceExecution
 
-echo "[tlc] all 59 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"
+readonly KURA_RETENTION_MODULE="SumeragiV2KuraReplicaRetention.tla"
+run_mutant kura-replica-forged-signature "$KURA_RETENTION_MODULE" \
+  kura_replica_forged_signature_bug.cfg KRAdmittedAdvertsSigned
+run_mutant kura-replica-relayed-advert "$KURA_RETENTION_MODULE" \
+  kura_replica_relayed_advert_bug.cfg KRAdmittedAdvertsDirectAuthenticated
+run_mutant kura-replica-wrong-finality-identity "$KURA_RETENTION_MODULE" \
+  kura_replica_wrong_finality_identity_bug.cfg \
+  KRAdmittedAdvertsBindExactFinality
+run_mutant kura-replica-wrong-wire-identity "$KURA_RETENTION_MODULE" \
+  kura_replica_wrong_wire_identity_bug.cfg KRAdmittedAdvertsBindExactWire
+run_mutant kura-replica-keeper-cardinality "$KURA_RETENTION_MODULE" \
+  kura_replica_keeper_cardinality_bug.cfg KRDeterministicFPlusOneKeepers
+run_mutant kura-replica-nonsigner-keeper "$KURA_RETENTION_MODULE" \
+  kura_replica_nonsigner_keeper_bug.cfg KRDeterministicFPlusOneKeepers
+run_mutant kura-replica-local-keeper-evict "$KURA_RETENTION_MODULE" \
+  kura_replica_local_keeper_evict_bug.cfg KRLocalSelectedKeeperPinsBody
+run_mutant kura-replica-partial-remote-freshness "$KURA_RETENTION_MODULE" \
+  kura_replica_partial_remote_freshness_bug.cfg \
+  KREvictionRequiresAllSelectedRemoteFresh
+run_mutant kura-replica-ttl-expiry "$KURA_RETENTION_MODULE" \
+  kura_replica_ttl_expiry_bug.cfg KRExpiredAdvertsCannotAuthorize
+run_mutant kura-replica-restart-registry-reuse "$KURA_RETENTION_MODULE" \
+  kura_replica_restart_registry_reuse_bug.cfg KRRestartClearsAdvertRegistry
+run_mutant kura-replica-registry-capacity-overflow "$KURA_RETENTION_MODULE" \
+  kura_replica_registry_capacity_overflow_bug.cfg KRRegistryCapacityBounded
+run_mutant kura-replica-refresh-window-oversize "$KURA_RETENTION_MODULE" \
+  kura_replica_refresh_window_oversize_bug.cfg KRRefreshWindowBounded
+run_mutant kura-replica-refresh-cursor-skip "$KURA_RETENTION_MODULE" \
+  kura_replica_refresh_cursor_skip_bug.cfg KRRefreshCursorExact
+run_mutant kura-replica-skip-final-prestage-recheck "$KURA_RETENTION_MODULE" \
+  kura_replica_skip_final_prestage_recheck_bug.cfg KRFinalPreStageRecheck
+
+echo "[tlc] all 73 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"

@@ -10,7 +10,9 @@ import importlib.util
 import json
 import os
 import re
+import secrets
 import shlex
+import stat
 import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
@@ -27,6 +29,95 @@ TLAPM_COMMIT = "3ab43c7ff31db4ced850619d4746fa4c841a7681"
 LEDGER_SCHEMA_VERSION = 2
 EVIDENCE_SCHEMA_VERSION = 2
 CROSS_TOOL_EVIDENCE_SCHEMA_VERSION = 3
+PRODUCTION_TRACE_EXTRACTION_EVIDENCE_SCHEMA_VERSION = 1
+PRODUCTION_TRACE_EXTRACTION_EVIDENCE_MAX_BYTES = 256 * 1024
+PRODUCTION_TRACE_EXTRACTION_COMPONENT_MAX_BYTES = 64 * 1024 * 1024
+PRODUCTION_TRACE_EXTRACTION_THEOREM = (
+    "sumeragi-v2-production-in-flight-first-release-trace-extraction"
+)
+PRODUCTION_TRACE_EXTRACTION_CANONICAL_ENCODING = "utf8-json-sort-keys-compact-lf-v1"
+
+# These are the four concrete authorization seams which must consume the
+# composed transition checker before a layout proof can be promoted to a
+# production trace-extraction theorem.  Merely hashing these functions is not
+# sufficient: `_production_trace_extraction_source_snapshot` also requires the
+# exact action tags and a checked transition for every named model step.
+PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
+    {
+        "id": "reservation_cleanup_prefixes",
+        "path": "crates/iroha_core/src/queue.rs",
+        "impl": "Queue",
+        "symbol": "commit_lane_reservation",
+        "model_actions": (
+            "PersistReservationCommitted",
+            "PersistPlanTombstone",
+            "ForgetReservationCommit",
+        ),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT",
+        ),
+        "checked_transition_count": 3,
+        "additional_tokens": (
+            "forget_commit",
+            "remove_plan_journal_for_reservation_commit",
+        ),
+    },
+    {
+        "id": "durable_autonomous_bundle",
+        "path": "crates/iroha_core/src/kura.rs",
+        "impl": "Kura",
+        "symbol": "durable_autonomous_lane_merge_source_under_prune_guard",
+        "model_actions": ("PersistExecutionInput", "PersistReadyQc", "LaneCommit"),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT",
+        ),
+        "checked_transition_count": 3,
+        "additional_tokens": (
+            "AutonomousLaneMergeBundleV1",
+            "validate_autonomous_lane_merge_bundle",
+            "source_bundle",
+            "bundle_hash",
+        ),
+    },
+    {
+        "id": "ready_authorization",
+        "path": "crates/iroha_core/src/kura.rs",
+        "impl": "Kura",
+        "symbol": "mint_lane_ready_authorization",
+        "model_actions": ("AuthorizeReady",),
+        "action_tags": ("IN_FLIGHT_FIRST_RELEASE_ACTION_AUTHORIZE_READY",),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "LaneReadyAuthorization",
+            "read_lane_block_execution_input_with_repair_policy",
+            "durable_execution_input_hash",
+        ),
+    },
+    {
+        "id": "canonical_wsv_commit_authorization",
+        "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "impl": "V2ApplyService",
+        "symbol": "execute",
+        "model_actions": ("ApplyCarrier",),
+        "action_tags": ("IN_FLIGHT_FIRST_RELEASE_ACTION_APPLY_CARRIER",),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "check_production_application_transition",
+            "validate_and_apply",
+            "finish_durable_apply_completion_against",
+        ),
+        "commit_sink": {
+            "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+            "impl": "V2ApplyService",
+            "symbol": "validate_and_apply",
+            "required_tokens": ("state_block.commit",),
+        },
+    },
+)
 
 _CHECKER_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_async_contracts.py",
@@ -39,6 +130,8 @@ _CHECKER_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_supporting_theorem_contracts.py",
     "sumeragi_v2_proof_ledger_proof_token_contracts.py",
     "sumeragi_v2_proof_ledger_source_seal_contracts.py",
+    "sumeragi_v2_proof_ledger_production_trace_contracts.py",
+    "sumeragi_v2_proof_ledger_serviced_candidate_contracts.py",
     "sumeragi_v2_proof_ledger_terminal_discharge_contracts.py",
 )
 
@@ -1543,6 +1636,17 @@ class LedgerValidation:
 
     errors: tuple[str, ...]
     machine_checked_completion: bool
+
+
+@dataclass(frozen=True)
+class ProductionTraceExtractionArtifactPaths:
+    """Exact retained artifacts authenticated by the theorem certificate."""
+
+    ledger: Path
+    evidence: Path
+    verus_evidence: Path
+    verus_log: Path
+    cross_tool_evidence: Path
 
 
 @dataclass(frozen=True)
@@ -8274,6 +8378,9 @@ def _cross_tool_evidence_errors(
     return []
 
 
+_execute_checker_component("sumeragi_v2_proof_ledger_production_trace_contracts.py")
+
+
 def build_release_evidence(
     *,
     tlapm_version: str,
@@ -14800,1203 +14907,7 @@ tracked.terminal = Some(V2IoServeTerminal::Response(response.clone()));
     return errors
 
 
-def _serviced_candidate_production_source_fidelity_errors(
-    repo_root: Path,
-) -> list[str]:
-    """Seal the V3-decode/V4-emit producer lifecycle and runtime handoff."""
-
-    base = repo_root / "crates" / "iroha_core" / "src" / "sumeragi"
-    paths = {
-        "module": base / "mod.rs",
-        "store": base / "serviced_candidate_store.rs",
-        "adapter": base / "v2.rs",
-        "runtime": base / "v2_runtime.rs",
-        "runner": base / "v2_runner.rs",
-        "worker": base / "v2_worker.rs",
-    }
-    descriptions = {
-        "module": "serviced-candidate module registration",
-        "store": "V3/V4 serviced-candidate durable store",
-        "adapter": "producer-continuation adapter ownership",
-        "runtime": "producer-continuation serialized runtime",
-        "runner": "producer-continuation high-water binding",
-        "worker": "producer-continuation worker quarantine ownership",
-    }
-    errors: list[str] = []
-    for key, path in paths.items():
-        if not path.is_file() or path.is_symlink():
-            errors.append(f"{path}: {descriptions[key]} must be a regular file")
-    if errors:
-        return errors
-
-    sources: dict[str, str] = {}
-    for key, path in paths.items():
-        relative = path.relative_to(repo_root).as_posix()
-        _loaded_path, sources[key] = _read_reviewed_rust_source(
-            repo_root,
-            relative,
-            errors,
-            descriptions[key],
-        )
-    structural = {
-        key: mask_rust_comments_and_literals(source)
-        for key, source in sources.items()
-    }
-    _require_rust_source_token_sequence(
-        paths["module"],
-        sources["module"],
-        "pub(crate) mod serviced_candidate_store;",
-        "the private durable candidate store must remain compiled into Sumeragi",
-        errors,
-    )
-    for literal, description in (
-        (
-            "const FORMAT_VERSION_V3: u16 = 3;",
-            "decode-only compatibility version must remain exactly V3",
-        ),
-        (
-            "const FORMAT_VERSION: u16 = 4;",
-            "the sole emitted serviced-candidate version must remain V4",
-        ),
-        (
-            'const FRAME_MAGIC: &[u8; 8] = b"SUMVCAND";',
-            "serviced-candidate frame magic",
-        ),
-        (
-            "pub(crate) const SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE: usize = 11;",
-            "closed eleven-stage producer address geometry",
-        ),
-    ):
-        observed = mask_rust_comments(sources["store"]).count(literal)
-        if observed != 1:
-            errors.append(
-                f"{paths['store']}: {description} must occur exactly once in "
-                f"executable source; found {observed}"
-            )
-
-    store_struct_attributes = {
-        "ServicedCandidateKey": (
-            "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]",
-            "#[norito(deny_unknown_fields)]",
-        ),
-        "PersistedServicedCandidate": (
-            "#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]",
-            "#[norito(deny_unknown_fields)]",
-        ),
-        "PersistedServicedCandidatesV3": (
-            "#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]",
-            "#[norito(deny_unknown_fields)]",
-        ),
-        "ProducerContinuationAddress": (
-            "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]",
-            "#[norito(deny_unknown_fields)]",
-        ),
-        "ProducerContinuationIdentity": (
-            "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]",
-            "#[norito(deny_unknown_fields)]",
-        ),
-        "ProducerContinuationHandoffToken": (
-            "#[derive(Clone, Copy, Debug, PartialEq, Eq)]",
-        ),
-        "ProducerContinuationTerminalToken": (
-            "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]",
-            "#[norito(deny_unknown_fields)]",
-        ),
-        "ProducerContinuationRecord": (
-            "#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]",
-            "#[norito(deny_unknown_fields)]",
-        ),
-        "PersistedProducerContinuation": (
-            "#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]",
-            "#[norito(deny_unknown_fields)]",
-        ),
-        "PersistedServicedCandidatesV4": (
-            "#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]",
-            "#[norito(deny_unknown_fields)]",
-        ),
-        "DecodedServicedCandidates": (),
-        "RestoredServicedCandidates": (),
-        "ServicedCandidateStore": ("#[derive(Debug)]",),
-    }
-    for name, expected_sha256 in (
-        _SERVICED_CANDIDATE_V4_STORE_STRUCT_SHA256.items()
-    ):
-        items = rust_struct_items(sources["store"], name)
-        if len(items) != 1:
-            errors.append(
-                f"{paths['store']}: require exactly one real V4 "
-                f"serviced-candidate struct named {name}; found {len(items)}"
-            )
-            continue
-        item = items[0]
-        _require_rust_item_context(
-            paths["store"],
-            item,
-            (),
-            f"V4 serviced-candidate schema {name}",
-            errors,
-            expected_attributes=store_struct_attributes[name],
-        )
-        _require_rust_item_token_sha256(
-            paths["store"],
-            item,
-            expected_sha256,
-            f"V4 serviced-candidate schema {name}",
-            errors,
-        )
-
-    for source_key, digests, expected_attributes in (
-        (
-            "adapter",
-            _SERVICED_CANDIDATE_V4_ADAPTER_STRUCT_SHA256,
-            {
-                "SelectedProducerLifecycle": (
-                    "#[derive(Clone, Debug, PartialEq, Eq)]",
-                ),
-                "ProducerReservationToken": (
-                    "#[derive(Clone, Debug, PartialEq, Eq)]",
-                ),
-                "PendingProducerHandoff": (
-                    "#[derive(Clone, Debug, PartialEq, Eq)]",
-                ),
-            },
-        ),
-        (
-            "runtime",
-            _SERVICED_CANDIDATE_V4_RUNTIME_STRUCT_SHA256,
-            {
-                "RuntimeDormantLocalFifoReservation": (
-                    "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]",
-                ),
-                "BoundedIngress": (),
-            },
-        ),
-    ):
-        for name, expected_sha256 in digests.items():
-            items = rust_struct_items(sources[source_key], name)
-            if len(items) != 1:
-                errors.append(
-                    f"{paths[source_key]}: require exactly one real producer "
-                    f"ownership struct named {name}; found {len(items)}"
-                )
-                continue
-            item = items[0]
-            _require_rust_item_context(
-                paths[source_key],
-                item,
-                (),
-                f"producer ownership carrier {name}",
-                errors,
-                expected_attributes=expected_attributes[name],
-            )
-            _require_rust_item_token_sha256(
-                paths[source_key],
-                item,
-                expected_sha256,
-                f"producer ownership carrier {name}",
-                errors,
-            )
-
-    def collect_items(
-        source_key: str,
-        specs: tuple[tuple[str, str] | tuple[str, str, str], ...],
-        digests: dict[str, str],
-    ) -> dict[str, RustItem | None]:
-        found: dict[str, RustItem | None] = {}
-        for spec in specs:
-            key, name = spec[:2]
-            items = rust_function_items_from_structural(
-                sources[source_key], structural[source_key], name
-            )
-            if len(spec) == 3:
-                required = rust_code_tokens(spec[2])
-                items = tuple(
-                    item
-                    for item in items
-                    if _token_sequence_count(
-                        rust_code_tokens(item.source), required
-                    )
-                    >= 1
-                )
-            if len(items) != 1:
-                errors.append(
-                    f"{paths[source_key]}: require exactly one real "
-                    f"serviced-candidate function item named {name}; "
-                    f"found {len(items)}"
-                )
-                found[key] = None
-                continue
-            item = items[0]
-            found[key] = item
-            _require_rust_item_token_sha256(
-                paths[source_key],
-                item,
-                digests[key],
-                f"V4 serviced-candidate item {key}",
-                errors,
-            )
-        return found
-
-    store_specs = (
-        (
-            "serviced_candidate_stage_for_kind_code",
-            "serviced_candidate_stage_for_kind_code",
-        ),
-        (
-            "producer_continuation_source_class_for_kind_code",
-            "producer_continuation_source_class_for_kind_code",
-        ),
-        (
-            "identity_new",
-            "new",
-            "candidate: ServicedCandidateKey, causal_lifecycle_key: Hash",
-        ),
-        (
-            "identity_address",
-            "address",
-            "ProducerContinuationAddress { lifecycle_slot: self.lifecycle_slot",
-        ),
-        ("identity_has_exact_stage", "has_exact_stage"),
-        (
-            "record_new",
-            "new",
-            "status: ProducerContinuationStatus, handoff_candidates:",
-        ),
-        ("record_handoff_token", "handoff_token"),
-        ("record_terminal_token", "terminal_token"),
-        ("producer_continuations_are_valid", "producer_continuations_are_valid"),
-        (
-            "leader_wire_terminal_matches_runtime",
-            "leader_wire_terminal_matches_runtime",
-        ),
-        (
-            "leader_wire_control_phase_matches_candidate",
-            "leader_wire_control_phase_matches_candidate",
-        ),
-        (
-            "leader_wire_stable_terminal_matches_runtime",
-            "leader_wire_stable_terminal_matches_runtime",
-        ),
-        ("leader_wire_load_and_reconcile", "load_and_reconcile"),
-        (
-            "store_open",
-            "open",
-            "lifecycle_capacity: usize, ) -> Result<(Self, RestoredServicedCandidates)",
-        ),
-        ("store_open_with_capacities", "open_with_capacities"),
-        ("store_load", "load"),
-        (
-            "store_reserve_producer_continuation",
-            "reserve_producer_continuation",
-        ),
-        (
-            "store_persist_with_producer_continuations",
-            "persist_with_producer_continuations",
-        ),
-        ("encode_payload_frame", "encode_payload_frame"),
-        ("encode_frame_v4", "encode_frame_v4"),
-        ("encode_frame_v3", "encode_frame_v3"),
-        ("decode_frame", "decode_frame"),
-    )
-    store_items = collect_items(
-        "store",
-        store_specs,
-        _SERVICED_CANDIDATE_V4_STORE_ITEM_SHA256,
-    )
-    encode_v3 = _require_rust_item(
-        paths["store"], sources["store"], "encode_frame_v3", errors
-    )
-    _require_rust_item_context(
-        paths["store"],
-        encode_v3,
-        (),
-        "V3 compatibility encoder",
-        errors,
-        expected_attributes=("#[cfg(test)]",),
-    )
-
-    adapter_specs = tuple(
-        (name, name)
-        for name in _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256
-    )
-    adapter_items = collect_items(
-        "adapter",
-        adapter_specs,
-        _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256,
-    )
-    runtime_names = {
-        "dormant_completion": "completion",
-        "dormant_is_local_fifo_stage": "is_local_fifo_stage",
-        "install_dormant_local_fifo_reservations": (
-            "install_dormant_local_fifo_reservations"
-        ),
-        "dormant_local_fifo_replacement": "dormant_local_fifo_replacement",
-        "occupied_with_dormant_reservations": (
-            "occupied_with_dormant_reservations"
-        ),
-        "oldest_active_lifecycle_ordinal": "oldest_active_lifecycle_ordinal",
-        "with_driver_and_lifecycle_ordinals": (
-            "with_driver_and_lifecycle_ordinals"
-        ),
-        "minimum_active_lifecycle_ordinal": "minimum_active_lifecycle_ordinal",
-        "complete_leader_wire_runtime_owner": (
-            "complete_leader_wire_runtime_owner"
-        ),
-        "step": "step",
-        "dispatch_one_adapter_deferred": "dispatch_one_adapter_deferred",
-    }
-    runtime_items = collect_items(
-        "runtime",
-        tuple(runtime_names.items()),
-        _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256,
-    )
-    runner_items = collect_items(
-        "runner",
-        (("run_inner", "run_inner"),),
-        _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256,
-    )
-
-    def require_item_sequence(
-        source_key: str,
-        items: dict[str, RustItem | None],
-        key: str,
-        sequence: str,
-        description: str,
-    ) -> None:
-        _require_rust_token_sequence(
-            paths[source_key],
-            items.get(key),
-            sequence,
-            description,
-            errors,
-        )
-
-    def require_item_order(
-        source_key: str,
-        items: dict[str, RustItem | None],
-        key: str,
-        sequences: tuple[str, ...],
-        description: str,
-    ) -> None:
-        item = items.get(key)
-        if item is None:
-            return
-        tokens = rust_code_tokens(item.body)
-        positions = [
-            _token_sequence_positions(tokens, rust_code_tokens(sequence))
-            for sequence in sequences
-        ]
-        if any(len(found) != 1 for found in positions) or any(
-            left[0] >= right[0]
-            for left, right in zip(positions, positions[1:])
-            if left and right
-        ):
-            errors.append(
-                f"{paths[source_key]}:{item.line}: {description} must retain "
-                "the exact reviewed order"
-            )
-
-    require_item_sequence(
-        "store",
-        store_items,
-        "serviced_candidate_stage_for_kind_code",
-        """
-match kind {
-    0..=6 => Some(kind),
-    8 => Some(7),
-    9 => Some(8),
-    10 => Some(9),
-    14 => Some(10),
-    _ => None,
-}
-""",
-        "the producer stage projection must reject every untracked event kind",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "producer_continuation_source_class_for_kind_code",
-        """
-match kind {
-    0 | 6 | 9 | 10 | 14 => Some(ProducerContinuationSourceClass::Local),
-    1..=5 => Some(ProducerContinuationSourceClass::ConditionalTransport),
-    8 => Some(ProducerContinuationSourceClass::VolatileBody),
-    _ => None,
-}
-""",
-        "every producer stage must retain its exact physical replay class",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "identity_new",
-        """
-if lifecycle_slot == 0 || admission_ordinal == 0 {
-    return Err(
-        "producer-continuation lifecycle slot and ordinal must be non-zero".to_owned(),
-    );
-}
-let stage = serviced_candidate_stage_for_kind_code(candidate.kind).ok_or_else(|| {
-    "producer-continuation candidate kind has no serviced stage".to_owned()
-})?;
-""",
-        "producer identity construction must reject zero ownership and untracked stages",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "record_new",
-        """
-handoff_candidates.len() > MAX_PRODUCER_CONTINUATION_HANDOFFS
-    || handoff_candidates.windows(2).any(|pair| pair[0] >= pair[1])
-    || handoff_candidates.iter().any(|successor| {
-        !successor.has_exact_stage()
-            || successor.admission_ordinal != identity.admission_ordinal
-            || successor.lifecycle_slot != identity.lifecycle_slot
-            || successor.causal_lifecycle_key != identity.causal_lifecycle_key
-            || successor.candidate.context_id != identity.candidate.context_id
-            || successor.candidate.height != identity.candidate.height
-            || successor.candidate.owner != identity.candidate.owner
-            || *successor == identity
-    })
-""",
-        "producer handoffs must be finite, ordered, and inherit exact lifecycle identity",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "producer_continuations_are_valid",
-        """
-identity.address() != persisted.address
-    || identity.admission_ordinal == 0
-    || identity.lifecycle_slot == 0
-    || identity.lifecycle_slot > lifecycle_capacity
-    || !identity.has_exact_stage()
-    || producer_continuation_source_class_for_kind_code(identity.candidate.kind)
-        != Some(record.source_class)
-    || !identity.candidate.belongs_to(context_id, height, owner)
-    || !identities.insert(identity)
-    || !candidate_identities.insert(identity.candidate)
-    || !ordinal_stages.insert((identity.admission_ordinal, identity.stage))
-""",
-        "decoded producer identities must preserve address, stage, geometry, and context",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "producer_continuations_are_valid",
-        """
-record.status != ProducerContinuationStatus::Terminal
-    && !active_ordinals.insert(identity.admission_ordinal)
-""",
-        "one live producer ordinal may own only one active continuation identity",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "store_open",
-        """
-let record_capacity = lifecycle_capacity
-    .checked_mul(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE)
-""",
-        "both bounded producer tables must derive the complete eleven-stage geometry",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "store_open_with_capacities",
-        """
-if producer_continuation_capacity % SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE != 0 {
-    return Err(
-        "producer-continuation capacity must be an exact lifecycle-stage geometry"
-            .to_owned(),
-    );
-}
-""",
-        "producer capacity must remain an exact multiple of the closed stage count",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "store_open_with_capacities",
-        """
-let max_frame_bytes = FIXED_FRAME_HEADROOM_BYTES
-    .checked_add(serviced_frame_bytes)
-    .and_then(|bytes| bytes.checked_add(producer_frame_bytes))
-""",
-        "the frame bound must charge both independent bounded tables",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "store_load",
-        """
-state.records.len() > self.serviced_capacity
-    || state.producer_continuations.len() > self.producer_continuation_capacity
-""",
-        "load must enforce both independent table capacities",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "store_load",
-        """
-state.decision_reclaimed
-    && (!state.records.is_empty() || !state.producer_continuations.is_empty())
-""",
-        "Decision reclamation must leave both durable tables empty",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "store_load",
-        """
-let record = if persisted.record.status == ProducerContinuationStatus::Terminal
-{
-    persisted.record
-} else {
-    ProducerContinuationRecord::new(
-        persisted.record.identity,
-        ProducerContinuationStatus::Reserved,
-        Vec::new(),
-    )
-""",
-        "restart must normalize executable handoff state to selector-inert Reserved",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "store_reserve_producer_continuation",
-        """
-if incumbent.identity == record.identity {
-    if incumbent != &record {
-        return Err(
-            "an exact producer-continuation retry changed its frozen record".to_owned(),
-        );
-    }
-    return Ok(ProducerContinuationReservation::Coalesced);
-}
-""",
-        "retry coalescing must compare the complete frozen producer record",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "store_reserve_producer_continuation",
-        """
-if incumbent.status != ProducerContinuationStatus::Terminal
-    || incumbent.identity.candidate.context_id != record.identity.candidate.context_id
-    || incumbent.identity.candidate.height != record.identity.candidate.height
-    || incumbent.identity.candidate.source_view >= record.identity.candidate.source_view
-    || incumbent.identity.admission_ordinal >= record.identity.admission_ordinal
-""",
-        "slot replacement must require terminal ownership and strict view/ordinal advance",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "store_persist_with_producer_continuations",
-        """
-if decision_reclaimed && (!records.is_empty() || !producer_continuations.is_empty()) {
-""",
-        "persisted Decision reclamation must reject either retained table",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "store_persist_with_producer_continuations",
-        """
-record.status == ProducerContinuationStatus::Terminal
-    && !records.contains_key(&record.identity.candidate)
-""",
-        "a durable producer terminal must retain its exact service tombstone",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "store_persist_with_producer_continuations",
-        """
-let state = PersistedServicedCandidatesV4 {
-    format_version: FORMAT_VERSION,
-""",
-        "production persistence must emit V4 only",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "encode_payload_frame",
-        """
-if frame_len > max_frame_bytes {
-    return Err("serviced-candidate frame exceeds its derived byte bound".to_owned());
-}
-""",
-        "frame emission must enforce the derived maximum size",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "encode_payload_frame",
-        """
-frame.extend_from_slice(Hash::new(&payload).as_ref());
-frame.extend_from_slice(&payload);
-""",
-        "frame emission must checksum the exact canonical payload",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "encode_frame_v4",
-        "encode_payload_frame(FORMAT_VERSION, state.encode(), max_frame_bytes)",
-        "production encoding must advertise V4",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "decode_frame",
-        "if !matches!(version, FORMAT_VERSION_V3 | FORMAT_VERSION)",
-        "decoding must accept exactly compatibility V3 and current V4",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "decode_frame",
-        """
-if payload_offset.checked_add(payload_len) != Some(bytes.len()) {
-    return Err("serviced-candidate frame length is inconsistent".to_owned());
-}
-let payload = &bytes[payload_offset..];
-if Hash::new(payload).as_ref() != &bytes[digest_offset..payload_offset] {
-    return Err("serviced-candidate snapshot checksum mismatch".to_owned());
-}
-""",
-        "decoding must enforce exact length and checksum before schema selection",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "decode_frame",
-        """
-if state.format_version != FORMAT_VERSION_V3 || state.encode() != payload {
-    return Err("v3 serviced-candidate snapshot is not canonically encoded".to_owned());
-}
-""",
-        "V3 compatibility decoding must bind its inner version and canonical bytes",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "decode_frame",
-        """
-serviced_capacity: state.capacity,
-producer_continuation_capacity: state.capacity,
-decision_reclaimed: state.decision_reclaimed,
-records: state.records,
-producer_continuations: Vec::new(),
-""",
-        "V3 migration must map old capacity exactly and invent no producer lifecycle",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "decode_frame",
-        """
-if state.format_version != FORMAT_VERSION || state.encode() != payload {
-    return Err("v4 serviced-candidate snapshot is not canonically encoded".to_owned());
-}
-""",
-        "V4 decoding must bind its inner version and canonical bytes",
-    )
-
-    require_item_sequence(
-        "store",
-        store_items,
-        "leader_wire_terminal_matches_runtime",
-        """
-candidate.context_id() == context_id
-    && candidate.height() == height
-    && candidate.owner() == owner
-    && candidate.source_view() == token.identity.view
-    && terminal.source_class() == ProducerContinuationSourceClass::ConditionalTransport
-    && token.source_class == super::FairV2IngressLeaderWireSourceClass::Control
-    && leader_wire_control_phase_matches_candidate(token, candidate)
-    && identity.causal_lifecycle_key() == runtime_owner.causal_lifecycle_key
-    && identity.admission_ordinal() == runtime_owner.admission_ordinal
-""",
-        "leader-wire producer terminals must match context, owner, view, phase, source, and runtime",
-    )
-
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "candidate_lifecycle_capacity",
-        """
-.saturating_add(geometry.effect_work_capacity)
-.saturating_add(CANDIDATE_LIFECYCLE_DURABLE_REPLAY_CAPACITY)
-""",
-        "lifecycle capacity must charge configured effect work and durable replay",
-    )
-    _require_rust_source_token_sequence(
-        paths["adapter"],
-        sources["adapter"],
-        """
-const _: () = assert!(
-    SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE == ServicedCandidateStage::COUNT
-);
-const _: () = assert!(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE == 11);
-""",
-        "adapter capacity must share the exact eleven-stage store geometry",
-        errors,
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "serviced_candidate",
-        """
-append_deferred_projection_field(&mut projection, &self.wire_context.id().encode());
-append_deferred_projection_u64(&mut projection, self.wire_context.height);
-append_deferred_projection_field(&mut projection, &owner);
-append_deferred_projection_field(&mut projection, &leader.encode());
-append_deferred_projection_u64(&mut projection, source_view);
-""",
-        "candidate identity must bind context, height, local owner, leader, and view",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "serviced_candidate",
-        """
-ServicedCandidateKey::new(
-    self.wire_context.id(),
-    self.wire_context.height,
-    owner,
-    leader,
-    source_view,
-    target,
-    phase,
-    ROUTE_NEUTRAL_SERVICED_CANDIDATE_CLASS,
-    deferred_event_kind(event).code(),
-    evidence,
-)
-""",
-        "candidate identity must exclude mutable scheduler priority",
-    )
-    _require_rust_source_token_sequence(
-        paths["adapter"],
-        sources["adapter"],
-        "pub(crate) priority: DeferredPriority,",
-        "deferred service evidence must retain its selected physical priority",
-        errors,
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "ensure_serviced_candidate_capacity_before_step",
-        "let capacity = self.serviced_candidate_capacity;",
-        "pre-step admission must use capacity frozen at adapter construction",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "producer_parent_replay_source_for_stage",
-        """
-ServicedCandidateStage::ProposalReceived
-| ServicedCandidateStage::VoteReceived
-| ServicedCandidateStage::QuorumCertificateReceived
-| ServicedCandidateStage::TimeoutVoteReceived
-| ServicedCandidateStage::TimeoutCertificateReceived => {
-    ProducerParentReplaySource::ConditionalResponsiveTransport
-}
-""",
-        "transport-owned stages must remain conditional rather than forged Local roots",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "producer_parent_has_exact_local_replay_binding",
-        """
-ProducerParentReplaySource::ConditionalResponsiveTransport => false,
-ProducerParentReplaySource::VolatileBodyReconstruction => false,
-""",
-        "nonlocal producer classes may not forge immediate local replay evidence",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "open_with_aggregator_and_publication_with_capacity",
-        """
-let restored_producer_continuation_ordinal_high_watermark = restored_producer_continuations
-    .values()
-    .map(|record| record.identity().admission_ordinal())
-    .max();
-""",
-        "the immutable producer high-water must be captured before reclamation",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "dormant_local_fifo_reservations",
-        """
-(record.status() != ProducerContinuationStatus::Terminal).then_some(*address)
-""",
-        "restart coverage must validate every nonterminal producer class",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "dormant_local_fifo_reservations",
-        """
-ProducerParentReplaySource::ConditionalResponsiveTransport,
-ProducerContinuationSourceClass::ConditionalTransport
-""",
-        "restart coverage must retain conditional transport ownership",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "dormant_local_fifo_reservations",
-        """
-ProducerParentReplaySource::VolatileBodyReconstruction,
-ProducerContinuationSourceClass::VolatileBody
-""",
-        "restart coverage must retain volatile-body ownership",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "producer_lifecycle_slot",
-        """
-if existing_slot
-    .replace(slot)
-    .is_some_and(|existing| existing != slot)
-{
-    return Err("one producer lifecycle occupied multiple bounded slots".to_owned());
-}
-""",
-        "one causal producer lifecycle must occupy one bounded slot",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "producer_lifecycle_slot",
-        """
-record.status() == ProducerContinuationStatus::Terminal
-    && identity.admission_ordinal() < selected.admission_ordinal
-    && identity.candidate().source_view() < candidate.source_view()
-""",
-        "the allocator may reuse only terminal older-view and older-ordinal slots",
-    )
-    require_item_order(
-        "adapter",
-        adapter_items,
-        "step_with_defer_policy",
-        (
-            "let producer_reservation = self.reserve_selected_producer_continuation(producer_candidate)?",
-            "self.ensure_serviced_candidate_capacity_before_step(&queued, serviced_candidate)",
-            "self.reducer.step(event)",
-            "self.record_serviced_candidate",
-        ),
-        "direct service must reserve and persist producer ownership before source retirement",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "step_with_defer_policy",
-        """
-// Every selected exact producer class reserves its immutable lifecycle
-let producer_candidate = if producer_stage.is_some() {
-    serviced_candidate
-} else {
-    None
-};
-""",
-        "all selected producer classes must reserve a lifecycle",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "step_with_defer_policy",
-        """
-if self.selected_producer_lifecycle.is_some()
-    && serviced_candidate.is_some()
-    && locally_reconstructible_producer
-    && !producer_parent_has_exact_local_replay_binding(
-""",
-        "only locally reconstructible producer classes require immediate local replay proof",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "drain_deferred_with_handoff_for_ordinals",
-        """
-let producer_continuation = self
-    .deferred_producer_continuations
-    .get(&deferred_ordinal)
-    .cloned();
-""",
-        "deferred service must retain its pre-reserved exact producer owner",
-    )
-    require_item_order(
-        "adapter",
-        adapter_items,
-        "drain_deferred_with_handoff_for_ordinals",
-        (
-            "self.ensure_serviced_candidate_capacity_before_step(&input.event, serviced_candidate)",
-            "self.reducer.step(event)",
-            "self.record_serviced_candidate",
-            """
-self.deferred_producer_continuations
-    .remove(&deferred_ordinal);
-if let Some(admission) = input.admission
-""",
-        ),
-        "deferred service must record before releasing its physical producer owner",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "acknowledge_producer_handoff",
-        """
-if pending.token != token || !token.matches_reserved(&record) {
-""",
-        "handoff acknowledgement must consume the exact frozen record",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "acknowledge_producer_handoff",
-        """
-if evidence == ProducerContinuationHandoffEvidence::DurableTerminal
-    && !pending.durable_terminal_evidence
-""",
-        "durable terminal acknowledgement must require retained exact evidence",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "acknowledge_producer_handoff",
-        """
-if evidence == ProducerContinuationHandoffEvidence::VolatileTerminal
-    && pending.durable_terminal_evidence
-""",
-        "durable terminal evidence may not be weakened to volatile",
-    )
-    require_item_order(
-        "adapter",
-        adapter_items,
-        "drive_effects",
-        (
-            "let persisted = reducer::Event::Persisted { tag, id }",
-            "let continuation = match self.reducer.step(persisted.clone())",
-            "self.prune_ingress_records()",
-            "self.reclaim_serviced_candidates()?",
-            "self.record_reducer_outcome",
-        ),
-        "durable WAL completion must reclaim only after ingress pruning and before publication",
-    )
-    require_item_sequence(
-        "adapter",
-        adapter_items,
-        "reclaim_serviced_candidates",
-        """
-self.serviced_candidates.clear();
-self.durable_serviced_candidates.clear();
-self.producer_continuations.clear();
-self.durable_producer_continuations.clear();
-self.restored_dormant_producer_continuations.clear();
-self.deferred_producer_continuations.clear();
-self.pending_producer_handoffs.clear();
-""",
-        "Decision reclamation must atomically retire service and producer ownership",
-    )
-
-    require_item_sequence(
-        "runtime",
-        runtime_items,
-        "install_dormant_local_fifo_reservations",
-        """
-if !self.commands.is_empty()
-    || self.reserved_body_available.is_some()
-    || !self.dormant_local_fifo_reservations.is_empty()
-""",
-        "dormant FIFO ownership must install before any physical runtime work",
-    )
-    require_item_sequence(
-        "runtime",
-        runtime_items,
-        "occupied_with_dormant_reservations",
-        """
-.and_then(|occupied| occupied.checked_add(self.dormant_local_fifo_reservations.len()))
-""",
-        "dormant Local owners must consume physical queue capacity",
-    )
-    require_item_sequence(
-        "runtime",
-        runtime_items,
-        "oldest_active_lifecycle_ordinal",
-        """
-self.dormant_local_fifo_reservations.iter().try_fold(
-    command_minimum,
-""",
-        "dormant Local owners must participate in global minimum selection",
-    )
-    require_item_sequence(
-        "runtime",
-        runtime_items,
-        "dormant_local_fifo_replacement",
-        """
-if self.dormant_local_fifo_reservations.contains(&expected) {
-    return Ok(Some(expected));
-}
-""",
-        "exact local replay must atomically replace its latent FIFO slot",
-    )
-    require_item_order(
-        "runtime",
-        runtime_items,
-        "with_driver_and_lifecycle_ordinals",
-        (
-            "driver.dormant_local_fifo_reservations()",
-            "BoundedIngress::with_lifecycle_ordinals",
-            "ingress.install_dormant_local_fifo_reservations",
-            "retain_effect_ownership",
-        ),
-        "restart must install dormant FIFO owners before startup successors",
-    )
-    require_item_order(
-        "runtime",
-        runtime_items,
-        "step",
-        (
-            "self.retain_effect_ownership(effect_source, Some(&effect_parent), &effects)",
-            "token.identity().admission_ordinal() != effect_parent.lifecycle_ordinal()",
-            "token.identity().causal_lifecycle_key() != effect_parent.causal_origin().lifecycle_key",
-            "self.driver.acknowledge_producer_handoff(token, evidence)",
-        ),
-        "runtime must retain successors and verify parent identity before acknowledgement",
-    )
-    require_item_order(
-        "runtime",
-        runtime_items,
-        "dispatch_one_adapter_deferred",
-        (
-            "self.retain_effect_ownership",
-            "token.identity().admission_ordinal() != lifecycle_owner.lifecycle_ordinal()",
-            "token.identity().causal_lifecycle_key() != lifecycle_owner.causal_origin().lifecycle_key",
-            "self.driver.acknowledge_producer_handoff",
-        ),
-        "deferred runtime service must retain successors before exact acknowledgement",
-    )
-    require_item_sequence(
-        "runtime",
-        runtime_items,
-        "complete_leader_wire_runtime_owner",
-        """
-receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
-    || receipt.owner().causal_lifecycle_key() != parent.causal_origin().lifecycle_key
-""",
-        "leader-wire completion must retain exact runtime ordinal and causal key",
-    )
-    require_item_order(
-        "runner",
-        runner_items,
-        "run_inner",
-        (
-            "adapter.restored_producer_continuation_ordinal_high_watermark()",
-            "lifecycle_ordinals.advance_past(high_watermark)",
-            "LeaderWireLifecycleStoreGate::open",
-            "lifecycle_ordinals.advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())",
-            "LeaderWireIngressBinding::bind",
-            "SerializedV2Runtime::new_with_lifecycle_ordinals",
-        ),
-        "both restored high-waters must advance the shared source before ingress/runtime construction",
-    )
-
-    def seal_regressions(
-        source_key: str,
-        inventory: dict[str, str],
-        long_tests: set[str] = set(),
-        unix_tests: set[str] = set(),
-    ) -> None:
-        test_module_offset = structural[source_key].find("mod tests")
-        if test_module_offset < 0:
-            errors.append(
-                f"{paths[source_key]}: serviced-candidate regression module is missing"
-            )
-            return
-        for name, expected_sha256 in inventory.items():
-            items = rust_function_items_from_structural(
-                sources[source_key], structural[source_key], name
-            )
-            if len(items) != 1:
-                errors.append(
-                    f"{paths[source_key]}: require exactly one real V4 regression "
-                    f"named {name}; found {len(items)}"
-                )
-                continue
-            item = items[0]
-            item_offset = sources[source_key].find(item.source)
-            expected = (
-                ("#[cfg(unix)]", "#[test]")
-                if name in unix_tests
-                else (
-                    ("#[test]", "#[allow(clippy::too_many_lines)]")
-                    if name in long_tests
-                    else ("#[test]",)
-                )
-            )
-            observed_attributes = _leading_rust_attributes(
-                sources[source_key],
-                structural[source_key],
-                item_offset,
-            )
-            if item_offset <= test_module_offset or observed_attributes != expected:
-                errors.append(
-                    f"{paths[source_key]}:{item.line}: V4 regression {name} "
-                    f"must remain in the test module with attributes {expected!r}; "
-                    f"found {observed_attributes!r}"
-                )
-            _require_rust_item_token_sha256(
-                paths[source_key],
-                item,
-                expected_sha256,
-                f"V4 serviced-candidate regression {name}",
-                errors,
-            )
-
-    seal_regressions(
-        "store",
-        _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256,
-        unix_tests={
-            "snapshot_load_and_retire_never_follow_substituted_symlinks"
-        },
-    )
-    seal_regressions(
-        "adapter",
-        _SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256,
-        long_tests={
-            "aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate",
-            "serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims",
-        },
-    )
-    seal_regressions(
-        "runtime",
-        _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256,
-    )
-    seal_regressions(
-        "worker",
-        _SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256,
-    )
-
-    for source_key in ("store", "adapter", "runtime", "runner", "worker"):
-        executable = structural[source_key]
-        for forbidden in ("std::env", "var_os", "serde_json"):
-            if forbidden in executable:
-                errors.append(
-                    f"{paths[source_key]}: serviced-candidate ownership may not "
-                    "depend on an environment toggle or legacy codec token "
-                    f"{forbidden}"
-                )
-    return errors
+_execute_checker_component("sumeragi_v2_proof_ledger_serviced_candidate_contracts.py")
 
 
 def _timeout_vote_semantic_capacity_source_fidelity_errors(
@@ -33403,16 +32314,57 @@ None => {
     _require_rust_token_sequence(
         runtime_path,
         minimum_active,
-        """
-let mut minimum = self.ingress.oldest_active_lifecycle_ordinal()?;
-let mut observe = |owner: &RuntimeLifecycleOwner| -> Result<(), EnqueueError> {
-""",
-        "global runtime predecessor cut starts with the FIFO minimum",
+        "self.minimum_active_lifecycle_ordinal_excluding(&[])",
+        "the complete runtime predecessor cut excludes no active owner",
+        errors,
+    )
+    minimum_active_excluding = _require_rust_item(
+        runtime_path,
+        runtime_source,
+        "minimum_active_lifecycle_ordinal_excluding",
         errors,
     )
     _require_rust_token_sequence(
         runtime_path,
-        minimum_active,
+        minimum_active_excluding,
+        """
+let _ = self.ingress.oldest_active_lifecycle_ordinal()?;
+let mut minimum = self
+    .ingress
+    .dormant_local_fifo_reservations
+    .iter()
+    .map(|reservation| reservation.admission_ordinal)
+    .min();
+""",
+        "the proof-gated runtime cut validates every FIFO owner and retains "
+        "restart-dormant Local FIFO predecessors",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        minimum_active_excluding,
+        """
+if excluded.iter().any(|blocked| blocked == owner) {
+    return Ok(());
+}
+""",
+        "the proof-gated runtime cut excludes only exact supplied owner aliases",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        minimum_active_excluding,
+        """
+for queued in &self.ingress.commands {
+    observe(&queued.lifecycle_owner()?)?;
+}
+""",
+        "the proof-gated runtime cut observes every physical FIFO owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        minimum_active_excluding,
         """
 for owner in self.deferred_lifecycle_ownership.values() {
     observe(owner)?;
@@ -33423,7 +32375,7 @@ for owner in self.deferred_lifecycle_ownership.values() {
     )
     _require_rust_token_sequence(
         runtime_path,
-        minimum_active,
+        minimum_active_excluding,
         """
 if let Some(ownership) = &self.pending_effect_ownership {
     for effect in ownership {
@@ -46627,6 +45579,21 @@ def _production_causal_fifo_source_fidelity_errors(
                 "adapter deferred-work serviceability fence",
             ),
             (
+                "completion_unblocks_deferred_fence",
+                (("impl", "SumeragiV2Adapter"),),
+                "exact signature-completion dependency proof",
+            ),
+            (
+                "command_is_blocked_by_deferred_fence",
+                (("impl", "SumeragiV2Adapter"),),
+                "exact reducer-fenced queued-command proof",
+            ),
+            (
+                "authenticated_command_reaches_fenced_reducer",
+                (("impl", "SumeragiV2Adapter"),),
+                "authenticated ingress reducer-reachability proof",
+            ),
+            (
                 "ready_to_finish",
                 (("impl", "SumeragiV2Adapter"),),
                 "terminal adapter deferred-debt readiness fence",
@@ -47078,7 +46045,12 @@ assert!(status.liveness.outbound_intents.iter().all(|intent| {
             f"{runtime_path}: serialized deferred-work runtime source is required"
         )
     else:
-        runtime_source = runtime_path.read_text(encoding="utf-8")
+        _loaded_path, runtime_source = _read_reviewed_rust_source(
+            repo_root,
+            runtime_path.relative_to(repo_root).as_posix(),
+            errors,
+            "serialized deferred-work runtime source",
+        )
         runtime_tokens = rust_code_tokens(runtime_source)
 
         def require_runtime_item_order(
@@ -47229,6 +46201,131 @@ SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)
             "deferred dispatch must retain the selected occurrence and optional "
             "producer handoff",
             errors,
+        )
+
+        for item_name, delegate, description in (
+            (
+                "completion_unblocks_deferred_fence",
+                "SumeragiV2Adapter::completion_unblocks_deferred_fence(self, tag, command)",
+                "production exact signature-fence completion delegate",
+            ),
+            (
+                "command_is_blocked_by_deferred_fence",
+                "SumeragiV2Adapter::command_is_blocked_by_deferred_fence(self, tag, command)",
+                "production reducer-fenced command delegate",
+            ),
+        ):
+            matching = tuple(
+                item
+                for item in rust_items(runtime_source, item_name)
+                if item.brace_context == production_driver_context
+            )
+            if len(matching) != 1:
+                errors.append(
+                    f"{runtime_path}: require exactly one {description}; found "
+                    f"{len(matching)}"
+                )
+                continue
+            _require_rust_item_context(
+                runtime_path,
+                matching[0],
+                production_driver_context,
+                description,
+                errors,
+            )
+            _require_rust_token_sequence(
+                runtime_path,
+                matching[0],
+                delegate,
+                description,
+                errors,
+            )
+
+        bounded_ingress_context = (
+            (
+                "impl",
+                "<",
+                "C",
+                ":",
+                "ExactRuntimeCommandIdentity",
+                ">",
+                "BoundedIngress",
+                "<",
+                "C",
+                ">",
+            ),
+        )
+        observed_fence_ingress_items: dict[str, RustItem | None] = {}
+        for item_name, description in (
+            (
+                "pop_fence_completion_with_ownership",
+                "proof-gated exact fence-completion FIFO removal",
+            ),
+            (
+                "fence_blocked_lifecycle_owners",
+                "proof-gated reducer-fenced FIFO owner snapshot",
+            ),
+        ):
+            matching = tuple(
+                item
+                for item in rust_items(runtime_source, item_name)
+                if item.brace_context == bounded_ingress_context
+            )
+            if len(matching) != 1:
+                errors.append(
+                    f"{runtime_path}: require exactly one {description}; found "
+                    f"{len(matching)}"
+                )
+                observed_fence_ingress_items[item_name] = None
+                continue
+            item = matching[0]
+            observed_fence_ingress_items[item_name] = item
+            _require_rust_item_context(
+                runtime_path,
+                item,
+                bounded_ingress_context,
+                description,
+                errors,
+            )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                item,
+                _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[item_name],
+                description,
+                errors,
+            )
+        require_runtime_item_order(
+            observed_fence_ingress_items.get(
+                "pop_fence_completion_with_ownership"
+            ),
+            (
+                "let _ = self.oldest_lifecycle_ordinal()?;",
+                "let queue_before = self.ownership_projection();",
+                ".position(|queued| queued.class == CommandClass::Completion "
+                "&& matches_fence(queued))",
+                "identity.kind != RuntimeCommandKind::SignatureCompleted",
+                """
+let command = self
+    .commands
+    .remove(index)
+    .expect("selected fence completion remains present");
+""",
+                "debug_assert_eq!(queue_before.len, self.ownership_projection().len + 1);",
+            ),
+            "fence completion removal must validate all FIFO owners, select an "
+            "exact signature completion, and remove only that physical owner",
+        )
+        require_runtime_item_order(
+            observed_fence_ingress_items.get("fence_blocked_lifecycle_owners"),
+            (
+                "let _ = self.oldest_lifecycle_ordinal()?;",
+                "self.commands",
+                ".filter(|queued| is_blocked(queued))",
+                ".map(TaggedCommand::lifecycle_owner)",
+                ".collect()",
+            ),
+            "fence-blocked owner projection must validate the complete queue "
+            "before collecting only driver-proved physical owners",
         )
 
         runtime_ingress_context = (("impl", "RuntimeIngressOwnershipEvidence"),)
@@ -47557,6 +46654,100 @@ if matches!(
                 f"production causal-FIFO regression {name}",
                 errors,
             )
+        fence_runtime_regressions: dict[str, RustItem | None] = {}
+        for name in (
+            "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo",
+            "real_adapter_fence_completion_breaks_pre_and_post_timeout_retransmit_debt",
+        ):
+            item = _require_rust_item(
+                runtime_path,
+                runtime_source,
+                name,
+                errors,
+            )
+            fence_runtime_regressions[name] = item
+            _require_rust_item_context(
+                runtime_path,
+                item,
+                runtime_test_context,
+                f"production signature-fence dependency regression {name}",
+                errors,
+                expected_attributes=("#[test]",),
+            )
+            _require_rust_item_token_sha256(
+                runtime_path,
+                item,
+                _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[name],
+                f"production signature-fence dependency regression {name}",
+                errors,
+            )
+        _require_rust_token_sequence(
+            runtime_path,
+            fence_runtime_regressions.get(
+                "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo"
+            ),
+            """
+assert_eq!(
+    scheduling.selected,
+    RuntimeSelectedOwnerKind::FenceCompletion
+);
+assert!(scheduling.fence_completion_bypass);
+assert!(scheduling.validate_exact().is_ok());
+""",
+            "preowned fenced FIFO regression must retain an exact exceptional "
+            "dependency-bypass carrier",
+            errors,
+        )
+        retransmit_fence_regression = fence_runtime_regressions.get(
+            "real_adapter_fence_completion_breaks_pre_and_post_timeout_retransmit_debt"
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            retransmit_fence_regression,
+            """
+runtime
+    .enqueue_signature(prepare_sign_tag, prepare_signature.clone())
+    .expect("enqueue an independently rooted signature callback");
+runtime
+    .enqueue_signature_with_owner(
+        prepare_sign_tag,
+        prepare_signature,
+        &prepare_effect_ownership[0],
+    )
+    .expect("enqueue exact Prepare signature completion");
+""",
+            "retransmit-debt regression must distinguish an independent "
+            "callback from the exact causally owned completion",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            retransmit_fence_regression,
+            """
+assert_eq!(
+    prepare_bypass.selected,
+    RuntimeSelectedOwnerKind::FenceCompletion
+);
+assert!(prepare_bypass.fence_completion_bypass);
+""",
+            "pre-timeout retransmit debt must be opened by an exact fence "
+            "completion bypass",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            retransmit_fence_regression,
+            """
+assert_eq!(
+    timeout_bypass.selected,
+    RuntimeSelectedOwnerKind::FenceCompletion
+);
+assert!(timeout_bypass.fence_completion_bypass);
+""",
+            "post-timeout retransmit debt must be opened by an exact fence "
+            "completion bypass",
+            errors,
+        )
         _require_rust_token_sequence(
             runtime_path,
             causal_runtime_regressions.get(
@@ -47643,6 +46834,21 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
             ),
         )
         runtime_items = (
+            (
+                "freeze_due_clock_owners",
+                "freeze_due_clock_owners",
+                "clock-owner freeze and cached-root alias fence",
+            ),
+            (
+                "minimum_active_lifecycle_ordinal",
+                "minimum_active_lifecycle_ordinal",
+                "complete active-lifecycle minimum wrapper",
+            ),
+            (
+                "minimum_active_lifecycle_ordinal_excluding",
+                "minimum_active_lifecycle_ordinal_excluding",
+                "proof-gated fence dependency minimum",
+            ),
             ("step", "runtime_step", "live serialized runtime step"),
             (
                 "step_recovery",
@@ -47653,6 +46859,11 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
                 "dispatch_one_adapter_deferred",
                 "dispatch_one_adapter_deferred",
                 "single adapter-deferred runtime dispatcher",
+            ),
+            (
+                "dispatch_one_fence_dependency",
+                "dispatch_one_fence_dependency",
+                "single proof-gated signature-fence dependency dispatcher",
             ),
         )
         observed_runtime_items: dict[str, RustItem | None] = {}
@@ -47680,6 +46891,90 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
                         f"reviewed token digest {expected_sha256}; found "
                         f"{observed_sha256}"
                     )
+        _require_rust_token_sequence(
+            runtime_path,
+            observed_runtime_items.get("minimum_active_lifecycle_ordinal"),
+            "self.minimum_active_lifecycle_ordinal_excluding(&[])",
+            "the complete production lifecycle minimum excludes no owner",
+            errors,
+        )
+        runtime_minimum_excluding = observed_runtime_items.get(
+            "minimum_active_lifecycle_ordinal_excluding"
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            runtime_minimum_excluding,
+            """
+let _ = self.ingress.oldest_active_lifecycle_ordinal()?;
+let mut minimum = self
+    .ingress
+    .dormant_local_fifo_reservations
+    .iter()
+    .map(|reservation| reservation.admission_ordinal)
+    .min();
+""",
+            "proof-gated lifecycle exclusion must validate every FIFO owner "
+            "and retain every restart-dormant Local FIFO reservation",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            runtime_minimum_excluding,
+            """
+if excluded.iter().any(|blocked| blocked == owner) {
+    return Ok(());
+}
+""",
+            "proof-gated lifecycle exclusion must remove only exact supplied "
+            "owner aliases",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            runtime_minimum_excluding,
+            """
+for queued in &self.ingress.commands {
+    observe(&queued.lifecycle_owner()?)?;
+}
+""",
+            "proof-gated lifecycle exclusion must project every physical FIFO owner",
+            errors,
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get("step"),
+            (
+                "self.freeze_due_clock_owners(now)",
+                "self.dispatch_one_fence_dependency(now)?",
+                "self.dispatch_one_adapter_deferred(now)?",
+                "let selected_round_tag = self.round_tag;",
+            ),
+            "live scheduling must freeze clock owners, service one exact fence "
+            "dependency, then service ordinary adapter debt before arbitration",
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get("dispatch_one_fence_dependency"),
+            (
+                "if self.driver.deferred_work_is_serviceable()",
+                "let active_deferred = self.driver.all_deferred_admission_ordinals();",
+                "let global_minimum = self.minimum_active_lifecycle_ordinal()",
+                ".fence_blocked_lifecycle_owners(",
+                ".minimum_active_lifecycle_ordinal_excluding(&blocked_dependency_owners)",
+                ".pop_fence_completion_with_ownership(",
+                "driver.completion_unblocks_deferred_fence(queued.tag, &queued.command)",
+                "let dispatch = match self.driver.dispatch(command)",
+                "if dispatch.retry_unadmitted",
+                "self.accept_driver_dispatch(dispatch, &owner)?",
+                "RuntimeSelectedOwnerKind::FenceCompletion",
+                "self.retain_effect_ownership(",
+                "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
+                "self.driver.acknowledge_producer_handoff(token, evidence)",
+                "self.complete_leader_wire_runtime_owner(",
+                "self.observe_effects(now, &effects)",
+            ),
+            "the signature-fence dispatcher must prove the dependency edge, "
+            "remove one exact completion, transfer every successor, and retire "
+            "the producer in one serialized macro-step",
+        )
         observed_runtime_ownership_items: dict[str, RustItem | None] = {}
         for item_name, description in (
             (
@@ -58930,11 +58225,12 @@ def _exact_output_production_source_fidelity_errors(
         / "v2_effects.rs"
     )
     errors: list[str] = []
-    if not worker_path.is_file() or worker_path.is_symlink():
-        return [
-            f"{worker_path}: production exact-output source must be a regular file"
-        ]
-    worker_source = worker_path.read_text(encoding="utf-8")
+    worker_path, worker_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        errors,
+        "production exact-output source",
+    )
     required_sources = (
         (network_message_path, "production network-message carrier source"),
         (merge_path, "production merge-sidecar source"),
@@ -70397,8 +69693,34 @@ self.runtime
     _require_rust_token_sequence(
         runtime_path,
         runtime_minimum,
-        "self.ingress.oldest_active_lifecycle_ordinal()",
-        "the complete runtime minimum must include latent Local FIFO reservations",
+        "self.minimum_active_lifecycle_ordinal_excluding(&[])",
+        "the exact-Serve runtime minimum must exclude no active owner",
+        errors,
+    )
+    runtime_minimum_excluding = runtime_items.get(
+        "minimum_active_lifecycle_ordinal_excluding"
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        runtime_minimum_excluding,
+        "let _ = self.ingress.oldest_active_lifecycle_ordinal()?;",
+        "the exact-Serve runtime minimum must deeply validate every FIFO and "
+        "latent Local FIFO owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        runtime_minimum_excluding,
+        """
+let mut minimum = self
+    .ingress
+    .dormant_local_fifo_reservations
+    .iter()
+    .map(|reservation| reservation.admission_ordinal)
+    .min();
+""",
+        "the exact-Serve runtime minimum must retain latent Local FIFO "
+        "reservations as unconditional predecessors",
         errors,
     )
     runtime_uses = runtime_items.get("active_lifecycle_uses_ordinal")
@@ -71385,6 +70707,12 @@ _KURA_RETIREMENT_FIXED_PROGRESS_PAIR_CONTRACTS = (
         "lane retirement certified lane block",
     ),
     (
+        "merge_bundle_data",
+        "merge_bundle_index",
+        "autonomous_lane_merge_bundle_paths_for_entry",
+        "lane retirement autonomous merge bundle",
+    ),
+    (
         "receipt_data",
         "receipt_index",
         "lane_block_application_receipt_paths_for_entry",
@@ -71506,7 +70834,7 @@ let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(
             if observed_pairs != expected_pair_membership:
                 errors.append(
                     f"{lane_geometry_path}:{retirement.line}: fixed retirement "
-                    "progress pairs must preserve exact five-member artifact "
+                    "progress pairs must preserve exact six-member artifact "
                     f"membership and order; found {observed_pairs!r}"
                 )
 
@@ -79254,6 +78582,7 @@ def _production_liveness_release_inventory_errors(
             errors.append(f"{receipt_path}: release receipt writer is invalid Python: {error}")
         else:
             assignments: dict[str, list[Any]] = {
+                "_RELEASE_RECEIPT_COMPONENT_FILES": [],
                 "_PRODUCTION_TEST_COUNT": [],
                 "_PRODUCTION_MODULES": [],
                 "_DATA_MODEL_PRODUCTION_MODULES": [],
@@ -79289,6 +78618,61 @@ def _production_liveness_release_inventory_errors(
                     f"{receipt_path}: production data-model receipt routing must "
                     "equal the exact shell data-model module inventory"
                 )
+            expected_receipt_components = (
+                "write_sumeragi_v2_release_receipt_formal_artifacts.py",
+            )
+            if assignments["_RELEASE_RECEIPT_COMPONENT_FILES"] != [
+                expected_receipt_components
+            ]:
+                errors.append(
+                    f"{receipt_path}: release receipt component manifest must equal "
+                    f"{expected_receipt_components!r}"
+                )
+            expected_component_symbols = (
+                "_validate_multilane_apalache_evidence",
+                "_validate_formal_snapshot_replays",
+                "_formal_artifacts",
+            )
+            parent_component_symbols = tuple(
+                statement.name
+                for statement in receipt_tree.body
+                if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and statement.name in expected_component_symbols
+            )
+            if parent_component_symbols:
+                errors.append(
+                    f"{receipt_path}: formal receipt functions must remain isolated "
+                    "in the declared component"
+                )
+            for component_name in expected_receipt_components:
+                component_path = receipt_path.with_name(component_name)
+                if component_path.is_symlink() or not component_path.is_file():
+                    errors.append(
+                        f"{component_path}: release receipt component must be a "
+                        "regular non-symlink file"
+                    )
+                    continue
+                try:
+                    component_tree = ast.parse(
+                        component_path.read_text(encoding="utf-8"),
+                        filename=str(component_path),
+                    )
+                except (OSError, UnicodeDecodeError, SyntaxError) as error:
+                    errors.append(
+                        f"{component_path}: release receipt component is invalid: "
+                        f"{error}"
+                    )
+                    continue
+                component_symbols = tuple(
+                    statement.name
+                    for statement in component_tree.body
+                    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+                )
+                if component_symbols != expected_component_symbols:
+                    errors.append(
+                        f"{component_path}: release receipt component symbols must "
+                        f"equal {expected_component_symbols!r}"
+                    )
             expected_receipt_route = (
                 "if module in _DATA_MODEL_PRODUCTION_MODULES:\n"
                 "        return (\n"
@@ -79563,6 +78947,10 @@ def validate_ledger(
     evidence: dict[str, Any] | None = None,
     verus_evidence: dict[str, Any] | None = None,
     cross_tool_evidence: dict[str, Any] | None = None,
+    production_trace_extraction_evidence: dict[str, Any] | None = None,
+    production_trace_extraction_artifacts: (
+        ProductionTraceExtractionArtifactPaths | None
+    ) = None,
     evidence_root: Path = ROOT_DIR,
     expected_verus_source_manifest_sha256: str | None = None,
     verus_log_path: Path | None = None,
@@ -79596,7 +78984,14 @@ def validate_ledger(
     if not isinstance(completion, bool):
         errors.append("machine_checked_completion must be a boolean")
         completion = False
-
+    obligations = ledger.get("obligations")
+    if not isinstance(obligations, list) or not obligations:
+        errors.append("proof ledger obligations must be a non-empty array")
+        obligations = []
+    errors.extend(_machine_checked_completion_contract_errors())
+    if inventory_errors := _proof_obligation_inventory_errors(obligations):
+        errors += inventory_errors + _proof_status_dependency_errors(obligations)
+        return LedgerValidation(tuple(errors), bool(completion))
     module_sources, module_errors = _module_sources(formal_dir)
     errors.extend(module_errors)
     errors.extend(_shared_tlc_result_contract_source_fidelity_errors(ROOT_DIR))
@@ -79816,13 +79211,6 @@ def validate_ledger(
             errors.append(
                 f"{cfg}: effective-lock search must keep two distinct subjects"
             )
-
-    obligations = ledger.get("obligations")
-    if not isinstance(obligations, list) or not obligations:
-        errors.append("proof ledger obligations must be a non-empty array")
-        obligations = []
-    errors.extend(_machine_checked_completion_contract_errors())
-    errors.extend(_proof_obligation_inventory_errors(obligations))
     errors.extend(_cross_tool_contract_errors())
     errors.extend(_quantitative_fixed_corridor_contract_errors(module_sources))
     errors.extend(_proof_obligation_architecture_errors(obligations, module_sources))
@@ -79959,6 +79347,18 @@ def validate_ledger(
                 verus_log_path=verus_log_path,
             )
         )
+        errors.extend(
+            _production_trace_extraction_evidence_errors(
+                ledger,
+                production_trace_extraction_evidence,
+                tlaps_evidence=evidence,
+                verus_evidence=verus_evidence,
+                cross_tool_evidence=cross_tool_evidence,
+                artifacts=production_trace_extraction_artifacts,
+                root_dir=evidence_root,
+                formal_dir=formal_dir,
+            )
+        )
 
     return LedgerValidation(tuple(errors), bool(completion))
 
@@ -80000,6 +79400,14 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="canonical 4+7+6 production-refinement evidence",
     )
+    parser.add_argument(
+        "--production-trace-extraction-evidence",
+        type=Path,
+        help=(
+            "bounded canonical theorem certificate authenticating production "
+            "in-flight trace extraction"
+        ),
+    )
     mode.add_argument(
         "--write-evidence",
         type=Path,
@@ -80011,6 +79419,14 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "write canonical cross-tool evidence from --ledger, --evidence, "
             "and --verus-evidence, then exit"
+        ),
+    )
+    mode.add_argument(
+        "--write-production-trace-extraction-evidence",
+        type=Path,
+        help=(
+            "write the canonical production trace-extraction theorem "
+            "certificate from all linked release evidence, then exit"
         ),
     )
     parser.add_argument(
@@ -80118,6 +79534,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.verus_evidence,
                 args.verus_log,
                 args.cross_tool_evidence,
+                args.production_trace_extraction_evidence,
             )
         ):
             print(
@@ -80159,6 +79576,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(
                 "--write-cross-tool-evidence cannot be combined with "
                 "--cross-tool-evidence",
+                file=sys.stderr,
+            )
+            return 2
+        if args.production_trace_extraction_evidence is not None:
+            print(
+                "--write-cross-tool-evidence cannot be combined with "
+                "--production-trace-extraction-evidence",
                 file=sys.stderr,
             )
             return 2
@@ -80208,6 +79632,91 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
+    if args.write_production_trace_extraction_evidence is not None:
+        required_paths = (
+            ("--evidence", args.evidence),
+            ("--verus-evidence", args.verus_evidence),
+            ("--verus-log", args.verus_log),
+            ("--cross-tool-evidence", args.cross_tool_evidence),
+        )
+        missing = [name for name, path in required_paths if path is None]
+        if missing:
+            print(
+                "--write-production-trace-extraction-evidence requires "
+                + ", ".join(missing),
+                file=sys.stderr,
+            )
+            return 2
+        if args.production_trace_extraction_evidence is not None:
+            print(
+                "--write-production-trace-extraction-evidence cannot be "
+                "combined with --production-trace-extraction-evidence",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            ledger = load_ledger(args.ledger)
+            tlaps_evidence = load_ledger(args.evidence)
+            verus_evidence = load_ledger(args.verus_evidence)
+            cross_tool_evidence = load_ledger(args.cross_tool_evidence)
+            if not all(
+                isinstance(value, dict)
+                for value in (
+                    ledger,
+                    tlaps_evidence,
+                    verus_evidence,
+                    cross_tool_evidence,
+                )
+            ):
+                raise ValueError("ledger and component evidence must be JSON objects")
+            validation = validate_ledger(
+                ledger,
+                release=True,
+                evidence=tlaps_evidence,
+                verus_evidence=verus_evidence,
+                cross_tool_evidence=cross_tool_evidence,
+                verus_log_path=args.verus_log,
+            )
+            if validation.errors:
+                raise ValueError(
+                    "linked formal release evidence is invalid:\n"
+                    + "\n".join(validation.errors)
+                )
+            artifacts = ProductionTraceExtractionArtifactPaths(
+                ledger=args.ledger,
+                evidence=args.evidence,
+                verus_evidence=args.verus_evidence,
+                verus_log=args.verus_log,
+                cross_tool_evidence=args.cross_tool_evidence,
+            )
+            document = build_production_trace_extraction_evidence(
+                ledger,
+                tlaps_evidence=tlaps_evidence,
+                verus_evidence=verus_evidence,
+                cross_tool_evidence=cross_tool_evidence,
+                artifacts=artifacts,
+            )
+            write_production_trace_extraction_evidence(
+                args.write_production_trace_extraction_evidence, document
+            )
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            DuplicateKeyError,
+            ValueError,
+        ) as error:
+            print(
+                f"production trace-extraction evidence generation failed: {error}",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            "wrote Sumeragi v2 production trace-extraction evidence to "
+            f"{args.write_production_trace_extraction_evidence}"
+        )
+        return 0
+
     if args.evidence is not None and not args.release:
         print(
             "--evidence is only valid with --release or "
@@ -80235,6 +79744,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.cross_tool_evidence is not None and not args.release:
         print("--cross-tool-evidence is only valid with --release", file=sys.stderr)
         return 2
+    if args.production_trace_extraction_evidence is not None and not args.release:
+        print(
+            "--production-trace-extraction-evidence is only valid with --release",
+            file=sys.stderr,
+        )
+        return 2
     try:
         ledger = load_ledger(args.ledger)
     except (OSError, json.JSONDecodeError, DuplicateKeyError) as error:
@@ -80246,6 +79761,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     evidence: dict[str, Any] | None = None
     verus_evidence: dict[str, Any] | None = None
     cross_tool_evidence: dict[str, Any] | None = None
+    production_trace_extraction_evidence: dict[str, Any] | None = None
+    production_trace_extraction_artifacts: (
+        ProductionTraceExtractionArtifactPaths | None
+    ) = None
     if args.release:
         if args.evidence is None:
             print("release gate requires --evidence", file=sys.stderr)
@@ -80276,12 +79795,51 @@ def main(argv: Sequence[str] | None = None) -> int:
                 verus_evidence = loaded
             else:
                 cross_tool_evidence = loaded
+        if args.production_trace_extraction_evidence is not None:
+            if (
+                args.verus_evidence is None
+                or args.verus_log is None
+                or args.cross_tool_evidence is None
+            ):
+                print(
+                    "production trace-extraction validation requires "
+                    "--verus-evidence, --verus-log, and --cross-tool-evidence",
+                    file=sys.stderr,
+                )
+                return 1
+            try:
+                production_trace_extraction_evidence = (
+                    load_production_trace_extraction_evidence(
+                        args.production_trace_extraction_evidence
+                    )
+                )
+            except ValueError as error:
+                print(
+                    f"production trace-extraction evidence load failed: {error}",
+                    file=sys.stderr,
+                )
+                return 1
+            production_trace_extraction_artifacts = (
+                ProductionTraceExtractionArtifactPaths(
+                    ledger=args.ledger,
+                    evidence=args.evidence,
+                    verus_evidence=args.verus_evidence,
+                    verus_log=args.verus_log,
+                    cross_tool_evidence=args.cross_tool_evidence,
+                )
+            )
     result = validate_ledger(
         ledger,
         release=args.release,
         evidence=evidence,
         verus_evidence=verus_evidence,
         cross_tool_evidence=cross_tool_evidence,
+        production_trace_extraction_evidence=(
+            production_trace_extraction_evidence
+        ),
+        production_trace_extraction_artifacts=(
+            production_trace_extraction_artifacts
+        ),
         verus_log_path=args.verus_log,
     )
     if result.errors:

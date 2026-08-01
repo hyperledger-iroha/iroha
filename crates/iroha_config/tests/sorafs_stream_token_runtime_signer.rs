@@ -75,8 +75,15 @@ enabled = true
 enabled = true
 signer_handle = "{handle}"
 signer_public_key_hex = "{public_key_hex}"
+signer_revision = 4
+signer_policy_digest_hex = "{}"
+admission_provider_handle = "sealed-cas:prod/stream-token/gateway-admission/v1"
+admission_provider_revision = 7
+admission_provider_policy_digest_hex = "{}"
 {native_signers}
-"#
+"#,
+        "b4".repeat(32),
+        "a5".repeat(32)
     )
 }
 
@@ -104,6 +111,18 @@ fn enabled_stream_tokens_parse_one_exact_non_secret_runtime_binding() {
                 .expect("32-byte test public key")
         )
     );
+    assert_eq!(tokens.signer_revision, Some(4));
+    assert_eq!(tokens.signer_policy_digest, Some([0xb4; 32]));
+    assert_eq!(
+        tokens.admission_provider_handle.as_deref(),
+        Some("sealed-cas:prod/stream-token/gateway-admission/v1")
+    );
+    assert_eq!(tokens.admission_provider_revision, Some(7));
+    assert_eq!(tokens.admission_provider_policy_digest, Some([0xa5; 32]));
+    assert_eq!(tokens.admission_max_pending, 65_536);
+    assert_eq!(tokens.admission_max_tracked_tokens, 65_536);
+    assert_eq!(tokens.admission_reconcile_max_items, 256);
+    assert_eq!(tokens.admission_lease_ttl_ms, 120_000);
 }
 
 #[test]
@@ -157,17 +176,90 @@ signer_handle = "pkcs11:prod/stream-token/v1"
 signer_public_key_hex = "{valid_public_key}"
 "#
             ),
-            "binding is forbidden while issuance is disabled",
+            "runtime bindings are forbidden while issuance is disabled",
+        ),
+        (
+            "missing signer revision",
+            enabled_overlay("pkcs11:prod/stream-token/v1", &valid_public_key)
+                .replace("signer_revision = 4\n", ""),
+            "signer_revision is required",
+        ),
+        (
+            "zero signer revision",
+            enabled_overlay("pkcs11:prod/stream-token/v1", &valid_public_key)
+                .replace("signer_revision = 4", "signer_revision = 0"),
+            "signer_revision must be non-zero",
+        ),
+        (
+            "missing signer policy digest",
+            enabled_overlay("pkcs11:prod/stream-token/v1", &valid_public_key)
+                .replace(&format!("signer_policy_digest_hex = \"{}\"\n", "b4".repeat(32)), ""),
+            "signer_policy_digest_hex is required",
+        ),
+        (
+            "zero signer policy digest",
+            enabled_overlay("pkcs11:prod/stream-token/v1", &valid_public_key)
+                .replace(&"b4".repeat(32), &"00".repeat(32)),
+            "signer_policy_digest_hex must be non-zero",
+        ),
+        (
+            "noncanonical signer policy digest",
+            enabled_overlay("pkcs11:prod/stream-token/v1", &valid_public_key)
+                .replace(&"b4".repeat(32), &"B4".repeat(32)),
+            "signer_policy_digest_hex must be exactly 64 lowercase hexadecimal characters",
         ),
         (
             "development handle",
             enabled_overlay("pkcs11:test/stream-token/v1", &valid_public_key),
-            "must be a production runtime handle",
+            "must be a canonical credential-free production runtime handle",
         ),
         (
             "whitespace handle",
             enabled_overlay("pkcs11:prod/stream token/v1", &valid_public_key),
-            "must be a production runtime handle",
+            "must be a canonical credential-free production runtime handle",
+        ),
+    ] {
+        let error = parse_overlay(&source).expect_err(label);
+        assert!(
+            error.contains(expected),
+            "{label} produced unexpected diagnostic: {error}"
+        );
+    }
+}
+
+#[test]
+fn stream_token_admission_binding_and_bounds_fail_closed() {
+    let valid_public_key = public_key_hex(0x45);
+    let base = enabled_overlay("pkcs11:prod/stream-token/v1", &valid_public_key);
+    for (label, source, expected) in [
+        (
+            "test-marked admission handle",
+            base.replace(
+                "sealed-cas:prod/stream-token/gateway-admission/v1",
+                "sealed-cas:test/stream-token/gateway-admission/v1",
+            ),
+            "admission_provider_handle must be a canonical credential-free production runtime handle",
+        ),
+        (
+            "zero admission revision",
+            base.replace(
+                "admission_provider_revision = 7",
+                "admission_provider_revision = 0",
+            ),
+            "admission_provider_revision must be non-zero",
+        ),
+        (
+            "zero admission digest",
+            base.replace(&"a5".repeat(32), &"00".repeat(32)),
+            "admission_provider_policy_digest_hex must be non-zero",
+        ),
+        (
+            "oversized reconciliation batch",
+            base.replace(
+                "admission_provider_revision = 7",
+                "admission_provider_revision = 7\nadmission_reconcile_max_items = 1025",
+            ),
+            "admission_reconcile_max_items must be within 1..=1024",
         ),
     ] {
         let error = parse_overlay(&source).expect_err(label);

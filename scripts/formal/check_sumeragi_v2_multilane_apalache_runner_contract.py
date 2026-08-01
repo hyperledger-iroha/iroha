@@ -85,6 +85,18 @@ def main() -> int:
     )
     _must_reject(
         source,
+        "kura_replica_retention_fixed.cfg \\\n" "  8 \\",
+        "kura_replica_retention_fixed.cfg \\\n" "  7 \\",
+        "Kura retention bound reduction",
+    )
+    _must_reject(
+        source,
+        "kura_replica_retention_fixed.cfg",
+        "kura_replica_relayed_advert_bug.cfg",
+        "Kura retention mutation substitution",
+    )
+    _must_reject(
+        source,
         "inflight_first_release_fixed.cfg \\\n  18 \\",
         "inflight_first_release_fixed.cfg \\\n  17 \\",
         "in-flight layout bound reduction",
@@ -106,7 +118,7 @@ def main() -> int:
         raise AssertionError("runner contract accepted a length override")
 
     print(
-        "Sumeragi v2 multilane Apalache runner contract passed 12 "
+        "Sumeragi v2 multilane Apalache runner contract passed 14 "
         "fail-closed negative controls"
     )
     return 0

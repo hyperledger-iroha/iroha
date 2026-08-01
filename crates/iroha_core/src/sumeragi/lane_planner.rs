@@ -2446,13 +2446,10 @@ fn assemble_autonomous_lane_reservation_slot(
     let quorum = LaneRelayQuorumContext::new(validator_count, min_quorum)
         .map_err(|_| AutonomousLaneReservationSlotPlanError::InvalidQuorum)?;
     let validator_set_hash = HashOf::new(&validator_set);
-    let author_index =
-        usize::try_from(lane_block_height.saturating_sub(1) % u64::from(validator_count))
-            .map_err(|_| AutonomousLaneReservationSlotPlanError::InvalidQuorum)?;
-    let author = validator_set
-        .get(author_index)
-        .cloned()
-        .ok_or(AutonomousLaneReservationSlotPlanError::InvalidQuorum)?;
+    let author =
+        crate::lane_consensus::deterministic_lane_author(&validator_set, lane_block_height)
+            .cloned()
+            .ok_or(AutonomousLaneReservationSlotPlanError::InvalidQuorum)?;
     let qc_mode_tag = LaneRelayEnvelope::lane_qc_mode_tag_for(
         lane_id,
         dataspace_id,

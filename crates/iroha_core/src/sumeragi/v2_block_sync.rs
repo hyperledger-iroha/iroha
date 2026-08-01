@@ -637,9 +637,6 @@ fn build_historical_body_response(
         },
     )?;
     let request = authenticated.request();
-    if request.certificate.phase != wire::GlobalPhase::Commit {
-        return Ok(None);
-    }
     if request.subject != artifact.subject {
         return Err(V2BlockSyncError::HistoricalSubjectMismatch { height });
     }
@@ -664,13 +661,20 @@ fn build_historical_body_response(
     }
     // Kura retains the canonical result-bearing execution image. Consensus
     // body transport must project it back to the exact resultless proposal
-    // authenticated by the CommitQC subject.
+    // authenticated by the QC subject.
     let proposal = block.canonical_resultless_proposal();
     let body = proposal
         .encode_wire()
         .map_err(|error| V2BlockSyncError::CanonicalBody(error.to_string()))?;
     if !proposal.is_resultless_proposal() || Hash::new(&body) != request.subject.payload_hash {
         return Err(V2BlockSyncError::HistoricalSubjectMismatch { height });
+    }
+    // Once the authenticated QC subject is proven to be the exact finalized
+    // Kura block and proposal payload, either QC phase is sufficient body-
+    // availability evidence. Keep this exhaustive so any future phase must be
+    // considered explicitly before it can use historical serving.
+    match request.certificate.phase {
+        wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit => {}
     }
     let encoded = encode_payload(context, request.round, request.subject, &body)?;
     let (manifest, _) = encoded.into_parts();
@@ -877,7 +881,7 @@ pub(super) mod tests {
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![0xC1; 96],
             };
-            commit_qc.aggregate_signature = aggregate_commit(&commit_qc, &old_validators);
+            commit_qc.aggregate_signature = aggregate_certificate(&commit_qc, &old_validators);
             let proofs_of_possession = old_validators
                 .iter()
                 .map(|key| {
@@ -977,7 +981,7 @@ pub(super) mod tests {
         )
     }
 
-    fn aggregate_commit(certificate: &wire::QuorumCertificate, keys: &[KeyPair]) -> Vec<u8> {
+    fn aggregate_certificate(certificate: &wire::QuorumCertificate, keys: &[KeyPair]) -> Vec<u8> {
         let preimage = wire::Vote {
             round: certificate.round,
             proposal_round: certificate.proposal_round,
@@ -1001,7 +1005,7 @@ pub(super) mod tests {
             })
             .collect::<Vec<_>>();
         let refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        iroha_crypto::bls_normal_aggregate_signatures(&refs).expect("aggregate CommitQC")
+        iroha_crypto::bls_normal_aggregate_signatures(&refs).expect("aggregate QC")
     }
 
     fn resign_request(request: &mut wire::CommitCertificateRequest, key: &KeyPair) {
@@ -1090,7 +1094,8 @@ pub(super) mod tests {
             signers: vec![0, 1, 2],
             aggregate_signature: Vec::new(),
         };
-        certificate.aggregate_signature = aggregate_commit(&certificate, &fixture.old_validators);
+        certificate.aggregate_signature =
+            aggregate_certificate(&certificate, &fixture.old_validators);
         let artifact = wire::finality::V2FinalityArtifact::new(
             context.clone(),
             subject,
@@ -1630,6 +1635,95 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn authenticated_prepare_qc_serves_only_exact_finalized_kura_body() {
+        let history = durable_history_fixture();
+        let context = history.artifact.height_context.clone();
+        let requester_key = key(90);
+        assert_eq!(peer(&requester_key), history.requester);
+        let sign_body_request = |certificate: wire::QuorumCertificate| {
+            let mut request = wire::CertifiedBodyRequest {
+                round: certificate.proposal_round,
+                subject: certificate.subject,
+                certificate,
+                requester: history.requester.clone(),
+                signature: Vec::new(),
+            };
+            request.signature =
+                Signature::new(requester_key.private_key(), &request.signature_preimage())
+                    .payload()
+                    .to_vec();
+            request
+        };
+
+        let mut prepare_qc = history.artifact.commit_qc.clone();
+        prepare_qc.phase = wire::GlobalPhase::Prepare;
+        prepare_qc.aggregate_signature = aggregate_certificate(&prepare_qc, &history.validators);
+        let request = sign_body_request(prepare_qc.clone());
+        let request_hash = HashOf::new(&request);
+        let mut server = V2BlockSyncServer::new(context.chain_id.clone(), 1).expect("body server");
+        let response = server
+            .serve_historical_body(
+                history.kura.as_ref(),
+                request,
+                &history.requester,
+                &history.validators[3],
+            )
+            .expect("authenticated PrepareQC request is valid")
+            .expect("exact finalized PrepareQC subject is served from Kura");
+        let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) = response.payload
+        else {
+            panic!("historical PrepareQC service emits a certified body response")
+        };
+        let canonical_body = history
+            .kura
+            .get_block(NonZeroUsize::new(1).expect("non-zero height"))
+            .expect("canonical historical block")
+            .canonical_resultless_proposal()
+            .encode_wire()
+            .expect("canonical resultless proposal wire");
+        assert_eq!(response.request_hash, request_hash);
+        assert_eq!(response.body, canonical_body);
+        assert_eq!(response.manifest.round, prepare_qc.proposal_round);
+        assert_eq!(response.manifest.subject, history.artifact.subject);
+        assert_eq!(response.responder, 3);
+        assert_eq!(server.body_len(), 1);
+
+        let mut mismatched_qc = prepare_qc.clone();
+        mismatched_qc.subject.payload_hash = Hash::new(b"non-canonical historical payload");
+        mismatched_qc.aggregate_signature =
+            aggregate_certificate(&mismatched_qc, &history.validators);
+        let mut mismatch_server =
+            V2BlockSyncServer::new(context.chain_id.clone(), 1).expect("mismatch server");
+        assert!(matches!(
+            mismatch_server.serve_historical_body(
+                history.kura.as_ref(),
+                sign_body_request(mismatched_qc),
+                &history.requester,
+                &history.validators[0],
+            ),
+            Err(V2BlockSyncError::HistoricalSubjectMismatch { height: 1 })
+        ));
+        assert_eq!(mismatch_server.body_len(), 0);
+
+        let mut invalid_qc = prepare_qc;
+        invalid_qc.aggregate_signature = vec![0xEE; 96];
+        let mut invalid_server =
+            V2BlockSyncServer::new(context.chain_id.clone(), 1).expect("invalid-proof server");
+        assert!(matches!(
+            invalid_server.serve_historical_body(
+                history.kura.as_ref(),
+                sign_body_request(invalid_qc),
+                &history.requester,
+                &history.validators[0],
+            ),
+            Err(V2BlockSyncError::Transport(
+                V2TransportError::CertificateRejected(_)
+            ))
+        ));
+        assert_eq!(invalid_server.body_len(), 0);
+    }
+
+    #[test]
     fn historical_body_uses_self_contained_kura_finality_without_context_store() {
         let fixture = Fixture::new();
         let committed = ValidBlock::new_dummy_and_modify_header(
@@ -1689,7 +1783,8 @@ pub(super) mod tests {
             signers: vec![0, 1, 2],
             aggregate_signature: Vec::new(),
         };
-        certificate.aggregate_signature = aggregate_commit(&certificate, &fixture.old_validators);
+        certificate.aggregate_signature =
+            aggregate_certificate(&certificate, &fixture.old_validators);
         let artifact = wire::finality::V2FinalityArtifact::new(
             context.clone(),
             subject,

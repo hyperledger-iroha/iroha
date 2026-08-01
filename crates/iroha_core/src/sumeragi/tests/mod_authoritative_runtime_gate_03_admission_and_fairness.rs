@@ -798,4 +798,78 @@
         assert_eq!(sender, Some(lane_origin));
         assert!(matches!(message, BlockMessage::LaneBlockCertificate(_)));
     }
+    #[test]
+    fn kura_replica_advert_requires_exact_signed_direct_keeper_ownership() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+        let keeper_key =
+            KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+                .expect("generate BLS-normal Kura replica keeper key");
+        let keeper = PeerId::new(keeper_key.public_key().clone());
+        let mut advert = super::message::KuraReplicaAdvertV1 {
+            version: super::message::KURA_REPLICA_ADVERT_VERSION_V1,
+            chain_id: ChainId::from("fair-ingress-kura-advert"),
+            height: 13,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replica-block")),
+            executed_block_wire_len: 4096,
+            executed_block_wire_hash: Hash::new(b"replica-wire"),
+            finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"replica-finality",
+            )),
+            keeper_index: 0,
+            keeper: keeper.clone(),
+            signature: Vec::new(),
+        };
+        advert.signature = iroha_crypto::Signature::new(
+            keeper_key.private_key(),
+            &advert.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let message = BlockMessage::KuraReplicaAdvert(advert.clone());
 
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_transport(
+                message.clone(),
+                keeper.clone(),
+                keeper.clone(),
+            )),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let admitted = ingress
+            .try_recv()
+            .expect("direct signed keeper advert owns one fair-ingress carrier");
+        assert!(admitted.ingress_ownership().is_some_and(|ownership| {
+            ownership.validate_exact()
+                && ownership.matches_message(admitted.message())
+                && ownership.matches_semantic_origin(Some(&keeper))
+        }));
+
+        let other = PeerId::new(KeyPair::random().public_key().clone());
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_transport(
+                message.clone(),
+                other.clone(),
+                keeper.clone(),
+            )),
+            Err(super::FairV2IngressPushError::Rejected(_))
+        ));
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_transport(
+                message,
+                keeper.clone(),
+                other,
+            )),
+            Err(super::FairV2IngressPushError::Rejected(_))
+        ));
+
+        advert.signature[0] ^= 0x80;
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_transport(
+                BlockMessage::KuraReplicaAdvert(advert),
+                keeper.clone(),
+                keeper,
+            )),
+            Err(super::FairV2IngressPushError::Rejected(_))
+        ));
+        assert_eq!(ingress.len(), 0, "rejected adverts retain no queue owner");
+    }

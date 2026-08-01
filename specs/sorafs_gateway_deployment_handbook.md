@@ -38,6 +38,11 @@ This handbook gives infra teams a single playbook for shipping and running Torii
    enabled = true
    signer_handle = "pkcs11:prod/stream-token/v4"
    signer_public_key_hex = "<64-lowercase-hex-characters>"
+   signer_revision = 4
+   signer_policy_digest_hex = "<64-lowercase-nonzero-hex-characters>"
+   admission_provider_handle = "sealed-cas:prod/stream-token/admission/v1"
+   admission_provider_revision = 7
+   admission_provider_policy_digest_hex = "<64-lowercase-nonzero-hex-characters>"
    key_version = 4
    default_ttl_secs = 900
    default_max_streams = 8
@@ -54,17 +59,21 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 
 The TOML `enabled` value is the only production activation control; do not use
 an environment override. The deployment launcher must inject the HSM/KMS signer
-adapter whose reported non-secret handle and 32-byte Ed25519 public key exactly
-match `signer_handle` and `signer_public_key_hex`. Startup fails closed when the
-adapter is absent, either value is missing or invalid, or the binding differs.
+adapter whose reported non-secret handle, 32-byte Ed25519 public key, non-zero
+adapter revision, and non-zero public-policy digest exactly match
+`signer_handle`, `signer_public_key_hex`, `signer_revision`, and
+`signer_policy_digest_hex`. Startup probes this public identity twice and fails
+closed when the adapter is absent, any value is missing or invalid, either
+probe differs, or the provider is stale, substituted, or test-marked.
 The signing key remains non-exportable, and adapter credentials, sessions, PINs,
 and tokens are runtime-only secrets that must not enter configuration, disk
 files, logs, or readiness evidence.
 
-For every issuance, Torii sends the canonical domain-separated Norito payload to
-the adapter, accepts only the raw 64-byte Ed25519 signature, and verifies it
-strictly against the configured public key before returning a token. Treat an
-unavailable or refusing signer and every malformed, weak-key, wrong-key, or
+For every issuance, Torii revalidates the exact public signer identity before
+and after sending the canonical domain-separated Norito payload to the adapter,
+accepts only the raw 64-byte Ed25519 signature, and verifies it strictly against
+the configured public key before returning a token. Treat qualification drift,
+an unavailable or refusing signer, and every malformed, weak-key, wrong-key, or
 non-verifying output as a fail-closed issuance error. Configure positive token
 defaults only: zero does not mean unlimited, TTL is capped at one hour, and
 request overrides may only reduce these defaults.
@@ -215,8 +224,9 @@ Recommended alerts:
    into a file, environment variable, configuration value, or deployment
    artefact.
 2. In one reviewed rollout, inject the adapter bound to that handle and update
-   `signer_handle`, `signer_public_key_hex`, and `key_version`. Restart the
-   issuer and require the exact startup handle/public-key binding to pass.
+   `signer_handle`, `signer_public_key_hex`, `signer_revision`,
+   `signer_policy_digest_hex`, and `key_version`. Restart the issuer and require
+   both exact startup qualification probes to pass.
 3. Issue a probe token and require strict verification of the HSM/KMS signature
    against the newly configured public key before publishing that key in the
    authenticated provider deployment inventory. The endpoint's

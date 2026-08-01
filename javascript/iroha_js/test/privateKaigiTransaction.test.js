@@ -1,13 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
-  buildPrivateKaigiFeeSpend,
   buildPrivateCreateKaigiTransaction,
   buildPrivateJoinKaigiTransaction,
   buildPrivateEndKaigiTransaction,
   submitTransactionEntrypoint,
 } from "../src/transaction.js";
+import * as transactionApi from "../src/transaction.js";
 import { ToriiClient } from "../src/toriiClient.js";
 
 test("buildPrivateCreateKaigiTransaction delegates to native binding", () => {
@@ -106,66 +107,35 @@ test("buildPrivateJoinKaigiTransaction and buildPrivateEndKaigiTransaction pass 
   }
 });
 
-test("buildPrivateKaigiFeeSpend delegates to native binding with registry vk bytes", () => {
-  const previous = globalThis.__IROHA_NATIVE_BINDING__;
-  const calls = [];
-  globalThis.__IROHA_NATIVE_BINDING__ = {
-    buildPrivateKaigiFeeSpend(...args) {
-      calls.push(args);
-      return {
-        assetDefinitionId: "xor#universal",
-        anchorRoot: Uint8Array.from({ length: 32 }, () => 0xaa),
-        nullifiers: [Uint8Array.from({ length: 32 }, () => 0x11)],
-        outputCommitments: [Uint8Array.from({ length: 32 }, () => 0x22)],
-        encryptedChangePayloads: [Uint8Array.from([0xde, 0xad])],
-        proof: Uint8Array.from([7, 7, 7]),
-      };
-    },
-  };
+test("private Kaigi fee proof synthesis is not part of the JavaScript API", () => {
+  assert.equal(
+    Object.hasOwn(transactionApi, "buildPrivateKaigiFeeSpend"),
+    false,
+  );
 
-  try {
-    const result = buildPrivateKaigiFeeSpend({
-      chainId: "chain-1",
-      assetDefinitionId: "xor#universal",
-      actionHash: Buffer.from("33".repeat(32), "hex"),
-      anchorRootHex: "44".repeat(32),
-      feeAmount: "1",
-      verifyingKey: {
-        id: {
-          backend: "halo2/ipa",
-          name: "vk_transfer",
-        },
-        record: {
-          circuit_id: "halo2/ipa:tiny-add",
-        },
-        inline_key: {
-          backend: "halo2/ipa",
-          bytes_b64: Buffer.from("fixture-vk", "utf8").toString("base64"),
-        },
-      },
-    });
+  const repositoryRoot = new URL("../../../", import.meta.url);
+  const rustHost = readFileSync(
+    new URL("crates/iroha_js_host/src/lib.rs", repositoryRoot),
+    "utf8",
+  );
+  const hostManifest = readFileSync(
+    new URL("crates/iroha_js_host/Cargo.toml", repositoryRoot),
+    "utf8",
+  );
+  const publicIndex = readFileSync(
+    new URL("../src/index.js", import.meta.url),
+    "utf8",
+  );
+  const declarations = readFileSync(
+    new URL("index.d.ts", new URL("../", import.meta.url)),
+    "utf8",
+  );
 
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0][0], "chain-1");
-    assert.equal(calls[0][1], "xor#universal");
-    assert.equal(Buffer.from(calls[0][2]).toString("hex"), "33".repeat(32));
-    assert.equal(calls[0][3], "44".repeat(32));
-    assert.equal(calls[0][4], "1");
-    assert.equal(calls[0][5], "halo2/ipa");
-    assert.equal(calls[0][6], "halo2/ipa:tiny-add");
-    assert.equal(Buffer.from(calls[0][7]).toString("utf8"), "fixture-vk");
-    assert.equal(result.asset_definition_id, "xor#universal");
-    assert.equal(result.nullifiers.length, 1);
-    assert.equal(result.output_commitments.length, 1);
-    assert.equal(result.encrypted_change_payloads.length, 1);
-    assert.deepEqual(Array.from(result.proof), [7, 7, 7]);
-  } finally {
-    if (previous === undefined) {
-      delete globalThis.__IROHA_NATIVE_BINDING__;
-    } else {
-      globalThis.__IROHA_NATIVE_BINDING__ = previous;
-    }
-  }
+  assert.doesNotMatch(rustHost, /test_utils::halo2_fixture_envelope/u);
+  assert.doesNotMatch(rustHost, /pub fn build_private_kaigi_fee_spend/u);
+  assert.doesNotMatch(hostManifest, /"iroha-core-tests"/u);
+  assert.doesNotMatch(publicIndex, /\bbuildPrivateKaigiFeeSpend\b/u);
+  assert.doesNotMatch(declarations, /\bbuildPrivateKaigiFeeSpend\b/u);
 });
 
 test("submitTransactionEntrypoint waits through Committed until Applied", async () => {

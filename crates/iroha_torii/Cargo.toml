@@ -160,7 +160,7 @@ parking_lot = { workspace = true }
 flate2 = "1.1.5"
 zstd = { workspace = true }
 futures-util = "0.3.31"
-jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
+jsonwebtoken = { version = "10.3.0", default-features = false, features = ["use_pem", "rust_crypto"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs", "process"] }

@@ -5,11 +5,11 @@ tests:
   - interval: 1m
     input_series:
       - series: 'soranet_privacy_circuit_events_total{kind="downgrade"}'
-        values: '0 0 0 1 2 3 3 3 3'
+        values: '0 180 360 540 720 900 1080 1260 1440'
       - series: 'soranet_privacy_bucket_suppressed'
-        values: '0 0 0 1 1 1 1 1 1'
+        values: '1 1 1 1 1 1 1 1 1'
       - series: 'soranet_privacy_last_poll_unixtime'
-        values: '0 60 120 180 180 180 180 180 180'
+        values: '180 180 180 180 180 180 180 180 180'
       - series: 'soranet_privacy_collector_enabled'
         values: '1 1 1 0 0 0 0 0 0'
     alert_rule_test:
@@ -17,12 +17,13 @@ tests:
         eval_time: 4m
         exp_alerts: []
       - alertname: SoranetPrivacyDowngradeSpike
-        eval_time: 6m
+        eval_time: 9m
         exp_alerts:
           - exp_labels:
               severity: warning
             exp_annotations:
               summary: "Downgrade rejection spike"
+              description: "Downgrade rejects are breaching the configured threshold."
       - alertname: SoranetPrivacySuppressedBuckets
         eval_time: 4m
         exp_alerts: []
@@ -33,6 +34,7 @@ tests:
               severity: critical
             exp_annotations:
               summary: "Privacy buckets suppressed"
+              description: "All reported buckets are suppressed; investigate collector health and contributor thresholds."
       - alertname: SoranetPrivacyCollectorIdle
         eval_time: 4m
         exp_alerts: []
@@ -43,6 +45,7 @@ tests:
               severity: critical
             exp_annotations:
               summary: "Privacy collector idle"
+              description: "No SoraNet privacy polls have succeeded in the last 5 minutes."
       - alertname: SoranetPrivacyCollectorDisabled
         eval_time: 4m
         exp_alerts: []
@@ -53,3 +56,4 @@ tests:
               severity: critical
             exp_annotations:
               summary: "Privacy collector disabled"
+              description: "The SoraNet privacy collector is disabled or failed to start; SNNet-5 guard adoption must block until it is re-enabled."

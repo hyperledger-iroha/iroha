@@ -139,6 +139,8 @@ def reference_sdk_supply_chain_fingerprint() -> dict[str, object]:
         "vulnerability-report.json",
         "provenance-bundle.json",
     )
+    source_kinds = MODULE.REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_KINDS
+    assert len(source_kinds) == len(source_paths) == len(source_digests)
     return {
         "source_artifacts": [
             {
@@ -146,12 +148,7 @@ def reference_sdk_supply_chain_fingerprint() -> dict[str, object]:
                 "artifact_path": artifact_path,
                 "sha256": digest,
             }
-            for kind, artifact_path, digest in zip(
-                MODULE.REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_KINDS,
-                source_paths,
-                source_digests,
-                strict=True,
-            )
+            for kind, artifact_path, digest in zip(source_kinds, source_paths, source_digests)
         ],
         "provenance_certificate_identity": (
             REFERENCE_SDK_PROVENANCE_CERTIFICATE_IDENTITY
@@ -1992,12 +1989,12 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
     write_gate(tmp_path, "gateway_load")
     write_foundational_summary(tmp_path)
     qualification_args = topology_cli_args(tmp_path)
+    assert len(qualification_args) % 2 == 0
     qualification_lines = [
         f"{flag} {value}"
         for flag, value in zip(
             qualification_args[::2],
             qualification_args[1::2],
-            strict=True,
         )
     ]
     args = tmp_path / "aggregate.args"
@@ -8663,10 +8660,10 @@ def test_reference_sdk_supply_chain_artifacts_share_trust_and_digest_inventory(
     second["sha256"] = "c1" * 32
     fingerprint = second["fingerprint"]
     second_source_digests = ("c2" * 32, "c3" * 32, "c4" * 32, "c5" * 32)
+    assert len(fingerprint["source_artifacts"]) == len(second_source_digests)
     for source, digest in zip(
         fingerprint["source_artifacts"],
         second_source_digests,
-        strict=True,
     ):
         source["artifact_path"] = f"second/{source['artifact_path']}"
         source["sha256"] = digest

@@ -66,9 +66,6 @@ const _: () = {
     assert!(CA_IO_BYTE_BITS_START + 8 == ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1);
 };
 
-/// Stable identity of the compact CA relation.
-pub(crate) const ZK_X509_ACCUMULATOR_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-ca-accumulator-air-v1-incompatible:compact-sorted-padded-capacity4096:private-index12:private-siblings12:exact-root-spki-der91:log7-rows128:hash-rows13=leaf+nodes12:serialized-root-spki-byte-rows91:nonpadding104:base695:five-hash-byte-lanes160+index12+direction1+digest-bits256+sibling-bits256+io-byte1+io-word-acc1+reused-io-byte-bits8:constraints1219:canonical-zero-padding24:height-bound-node-order:all-private-digest-sibling-and-serialized-spki-bytes-range-constrained:big-endian-four-byte-word-assembly:four-lane-sha-call-terminal-binding-required:exact-root-spki-io-consumer-required:no-crl-accumulator";
-
 /// Public statement selected by the verifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509CaAccumulatorStatementV1 {
@@ -114,11 +111,6 @@ impl ZkX509CaAccumulatorFixedRowV1 {
             self.kind,
             ZkX509CaAccumulatorRowKindV1::Leaf | ZkX509CaAccumulatorRowKindV1::Node(_)
         )
-    }
-
-    /// Whether this row owns one serialized root-SPKI byte.
-    pub(crate) const fn io_active(self) -> bool {
-        matches!(self.kind, ZkX509CaAccumulatorRowKindV1::RootSpkiByte(_))
     }
 
     /// Whether the next row is another SHA call.

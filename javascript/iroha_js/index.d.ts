@@ -9513,24 +9513,6 @@ export interface PrivateKaigiEntrypointResult {
   actionHash: Buffer;
 }
 
-export interface PrivateKaigiFeeSpendResult {
-  asset_definition_id: string;
-  anchor_root: Buffer;
-  nullifiers: ReadonlyArray<Buffer>;
-  output_commitments: ReadonlyArray<Buffer>;
-  encrypted_change_payloads: ReadonlyArray<Buffer>;
-  proof: Buffer;
-}
-
-export interface PrivateKaigiFeeSpendInput {
-  chainId: string;
-  assetDefinitionId: string;
-  actionHash: BinaryLike;
-  anchorRootHex: string;
-  feeAmount: QuantityInput;
-  verifyingKey: Record<string, unknown>;
-}
-
 export interface ConfidentialTransferProofInputV2 {
   amount: NumericLike;
   rhoHex?: string;
@@ -9579,6 +9561,7 @@ export interface PrivateCreateKaigiTransactionInput {
   chainId: string;
   call: Record<string, unknown>;
   artifacts: Record<string, unknown>;
+  /** Canonical envelope produced by a production confidential wallet or prover. */
   feeSpend: Record<string, unknown>;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -9589,6 +9572,7 @@ export interface PrivateJoinKaigiTransactionInput {
   chainId: string;
   callId: string;
   artifacts: Record<string, unknown>;
+  /** Canonical envelope produced by a production confidential wallet or prover. */
   feeSpend: Record<string, unknown>;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -9600,6 +9584,7 @@ export interface PrivateEndKaigiTransactionInput {
   callId: string;
   endedAtMs?: number | null;
   artifacts: Record<string, unknown>;
+  /** Canonical envelope produced by a production confidential wallet or prover. */
   feeSpend: Record<string, unknown>;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -12004,13 +11989,18 @@ export function encodeQuantityNoritoValue(
   value: QuantityInput,
   context?: string,
 ): Uint8Array;
+/** An ordinary owned byte array; Node `Buffer` compatibility aliases are excluded. */
+export interface CancelAssetLockV1Archive extends Uint8Array<ArrayBuffer> {
+  readonly write?: never;
+}
+
 /** Encode the exact schema-bound bare `CancelAssetLock` V1 archive. */
 export function encodeCancelAssetLockV1(
   value: Readonly<CancelAssetLockV1>,
-): Buffer;
+): CancelAssetLockV1Archive;
 /** Decode an exact schema-bound bare `CancelAssetLock` V1 archive. */
 export function decodeCancelAssetLockV1(
-  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+  bytes: CancelAssetLockV1Archive,
 ): CancelAssetLockV1;
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
 export function noritoDecodeBlockProofs(
@@ -12572,9 +12562,6 @@ export function buildPrecommitTriggerAction(
 export function buildCreateKaigiTransaction(
   input: CreateKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
-export function buildPrivateKaigiFeeSpend(
-  input: PrivateKaigiFeeSpendInput,
-): PrivateKaigiFeeSpendResult;
 export function buildConfidentialTransferProofV2(input: {
   chainId: string;
   assetDefinitionId: string;

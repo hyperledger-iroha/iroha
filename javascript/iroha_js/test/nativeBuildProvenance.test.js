@@ -18,6 +18,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   createNativeBuildProvenance,
@@ -36,6 +37,10 @@ import {
 
 const REVISION = "a".repeat(40);
 const SOURCE_DIGEST = "b".repeat(64);
+const SOURCE_STATE_READER = fileURLToPath(
+  new URL("../scripts/read-native-build-source-state.mjs", import.meta.url),
+);
+const REPOSITORY_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const INHERITED_CARGO_LOCK_PATH = process.env[NATIVE_BUILD_CARGO_LOCK_ENV];
 
 delete process.env[NATIVE_BUILD_CARGO_LOCK_ENV];
@@ -111,6 +116,27 @@ function withSourceRepository(run) {
     rmSync(repoRoot, { recursive: true, force: true });
   }
 }
+
+test("repository ignores every native publication artifact", () => {
+  const generatedPaths = [
+    "javascript/iroha_js/native/.build-dist.lock",
+    "javascript/iroha_js/native/iroha_js_host.node",
+    "javascript/iroha_js/native/iroha_js_host.checksums.json",
+    "javascript/iroha_js/native/.iroha-js-host-txn-00000000-0000-4000-8000-000000000000/iroha_js_host.node.next",
+    "javascript/iroha_js/native/.iroha-js-host-init-txn-v1-00000000-0000-4000-8000-000000000000-00000000-0000-4000-8000-000000000001/iroha_js_host.node.next",
+    "javascript/iroha_js/native/.iroha-js-host-cleanup-v1-00000000-0000-4000-8000-000000000000-00000000-0000-4000-8000-000000000001",
+    "javascript/iroha_js/native/.iroha-js-host-cleanup-v1-00000000-0000-4000-8000-000000000000-00000000-0000-4000-8000-000000000001.owner.json",
+  ];
+  for (const generatedPath of generatedPaths) {
+    git(REPOSITORY_ROOT, [
+      "check-ignore",
+      "--quiet",
+      "--no-index",
+      "--",
+      generatedPath,
+    ]);
+  }
+});
 
 test("native build provenance V3 binds the exact binary, source, and execution policy", () => {
   withNativeFixture(({ nativePath }) => {
@@ -239,6 +265,88 @@ test("source seal covers tracked, untracked, lock, mode, symlink, and deletion s
     unlinkSync(trackedPath);
     const deleted = readNativeBuildSourceState(repoRoot);
     assert.notEqual(deleted.sourceTreeSha256, base.sourceTreeSha256);
+  });
+});
+
+test("source seal binds tracked gitlinks without snapshotting optional submodule contents", () => {
+  withSourceRepository((repoRoot) => {
+    const gitlinkPath = path.join(repoRoot, "iroha-docs");
+    const gitlinkObject = git(repoRoot, ["rev-parse", "HEAD"]);
+    git(repoRoot, [
+      "update-index",
+      "--add",
+      "--cacheinfo",
+      "160000",
+      gitlinkObject,
+      "iroha-docs",
+    ]);
+
+    const absentCheckout = readNativeBuildSourceState(repoRoot);
+    assert.match(absentCheckout.sourceTreeSha256, /^[0-9a-f]{64}$/u);
+
+    mkdirSync(gitlinkPath);
+    writeFileSync(path.join(gitlinkPath, "optional-guide.md"), "not a build input\n");
+    const snapshot = createNativeBuildSourceSnapshot(
+      repoRoot,
+      path.join(repoRoot, "target", "gitlink-snapshot"),
+    );
+    try {
+      assert.equal(
+        existsSync(path.join(snapshot.snapshotRoot, "iroha-docs")),
+        false,
+      );
+      assert.deepEqual(
+        verifyNativeBuildSourceSnapshot(snapshot),
+        snapshot.sourceState,
+      );
+    } finally {
+      cleanupNativeBuildSourceSnapshot(snapshot);
+    }
+
+    rmSync(gitlinkPath, { recursive: true });
+    writeFileSync(gitlinkPath, "unsafe gitlink substitution\n");
+    assert.throws(
+      () => readNativeBuildSourceState(repoRoot),
+      /gitlink worktree entry has an unsafe file type/u,
+    );
+  });
+});
+
+test("synchronous source-state reader accepts only the exact dirty debug provenance", () => {
+  withSourceRepository((repoRoot) => {
+    writeFileSync(path.join(repoRoot, "tracked.txt"), "tracked-v2\n");
+    const state = readNativeBuildSourceState(repoRoot);
+    const verification = {
+      cargoProfile: "debug",
+      ...state,
+    };
+    const runReader = (expected) =>
+      spawnSync(
+        process.execPath,
+        [
+          SOURCE_STATE_READER,
+          "--verify",
+          repoRoot,
+          JSON.stringify(expected),
+        ],
+        {
+          encoding: "utf8",
+          env: { ...process.env, NODE_OPTIONS: "" },
+          maxBuffer: 16 * 1024,
+        },
+      );
+
+    const accepted = runReader(verification);
+    assert.equal(accepted.status, 0, accepted.stderr);
+    assert.equal(accepted.stdout, "");
+
+    const stale = runReader({
+      ...verification,
+      sourceTreeSha256: "f".repeat(64),
+    });
+    assert.notEqual(stale.status, 0);
+    const release = runReader({ ...verification, cargoProfile: "release" });
+    assert.notEqual(release.status, 0);
   });
 });
 

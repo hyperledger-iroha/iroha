@@ -5295,7 +5295,7 @@ fn offline_kura_config(store_dir: PathBuf) -> KuraConfig {
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
-        eviction_required_replicas: defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
 
@@ -9521,11 +9521,5 @@ mod tests {
         }
     }
 
-    #[test]
-    fn render_error_with_debug_keeps_display_and_debug_context() {
-        assert_eq!(
-            render_error_with_debug(&DisplayOnlyTxError),
-            "route probe failed (DisplayOnlyTxError)"
-        );
-    }
+    include!("cross_dataspace_localnet/error_render_test.rs");
 }

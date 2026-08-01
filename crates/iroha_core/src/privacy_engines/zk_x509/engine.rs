@@ -12,7 +12,7 @@
 //! credential proof.
 
 use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1};
-use rand::{TryCryptoRng, rngs::OsRng};
+use rand::TryCryptoRng;
 use thiserror::Error;
 
 use super::{
@@ -419,27 +419,6 @@ pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     Ok(encoded)
 }
 
-/// Construct one canonical `X5S1` credential proof with operating-system
-/// cryptographic entropy.
-pub(crate) fn prove_zk_x509_credential_proof_v1(
-    statement: &IrohaZkX509StarkP256StatementV1,
-    authoritative_state: &PrivacyZkX509AuthoritativeStateV1,
-    trusted_block_timestamp_ms: u64,
-    consensus_limits: &PrivacyConsensusLimitsV1,
-    genesis_hash: [u8; 32],
-    encoded_witness: &[u8],
-) -> Result<Vec<u8>, ZkX509EngineErrorV1> {
-    prove_zk_x509_credential_proof_v1_with_rng(
-        statement,
-        authoritative_state,
-        trusted_block_timestamp_ms,
-        consensus_limits,
-        genesis_hash,
-        encoded_witness,
-        &mut OsRng,
-    )
-}
-
 fn compiled_profile_fields_v1<'a>(
     sha_schedule_digests: &'a [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1],
     p256_schedule_digest: &'a [u8; 32],
@@ -803,7 +782,7 @@ mod tests {
             .find("pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng")
             .expect("sole credential prover");
         let prover_end = source[prover_start..]
-            .find("/// Construct one canonical `X5S1` credential proof with operating-system")
+            .find("fn compiled_profile_fields_v1")
             .map(|offset| prover_start + offset)
             .expect("sole credential prover end");
         let prover = &source[prover_start..prover_end];
@@ -858,6 +837,7 @@ mod tests {
             "require_complete_zk_x509_air_v1",
             "after_release_gate",
             "zk_x509_air_gaps_v1",
+            "OsRng",
         ] {
             assert!(
                 !production_source.contains(forbidden),

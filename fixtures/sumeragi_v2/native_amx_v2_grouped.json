@@ -24,10 +24,13 @@
       "execution_commitment": {
         "executed_block_wire_hash": "hash:271576DEB148C553F40354AFCC861C1F9EF1B56E933F68CB17A9E9458D356163#7168",
         "executed_block_wire_len": 49,
+        "merge_carrier": {
+          "entry_hash": "hash:4427857CB7FE0C19E3608077395E93F8F1224E45B26FAD9274D3E3E3B9CB2F0D#D7B1",
+          "version": 1
+        },
         "native_amx_application_manifest_count": 1,
         "native_amx_application_manifest_root": "hash:DBA9A5F6FA19DA8775E789C8B1DEDA07749555DDEB2CB8E1A33CE21EAAE8D071#2584",
         "native_amx_application_manifest_version": 1,
-        "merge_carrier": null,
         "ordinary_writes_root": "hash:1A5A5B04F6090629E915CCC7D9778B613D628129E507972005CDB065C4C09DF3#F0C7",
         "parent_state_root": "hash:006C20B42142D194F1C1D6FBC8F183684B2724F3A2261457D16328E7BF585B3B#44D4",
         "post_state_root": "hash:B367329C1BC04D88F963BE38AF8268A82E0FC4E0325D4AEA6D92E7284E8F9853#B8F4",
@@ -10384,6 +10387,29 @@
         }
       ],
       "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "execution_commitment_merge_carrier_wrong_version",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/application_evidence/execution_commitment/merge_carrier/version",
+          "value": 2
+        }
+      ],
+      "validator": "application_evidence"
+    },
+    {
+      "expectation": "reject",
+      "id": "execution_commitment_missing_merge_carrier_field",
+      "mutations": [
+        {
+          "op": "remove",
+          "path": "/golden/application_evidence/execution_commitment/merge_carrier"
+        }
+      ],
+      "validator": "application_evidence"
     },
     {
       "expectation": "reject",

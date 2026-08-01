@@ -18,8 +18,6 @@ use thiserror::Error;
 
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 
-/// Stable descriptor for the first-release 16-way P-256 point selector.
-pub(crate) const ZK_X509_P256_WINDOW_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-window-air-v2-incompatible:four-verifier-positioned-big-endian-scalar-bits:16-candidate-full-scan:four-prefix-match-products:exactly-one-selection:48-running-coordinate-limb-accumulators:x-then-y-then-z-id-contiguous-external-reads:three-external-limbs-per-row:256-candidate-plus16-output-rows:61-base-columns:verifier-preprocessed-fixed27:aggregate-aux1-zero:fixed-constraint-vector232-degree4:value-bus-and-scalar-bit-copy-binding=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
 /// Stable aggregate layout for all selectors in one ECDSA equation.
 pub(crate) const ZK_X509_P256_WINDOW_BATCH_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-window-batch-v1-incompatible:one-signature:u1-window0-through63-then-u2-window0-through63:128-verifier-fixed-vertical-blocks:512-rows-per-block:65536-row-single-commitment:no-horizontal-instance-expansion:base61:aux1-zero-before-cross-products:fixed27:constraints232-degree4:cross-trace-address-binding=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
 
@@ -635,11 +633,6 @@ impl P256WindowBatchStarkFixedProviderV1 {
             return Ok(fixed);
         }
         p256_window_stark_fixed_local_row_v1(index % P256_WINDOW_STARK_TRACE_SIZE_V1)
-    }
-
-    /// Native row count.
-    pub(crate) const fn trace_size_v1(self) -> usize {
-        self.trace_size
     }
 }
 

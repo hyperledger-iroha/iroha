@@ -30,6 +30,7 @@ pub(super) fn dependency_is_present(
         }
         Slot::GovernanceDagCheckpointStore => deps.sorafs_governance_dag_checkpoint_store.is_some(),
         Slot::StreamTokenSigner => deps.sorafs_stream_token_signer.is_some(),
+        Slot::StreamTokenGatewayAdmission => deps.sorafs_stream_token_gateway_admission.is_some(),
         Slot::AppealFinanceTransactionSigner => {
             deps.sorafs_appeal_finance_runtime_signers.is_some()
         }
@@ -208,6 +209,10 @@ fn has_unrequested_storage_security_dependency(
         bindings,
         Slot::StreamTokenSigner,
         dependencies.sorafs_stream_token_signer.is_some(),
+    ) || dependency_is_unrequested(
+        bindings,
+        Slot::StreamTokenGatewayAdmission,
+        dependencies.sorafs_stream_token_gateway_admission.is_some(),
     ) || dependency_is_unrequested(
         bindings,
         Slot::PorFinalizedReplayArchive,

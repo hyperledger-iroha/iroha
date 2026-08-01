@@ -81,7 +81,7 @@ jobs:
       - name: Make koto executable
         run: chmod +x bins/koto
       - name: Install pytest
-        run: python3 -m pip install --disable-pip-version-check pytest==8.4.2
+        run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
       - name: Unit-test Kotodama documentation checker
         run: python3 -m pytest -q pytests/scripts/check_kotodama_docs_test.py
       - name: Verify workspace release-workflow semantics
@@ -177,7 +177,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install pinned router-test dependency
-        run: python3 -m pip install --disable-pip-version-check pytest==8.4.2
+        run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
       - name: Verify exhaustive Rust lane ownership
         run: |
           python3 scripts/rust_ci.py validate

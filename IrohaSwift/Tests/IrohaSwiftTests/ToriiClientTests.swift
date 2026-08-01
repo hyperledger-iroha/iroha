@@ -5,11 +5,11 @@ import Combine
 #endif
 @testable import IrohaSwift
 
-private func testFeePayment(gasLimit: UInt64? = nil) -> FeePaymentIntent {
+func testFeePayment(gasLimit: UInt64? = nil) -> FeePaymentIntent {
     .authority(chargeLimits: [], gasLimit: gasLimit)
 }
 
-private func testFeePaymentObject(_ intent: FeePaymentIntent) -> [String: Any] {
+func testFeePaymentObject(_ intent: FeePaymentIntent) -> [String: Any] {
     let data = try! intent.canonicalJSONData()
     return try! JSONSerialization.jsonObject(with: data) as! [String: Any]
 }
@@ -24,7 +24,30 @@ private func encodeTestCanonicalOnboardingBody(
     return try encoder.encode(body)
 }
 
-private final class StubURLProtocol: URLProtocol {
+private func kagemushaOperationRequestArchive(
+    schema: String,
+    fieldCount: Int,
+    operationIdFieldIndex: Int
+) -> Data {
+    var payload = CompactNoritoWriter()
+    for index in 0..<fieldCount {
+        let field: Data
+        if index == 0 {
+            field = CompactNorito.encodeUInt16(KagemushaRecursiveSpend.wireVersionV4)
+        } else if index == operationIdFieldIndex {
+            field = Data(repeating: 0x11, count: 32)
+        } else {
+            field = Data([UInt8(index + 1)])
+        }
+        payload.writeField(field)
+    }
+    return KagemushaRecursiveSpend.frameArchive(
+        schema: schema,
+        payload: payload.data
+    )
+}
+
+final class StubURLProtocol: URLProtocol {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data?))?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -305,550 +328,6 @@ private func mutateFirstNativeAmxQcBody(
     }
 }
 
-@available(iOS 15.0, macOS 12.0, *)
-final class ToriiContractAPITests: XCTestCase {
-    private let detachedCreationTimeMs: UInt64 = 4_102_444_800_000
-    private let signingSeed = Data(repeating: 0x41, count: 32)
-    private var signingKeypair: Keypair { try! Keypair(privateKeyBytes: signingSeed) }
-    private var authority: String {
-        try! signingKeypair.accountId(networkPrefix: AccountId.defaultNetworkPrefix)
-    }
-    private var signingPublicKeyHex: String {
-        signingKeypair.publicKey.map { String(format: "%02x", $0) }.joined()
-    }
-    private func detachedSignatureB64() throws -> String {
-        try signingKeypair.sign(Data(repeating: 0x5a, count: 32)).base64EncodedString()
-    }
-    private let merchantAccount = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
-    private let contractAlias = "bisp::hbl.sbp"
-    private let contractAddress = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
-    private let assetId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
-    private let codeHash = String(repeating: "a", count: 64)
-    private let abiHash = String(repeating: "b", count: 64)
-    private let entrypointHash = String(repeating: "c", count: 64)
-    private let payloadDigest = "180cfc3bcd8ac21e73becfc0ce45618853171b0a20d4db52fac65c6cdd262ddc"
-    private let txHash = String(repeating: "e", count: 64)
-
-    override func tearDown() {
-        StubURLProtocol.handler = nil
-        super.tearDown()
-    }
-
-    private func makeClient() -> ToriiClient {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [StubURLProtocol.self]
-        return ToriiClient(
-            baseURL: URL(string: "https://contracts.example")!,
-            session: URLSession(configuration: configuration),
-            currentTimeMilliseconds: { 4_102_444_801_000 }
-        )
-    }
-
-    private var canonicalReadAuth: ToriiCanonicalRequestAuth {
-        ToriiCanonicalRequestAuth(
-            accountId: authority,
-            privateKey: signingSeed,
-            timestampMs: 4_102_444_801_000,
-            nonce: "canonical-read-test"
-        )
-    }
-
-    private func jsonBody(_ request: URLRequest) throws -> [String: Any] {
-        let data: Data
-        if let body = request.httpBody {
-            data = body
-        } else if let stream = request.httpBodyStream {
-            stream.open()
-            defer { stream.close() }
-            var result = Data()
-            var buffer = [UInt8](repeating: 0, count: 4_096)
-            while stream.hasBytesAvailable {
-                let count = stream.read(&buffer, maxLength: buffer.count)
-                guard count > 0 else { break }
-                result.append(buffer, count: count)
-            }
-            data = result
-        } else {
-            throw NSError(domain: "ToriiContractAPITests", code: 1)
-        }
-        return try XCTUnwrap(
-            JSONSerialization.jsonObject(with: data) as? [String: Any]
-        )
-    }
-
-    private func response(
-        for request: URLRequest,
-        status: Int = 200,
-        contentType: String = "application/json",
-        json: Any
-    ) throws -> (HTTPURLResponse, Data?) {
-        let response = try XCTUnwrap(HTTPURLResponse(
-            url: try XCTUnwrap(request.url),
-            statusCode: status,
-            httpVersion: nil,
-            headerFields: ["Content-Type": contentType]
-        ))
-        return (response, try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys]))
-    }
-
-    private func contractCallResponse(
-        submitted: Bool,
-        mutate: (inout [String: Any]) -> Void = { _ in }
-    ) -> [String: Any] {
-        var receipt: [String: Any] = [
-            "operation_kind": "contract_call",
-            "status": submitted ? "submitted" : "pending_signature",
-            "transport": "torii",
-            "dataspace": "hbl.sbp",
-            "contract_alias": contractAlias,
-            "contract_address": contractAddress,
-            "code_hash_hex": codeHash,
-            "abi_hash_hex": abiHash,
-            "entrypoint": "spend_to_merchant",
-            "entrypoint_hash_hex": entrypointHash,
-            "gas_limit": 500_000,
-            "fee_payment": testFeePaymentObject(testFeePayment(gasLimit: 500_000)),
-            "payload_digest_hex": payloadDigest,
-        ]
-        if submitted {
-            receipt["tx_hash_hex"] = txHash
-        }
-        var value: [String: Any] = [
-            "ok": true,
-            "submitted": submitted,
-            "dataspace": "hbl.sbp",
-            "contract_address": contractAddress,
-            "code_hash_hex": codeHash,
-            "abi_hash_hex": abiHash,
-            "creation_time_ms": detachedCreationTimeMs,
-            "transaction_ttl_ms": 120_000,
-            "entrypoint_hash_hex": entrypointHash,
-            "entrypoint": "spend_to_merchant",
-            "operation_receipt": receipt,
-        ]
-        if submitted {
-            value["tx_hash_hex"] = txHash
-            value["pipeline_status"] = [
-                "hash": txHash,
-                "status": ["kind": "Queued"],
-                "summary": "Queued",
-                "diagnostics": [],
-                "scope": "local",
-                "resolved_from": "queue",
-            ]
-        } else {
-            let scaffold = Data([1, 2, 3, 4]).base64EncodedString()
-            value["transaction_scaffold_b64"] = scaffold
-            value["signed_transaction_b64"] = scaffold
-            value["signing_message_b64"] = Data(repeating: 0x5a, count: 32).base64EncodedString()
-            value["tx_hash_hex"] = NSNull()
-        }
-        mutate(&value)
-        return value
-    }
-
-    private func detachedRequest() -> ToriiContractCallRequest {
-        ToriiContractCallRequest(
-            authority: authority,
-            contractAlias: contractAlias,
-            entrypoint: "spend_to_merchant",
-            payload: .object([
-                "merchant_account_id": .string(merchantAccount),
-                "amount": .string("750"),
-            ]),
-            creationTimeMs: detachedCreationTimeMs,
-            transactionTtlMs: 120_000,
-            feePayment: testFeePayment(gasLimit: 500_000)
-        )
-    }
-
-    func testResolveContractAliasUsesCanonicalRouteAndBindsResponse() async throws {
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/contracts/aliases/resolve")
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
-            XCTAssertEqual(try self.jsonBody(request)["contract_alias"] as? String, self.contractAlias)
-            return try self.response(for: request, json: [
-                "contract_alias": self.contractAlias,
-                "contract_address": self.contractAddress,
-                "dataspace": "hbl.sbp",
-                "contract_alias_binding": [
-                    "alias": self.contractAlias,
-                    "status": "permanent",
-                    "bound_at_ms": 123,
-                ],
-                "source": "world_state",
-            ])
-        }
-
-        let result = try await makeClient().resolveContractAlias(contractAlias, canonicalAuth: canonicalReadAuth)
-        XCTAssertEqual(result.contractAddress, contractAddress)
-        XCTAssertEqual(result.binding?.status, .permanent)
-    }
-
-    func testResolveContractAliasRejectsUnboundDuplicateAndUnknownResponses() async {
-        let payloads = [
-            "{\"contract_alias\":\"other::hbl.sbp\",\"contract_address\":\"\(contractAddress)\",\"dataspace\":\"hbl.sbp\"}",
-            "{\"contract_alias\":\"\(contractAlias)\",\"contract_alias\":\"\(contractAlias)\",\"contract_address\":\"\(contractAddress)\",\"dataspace\":\"hbl.sbp\"}",
-            "{\"contract_alias\":\"\(contractAlias)\",\"contract_address\":\"\(contractAddress)\",\"dataspace\":\"hbl.sbp\",\"legacy\":true}",
-        ]
-        for payload in payloads {
-            StubURLProtocol.handler = { request in
-                let http = HTTPURLResponse(
-                    url: request.url!, statusCode: 200, httpVersion: nil,
-                    headerFields: ["Content-Type": "application/json"]
-                )!
-                return (http, Data(payload.utf8))
-            }
-            do {
-                _ = try await makeClient().resolveContractAlias(contractAlias, canonicalAuth: canonicalReadAuth)
-                XCTFail("adversarial alias response was accepted: \(payload)")
-            } catch {}
-        }
-    }
-
-    func testContractStatePathQueryIsStrictlyBound() async throws {
-        let query = try ToriiContractStateQuery(
-            target: .alias(contractAlias),
-            selector: .path("TrancheCount"),
-            decodeJSON: true
-        )
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/contracts/state")
-            let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems
-            XCTAssertEqual(items?.first(where: { $0.name == "contract_alias" })?.value, self.contractAlias)
-            XCTAssertEqual(items?.first(where: { $0.name == "path" })?.value, "TrancheCount")
-            XCTAssertEqual(items?.first(where: { $0.name == "decode" })?.value, "json")
-            return try self.response(for: request, json: [
-                "contract_address": self.contractAddress,
-                "contract_alias": self.contractAlias,
-                "path": "TrancheCount",
-                "entries": [[
-                    "path": "TrancheCount",
-                    "found": true,
-                    "value_b64": Data([0, 0, 0, 2]).base64EncodedString(),
-                    "value_len": 4,
-                    "value_json": "2",
-                ]],
-                "offset": 0,
-                "limit": 1,
-            ])
-        }
-
-        let page = try await makeClient().queryContractState(query)
-        XCTAssertEqual(page.entries.first?.valueJSON, .string("2"))
-        XCTAssertFalse(page.hasMore)
-    }
-
-    func testContractStateQueryRejectsAmbiguousAndNonCanonicalSelectors() throws {
-        XCTAssertThrowsError(try ToriiContractStateQuery(
-            target: .alias(contractAlias), selector: .paths([])
-        ))
-        XCTAssertThrowsError(try ToriiContractStateQuery(
-            target: .alias(contractAlias), selector: .paths(["Tranches/a", "Tranches/a"])
-        ))
-        XCTAssertThrowsError(try ToriiContractStateQuery(
-            target: .alias(contractAlias), selector: .path("Tranches,a")
-        ))
-        XCTAssertThrowsError(try ToriiContractStateQuery(
-            target: .alias(contractAlias), selector: .path(" TrancheCount")
-        ))
-        XCTAssertThrowsError(try ToriiContractStateQuery(
-            target: .alias(contractAlias), selector: .path("TrancheCount"), offset: 1
-        ))
-        XCTAssertThrowsError(try ToriiContractStateQuery(
-            target: .alias(contractAlias), selector: .prefix("Tranches"), limit: 10_001
-        ))
-    }
-
-    func testContractStateModelsRejectLegacyDecodeErrorsAndCorruptValues() throws {
-        let base: [String: Any] = [
-            "contract_address": contractAddress,
-            "contract_alias": contractAlias,
-            "path": "TrancheCount",
-            "entries": [[
-                "path": "TrancheCount", "found": true,
-                "value_b64": "AQ==", "value_len": 1,
-            ]],
-            "offset": 0,
-            "limit": 1,
-        ]
-        var legacy = base
-        legacy["entries"] = [[
-            "path": "TrancheCount", "found": true,
-            "decode_error": "legacy entry error",
-        ]]
-        var badLength = base
-        badLength["entries"] = [[
-            "path": "TrancheCount", "found": true,
-            "value_b64": "AQ==", "value_len": 2,
-        ]]
-        var missingWithValue = base
-        missingWithValue["entries"] = [[
-            "path": "TrancheCount", "found": false,
-            "value_json": "2",
-        ]]
-        for object in [legacy, badLength, missingWithValue] {
-            let data = try JSONSerialization.data(withJSONObject: object)
-            XCTAssertThrowsError(
-                try JSONDecoder().decode(ToriiContractStateResponse.self, from: data)
-            )
-        }
-    }
-
-    func testPrepareAndSubmitDetachedContractCallPreservesEveryBinding() async throws {
-        var requestIndex = 0
-        StubURLProtocol.handler = { request in
-            requestIndex += 1
-            XCTAssertEqual(request.url?.path, "/v1/contracts/call")
-            let body = try self.jsonBody(request)
-            XCTAssertNil(body["private_key"])
-            XCTAssertEqual(body["transaction_ttl_ms"] as? Int, 120_000)
-            if requestIndex == 1 {
-                XCTAssertNil(body["public_key_hex"])
-                XCTAssertNil(body["signature_b64"])
-                return try self.response(
-                    for: request,
-                    json: self.contractCallResponse(submitted: false)
-                )
-            }
-            XCTAssertEqual(
-                body["creation_time_ms"] as? NSNumber,
-                self.detachedCreationTimeMs as NSNumber
-            )
-            XCTAssertEqual(body["public_key_hex"] as? String, self.signingPublicKeyHex)
-            XCTAssertEqual(body["signature_b64"] as? String, try self.detachedSignatureB64())
-            return try self.response(
-                for: request,
-                json: self.contractCallResponse(submitted: true)
-            )
-        }
-
-        let client = makeClient()
-        let draft = try await client.prepareDetachedContractCall(detachedRequest())
-        XCTAssertEqual(draft.signingMessage, Data(repeating: 0x5a, count: 32))
-        XCTAssertEqual(draft.resolvedContractAddress, contractAddress)
-        let submitted = try await client.submitDetachedContractCall(
-            draft,
-            publicKeyHex: signingPublicKeyHex,
-            signatureB64: try detachedSignatureB64()
-        )
-        XCTAssertEqual(submitted.transactionHashHex, txHash)
-        XCTAssertEqual(requestIndex, 2)
-    }
-
-    func testDetachedContractCallPayloadDigestMatchesToriiCanonicalJSON() throws {
-        XCTAssertEqual(
-            try detachedRequest().canonicalContractPayloadDigestHex(),
-            payloadDigest
-        )
-    }
-
-    func testDetachedPreparationRejectsUnboundedOrMissingGasLimitBeforeNetwork() async {
-        var calls = 0
-        StubURLProtocol.handler = { request in
-            calls += 1
-            return try self.response(
-                for: request,
-                json: self.contractCallResponse(submitted: false)
-            )
-        }
-        let mutations: [(inout ToriiContractCallRequest) -> Void] = [
-            { $0.transactionTtlMs = nil },
-            { $0.transactionTtlMs = ToriiContractCallRequest.maximumDetachedTransactionTtlMs + 1 },
-            { $0.creationTimeMs = nil },
-            { $0.creationTimeMs = 1 },
-            { $0.creationTimeMs = UInt64.max },
-            { $0.feePayment = testFeePayment() },
-        ]
-        for mutation in mutations {
-            var request = detachedRequest()
-            mutation(&request)
-            do {
-                _ = try await makeClient().prepareDetachedContractCall(request)
-                XCTFail("unbounded detached request was accepted")
-            } catch {}
-        }
-        XCTAssertEqual(calls, 0)
-    }
-
-    func testDetachedContractCallFinalityRequiresGlobalStateAppliedStatus() async throws {
-        var requestIndex = 0
-        StubURLProtocol.handler = { request in
-            requestIndex += 1
-            switch requestIndex {
-            case 1:
-                return try self.response(
-                    for: request,
-                    json: self.contractCallResponse(submitted: false)
-                )
-            case 2:
-                return try self.response(
-                    for: request,
-                    json: self.contractCallResponse(submitted: true)
-                )
-            default:
-                XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
-                let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems
-                XCTAssertEqual(items?.first(where: { $0.name == "hash" })?.value, self.txHash)
-                XCTAssertEqual(items?.first(where: { $0.name == "scope" })?.value, "auto")
-                return try self.response(for: request, json: [
-                    "hash": self.txHash,
-                    "status": ["kind": "Applied", "block_height": 44],
-                    "summary": "Applied at block 44",
-                    "diagnostics": [],
-                    "scope": "global",
-                    "resolved_from": "state",
-                ])
-            }
-        }
-
-        let client = makeClient()
-        let draft = try await client.prepareDetachedContractCall(detachedRequest())
-        let submitted = try await client.submitDetachedContractCall(
-            draft,
-            publicKeyHex: signingPublicKeyHex,
-            signatureB64: try detachedSignatureB64()
-        )
-        let finality = try await client.waitForDetachedContractCallFinality(
-            draft,
-            submission: submitted,
-            pollOptions: PipelineStatusPollOptions(
-                pollInterval: 0,
-                timeout: 1,
-                maxAttempts: 1
-            )
-        )
-        XCTAssertEqual(finality.state, .applied)
-        XCTAssertEqual(finality.status.blockHeight, 44)
-        XCTAssertEqual(requestIndex, 3)
-    }
-
-    func testDetachedPreparationRejectsAdversarialDraftResponses() async {
-        let mutations: [(inout [String: Any]) -> Void] = [
-            { $0["submitted"] = true },
-            { $0["signing_message_b64"] = Data(repeating: 1, count: 31).base64EncodedString() },
-            { $0["signed_transaction_b64"] = Data([9]).base64EncodedString() },
-            {
-                var receipt = $0["operation_receipt"] as! [String: Any]
-                receipt["transport"] = "legacy"
-                $0["operation_receipt"] = receipt
-            },
-            {
-                var receipt = $0["operation_receipt"] as! [String: Any]
-                receipt["payload_digest_hex"] = String(repeating: "0", count: 64)
-                $0["operation_receipt"] = receipt
-            },
-            {
-                var receipt = $0["operation_receipt"] as! [String: Any]
-                receipt["payload_digest_hex"] = String(repeating: "f", count: 64)
-                $0["operation_receipt"] = receipt
-            },
-            {
-                var receipt = $0["operation_receipt"] as! [String: Any]
-                receipt["fee_payment"] = testFeePaymentObject(testFeePayment(gasLimit: 500_001))
-                $0["operation_receipt"] = receipt
-            },
-            {
-                var receipt = $0["operation_receipt"] as! [String: Any]
-                receipt["unexpected_fee_field"] = "legacy"
-                $0["operation_receipt"] = receipt
-            },
-        ]
-        for mutation in mutations {
-            StubURLProtocol.handler = { request in
-                try self.response(
-                    for: request,
-                    json: self.contractCallResponse(submitted: false, mutate: mutation)
-                )
-            }
-            do {
-                _ = try await makeClient().prepareDetachedContractCall(detachedRequest())
-                XCTFail("adversarial detached draft was accepted")
-            } catch {}
-        }
-    }
-
-    func testDetachedSubmitRejectsInvalidSignatureWithoutNetworkRequest() async throws {
-        var calls = 0
-        StubURLProtocol.handler = { request in
-            calls += 1
-            return try self.response(
-                for: request,
-                json: self.contractCallResponse(submitted: false)
-            )
-        }
-        let client = makeClient()
-        let draft = try await client.prepareDetachedContractCall(detachedRequest())
-        let invalidInputs = [
-            (String(repeating: "A", count: 64), Data(repeating: 1, count: 64).base64EncodedString()),
-            (String(repeating: "0", count: 64), Data(repeating: 1, count: 64).base64EncodedString()),
-            (signingPublicKeyHex, "AQ=="),
-            (signingPublicKeyHex, Data(repeating: 1, count: 64).base64EncodedString()),
-            (String(repeating: "1", count: 64), Data(repeating: 0, count: 64).base64EncodedString()),
-            (String(repeating: "1", count: 64), Data(repeating: 1, count: 64).base64EncodedString() + "\n"),
-        ]
-        for input in invalidInputs {
-            do {
-                _ = try await client.submitDetachedContractCall(
-                    draft,
-                    publicKeyHex: input.0,
-                    signatureB64: input.1
-                )
-                XCTFail("invalid detached signature input was accepted")
-            } catch {}
-        }
-        XCTAssertEqual(calls, 1)
-    }
-
-    func testDetachedSubmitRejectsTamperedReceiptAndPipelineBindings() async throws {
-        let mutations: [(inout [String: Any]) -> Void] = [
-            {
-                var pipeline = $0["pipeline_status"] as! [String: Any]
-                pipeline["hash"] = String(repeating: "f", count: 64)
-                $0["pipeline_status"] = pipeline
-            },
-            {
-                var pipeline = $0["pipeline_status"] as! [String: Any]
-                pipeline["scope"] = "global"
-                pipeline["resolved_from"] = "state"
-                $0["pipeline_status"] = pipeline
-            },
-            {
-                var receipt = $0["operation_receipt"] as! [String: Any]
-                receipt["payload_digest_hex"] = String(repeating: "f", count: 64)
-                $0["operation_receipt"] = receipt
-            },
-            {
-                var receipt = $0["operation_receipt"] as! [String: Any]
-                receipt["gas_used"] = 1
-                $0["operation_receipt"] = receipt
-            },
-            { $0["signing_message_b64"] = Data(repeating: 1, count: 32).base64EncodedString() },
-            { $0["entrypoint_hash_hex"] = String(repeating: "f", count: 64) },
-        ]
-        for mutation in mutations {
-            var call = 0
-            StubURLProtocol.handler = { request in
-                call += 1
-                let json = call == 1
-                    ? self.contractCallResponse(submitted: false)
-                    : self.contractCallResponse(submitted: true, mutate: mutation)
-                return try self.response(for: request, json: json)
-            }
-            let client = makeClient()
-            let draft = try await client.prepareDetachedContractCall(detachedRequest())
-            do {
-                _ = try await client.submitDetachedContractCall(
-                    draft,
-                    publicKeyHex: signingPublicKeyHex,
-                    signatureB64: try detachedSignatureB64()
-                )
-                XCTFail("tampered detached submit response was accepted")
-            } catch {}
-        }
-    }
-}
 
 #if os(macOS)
 private final class ToriiMockProcess {
@@ -12904,25 +12383,6 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testOfflineOperationsUseCanonicalPathsAndDirectNoritoBodies() async throws {
         let operationId = String(repeating: "11", count: 32)
-        let operationIdBytes = Data(repeating: 0x11, count: 32)
-        func requestArchive(
-            schema: String,
-            fieldCount: Int,
-            operationIdFieldIndex: Int
-        ) -> Data {
-            var payload = CompactNoritoWriter()
-            for index in 0..<fieldCount {
-                payload.writeField(
-                    index == operationIdFieldIndex
-                        ? operationIdBytes
-                        : Data([UInt8(index + 1)])
-                )
-            }
-            return KagemushaRecursiveSpend.frameArchive(
-                schema: schema,
-                payload: payload.data
-            )
-        }
         func reference(_ kind: KagemushaOperationKind) throws -> KagemushaOperationReference {
             try KagemushaOperationReference(
                 operationId: operationId,
@@ -12935,15 +12395,15 @@ final class ToriiClientTests: XCTestCase {
         }
         let topUpResponseArchive = KagemushaOperationCodec.encodeReference(try reference(.topUp))
         let redeemResponseArchive = KagemushaOperationCodec.encodeReference(try reference(.redeem))
-        let topUpRequestArchive = requestArchive(
+        let topUpRequestArchive = kagemushaOperationRequestArchive(
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
-            fieldCount: 7,
-            operationIdFieldIndex: 5
+            fieldCount: 8,
+            operationIdFieldIndex: 6
         )
-        let redeemRequestArchive = requestArchive(
+        let redeemRequestArchive = kagemushaOperationRequestArchive(
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
-            fieldCount: 9,
-            operationIdFieldIndex: 7
+            fieldCount: 10,
+            operationIdFieldIndex: 8
         )
         let pendingStatusArchive = try XCTUnwrap(Data(hexString:
             "4e5254300000fb04214104df1bdcd39249bddd4db23a009600000000000000bdfee2508f80055702000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff"
@@ -13054,18 +12514,11 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testBodyOnlyOfflineStatus404CannotAuthorizeSubmission() async throws {
         let operationId = String(repeating: "11", count: 32)
-        var payload = CompactNoritoWriter()
-        for index in 0..<7 {
-            payload.writeField(
-                index == 5
-                    ? Data(repeating: 0x11, count: 32)
-                    : Data([UInt8(index + 1)])
-            )
-        }
         let request = try KagemushaTopUpRequest(
-            noritoArchive: KagemushaRecursiveSpend.frameArchive(
+            noritoArchive: kagemushaOperationRequestArchive(
                 schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                payload: payload.data
+                fieldCount: 8,
+                operationIdFieldIndex: 6
             )
         )
         var methods: [String] = []
@@ -13124,18 +12577,11 @@ final class ToriiClientTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testBodyOnlyOfflineSubmissionCodesCannotBecomeDefinitive() async throws {
-        var payload = CompactNoritoWriter()
-        for index in 0..<7 {
-            payload.writeField(
-                index == 5
-                    ? Data(repeating: 0x11, count: 32)
-                    : Data([UInt8(index + 1)])
-            )
-        }
         let request = try KagemushaTopUpRequest(
-            noritoArchive: KagemushaRecursiveSpend.frameArchive(
+            noritoArchive: kagemushaOperationRequestArchive(
                 schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                payload: payload.data
+                fieldCount: 8,
+                operationIdFieldIndex: 6
             )
         )
 
@@ -13184,18 +12630,11 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testOfflineSubmissionClassifierRequiresExactEndpointPairs() async throws {
         let operationId = String(repeating: "11", count: 32)
-        var payload = CompactNoritoWriter()
-        for index in 0..<7 {
-            payload.writeField(
-                index == 5
-                    ? Data(repeating: 0x11, count: 32)
-                    : Data([UInt8(index + 1)])
-            )
-        }
         let request = try KagemushaTopUpRequest(
-            noritoArchive: KagemushaRecursiveSpend.frameArchive(
+            noritoArchive: kagemushaOperationRequestArchive(
                 schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                payload: payload.data
+                fieldCount: 8,
+                operationIdFieldIndex: 6
             )
         )
 
@@ -13355,18 +12794,11 @@ final class ToriiClientTests: XCTestCase {
             )
         }
 
-        var payload = CompactNoritoWriter()
-        for index in 0..<7 {
-            payload.writeField(
-                index == 5
-                    ? Data(repeating: 0x11, count: 32)
-                    : Data([UInt8(index + 1)])
-            )
-        }
         let request = try KagemushaTopUpRequest(
-            noritoArchive: KagemushaRecursiveSpend.frameArchive(
+            noritoArchive: kagemushaOperationRequestArchive(
                 schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                payload: payload.data
+                fieldCount: 8,
+                operationIdFieldIndex: 6
             )
         )
 
@@ -13406,16 +12838,13 @@ final class ToriiClientTests: XCTestCase {
         let submittedOperationId = String(repeating: "11", count: 32)
         let otherOperationId = String(repeating: "33", count: 32)
         let transactionHash = String(repeating: "22", count: 32)
-        var requestPayload = CompactNoritoWriter()
-        for index in 0..<7 {
-            requestPayload.writeField(
-                index == 5 ? Data(repeating: 0x11, count: 32) : Data([UInt8(index + 1)])
+        let request = try KagemushaTopUpRequest(
+            noritoArchive: kagemushaOperationRequestArchive(
+                schema: KagemushaRecursiveSpend.topUpRequestWireName,
+                fieldCount: 8,
+                operationIdFieldIndex: 6
             )
-        }
-        let request = try KagemushaTopUpRequest(noritoArchive: KagemushaRecursiveSpend.frameArchive(
-            schema: KagemushaRecursiveSpend.topUpRequestWireName,
-            payload: requestPayload.data
-        ))
+        )
 
         func reference(operationId: String, kind: KagemushaOperationKind) throws -> Data {
             KagemushaOperationCodec.encodeReference(try KagemushaOperationReference(

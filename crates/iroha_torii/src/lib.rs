@@ -2147,8 +2147,10 @@ struct AppState {
     #[cfg(feature = "app_api")]
     stream_token_issuer: Option<Arc<sorafs::StreamTokenIssuer>>,
     #[cfg(feature = "app_api")]
+    stream_token_admission_capture: Option<Arc<sorafs::StreamTokenAdmissionCaptureV1>>,
+    #[cfg(all(test, feature = "app_api"))]
     stream_token_concurrency: sorafs::StreamTokenConcurrencyTracker,
-    #[cfg(feature = "app_api")]
+    #[cfg(all(test, feature = "app_api"))]
     stream_token_quota: sorafs::StreamTokenQuotaTracker,
     #[cfg(feature = "app_api")]
     sorafs_chunk_range_overrides: DashMap<[u8; 32], bool>,
@@ -3110,21 +3112,6 @@ impl AppState {
     #[cfg(feature = "app_api")]
     pub(crate) fn sorafs_node(&self) -> &sorafs_node::NodeHandle {
         &self.sorafs_node
-    }
-
-    #[cfg(feature = "app_api")]
-    pub(crate) fn stream_token_issuer(&self) -> Option<Arc<sorafs::StreamTokenIssuer>> {
-        self.stream_token_issuer.clone()
-    }
-
-    #[cfg(feature = "app_api")]
-    pub(crate) fn stream_token_concurrency(&self) -> &sorafs::StreamTokenConcurrencyTracker {
-        &self.stream_token_concurrency
-    }
-
-    #[cfg(feature = "app_api")]
-    pub(crate) fn stream_token_quota(&self) -> &sorafs::StreamTokenQuotaTracker {
-        &self.stream_token_quota
     }
 
     #[cfg(feature = "app_api")]
@@ -49247,6 +49234,8 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     stream_token_issuer: Option<Arc<sorafs::StreamTokenIssuer>>,
     #[cfg(feature = "app_api")]
+    sorafs_stream_token_admission_capture: Option<Arc<sorafs::StreamTokenAdmissionCaptureV1>>,
+    #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
     #[cfg(feature = "app_api")]
     sorafs_appeal_finance_policy: Arc<sorafs::api::AppealFinanceRuntimePolicy>,
@@ -49278,6 +49267,8 @@ pub struct ToriiRuntimeDeps {
     sorafs_node: Option<sorafs_node::NodeHandle>,
     #[cfg(feature = "app_api")]
     sorafs_stream_token_signer: Option<Arc<dyn sorafs::StreamTokenRuntimeSigner>>,
+    #[cfg(feature = "app_api")]
+    sorafs_stream_token_admission_capture: Option<Arc<sorafs::StreamTokenAdmissionCaptureV1>>,
     #[cfg(feature = "app_api")]
     sorafs_proof_outcome_signer: Option<Arc<dyn SoraFsProofOutcomeTransactionSigner>>,
     #[cfg(feature = "app_api")]
@@ -49386,6 +49377,8 @@ impl ToriiRuntimeDeps {
             #[cfg(feature = "app_api")]
             sorafs_stream_token_signer: None,
             #[cfg(feature = "app_api")]
+            sorafs_stream_token_admission_capture: None,
+            #[cfg(feature = "app_api")]
             sorafs_proof_outcome_signer: None,
             #[cfg(feature = "app_api")]
             sorafs_repair_transaction_signer: None,
@@ -49482,17 +49475,6 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_sorafs_node(mut self, sorafs_node: sorafs_node::NodeHandle) -> Self {
         self.sorafs_node = Some(sorafs_node);
-        self
-    }
-
-    /// Attach the runtime-only HSM/KMS signer used for stream-token issuance.
-    #[cfg(feature = "app_api")]
-    #[must_use]
-    pub fn with_sorafs_stream_token_signer(
-        mut self,
-        signer: Arc<dyn sorafs::StreamTokenRuntimeSigner>,
-    ) -> Self {
-        self.sorafs_stream_token_signer = Some(signer);
         self
     }
 
@@ -54100,6 +54082,13 @@ impl Torii {
             |error| panic!("invalid SoraFS native signer runtime preflight: {error}"),
         );
         #[cfg(feature = "app_api")]
+        sorafs::stream_token_runtime::preflight_admission_capture(
+            &chain_id,
+            &config,
+            &runtime_deps,
+        )
+        .unwrap_or_else(|error| panic!("invalid SoraFS stream-token runtime preflight: {error}"));
+        #[cfg(feature = "app_api")]
         preflight_sorafs_fenced_privacy_runtime(
             &sorafs_node::config::StorageConfig::from(&config.sorafs_storage),
             &runtime_deps,
@@ -54113,6 +54102,9 @@ impl Torii {
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
         #[cfg(feature = "app_api")]
         let shared_sorafs_stream_token_signer = runtime_deps.sorafs_stream_token_signer.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_stream_token_admission_capture =
+            runtime_deps.sorafs_stream_token_admission_capture.clone();
         #[cfg(feature = "app_api")]
         let shared_sorafs_proof_outcome_signer = runtime_deps.sorafs_proof_outcome_signer.clone();
         #[cfg(feature = "app_api")]
@@ -55146,15 +55138,11 @@ impl Torii {
             None
         };
         #[cfg(feature = "app_api")]
-        let stream_token_issuer = match sorafs::StreamTokenIssuer::from_config(
+        let stream_token_issuer = sorafs::stream_token_runtime::build_issuer(
             &config.sorafs_storage.stream_tokens,
             &config.api_tokens,
             shared_sorafs_stream_token_signer,
-        ) {
-            Ok(Some(issuer)) => Some(Arc::new(issuer)),
-            Ok(None) => None,
-            Err(err) => panic!("invalid SoraFS stream token configuration: {err}"),
-        };
+        );
         #[cfg(feature = "app_api")]
         let (por_coordinator, por_runtime) =
             build_por_components(&config, &chain_id, &sorafs_node, sorafs_admission.clone());
@@ -55493,6 +55481,8 @@ impl Torii {
             sorafs_publish_discovery,
             #[cfg(feature = "app_api")]
             stream_token_issuer,
+            #[cfg(feature = "app_api")]
+            sorafs_stream_token_admission_capture: shared_sorafs_stream_token_admission_capture,
             #[cfg(feature = "app_api")]
             account_faucet,
             #[cfg(feature = "app_api")]
@@ -55961,10 +55951,12 @@ impl Torii {
             #[cfg(feature = "app_api")]
             stream_token_issuer: self.stream_token_issuer.clone(),
             #[cfg(feature = "app_api")]
+            stream_token_admission_capture: self.sorafs_stream_token_admission_capture.clone(),
+            #[cfg(feature = "app_api")]
             sorafs_potr_runtime_signers: self.sorafs_potr_runtime_signers.clone(),
-            #[cfg(feature = "app_api")]
+            #[cfg(all(test, feature = "app_api"))]
             stream_token_concurrency: sorafs::StreamTokenConcurrencyTracker::default(),
-            #[cfg(feature = "app_api")]
+            #[cfg(all(test, feature = "app_api"))]
             stream_token_quota: sorafs::StreamTokenQuotaTracker::default(),
             #[cfg(feature = "app_api")]
             sorafs_chunk_range_overrides: DashMap::new(),
@@ -56034,8 +56026,7 @@ impl Torii {
             &app_state.sorafs_gateway_tls_state,
             &app_state.sorafs_blinded_resolver,
             &app_state.stream_token_issuer,
-            &app_state.stream_token_quota,
-            &app_state.stream_token_concurrency,
+            &app_state.stream_token_admission_capture,
             &app_state.sorafs_chunk_range_overrides,
             &app_state.account_faucet,
             &app_state.sorafs_appeal_settlement_submitter,
@@ -57189,6 +57180,18 @@ mod gateway_runtime_config_tests {
 
         fn public_key(&self) -> [u8; 32] {
             self.public_key
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            sorafs::StreamTokenRuntimeSignerQualificationV1,
+            sorafs::StreamTokenRuntimeSignerProbeErrorV1,
+        > {
+            Ok(sorafs::StreamTokenRuntimeSignerQualificationV1::new(
+                4,
+                [0xb4; 32],
+            ))
         }
 
         fn sign(

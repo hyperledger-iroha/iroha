@@ -843,6 +843,9 @@ pub enum ParseError {
     /// Concurrency configuration contained invalid values.
     #[error("Invalid concurrency configuration")]
     InvalidConcurrencyConfig,
+    /// Kura storage parameters contained invalid or unrepresentable replica-advert geometry.
+    #[error("Invalid Kura configuration")]
+    InvalidKuraConfig,
     /// Torii configuration contained invalid or incomplete values.
     #[error("Invalid Torii configuration")]
     InvalidToriiConfig,
@@ -1052,7 +1055,7 @@ impl Root {
 
         let genesis = self.genesis.into();
 
-        let kura = self.kura.parse();
+        let kura = self.kura.parse(&mut emitter);
 
         let logger = self.logger;
         let queue = self.queue;
@@ -5630,111 +5633,7 @@ impl From<Genesis> for actual::Genesis {
     }
 }
 
-/// User-level configuration container for `Kura`.
-#[derive(Debug, ReadConfig)]
-pub struct Kura {
-    /// Initialisation mode controlling whether to reuse or reset existing storage.
-    #[config(env = "KURA_INIT_MODE", default)]
-    pub init_mode: KuraInitMode,
-    /// Directory where Kura stores blocks and auxiliary indices.
-    #[config(
-        env = "KURA_STORE_DIR",
-        default = "PathBuf::from(defaults::kura::STORE_DIR)"
-    )]
-    pub store_dir: WithOrigin<PathBuf>,
-    /// Maximum on-disk footprint for Kura (bytes, 0 = unlimited).
-    #[config(
-        env = "KURA_MAX_DISK_USAGE_BYTES",
-        default = "defaults::kura::MAX_DISK_USAGE_BYTES"
-    )]
-    pub max_disk_usage_bytes: Bytes<u64>,
-    /// Number of most-recent blocks kept in memory for fast access.
-    #[config(
-        env = "KURA_BLOCKS_IN_MEMORY",
-        default = "defaults::kura::BLOCKS_IN_MEMORY"
-    )]
-    pub blocks_in_memory: NonZeroUsize,
-    /// Number of recent committed non-genesis roster records retained for block-sync validation.
-    /// Genesis is pinned separately, and one additional row is reserved for an authenticated
-    /// pre-Kura successor.
-    #[config(
-        env = "KURA_BLOCK_SYNC_ROSTER_RETENTION",
-        default = "defaults::kura::BLOCK_SYNC_ROSTER_RETENTION"
-    )]
-    pub block_sync_roster_retention: NonZeroUsize,
-    /// Number of recent roster sidecars retained alongside the block store.
-    #[config(
-        env = "KURA_ROSTER_SIDECAR_RETENTION",
-        default = "defaults::kura::ROSTER_SIDECAR_RETENTION"
-    )]
-    pub roster_sidecar_retention: NonZeroUsize,
-    /// Distinct remote peers that must advertise a canonical block before local body eviction.
-    #[config(
-        env = "KURA_EVICTION_REQUIRED_REPLICAS",
-        default = "defaults::kura::EVICTION_REQUIRED_REPLICAS"
-    )]
-    pub eviction_required_replicas: NonZeroUsize,
-    /// Capacity of the merge-ledger cache used during compaction.
-    #[config(
-        env = "KURA_MERGE_LEDGER_CACHE_CAPACITY",
-        default = "defaults::kura::MERGE_LEDGER_CACHE_CAPACITY"
-    )]
-    pub merge_ledger_cache_capacity: usize,
-    /// Fsync policy for block persistence.
-    #[config(env = "KURA_FSYNC_MODE", default = "defaults::kura::FSYNC_MODE")]
-    pub fsync_mode: KuraFsyncMode,
-    /// Interval for batched fsync operations.
-    #[config(
-        env = "KURA_FSYNC_INTERVAL_MS",
-        default = "defaults::kura::FSYNC_INTERVAL.into()"
-    )]
-    pub fsync_interval_ms: DurationMs,
-    /// Debug controls for development/testing scenarios.
-    #[config(nested)]
-    pub debug: KuraDebug,
-}
-
-impl Kura {
-    fn parse(self) -> actual::Kura {
-        let Self {
-            init_mode,
-            store_dir,
-            max_disk_usage_bytes,
-            blocks_in_memory,
-            block_sync_roster_retention,
-            roster_sidecar_retention,
-            eviction_required_replicas,
-            merge_ledger_cache_capacity,
-            fsync_mode,
-            fsync_interval_ms,
-            debug:
-                KuraDebug {
-                    output_new_blocks: debug_output_new_blocks,
-                },
-        } = self;
-
-        actual::Kura {
-            init_mode,
-            store_dir,
-            max_disk_usage_bytes,
-            blocks_in_memory,
-            block_sync_roster_retention,
-            roster_sidecar_retention,
-            eviction_required_replicas,
-            debug_output_new_blocks,
-            merge_ledger_cache_capacity,
-            fsync_mode,
-            fsync_interval: fsync_interval_ms.0,
-        }
-    }
-}
-
-/// User-level configuration container for `KuraDebug`.
-#[derive(Debug, Clone, Copy, ReadConfig)]
-pub struct KuraDebug {
-    #[config(env = "KURA_DEBUG_OUTPUT_NEW_BLOCKS", default)]
-    output_new_blocks: bool,
-}
+include!("user/kura.rs");
 
 /// User-level finite candidate block limits.
 #[derive(Debug, Clone, Copy, ReadConfig)]
@@ -29568,6 +29467,9 @@ fn sorafs_por_rejects_obsolete_competing_state_paths() {
     );
 }
 
+#[path = "user/stream_token_admission.rs"]
+mod stream_token_admission;
+
 /// User-level configuration for stream-token issuance.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsStreamTokenConfig {
@@ -29578,6 +29480,28 @@ pub struct SorafsStreamTokenConfig {
     pub signer_handle: Option<String>,
     /// Canonical lowercase Ed25519 public key bound to the runtime signer.
     pub signer_public_key_hex: Option<String>,
+    /// Exact non-zero deployment adapter revision bound to the runtime signer.
+    pub signer_revision: Option<u64>,
+    /// Exact non-zero public-policy digest as lowercase hexadecimal.
+    pub signer_policy_digest_hex: Option<String>,
+    /// Credential-free deployment-owned quota/sequence/outbox provider handle.
+    pub admission_provider_handle: Option<String>,
+    /// Exact non-zero external admission-provider contract revision.
+    pub admission_provider_revision: Option<u64>,
+    /// Exact non-zero public-policy digest as lowercase hexadecimal.
+    pub admission_provider_policy_digest_hex: Option<String>,
+    /// Maximum durable callback rows admitted by the external provider.
+    #[config(default = "defaults::sorafs::storage::tokens::ADMISSION_MAX_PENDING")]
+    pub admission_max_pending: u32,
+    /// Maximum active token quota windows admitted by the external provider.
+    #[config(default = "defaults::sorafs::storage::tokens::ADMISSION_MAX_TRACKED_TOKENS")]
+    pub admission_max_tracked_tokens: u32,
+    /// Maximum ordered callback rows replayed by one reconciliation tick.
+    #[config(default = "defaults::sorafs::storage::tokens::ADMISSION_RECONCILE_MAX_ITEMS")]
+    pub admission_reconcile_max_items: u32,
+    /// Maximum lifetime of one cross-replica concurrency lease.
+    #[config(default = "defaults::sorafs::storage::tokens::ADMISSION_LEASE_TTL_MS")]
+    pub admission_lease_ttl_ms: u64,
     /// Public-key version advertised in tokens.
     #[config(default = "defaults::sorafs::storage::tokens::KEY_VERSION")]
     pub key_version: u32,
@@ -29601,6 +29525,17 @@ impl Default for SorafsStreamTokenConfig {
             enabled: defaults::sorafs::storage::tokens::ENABLED,
             signer_handle: None,
             signer_public_key_hex: None,
+            signer_revision: None,
+            signer_policy_digest_hex: None,
+            admission_provider_handle: None,
+            admission_provider_revision: None,
+            admission_provider_policy_digest_hex: None,
+            admission_max_pending: defaults::sorafs::storage::tokens::ADMISSION_MAX_PENDING,
+            admission_max_tracked_tokens:
+                defaults::sorafs::storage::tokens::ADMISSION_MAX_TRACKED_TOKENS,
+            admission_reconcile_max_items:
+                defaults::sorafs::storage::tokens::ADMISSION_RECONCILE_MAX_ITEMS,
+            admission_lease_ttl_ms: defaults::sorafs::storage::tokens::ADMISSION_LEASE_TTL_MS,
             key_version: defaults::sorafs::storage::tokens::KEY_VERSION,
             default_ttl_secs: defaults::sorafs::storage::tokens::DEFAULT_TTL_SECS,
             default_max_streams: defaults::sorafs::storage::tokens::DEFAULT_MAX_STREAMS,
@@ -29639,6 +29574,16 @@ impl SorafsStreamTokenConfig {
                 }
                 Some(bytes)
             });
+        let admission_provider_policy_digest = stream_token_admission::decode_policy_digest(
+            self.admission_provider_policy_digest_hex.as_deref(),
+            "admission_provider_policy_digest_hex",
+            emitter,
+        );
+        let signer_policy_digest = stream_token_admission::decode_policy_digest(
+            self.signer_policy_digest_hex.as_deref(),
+            "signer_policy_digest_hex",
+            emitter,
+        );
 
         if self.enabled {
             if !storage_enabled {
@@ -29665,16 +29610,47 @@ impl SorafsStreamTokenConfig {
                     "sorafs.storage.stream_tokens.signer_public_key_hex is required when issuance is enabled",
                 ));
             }
-        } else if self.signer_handle.is_some() || self.signer_public_key_hex.is_some() {
+            match self.signer_revision {
+                Some(0) => emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                    "sorafs.storage.stream_tokens.signer_revision must be non-zero",
+                )),
+                None => emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                    "sorafs.storage.stream_tokens.signer_revision is required when issuance is enabled",
+                )),
+                Some(_) => {}
+            }
+            if self.signer_policy_digest_hex.is_none() {
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                    "sorafs.storage.stream_tokens.signer_policy_digest_hex is required when issuance is enabled",
+                ));
+            }
+        } else if self.signer_handle.is_some()
+            || self.signer_public_key_hex.is_some()
+            || self.signer_revision.is_some()
+            || self.signer_policy_digest_hex.is_some()
+            || self.admission_provider_handle.is_some()
+            || self.admission_provider_revision.is_some()
+            || self.admission_provider_policy_digest_hex.is_some()
+        {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                "sorafs.storage.stream_tokens signer binding is forbidden while issuance is disabled",
+                "sorafs.storage.stream_tokens runtime bindings are forbidden while issuance is disabled",
             ));
         }
+        stream_token_admission::validate_binding_and_bounds(&self, emitter);
 
         actual::SorafsTokenConfig {
             enabled: self.enabled,
             signer_handle: self.signer_handle,
             signer_public_key,
+            signer_revision: self.signer_revision,
+            signer_policy_digest,
+            admission_provider_handle: self.admission_provider_handle,
+            admission_provider_revision: self.admission_provider_revision,
+            admission_provider_policy_digest,
+            admission_max_pending: self.admission_max_pending,
+            admission_max_tracked_tokens: self.admission_max_tracked_tokens,
+            admission_reconcile_max_items: self.admission_reconcile_max_items,
+            admission_lease_ttl_ms: self.admission_lease_ttl_ms,
             key_version: self.key_version,
             default_ttl_secs: self.default_ttl_secs,
             default_max_streams: self.default_max_streams,
@@ -31630,8 +31606,8 @@ mod offline_cfg_tests {
 
         assert!(parsed.enabled);
         assert_eq!(
-            parsed.max_body_bytes,
-            defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES
+            parsed.max_body_bytes.0,
+            defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES.0
         );
         assert_eq!(parsed.dedupe_ttl_secs, 120);
         assert_eq!(parsed.default_profile, "swift-cbpr-plus");
@@ -32069,6 +32045,7 @@ mod offline_cfg_tests {
 mod duration_clamp_tests {
     use std::{
         fs,
+        num::NonZeroUsize,
         path::{Path, PathBuf},
         str::FromStr,
         time::{Duration, Duration as StdDuration},
@@ -34454,113 +34431,7 @@ publish_delay_seconds = 17
         assert_eq!(actual.network.deferred_send_max_bytes_total, 1);
     }
 
-    #[test]
-    fn default_snapshot_store_dir_follows_explicit_kura_store_dir() {
-        let mut table = base_table();
-        let kura = table
-            .entry("kura")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("kura table");
-        kura.insert(
-            "store_dir".into(),
-            Value::String("/var/lib/iroha/peer0".into()),
-        );
-
-        let actual = load_root(table);
-
-        assert_eq!(
-            actual.snapshot.store_dir.value(),
-            &PathBuf::from("/var/lib/iroha/peer0/snapshot")
-        );
-    }
-
-    #[test]
-    fn explicit_snapshot_store_dir_is_preserved() {
-        let mut table = base_table();
-        let kura = table
-            .entry("kura")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("kura table");
-        kura.insert(
-            "store_dir".into(),
-            Value::String("/var/lib/iroha/peer0".into()),
-        );
-        let snapshot = table
-            .entry("snapshot")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("snapshot table");
-        snapshot.insert(
-            "store_dir".into(),
-            Value::String("/snapshots/paynet-1".into()),
-        );
-
-        let actual = load_root(table);
-
-        assert_eq!(
-            actual.snapshot.store_dir.value(),
-            &PathBuf::from("/snapshots/paynet-1")
-        );
-    }
-
-    #[test]
-    fn snapshot_bootstrap_policy_parses_only_complete_exact_authority() {
-        let digest = "1a0861b04fa35fd0d8ea4c2f38baaa478c7430df3466e9401c53f934671747bd";
-        let mut table = base_table();
-        let snapshot = table
-            .entry("snapshot")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("snapshot table");
-        let mut bootstrap = Table::new();
-        bootstrap.insert("enabled".into(), Value::Boolean(true));
-        bootstrap.insert("audited_sha256".into(), Value::String(digest.to_owned()));
-        bootstrap.insert("audited_height".into(), Value::Integer(42));
-        snapshot.insert("bootstrap".into(), Value::Table(bootstrap));
-
-        let actual = load_root(table);
-        assert!(actual.snapshot.bootstrap.authorizes(digest, 42));
-    }
-
-    #[test]
-    fn snapshot_bootstrap_policy_rejects_partial_or_invalid_authority() {
-        for bootstrap in [
-            {
-                let mut value = Table::new();
-                value.insert("enabled".into(), Value::Boolean(true));
-                value.insert("audited_height".into(), Value::Integer(42));
-                value
-            },
-            {
-                let mut value = Table::new();
-                value.insert("enabled".into(), Value::Boolean(true));
-                value.insert("audited_sha256".into(), Value::String("AA".repeat(32)));
-                value.insert("audited_height".into(), Value::Integer(42));
-                value
-            },
-            {
-                let mut value = Table::new();
-                value.insert("enabled".into(), Value::Boolean(false));
-                value.insert("audited_sha256".into(), Value::String("00".repeat(32)));
-                value.insert("audited_height".into(), Value::Integer(42));
-                value
-            },
-        ] {
-            let mut table = base_table();
-            let snapshot = table
-                .entry("snapshot")
-                .or_insert_with(|| Value::Table(Table::new()))
-                .as_table_mut()
-                .expect("snapshot table");
-            snapshot.insert("bootstrap".into(), Value::Table(bootstrap));
-            assert!(
-                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
-                "invalid snapshot bootstrap authority must fail configuration parsing"
-            );
-        }
-    }
+    include!("user/kura_and_snapshot_tests.rs");
 
     #[test]
     fn storage_budget_applies_after_parse() {

@@ -176,11 +176,6 @@ impl ServicedCandidateKey {
         self.owner
     }
 
-    /// Optional block subject projected by the serviced reducer occurrence.
-    pub(crate) const fn target(self) -> Option<[u8; 32]> {
-        self.target
-    }
-
     /// Protocol phase projected by the serviced reducer occurrence.
     pub(crate) const fn phase(self) -> u8 {
         self.phase
@@ -189,11 +184,6 @@ impl ServicedCandidateKey {
     /// Closed reducer-event kind used to derive stage and replay class.
     pub(crate) const fn kind(self) -> u8 {
         self.kind
-    }
-
-    /// Route-neutral semantic evidence hash for this exact occurrence.
-    pub(crate) const fn evidence(self) -> [u8; 32] {
-        self.evidence
     }
 
     /// Semantic adapter lane which owned the serviced occurrence.
@@ -411,11 +401,6 @@ impl ProducerContinuationTerminalToken {
         self.identity
     }
 
-    /// Exact route-neutral serviced occurrence paired with this terminal.
-    pub(crate) const fn candidate(self) -> ServicedCandidateKey {
-        self.identity.candidate()
-    }
-
     /// Physical replay class frozen before terminal publication.
     pub(crate) const fn source_class(self) -> ProducerContinuationSourceClass {
         self.source_class
@@ -552,16 +537,6 @@ pub(crate) struct RestoredServicedCandidates {
         BTreeMap<ProducerContinuationAddress, ProducerContinuationRecord>,
     /// Whether the pre-Decision epoch has already been reclaimed.
     pub(crate) decision_reclaimed: bool,
-}
-
-impl RestoredServicedCandidates {
-    /// Canonical restart-stable producer terminals from the validated snapshot.
-    pub(crate) fn producer_terminal_tokens(&self) -> Vec<ProducerContinuationTerminalToken> {
-        self.producer_continuations
-            .values()
-            .filter_map(ProducerContinuationRecord::terminal_token)
-            .collect()
-    }
 }
 
 /// Durable position of one generic productive leader-wire lifecycle.
@@ -1501,16 +1476,6 @@ impl LeaderWireLifecycleStoreGate {
         Arc::ptr_eq(left, right)
     }
 
-    /// Height context bound into every accepted token and persisted header.
-    pub(crate) const fn context_id(&self) -> wire::HeightContextId {
-        self.context_id
-    }
-
-    /// Exact height bound into this per-height persistence gate.
-    pub(crate) const fn height(&self) -> wire::Height {
-        self.height
-    }
-
     /// Whether a proposed fair-ingress binding has identical frozen geometry.
     pub(crate) fn matches_geometry(
         &self,
@@ -1866,24 +1831,6 @@ impl LeaderWireLifecycleStoreGate {
         self.mark_terminal(
             runtime,
             LeaderWireStableTerminalEvidence::Producer(producer_terminal),
-        )
-    }
-
-    /// Publish a body-backed stable terminal from a non-forgeable store receipt.
-    pub(crate) fn mark_durable_body_terminal(
-        &self,
-        runtime: &LeaderWireLifecycleRuntimeReceipt,
-        durable_body: &DurableBodyReceipt,
-    ) -> Result<(), String> {
-        self.mark_terminal(
-            runtime,
-            LeaderWireStableTerminalEvidence::DurableBody(
-                LeaderWireDurableBodyTerminalEvidence::from_receipt(
-                    durable_body,
-                    self.owner,
-                    runtime.owner,
-                ),
-            ),
         )
     }
 
@@ -2937,7 +2884,7 @@ mod tests {
         use iroha_data_model::peer::PeerId;
 
         assert!(roster_len != 0 && roster_len <= usize::from(u8::MAX) - 7);
-        let roster = (0..roster_len)
+        let mut roster = (0..roster_len)
             .map(|index| {
                 let seed = u8::try_from(index + 7).expect("bounded deterministic seed");
                 let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -2948,6 +2895,7 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
+        roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let context = wire::HeightContext {
             chain_id: "serviced-candidate-test".into(),
             protocol_version: wire::PROTOCOL_VERSION,
@@ -3708,8 +3656,11 @@ mod tests {
             .find(|token| token.slot.phase == FairV2IngressLeaderWirePhase::PrepareVote)
             .expect("one PrepareVote slot")
             .clone();
+        let replay = reopened
+            .reserve(terminal_target.clone())
+            .expect("reactivate target ingress after restart");
         reopened
-            .mark_ingress(&terminal_target)
+            .mark_ingress(replay.token())
             .expect("replay target ingress after restart");
         let runtime_owner = LeaderWireRuntimeOwner::new(
             terminal_target.identity_hash(),
@@ -3717,7 +3668,7 @@ mod tests {
         )
         .expect("exact runtime owner");
         let runtime = reopened
-            .mark_runtime(&terminal_target, runtime_owner)
+            .mark_runtime(replay.token(), runtime_owner)
             .expect("rebind exact runtime owner after restart");
         let producer_terminal = matching_terminal(&context, runtime_owner, &terminal_target);
         reopened
@@ -3915,9 +3866,14 @@ mod tests {
             LeaderWireLifecycleStatus::Dormant
         );
         assert!(restore.records()[0].terminal_evidence().is_none());
-        reopened.mark_ingress(&token).expect("replay exact ingress");
+        let replay = reopened
+            .reserve(token.clone())
+            .expect("reactivate exact ingress");
+        reopened
+            .mark_ingress(replay.token())
+            .expect("replay exact ingress");
         let runtime = reopened
-            .mark_runtime(&token, runtime_owner)
+            .mark_runtime(replay.token(), runtime_owner)
             .expect("rebind exact runtime owner");
         reopened
             .mark_producer_terminal(&runtime, matching_terminal(&context, runtime_owner, &token))

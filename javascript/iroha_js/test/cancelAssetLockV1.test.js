@@ -76,7 +76,11 @@ function archiveWithTrueTrailingPayloadByte(archive) {
   const payload = malformed.subarray(40);
   malformed.writeBigUInt64LE(BigInt(payload.length), 23);
   malformed.writeBigUInt64LE(crc64(payload), 31);
-  return malformed;
+  return Uint8Array.from(malformed);
+}
+
+function exactArchiveFixture(name) {
+  return Uint8Array.from(fixtureBytes.get(name));
 }
 
 test("all eight appeal-finance CancelAssetLock fixtures are mandatory", () => {
@@ -91,14 +95,19 @@ test("bare CancelAssetLock V1 codec byte-matches and decodes the canonical fixtu
   const canonicalJson = strictJsonObject(
     fixtureBytes.get("cancel_asset_lock_v1.json"),
   );
-  const canonicalArchive = fixtureBytes.get("cancel_asset_lock_v1.to");
+  const canonicalArchive = exactArchiveFixture("cancel_asset_lock_v1.to");
   assert.deepEqual(canonicalJson, {
     escrow_id: canonicalEscrowId,
     expected_remaining_amount: "20",
   });
   assert.equal(canonicalArchive.length, 85);
-  assert.equal(canonicalArchive.toString("hex"), canonicalArchiveHex);
-  assert.deepEqual(encodeCancelAssetLockV1(canonicalJson), canonicalArchive);
+  assert.equal(Buffer.from(canonicalArchive).toString("hex"), canonicalArchiveHex);
+  const encoded = encodeCancelAssetLockV1(canonicalJson);
+  assert.equal(Object.getPrototypeOf(encoded), Uint8Array.prototype);
+  assert.equal(Object.getPrototypeOf(encoded.buffer), ArrayBuffer.prototype);
+  assert.equal(encoded.byteOffset, 0);
+  assert.equal(encoded.byteLength, encoded.buffer.byteLength);
+  assert.deepEqual(encoded, canonicalArchive);
   assert.deepEqual(decodeCancelAssetLockV1(canonicalArchive), canonicalJson);
 });
 
@@ -121,7 +130,7 @@ test("bare CancelAssetLock V1 rejects all shared negative fixtures", () => {
     "negative/cancel_asset_lock_zero_expected_v1.to",
   ]) {
     assert.throws(
-      () => decodeCancelAssetLockV1(fixtureBytes.get(name)),
+      () => decodeCancelAssetLockV1(exactArchiveFixture(name)),
       undefined,
       `accepted ${name}`,
     );
@@ -197,42 +206,71 @@ test("bare CancelAssetLock V1 encoder rejects aliases and noncanonical structure
 });
 
 test("bare CancelAssetLock V1 decoder accepts bytes only and rejects frame substitution", () => {
-  const canonical = fixtureBytes.get("cancel_asset_lock_v1.to");
+  const fixture = fixtureBytes.get("cancel_asset_lock_v1.to");
+  const canonical = Uint8Array.from(fixture);
+  const partialBacking = new Uint8Array(canonical.length + 2);
+  partialBacking.set(canonical, 1);
+  class Uint8ArrayAlias extends Uint8Array {}
   for (const alias of [
-    canonical.toString("hex"),
-    canonical.toString("base64"),
+    fixture,
+    Buffer.from(canonical),
+    Buffer.from(canonical).toString("hex"),
+    Buffer.from(canonical).toString("base64"),
+    canonical.buffer,
+    new DataView(canonical.buffer),
+    new Uint16Array(canonical.buffer.slice(0, 84)),
+    partialBacking.subarray(1, -1),
+    new Uint8ArrayAlias(canonical),
     [...canonical],
     { bytes: canonical },
   ]) {
-    assert.throws(() => decodeCancelAssetLockV1(alias));
+    assert.throws(
+      () => decodeCancelAssetLockV1(alias),
+      /owned, full-span Uint8Array/u,
+    );
   }
+  if (typeof SharedArrayBuffer === "function") {
+    const shared = new Uint8Array(new SharedArrayBuffer(canonical.length));
+    shared.set(canonical);
+    assert.throws(
+      () => decodeCancelAssetLockV1(shared),
+      /owned, full-span Uint8Array/u,
+    );
+  }
+  assert.throws(() =>
+    decodeCancelAssetLockV1(
+      Uint8Array.from(Buffer.from(canonicalArchiveHex, "ascii")),
+    ),
+  );
 
-  const wrongVersion = Buffer.from(canonical);
+  const wrongVersion = Uint8Array.from(canonical);
   wrongVersion[4] = 1;
   assert.throws(() => decodeCancelAssetLockV1(wrongVersion), /version/u);
 
-  const wrongSchema = Buffer.from(canonical);
+  const wrongSchema = Uint8Array.from(canonical);
   wrongSchema[6] ^= 1;
   assert.throws(() => decodeCancelAssetLockV1(wrongSchema), /schema/u);
 
-  const compressed = Buffer.from(canonical);
+  const compressed = Uint8Array.from(canonical);
   compressed[22] = 1;
   assert.throws(() => decodeCancelAssetLockV1(compressed), /uncompressed/u);
 
-  const wrongFlags = Buffer.from(canonical);
+  const wrongFlags = Uint8Array.from(canonical);
   wrongFlags[39] = 0;
   assert.throws(() => decodeCancelAssetLockV1(wrongFlags), /compact-length/u);
 
-  const padded = Buffer.concat([
-    canonical.subarray(0, 40),
-    Buffer.of(0),
-    canonical.subarray(40),
-  ]);
+  const padded = Uint8Array.from(
+    Buffer.concat([
+      canonical.subarray(0, 40),
+      Buffer.of(0),
+      canonical.subarray(40),
+    ]),
+  );
   assert.throws(() => decodeCancelAssetLockV1(padded), /padding/u);
 });
 
 test("nested EscrowId and true trailing payload bytes are independent failures", () => {
-  const nested = fixtureBytes.get(
+  const nested = exactArchiveFixture(
     "negative/cancel_asset_lock_nested_escrow_id_v1.to",
   );
   assert.equal(nested.length, 86);
@@ -243,7 +281,7 @@ test("nested EscrowId and true trailing payload bytes are independent failures",
     fixtureBytes.get("cancel_asset_lock_v1.to"),
   );
   assert.equal(trailing.length, 86);
-  assert.equal(trailing.readBigUInt64LE(23), 46n);
+  assert.equal(new DataView(trailing.buffer).getBigUint64(23, true), 46n);
   assert.throws(() => decodeCancelAssetLockV1(trailing), /trailing bytes/u);
 });
 

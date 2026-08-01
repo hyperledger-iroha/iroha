@@ -15,9 +15,12 @@ those documents.
 The ledger deliberately distinguishes a reachable production implementation
 from a release-evidenced end-to-end path. The current source contains
 autonomous production, Native application evidence, evidence-aware drain, and
-artifact-aware retirement; source presence and focused fixtures do not prove
-the required real-network corridors, fault soak, scaling target, SDK parity, or
-clean full-workspace release gate.
+artifact-aware retirement. The Rust-generated protocol-4 consensus fixtures
+are synchronized, while authenticated Kura replica outbound/configuration and
+its formal/release closure remain open below. Source presence, synchronized
+fixtures, and partial direct SDK results do not prove the required real-network
+corridors, fault soak, scaling target, complete SDK parity, or clean full-
+workspace release gate.
 
 ## Status rules
 
@@ -41,6 +44,41 @@ Every in-scope row records three independent states:
 No user-visible release gate in this ledger is currently **Evidenced**.
 Existing unit tests and historical status reports are useful leads, not
 multilane release evidence.
+
+## 2026-07-31 closure-marker audit
+
+The audit used case-insensitive whole-word `TODO|FIXME|XXX` scans. Raw token
+matches were then inspected so sentinel strings, ISO currency code `XXX`, test
+assertions, scanner commands, and historical prose were not misclassified as
+unfinished implementation.
+
+- `crates/` plus `integration_tests/` contain 55 raw matches and 11 actual
+  source TODO comments. None is an in-scope multilane TODO. Eight are
+  consensus- or lane-adjacent but explicitly classified below, and three are
+  unrelated privacy/Kagemusha/PTX work.
+- `formal/sumeragi_v2/` contains 13 TODO markers. One is the generic Decision
+  fetch refinement already classified below; the other 12 are generic locked-
+  body/producer/corridor liveness-composition obligations. None models a lane
+  reservation, Native participant application, merge carrier, autoscale drain,
+  or lane retirement.
+- `roadmap.md` contains five raw matches: two active wallet-query TODOs and
+  three narrative/scanner mentions. The two active items concern an account
+  activity feed and an outgoing-value aggregate, not multilane consensus.
+- `status.md` contains 274 raw matches, all in chronological reports, quoted
+  commands, scanner descriptions, or sentinel discussions; it has no active
+  TODO directive. `docs/` contains no marker.
+
+Thus the current explicit in-scope marker count is zero, but release evidence
+remains incomplete. The authenticated replica-advert outbound/configuration
+path in `ML-KURA-01` and its `ML-WIRE-01` runtime-bound dependency are now
+source-bound; their focused Rust, formal-engine, and network evidence remains
+open. The former generated-
+fixture mismatch in `ML-API-04` is resolved byte-for-byte, but its full SDK
+evidence remains open. Static source inventories and partial direct SDK runs
+do not close `G-UNIT`, `G-SDK`, `G-FORMAL`, or any execution/network gate. The
+statements in `roadmap.md` and historical `status.md` that no marker remains
+are only marker inventory claims; they are not implementation or release
+closure evidence.
 
 ## Non-negotiable invariants
 
@@ -83,25 +121,31 @@ invariants together.
 
 ## In-flight first-release formal boundary
 
-**Implementation:** Current first-release layouts are source-bound to the
-abstract kernel, and the reservation-journal-local primitive transition seam
-is source-bound; a total transition projection is not implemented.
+**Implementation:** Current first-release layouts are source-bound, as is the
+reservation-journal primitive seam. The fixed-width composed transition relation is implemented
+and source-bound. One narrow pre-Kura autonomous
+reservation-batch direct-release path consumes its checked `DirectReleased`
+projection under the Queue transition and FIFO locks immediately before the
+durable release append; complete production trace extraction is not implemented.
 **Closure:** Open.
-**Evidence:** Current schema-4 structural/source binding and local checked
-reservation-journal transition evidence. The dated bounded TLC/Apalache
-checkpoint below does not attest the current schema-4 source; total refinement
-theorem open.
+**Evidence:** Current schema-5 structural/source binding, local checked
+reservation-journal transition evidence, and Rust/Verus composed relation.
+The dated bounded TLC/Apalache checkpoint below does not attest the current
+schema-5 source; the production trace-extraction theorem remains open.
 
 `SumeragiV2InFlightFirstRelease.tla` is a finite three-validator safety model
 for the accepted schema V2 carried by the production
 `LaneExecutablePayloadV1` container and its exact
-`QueuePlanAdmissionBindingV2` preimage. Its fixed and mutation configurations
-cover producer-selected versus replicated-carrier ownership; a selected-batch
+`QueuePlanAdmissionBindingV2` preimage. It establishes authenticated custody
+for the selected producer without inferring knowledge by every validator, and
+uses the canonical strict 3-of-3 count quorum for its fixed cardinality. Its
+fixed and mutation configurations cover producer-selected versus
+replicated-carrier ownership; a selected-batch
 conjunction over individual QueuePlan journal V4 `Put` records; reservation journal V5,
 Kura Active, execution-input, READY authorization/signature/QC,
 and lane-commit ordering; volatile body loss; crash-prefix durable recovery;
 atomic WSV application; separate post-carrier reservation
-Commit/QueuePlan-tombstone/ForgetCommit steps; prefix-recoverable four-stage
+per-key Commit/QueuePlan-tombstone/ForgetCommit prefixes; prefix-recoverable four-stage
 release; exact lane-commit/release scope; conflicting/ABA bindings; and the
 4096 entry limit. Auxiliary post-WSV repair is explicit stuttering.
 
@@ -113,21 +157,33 @@ refinement checker. It binds the exact frame/bound, state-instance domain,
 structural pre-state shape, generation/history identities, and ordered
 owner-token coverage through post-I/O revalidation and bounded direct
 publication without a full-state clone, including fail-closed post-durable
-restart reconstruction. This is only the reservation journal's primitive
-owner-transition seam. The QueuePlan, Kura, canonical carrier, WSV,
-FIFO-restoration, and lane-lifecycle transition refinements remain open, along
-with both the total forward simulation and reverse terminal-owner projection.
+restart reconstruction. The composed Rust/Verus relation generalizes the
+committee bitmap to 1 through 128 validators while the TLA+ instance remains
+explicitly bounded. It mirrors QueuePlan, Kura/input/READY-QC, volatile
+fanout/late-body custody, lane commit, canonical WSV application, Commit
+cleanup, and ordered release. Its reverse
+terminal-owner projection distinguishes canonical-WSV Commit ownership from
+ordinary-FIFO ordered/direct release. Snapshot recovery maps to an abstract
+stutter, and direct release is an explicit named action. The retired lane-wide
+removal operation is absent from the schema-bound V5 journal, and its old
+bootstrap claim and operation bytes fail closed without compatibility replay.
+The sole pre-Kura autonomous reservation-batch direct-release
+linearization point now extracts and consumes this composed projection after
+locked V4/V5, FIFO, group, and committee revalidation. Other production
+linearization points do not yet extract and consume it, so the end-to-end
+refinement remains open.
 
 This row is deliberately **not** a production-refinement claim. When run, TLC
 can exhaust the stated finite model and Apalache can typecheck/bound its
 abstract actions; neither checker proves that Rust filesystem/restart traces
-refine those actions. Current schema-4 static checks execute neither engine.
-The open theorem is a total Rust pre/post-state forward simulation and reverse
-terminal-owner projection over QueuePlan journal V4, reservation journal V5,
-Kura, recovery, Commit, and Release. Schema 4 of
-`multilane_source_bindings.json` deliberately classifies this as
-`layout_only_no_transition_refinement`: its exact version/field/order bindings
-detect drift but are insufficient to promote this row or a release status. See
+refine those actions. Current schema-5 static checks execute neither engine.
+The open theorem is a production trace extraction from the actual QueuePlan
+journal V4, reservation journal V5, Kura, recovery, Commit, WSV, and Release
+linearization points into the implemented pre/post-state and terminal-owner
+relations. Schema 5 of `multilane_source_bindings.json` deliberately classifies
+this as `composed_state_action_relation_no_trace_extraction`: its exact
+version/field/order/relation bindings detect drift but are insufficient to
+promote this row or a release status. See
 `formal/sumeragi_v2/INFLIGHT_FIRST_RELEASE_EVIDENCE.md`.
 
 ## Native AMX application closure
@@ -330,10 +386,13 @@ the canonical block, checkpoint, V2 finality, manifest root/proof, executed
 wire, exact receipt group, and active incarnation.
 `StateBlock::stage_native_amx_participant_frontiers` in
 `crates/iroha_core/src/state.rs` publishes WSV markers only after durable
-evidence, while `crates/iroha_core/src/sumeragi/v2_apply.rs` invokes
-persistence and idempotent startup/replay repair in durability order. Pruned
-bodies remain verifiable through QC-authenticated manifest evidence; weaker
-hash-only evidence remains fail-closed. The Kura namespace contains one
+evidence, while `crates/iroha_core/src/sumeragi/v2_apply.rs` invokes live
+persistence in durability order. Unified startup planning/application lives in
+`crates/iroha_core/src/sumeragi/v2_lane_work.rs`; `run_inner` in
+`crates/iroha_core/src/sumeragi/v2_runner.rs` keeps the Queue gate closed until
+that repair and exact readback complete. Pruned bodies remain verifiable
+through QC-authenticated manifest evidence; weaker hash-only evidence remains
+fail-closed. The Kura namespace contains one
 immutable versioned manifest file and one immutable versioned receipt file per
 participant height, followed by a version-2 route/incarnation- and
 application-identity-bound replaceable exact-latest pointer. The pointer binds
@@ -360,10 +419,17 @@ The startup owner plans ordinary certified lane receipts and Native frontier
 markers together through `plan_lane_application_evidence_repair`, without
 publishing either class. Owners naming the same canonical carrier coalesce
 into one `CanonicalExecutedBlockNeedV1`; after authenticated body recovery the
-complete plan is rebuilt. `apply_lane_application_evidence_repair` repeats
-every ordinary and Native preflight before its first write, publishes every
-exact item, and performs authoritative readback while the Queue startup gate
-remains closed. Only then may lane-reservation ownership reconciliation run.
+complete plan is rebuilt. The ordinary owner is the immutable
+`State::lane_application_certified_repair_snapshot_cached` projection: it uses
+`Kura::preflight_latest_certified_lane_block_frontier_with_authority` and
+`Kura::read_certified_lane_block_artifact_read_only`, and every receipt,
+predecessor, and snapshot-anchor lookup selects Kura's no-sidecar-repair read
+path. Frontier-backed indexed-pair repairs are returned as explicit plan items;
+they are not published by planning. `apply_lane_application_evidence_repair`
+repeats every ordinary and Native preflight before its first write, explicitly
+publishes those lifecycle-bound ordinary pair repairs and every exact evidence
+item, and performs authoritative readback while the Queue startup gate remains
+closed. Only then may lane-reservation ownership reconciliation run.
 The carrier index is validated in both directions: finality `Some(carrier)`
 has one exact carrier record, finality `None` has none, and caching a recovered
 body preflights reverse carrier reconstruction before retiring the body need.
@@ -380,6 +446,17 @@ wire recovery. Exercise the versioned prune intent as a temporary only, as a
 stable intent before deletion, after each individual manifest/receipt unlink,
 after the complete pair unlink, and with identical stable and temporary copies;
 each restart must finish idempotently without deleting the exact latest pair.
+Current source anchors include
+`pair_only_application_evidence_repair_counts_as_progress`,
+`canonical_body_recovery_batches_all_ordered_heights_before_gate_close`,
+`read_only_certified_frontier_preflight_plans_reused_slot_without_mutation`,
+`certified_lane_predecessor_rejects_nonzero_height_without_descriptor_hash`,
+and
+`native_participant_missing_carrier_uses_generic_chunk_recovery_then_repairs_receipt`.
+They cover pair-only progress accounting, ordered coalesced body recovery,
+read-only reused-slot planning, fail-closed predecessor identity, and repair
+after generic authenticated carrier recovery, respectively. These are mapped
+source tests, not a fresh `G-UNIT` transcript.
 
 **Formal obligation and mutation.** Invariant
 `MLNativeDurabilityPrecedesFrontier` orders durable finality, immutable
@@ -453,6 +530,116 @@ layout, or omits an artifact class from retirement; the model must expose stale
 authorization or unsafe destruction.
 
 **Release gates.** `G-UNIT`, `G-FORMAL`, `G-4P`, `G-12P`, and `G-FINAL`.
+
+## Canonical Kura body-retention closure
+
+### ML-KURA-01 — authenticated deterministic keepers before body eviction
+
+**Implementation:** Implemented.
+**Closure:** Implemented.
+**Evidence:** Open; current evidence is focused/source-bound only.
+
+**Production map.** `KuraReplicaAdvertV1` and its domain-separated signature
+preimage in `crates/iroha_core/src/sumeragi/message.rs` now bind chain, height,
+block, executed-wire length/hash, exact finality-artifact hash, keeper index,
+and keeper identity. `BlockMessage::is_live_auxiliary` admits that versioned
+shape to the live-message family. `FairV2Ingress` and
+`admit_kura_replica_advert_ingress` in
+`crates/iroha_core/src/sumeragi/v2_runner.rs` require the signature-bound
+keeper to be both semantic sender and direct `via` peer before
+`Kura::admit_kura_replica_advert` revalidates exact durable chain/finality/wire
+identity and deterministic keeper membership. `Kura::evict_block_bodies`
+requires fresh adverts from every selected remote keeper and
+`has_all_selected_remote_keepers` pins a selected local keeper when the local
+identity is bound. The standard launcher in `crates/irohad/src/main.rs` now
+binds the configured node `PeerId` before `Kura::start`, making that pin
+reachable in production; `Kura::start` rejects an unbound local identity.
+`KuraReplicaAdvertPolicy::validate` supplies configured replica count,
+evictable window, TTL, and refresh cadence and checks the complete registry key
+and entry geometry, including the typed two-millisecond TTL floor and
+one-millisecond refresh floor, before `Kura::new_inner` constructs the store.
+Refresh-owner construction repeats the refresh minimum as a defense-in-depth
+boundary.
+`KuraReplicaAdvertSourceV1` is the body-free exact source token: it binds chain,
+height, block, executed-wire length/hash, finality artifact, keeper index, and
+keeper. `exact_kura_replica_advert_tip` captures height and hash under the prune
+and canonical-chain guards; source probing authenticates the durable index,
+finality, and keeper without reading the body; and construction plus rollover
+revalidation repeat the exact source and complete-body checks before signing or
+publication. The runner creates one process-lifetime
+`KuraReplicaAdvertRefreshOwner` outside its height loop, shares it with each
+`ProductionV2Services`, advances it after accepted durable application and on
+bounded service turns, and publishes only through the guarded exact-output
+corridor. Its configured evictable-first arithmetic window is anchored to one
+exact tip, probes at most eight heights and transfers at most one fanout per
+turn, retains one reconstructible source across backpressure, and anchors the
+next deadline when a scan starts so a slow scan does not add a second refresh
+interval. Applied-height handoff validates each pending advert's exact rollover
+claim, completes durable reconstruction first, then wakes the owner with only
+the unique source heights inside its active window. That bounded urgent-height
+set is pruned on tip change and serviced before ordinary cursor work. The owner
+also schedules a follow-up for same-height tip replacement without resetting
+the current cursor. Restart creates a fresh owner from the exact durable tip and
+the authenticated remote advert registry remains restart-empty.
+
+**Closure condition.** Admit only a bounded, versioned advert whose signature
+and direct transport sender/via identity are the same keeper. Kura must
+revalidate the exact canonical block, V2 finality artifact, complete-wire
+length/hash, frozen roster, CommitQC signer bitmap/quorum, keeper index, and
+deterministic keeper selection. Select at least `f + 1` keepers from the exact
+CommitQC signer set using canonical chain/context/block/finality identities,
+where `f` is derived from the frozen roster and quorum requirement rather than
+the observed signer surplus. A local selected keeper may never evict its body;
+a non-keeper may evict only after every selected keeper has one fresh exact
+advert. Registry count, TTL, refresh scan, and per-turn output must come from
+bounded `iroha_config` values. Production receive, post-durable-apply send,
+bounded historical refresh, restart-empty reconstruction, and exact-output
+rollover must all use the same authority predicate.
+
+**Focused and adversarial tests.** Reject forged version, chain, block,
+executed-wire length/hash, finality identity, keeper index, keeper identity,
+signature, transport sender, and relay/via identity. Reject a valid signer that
+is not selected, an alternate same-decision QC/finality artifact, under-`f+1`
+keeper selection, expired adverts, registry overflow, and a refresh/output
+burst above its bound. Pin a selected local keeper. Cover validator rotation,
+restart-empty registry reconstruction, exact-output height rollover, concurrent
+eviction/advert admission lock order, and body recovery from every advertised
+keeper in four- and twelve-peer corridors. Current source anchors are
+`kura_replica_advert_signature_binds_every_eviction_identity`,
+`kura_replica_advert_is_live_auxiliary_not_lane_or_global_v1`,
+`authenticated_replica_admission_rejects_forgery_non_qc_peer_and_alternate_finality`,
+`deterministic_commit_qc_keepers_use_f_plus_one_and_pin_a_local_keeper`, and
+`expired_replica_adverts_do_not_allow_eviction`; startup and producer ownership
+are pinned by `kura_start_rejects_unbound_local_peer_identity`,
+`standard_launcher_binds_kura_local_peer_before_start`,
+`refresh_window_is_evictable_first_and_overflow_safe`,
+`refresh_turn_retains_one_source_and_attempts_at_most_one_fanout`, and
+`same_height_tip_rewrite_requests_follow_up_without_starving_current_cursor`.
+`durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_drift`
+now source-pins the actual-Kura path from refresh publication through exact-
+output backpressure, successful durable-handoff urgent wake-up, predecessor
+drop, successor retry, frozen exact recipients, and final Kura revalidation.
+Fresh same-day isolated Rust 1.93.1 locked/offline slices passed the 18 exact
+Kura replica tests and four exact configuration tests. Those focused runs and
+source anchors are not the complete 338-test `G-UNIT` receipt, and no
+multi-peer body-pruning corridor was run, so this row's evidence remains Open.
+
+**Formal obligation and mutation.** `ML-MUT-KURA-01` now owns the source-bound
+`KuraReplicaRetentionProductionRefinementObligation` and all fourteen exact
+Kura mutation configurations. `SumeragiV2KuraReplicaRetention.tla` models
+signature and direct sender/via authentication, exact finality and wire
+identity, deterministic `f + 1` selection, non-signer rejection, local-keeper
+pinning, all-selected-remote freshness, TTL and restart invalidation, finite
+registry capacity, bounded refresh, and the final pre-stage recheck. The
+structural checker binds the settled receive/authority/eviction symbols and
+the checked configured registry geometry, exact tip/source construction, and
+the bounded process-lifetime refresh owner. The schema-5 binding contract has
+no pending Kura source check. TLC and Apalache still must produce fresh archived
+positive and expected-counterexample evidence, so this model addition does not
+close `G-FORMAL`.
+
+**Release gates.** `G-UNIT`, `G-FORMAL`, `G-4P`, `G-12P`, `G-SCALE`, and
+`G-FINAL`.
 
 ## QueuePlan admission closure
 
@@ -732,7 +919,21 @@ enqueue order. Prune only terminal forgotten reservations.
 availability QC, Prepare QC, Commit QC, certified-bundle fsync, merge-QC
 certification, Kura commit, WSV commit, reservation Commit, and ForgetCommit.
 Cover stale-incarnation sidecars, duplicate reservation files, ambiguous
-evidence, corrupt/oversized artifacts, and repeated startup.
+evidence, corrupt/oversized artifacts, and repeated startup. The focused
+`historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation`
+regression in
+`crates/iroha_core/src/kura/tests/07b_autonomous_reservation_reconciliation_tests.rs`
+exercises one lane ID across B/A/B storage generations, including a deliberate
+incarnation-hash ABA with a fresh activation fence: delayed B/A recovery
+records, QCs, payloads, and physically copied archive bytes fail closed, the
+recreated-B evidence remains byte-exact, and restart recovers only recreated-B
+ownership. The final current-source checkpoint passed this exact B/A/B
+regression (`1/1`), the startup-replay binding regressions (`2/2`), the bounded
+historical namespace/accounting suite (`6/6`), first-merge crash-window repair
+(`1/1`), Native post-WSV retention (`1/1`), and authenticated geometry refresh
+(`1/1`) under isolated Rust 1.93.1 locked/offline execution. These 12 focused
+tests are mapped row evidence, not the complete 338-test `G-UNIT` receipt, so
+this row's evidence remains Open.
 
 **Formal obligation and mutation.** Invariant `MLRestartOwnershipPartition`
 states that startup reconstruction preserves the single-owner partition.
@@ -1066,29 +1267,30 @@ accept/reject mismatch.
 ### ML-API-04 — Rust-owned grouped fixtures and explicit builders
 
 **Implementation:** Implemented.
-**Closure:** Open.
+**Closure:** Implemented.
 **Evidence:** Open.
 
 **Production map.**
-`crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs` and its
-`native_amx_grouped` module generate
+`crates/iroha_data_model/src/bin/native_amx_grouped.rs` generates
 `fixtures/sumeragi_v2/native_amx_v2_grouped.json`, including grouped golden
-data, application evidence, and 50 negative controls.
+data and application evidence.
 `NativeAmxAttestationBodyV2::computed_grouped_participant_settlement` is the
 explicit production builder; single-source construction is labelled as a test
 fixture.
 `ci/run_native_amx_v2_grouped_sdk_parity.sh` source-binds the exact fixture and
 OpenAPI, Python, JavaScript source/distribution, Swift, Kotlin, and Java
-consumers. The current harness contract requires OpenAPI `7`, Python `56`,
-JavaScript `54`, Swift `3`, Kotlin `6`, and Java `5` cases against fixture
-SHA-256
-`ccdfa7dc54301889152a199da01dad4b8b3a469214063f52c338ee3d66c9f0fd`
-and suite-source manifest SHA-256
-`ad932dcf6feee2c60b26aa7d7aa3b3d8375a665c44108236799e59937f16f93b`.
-Current standalone OpenAPI and installed-package Python runs pass `7/7` and
-`56/56`, respectively. Those results are not a fresh archived replay of every
-surface. Closure remains open until one release gate archives every language
-consumer together.
+consumers. Fresh Rust generation of the protocol-4 corpus matches the checked-
+in JSON byte-for-byte. It contains 52 negative controls, including
+`execution_commitment_merge_carrier_wrong_version` and
+`execution_commitment_missing_merge_carrier_field`; the harness and source-
+bound release inventory both require that exact count. The synchronized
+fixture SHA-256 is
+`0fb9bf6a490f4974e65a5a03985bfe75321e3de1f54be064c3b088ccffc061d1`
+and the current suite-source manifest SHA-256 is
+`2962648895668a3fef1d1055473541695cc4bfab2f301213e369a40dfb53a521`.
+Direct OpenAPI, Python, and JavaScript grouped checks provide partial evidence
+recorded under `G-SDK`; Rust, Swift, Kotlin, Java, and one complete archived
+harness replay remain unexecuted, so this row's evidence is still Open.
 
 **Closure condition.** Generate one canonical grouped fixture and negative
 corpus from Rust and consume the exact files in OpenAPI, Python, JavaScript,
@@ -1124,6 +1326,19 @@ diagnostics models all carry explicit versions or exact typed Norito layouts
 in their owning modules. Unknown and retired layouts fail closed; the source
 tree contains no implicit legacy consensus decoder or production
 feature/environment compatibility switch for autonomous execution.
+`crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs` now generates
+the positive `quorum_certificate_merge_carrier` row and negative
+`execution_commitment_merge_carrier_wrong_version` and
+`execution_commitment_missing_merge_carrier_field` rows. Fresh Rust generation
+matches the checked-in 48-line `fixtures/sumeragi_v2/wire_v2.tsv` byte-for-
+byte, including all three rows; its SHA-256 is
+`f4ed50fb3db8aba9a8f50c542a58b72099c162e5cb927637c83634bca5120ae7`.
+`KuraReplicaAdvertV1` is explicit and clean-break. Its nested runtime policy
+configures and validates TTL, refresh cadence, evictable window, replica floor,
+and checked registry geometry. The direct authenticated ingress and the exact
+source-bound, bounded production refresher both consume the V1 layout. The
+former runtime-consumer gap and the wire-fixture regeneration gap are therefore
+implemented; fresh cross-SDK and execution evidence remains open.
 
 **Closure condition.** Version every new persistence and wire layout. Reject
 unknown and legacy versions unless an explicitly authenticated migration
@@ -1171,25 +1386,34 @@ identical temporary), reservation duplication, base-state mismatch, bounded
 fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
-The release runner now inventories 289 exact, non-ignored multilane focus
-tests: 105 core multilane tests, 127 core queue-journal tests, seven
-configuration tests, eight in `iroha_data_model`, 39 in Torii, one in
-Torii-shared, and two in the integration support library. The canonical
-inventory contains 290 TSV lines and has SHA-256
-`1bee8acd32f2296adda465a85c27eccb86ef5ce7df59e1a63acb144e5e913733`.
-The exact-source reservation-journal slice passes `65/65`, and its local
-identity-bound refinement regression passes `1/1`. That source inventory is
-not a passing 289-test transcript; the full focused rerun and archived receipt
-remain required.
+The focused source inventory is now internally consistent. The nine arrays in
+`scripts/run_sumeragi_v2_release_gates.sh` contain exactly 338 unique required
+tests: 135 core, 140 queue-journal, 13 configuration, eight data-model, 39
+Torii, one Torii-shared, and two integration. The runner and
+`ci/check_sumeragi_v2_multilane_release_inventory.sh` both require that exact
+338-row shape, including the current authenticated replica-advert focus cases.
+The static checker passes exact `338/338` and also source-binds the synchronized
+52-control grouped corpus. On 2026-07-31, pinned Rust 1.93.1 locked/offline
+execution from isolated source `/tmp/iroha-kura-final3.dvOYAN` and isolated
+target `/tmp/iroha-kura-target2.Llklru` passed 12 current-source focused tests:
+six bounded historical namespace/accounting cases, two startup-replay binding
+cases, and one each for B/A/B historical recovery, first-merge crash-window
+repair, Native post-WSV retention, and authenticated geometry refresh. The
+isolated checkpoint also passed `cargo check -p iroha_core --lib`; the
+post-reader-refactor reruns covered startup binding and B/A/B recovery. Earlier
+same-day isolated slices passed the 18 Kura replica tests and four
+configuration tests. These are focused partial results, not a fresh archived
+execution of all 338 required tests, so `G-UNIT` stays Open.
 
 ### G-FORMAL — source-bound models and expected mutations
 
 **Evidence:** Open.
 
 Port current production behavior for autoscale, Native application,
-autonomous reservation/carrier ownership, and QueuePlan admission into
+autonomous reservation/carrier ownership, QueuePlan admission, and Kura
+replica retention into
 `formal/sumeragi_v2`. Positive TLC and Apalache models must pass the TLA+
-invariants named by their four kernel rows. Every conceptual `ML-MUT-*` case is
+invariants named by their five kernel rows. Every conceptual `ML-MUT-*` case is
 classified and machine-mapped in `multilane_source_bindings.json`: a
 `tla_counterexample` case must own its exact non-empty `_bug.cfg` set and
 produce each named TLC counterexample, while a `static_release` or
@@ -1201,10 +1425,50 @@ source hash drift, then archive model, configuration, tool-version, result,
 and source hashes. Existing generic Sumeragi models are not substitutes for
 these multilane models.
 
-The separate in-flight carrier contract is layout-only: its twenty exact TLC
-mutation witnesses and fifth positive Apalache row are mandatory release
-evidence after the four refinement rows, but they do not promote the missing
-total Rust transition projection to a theorem.
+The current schema-5 binding registry contains 30 conceptual rows: 25 TLA
+counterexample rows with 73 exact mutation configurations, two static-release
+rows, and three differential-release rows. Its Native startup bindings name
+`LaneApplicationEvidenceRepairSummary::publication_count`, explicit ordinary
+pair repairs, read-only certified frontier/artifact access, reverse merge-
+carrier preflight/application, and the Queue-gated runner ordering. Those
+structural bindings execute no model checker. The fifth authenticated Kura
+retention kernel and its conceptual mutation mapping are now structurally
+present. Its direct-ingress and settled Kura authority/eviction bindings are
+checked, and configured checked registry capacity is bound through the
+overflow-checked key/entry helpers and Kura initialization. The exact durable
+tip/source token, complete-source revalidation, configured evictable-first
+window, eight-probe/one-fanout owner turn, retained retry, scan-start interval
+anchor, active-window-bounded rollover wake-up after durable handoff,
+durable-tip update, guarded publication, and process-lifetime runner ownership
+are all bound; the Kura retention contract has no pending production symbol. The source binding for
+`validate_v2_finality_wire_bindings` follows
+its split production owner at
+`crates/iroha_core/src/kura/retained_finality_replica_authority.rs`, instead of
+the former `kura.rs` location. Static validation of this registry confirms
+only structural source binding; it is neither a TLC/Apalache result nor a
+fresh Rust or network execution result.
+
+The separate in-flight carrier contract has a composed state/action relation
+but remains release-classified as layout-only until production trace
+extraction exists. Its twenty exact TLC mutation witnesses and sixth positive
+Apalache row are mandatory release evidence after the five refinement rows,
+but they do not promote the missing extraction theorem.
+
+A 2026-07-31 non-Cargo structural checkpoint taken immediately before this
+self-documenting ledger update reported source manifest
+`01754c06f060330a30cddd03c48203a55909832dfcb8475aee3f5b95651a4d5c`
+validated schema 5, all 30 conceptual rows, all 25 TLA counterexample rows and
+73 exact mutation configurations, the two static and three differential rows,
+the five refinement kernels plus the separately classified layout-only row,
+and an empty Kura pending-source list. This checkpoint did not run TLC,
+Apalache, Cargo/Rust tests, SDK harnesses, or any network corridor and is not a
+release execution receipt. The isolated Python source-contract suite passed all
+13 Kura cases, including the TTL floor, owner-minimum, scan-start deadline, and
+durable-handoff wake-up negative controls; those are structural checks, not
+Rust execution evidence. The fresh aggregate structural/model-source suite
+passed `100/100`, the proof-ledger release-inventory subset passed `42/42`, and
+the static Apalache runner contract passed all 14 fail-closed controls. None
+executes TLC or Apalache.
 
 A 2026-07-24 source-bound checkpoint for source manifest
 `af1361d00f08bbf340c57e6b4992c0a8166a7e9e67f9f4c5771827ce5c69e7a6`
@@ -1227,7 +1491,10 @@ Fresh four-peer suites must cover automatic expansion/contraction, restart
 recovery, same-ID A/B/A recreation, grouped and mixed-role Native application,
 same-route handling, offline/Byzantine validator rotation, body pruning,
 evidence-aware drain, archive, and useful autonomous execution through the
-canonical carrier. Required anchors include
+canonical carrier. Body-pruning cases must establish the `ML-KURA-01`
+deterministic keeper set, authenticated direct adverts, local-keeper pinning,
+and recovery from every advertised keeper; tuple-count or test-only advert
+injection is insufficient. Required anchors include
 `nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart`,
 `nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart`,
 and the strict autoscale cycle tests in
@@ -1243,7 +1510,10 @@ artifact is recorded here.
 
 Run at least three independent four-validator dataspaces with grouped DvP and
 autonomous work, rotating outage/restart, scale-out, drain, scale-in, and
-same-ID recreation. Require 10/10 fresh deterministic seeds and a two-hour
+same-ID recreation. The corridor must also rotate deterministic Kura keepers,
+expire and refresh adverts within configured bounds, pin local keepers, and
+recover an evicted canonical body from authenticated advertised sources.
+Require 10/10 fresh deterministic seeds and a two-hour
 fault soak, full peer convergence, durable participant receipts, and zero lost,
 rejected-after-acceptance, or duplicate transactions. The existing
 `cross_dataspace_atomic_swap_is_all_or_nothing` corridor is a starting point:
@@ -1272,16 +1542,18 @@ Swift, Kotlin core-jvm, and mirrored Java suites against the same Rust-owned
 grouped corpus. Archive the corpus hash and per-SDK results. No SDK may skip a
 negative or substitute a hand-authored fixture.
 
-The Rust generator, 50-control grouped corpus, six-surface parity harness, and
-fixture/suite source-hash binding are present. The current harness contract
-requires OpenAPI `7`, Python `56`, JavaScript `54`, Swift `3`, Kotlin `6`, and
-Java `5` cases against fixture SHA-256
-`ccdfa7dc54301889152a199da01dad4b8b3a469214063f52c338ee3d66c9f0fd`
-and suite-source manifest SHA-256
-`ad932dcf6feee2c60b26aa7d7aa3b3d8375a665c44108236799e59937f16f93b`.
-Current standalone OpenAPI and installed-package Python runs pass `7/7` and
-`56/56`, respectively. One archived release replay of every required surface
-is not yet recorded, so neither `ML-API-04` closure nor this gate advances.
+The Rust generator, checked-in protocol-4 grouped corpus, wire TSV, harness
+count, and static release inventory are now synchronized. The grouped corpus
+contains exactly 52 negative controls and hashes to
+`0fb9bf6a490f4974e65a5a03985bfe75321e3de1f54be064c3b088ccffc061d1`;
+the source-suite manifest hashes to
+`2962648895668a3fef1d1055473541695cc4bfab2f301213e369a40dfb53a521`.
+Fresh direct results pass OpenAPI `7/7`, Python `58/58`, JavaScript grouped
+parity `56/56`, and the separate JavaScript status/diagnostics contract
+`43/43`. These are partial results, not the complete source-and-distribution
+release harness: no Rust, Swift, Kotlin, or Java parity suite and no full
+aggregate harness replay was run for this evidence refresh. `G-SDK` therefore
+stays Open despite the resolved generation drift and passing direct subsets.
 
 ### G-FINAL — clean release validation
 
@@ -1319,10 +1591,28 @@ diagnostics must be added here or mapped to a ledger row before release.
 - The former first-release autonomous and drain limitations are retired in the
   canonical English architecture/operator documents. Historical entries in
   `status.md` and `roadmap.md` remain historical and are not evidence.
+- The former grouped JSON/general wire TSV drift is resolved: fresh Rust
+  generation matches both checked-in protocol-4 artifacts byte-for-byte, the
+  grouped harness and release inventory require 52 negatives, and
+  `ML-API-04` is implemented. Complete cross-SDK evidence remains open under
+  `G-SDK`.
 - A fresh source scan found no remaining in-scope TODO in lane routing,
   autoscale, merge, reservation ownership, Native AMX, drain, retirement, or
   multilane diagnostics. Any newly introduced marker must be classified here
   before release.
+
+### Unresolved in scope without a TODO marker
+
+- The former authenticated Kura V1 producer/configuration and wire-consumer
+  implementation gaps are resolved and source-bound. Their focused Rust,
+  formal-engine, SDK, and multi-peer execution receipts remain open; structural
+  source validation alone cannot close those gates.
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain open even though the exact 338-row
+  inventory, 52-control corpus, partial direct SDK subsets, and structural
+  formal checker now pass. Focused Rust subsets now pass, but no complete
+  338-test execution, complete SDK harness, or formal-engine result was
+  produced by this refresh, and no static source list or focused slice is a
+  release execution receipt.
 
 ### Explicitly out of scope
 
@@ -1368,6 +1658,22 @@ diagnostics must be added here or mapped to a ledger row before release.
   conflicting generic consensus-message pair before enabling penalties. It is
   not specific to lane/autoscale/merge/Native AMX behavior and remains in the
   generic consensus proof ledger.
+- **Generic P2P exact-writer deadline corridor:** the TODO above
+  `full_exact_writer_queue_times_out_closes_route_and_releases_actor_budget`
+  in `crates/iroha_p2p/src/network.rs` requests a four-peer socket-level test
+  for a Byzantine peer that keeps its inbound timer alive while refusing to
+  read outbound bytes. It tests connection-actor isolation for all P2P
+  payloads; it does not define Kura keeper authority, authenticate a lane
+  artifact, own a reservation, or decide drain/retirement. `G-4P` still must
+  exercise multilane Byzantine traffic, but this generic transport test is not
+  a multilane implementation row.
+- **Generic reputation finalized-view index scaling:** the TODO on
+  `ReputationFinalizedVirtualBaseCheckpointV1::journal_prefix_source_heads` in
+  `crates/iroha_core/src/query/reputation_finalized.rs` concerns replacing a
+  bounded inline reputation-source snapshot with content-addressed sharded or
+  Merkle indexing before an unrelated source population can become
+  unbounded. It neither retains canonical execution bodies nor participates
+  in Native, merge, reservation, autoscale, drain, or lane-archive authority.
 - **Generic Decision fetch refinement:** the TODO in
   `SumeragiV2CertifiedRequestHashAuthorityProofs.tla` concerns the concrete
   `ExecuteDecisionFetch` trace mapping for generic historical Decision body
@@ -1376,6 +1682,15 @@ diagnostics must be added here or mapped to a ledger row before release.
   reservations, autonomous merge carriers, Native participant evidence,
   autoscale, drain, or retirement and is therefore outside this multilane
   closure ledger.
+- **Other generic Sumeragi liveness composition:** the remaining 12 TODOs in
+  `formal/sumeragi_v2/` are five locked-body reproposal provider/composition
+  obligations, one finite-producer descent proof, one adequate-leader corridor
+  deadline service property, two asynchronous finite-producer route/rank
+  obligations, and three finite-producer production/descent/source-isolation
+  obligations. They concern generic proposal/timeout/producer temporal
+  liveness, not the multilane kernels in
+  `multilane_source_bindings.json`. They remain proof debt, but cannot stand in
+  for or block the lane-specific safety/evidence rows.
 - **Generic causal-scheduler projection and liveness:** the TODO on
   `production_fresh_causal_successors` in
   `crates/iroha_sumeragi_core/src/verus_proofs.rs`, mirrored in
@@ -1386,6 +1701,45 @@ diagnostics must be added here or mapped to a ledger row before release.
   `specified_unproved` in `formal/sumeragi_v2/PROOF.md`; it does not model
   lane reservations, autonomous merge carriers, Native participant evidence,
   autoscale, drain, or retirement and is outside this multilane ledger.
+- **Unrelated source markers:** the TODOs in
+  `crates/iroha_core/src/privacy_profiles.rs`, the Kagemusha SHA-256 table
+  implementation, and `crates/ivm/build.rs` concern privacy-engine activation,
+  an optional spread-word representation, and reproducible CUDA PTX artifacts.
+  None consumes a multilane identity or evidence class. They account for the
+  three non-consensus source TODO comments in the audit and are outside this
+  ledger.
+- **Wallet query roadmap items:** the two active TODO bullets in `roadmap.md`
+  request an authenticated account-activity feed and a timestamp-bounded
+  outgoing-value aggregate. They are query/index product work and do not
+  participate in consensus ownership or lane lifecycle.
+
+### Intentional first-release rejections
+
+These are current fail-closed policy, not hidden TODOs. Their negative tests
+remain required by the mapped rows.
+
+- QueuePlan, reservation journal V5/key V2/FIFO/release layouts, Native signing
+  claims, lane executable/QC/NewView artifacts, merge entries, execution
+  contexts, application evidence, and `KuraReplicaAdvertV1` reject retired,
+  zero, or future versions. This is the coordinated clean break mapped to
+  `ML-WIRE-01`, not authorization to accept legacy bytes.
+- `require_validator_storage_platform` and Kura geometry recovery reject a
+  voting/retirement role when the host cannot provide the first-release
+  Linux/macOS crash-safe storage contract. This is a declared platform
+  restriction mapped to `ML-LIFE-01`, `ML-LIFE-04`, and `G-FINAL`; it must not
+  be silently bypassed.
+- `ConfigError::NexusMultilaneDisabled` rejects lane catalogs, dataspaces, or
+  routing overrides when `nexus.enabled` is false. That preserves the
+  configuration-only production boundary in `ML-LIFE-01`; it is not an
+  environment-controlled autonomous-execution toggle.
+- Queue durability ambiguity disables admission/selection until bounded
+  restart recovery, and Kura retirement rejects obsolete, unexpected,
+  malformed, temporary, hardlinked, or symlinked evidence. Those rejections
+  implement `ML-AUT-06`, `ML-NAT-07`, and `ML-LIFE-04`; weakening them would
+  reopen loss, ABA, or unsafe-retirement traces.
+- The logging-only first-release equivocation limitation and the two fee-policy
+  rejections are the explicitly out-of-scope TODOs above. They do not weaken
+  any admitted multilane reservation/carrier path.
 
 Out-of-scope classification means these TODOs do not block multilane closure.
 It does not mark them implemented, safe for removal, or release-evidenced.

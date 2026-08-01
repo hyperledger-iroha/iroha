@@ -1023,8 +1023,7 @@
                 fsync_interval: FSYNC_INTERVAL,
                 block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-                eviction_required_replicas:
-                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+                replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -1083,8 +1082,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
 
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
@@ -1148,8 +1146,7 @@
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-                eviction_required_replicas:
-                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+                replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -1208,13 +1205,14 @@
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-                eviction_required_replicas:
-                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+                replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             },
             &RuntimeLaneConfig::default(),
         )
         .unwrap();
 
+        kura.bind_local_peer_id(checked_peer_id())
+            .expect("bind local peer before Kura start");
         let _handle = {
             let _rt_guard = rt.enter();
             Kura::start(kura.clone(), ShutdownSignal::new())
@@ -1284,8 +1282,7 @@
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-                eviction_required_replicas:
-                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+                replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -2704,13 +2701,8 @@
         .expect("persist availability before retirement");
         let (session, signer_pops) =
             committed_lane_block_session_for_kura_proposal(&payload.origin_proposal, &signer);
-        let certified = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
         let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
 
-        assert_eq!(
-            retirement.reservation_keys(),
-            payload.reservation_keys.as_slice(),
-        );
         assert_eq!(
             kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch,)
                 .expect("persist terminal slot retirement"),
@@ -2763,8 +2755,8 @@
             }] if exact_payload == &payload && exact_retirement == &retirement
         ));
         assert_eq!(
-            kura.autonomous_lane_merge_bundle(certified, chain_id_hash, epoch),
-            Err("autonomous lane merge payload is unavailable"),
+            kura.durable_autonomous_lane_merge_source(lane_id, 1, chain_id_hash, epoch),
+            Err("retired autonomous lane slot is not merge eligible"),
             "a locally supplied delayed QC cannot make a retired slot merge eligible",
         );
         assert!(

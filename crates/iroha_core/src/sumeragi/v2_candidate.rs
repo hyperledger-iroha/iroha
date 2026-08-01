@@ -1474,6 +1474,11 @@ mod tests {
             .map(|key| PeerId::new(key.public_key().clone()))
             .collect::<Vec<_>>();
         validator_set.sort();
+        let validator_count = u32::try_from(validator_set.len()).expect("validator count fits u32");
+        let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
+            validator_set.len(),
+        ))
+        .expect("validator quorum fits u32");
         let entrypoint_hash = Hash::from(transaction.hash_as_entrypoint());
         let previous_lane_block_height = lane_block_height.saturating_sub(1);
         let mut descriptor = LaneBlockDescriptorV1 {
@@ -1494,8 +1499,8 @@ mod tests {
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set: validator_set.clone(),
-            validator_count: u32::try_from(validator_set.len()).expect("validator count fits"),
-            min_quorum: 2,
+            validator_count,
+            min_quorum,
             qc_mode_tag: format!("permissioned:lane:{lane_id}:dataspace:{dataspace_id}"),
             descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
         };
@@ -1506,7 +1511,12 @@ mod tests {
             payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
-        let producer = validator_set[0].clone();
+        let producer = crate::lane_consensus::deterministic_lane_author(
+            &validator_set,
+            proposal.descriptor.lane_block_height,
+        )
+        .cloned()
+        .expect("fixture has a deterministic autonomous producer");
         let producer_key = keypairs
             .iter()
             .find(|key| key.public_key() == producer.public_key())

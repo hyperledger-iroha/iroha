@@ -14,6 +14,7 @@ use iroha_data_model::{
             LaneBlockVoteBodyV1, LanePayloadAvailabilityBodyV1, LanePayloadAvailabilityQcV1,
             NativeAmxReceipt, SumeragiLanePayloadOwnership,
         },
+        consensus_v2::HeightContextId,
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     merge::{
@@ -31,6 +32,7 @@ use thiserror::Error;
 
 use crate::{
     json_macros::{JsonDeserialize, JsonSerialize},
+    kura::LaneReadyAuthorization,
     queue::{LaneQueueReservationKeyV2, RouteLegRole, RoutingPlan},
     tx::AcceptedTransaction,
 };
@@ -88,6 +90,24 @@ const AUTONOMOUS_LANE_PAYLOAD_DECODE_LIMITS: norito::DecodeLimits = norito::Deco
 /// Version two removes the advisory global block hint from both authenticated
 /// preimages. Version one and unknown versions fail closed.
 pub(crate) const LANE_EXECUTABLE_PAYLOAD_VERSION_V2: u8 = 2;
+
+/// Return the unique height-rotated author for an autonomous lane block.
+///
+/// Autonomous authorship is independent of the global carrier view. A zero
+/// lane height or empty committee has no valid author and therefore fails
+/// closed at every caller.
+pub(crate) fn deterministic_lane_author(
+    validator_set: &[PeerId],
+    lane_block_height: u64,
+) -> Option<&PeerId> {
+    let author_offset = lane_block_height.checked_sub(1)?;
+    let validator_count = u64::try_from(validator_set.len()).ok()?;
+    if validator_count == 0 {
+        return None;
+    }
+    let author_index = usize::try_from(author_offset % validator_count).ok()?;
+    validator_set.get(author_index)
+}
 
 /// Maximum authenticated view transitions retained for one lane height.
 pub(crate) const MAX_LANE_NEW_VIEW_CERTIFICATES: usize = 256;
@@ -615,6 +635,9 @@ pub(crate) enum LaneAutonomousArtifactError {
     /// Payload producer is not a member of the lane committee.
     #[error("autonomous lane payload producer is not in committee")]
     ProducerNotInCommittee,
+    /// Payload producer is not the height-rotated lane author.
+    #[error("autonomous lane payload producer is not the deterministic lane author")]
+    ProducerNotDeterministicAuthor,
     /// Payload producer is not a BLS-normal consensus identity.
     #[error("autonomous lane payload producer is not BLS-normal")]
     ProducerNotBlsNormal,
@@ -702,6 +725,9 @@ pub(crate) enum LaneAutonomousArtifactError {
     /// READY aggregate signature construction or verification failed.
     #[error("lane payload availability aggregate signature is invalid")]
     InvalidAvailabilityAggregate,
+    /// Move-only durable-input authority does not match the READY signing request.
+    #[error("lane payload availability durable authorization does not match signing request")]
+    AvailabilityAuthorizationMismatch,
     /// Availability certificate is not a valid aggregate prepare QC.
     #[error("lane payload availability certificate is invalid")]
     InvalidAvailabilityCertificate,
@@ -810,6 +836,13 @@ impl LaneExecutablePayloadV1 {
             .contains(&self.producer)
         {
             return Err(LaneAutonomousArtifactError::ProducerNotInCommittee);
+        }
+        if deterministic_lane_author(
+            &self.origin_proposal.descriptor.validator_set,
+            self.origin_proposal.descriptor.lane_block_height,
+        ) != Some(&self.producer)
+        {
+            return Err(LaneAutonomousArtifactError::ProducerNotDeterministicAuthor);
         }
         if !peer_uses_bls_normal(&self.producer) {
             return Err(LaneAutonomousArtifactError::ProducerNotBlsNormal);
@@ -1158,7 +1191,39 @@ fn availability_body_matches_lane_vote_body(
 }
 
 impl LanePayloadAvailabilityVoteV1 {
-    /// Construct a READY vote after the caller has durably retained the exact payload.
+    /// Consume Kura's exact durable-input authority and construct one READY vote.
+    pub(crate) fn new_signed_with_authorization(
+        authorization: LaneReadyAuthorization,
+        proposal: &LaneBlockProposalV1,
+        body: LanePayloadAvailabilityBodyV1,
+        signer: PeerId,
+        validator_set_pops: Vec<Vec<u8>>,
+        private_key: &PrivateKey,
+        height_context_id: HeightContextId,
+    ) -> Result<Self, LaneAutonomousArtifactError> {
+        if !authorization.matches_signing_request(
+            proposal,
+            &body,
+            &signer,
+            height_context_id,
+        ) {
+            return Err(LaneAutonomousArtifactError::AvailabilityAuthorizationMismatch);
+        }
+        validate_lane_payload_availability_body_shape(&body)?;
+        let signature = Signature::try_new(private_key, &body.signature_preimage())
+            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilitySignature)?;
+        let vote = Self {
+            body,
+            signer,
+            validator_set_pops,
+            bls_signature: signature.payload().to_vec(),
+        };
+        vote.validate_against_validator_set(&proposal.descriptor.validator_set)?;
+        Ok(vote)
+    }
+
+    /// Construct a READY vote for a test fixture without a physical Kura boundary.
+    #[cfg(test)]
     pub(crate) fn new_signed(
         body: LanePayloadAvailabilityBodyV1,
         signer: PeerId,
@@ -3007,7 +3072,6 @@ impl LaneBlockSessionCache {
     }
 
     /// Return whether this validator still needs to synthesize a prepare vote for a proposal.
-    #[cfg(test)]
     pub(crate) fn local_prepare_vote_needed_for(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -6154,7 +6218,10 @@ mod tests {
         proposal.proposal_hash = proposal.computed_proposal_hash();
         let chain_id_hash = Hash::new(b"lane-autonomous-chain");
         let epoch = 4;
-        let producer = validator_set[0].clone();
+        let producer =
+            deterministic_lane_author(&validator_set, proposal.descriptor.lane_block_height)
+                .cloned()
+                .expect("fixture has a deterministic lane author");
         let producer_key = keypairs
             .iter()
             .find(|keypair| keypair.public_key() == producer.public_key())
@@ -6265,6 +6332,59 @@ mod tests {
             unknown.validate(chain_id_hash, epoch),
             Err(LaneAutonomousArtifactError::UnsupportedVersion)
         );
+    }
+
+    #[test]
+    fn autonomous_payload_requires_height_rotated_committee_author() {
+        let keypairs = [
+            checked_bls_keypair(74),
+            checked_bls_keypair(75),
+            checked_bls_keypair(76),
+        ];
+        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let descriptor = &payload.origin_proposal.descriptor;
+        assert_eq!(
+            deterministic_lane_author(&descriptor.validator_set, descriptor.lane_block_height),
+            Some(&payload.producer),
+            "the positive fixture must rotate to the exact lane-height author",
+        );
+
+        let wrong_key = keypairs
+            .iter()
+            .find(|keypair| keypair.public_key() != payload.producer.public_key())
+            .expect("fixture contains another committee signer");
+        let mut wrong_author = payload.clone();
+        wrong_author.producer = peer(wrong_key);
+        wrong_author.producer_signature = Signature::try_new(
+            wrong_key.private_key(),
+            &wrong_author.producer_signature_preimage(),
+        )
+        .expect("wrong lane author can still make a cryptographically valid signature")
+        .payload()
+        .to_vec();
+        assert_eq!(
+            wrong_author.validate(chain_id_hash, epoch),
+            Err(LaneAutonomousArtifactError::ProducerNotDeterministicAuthor),
+            "committee membership and a valid signature must not confer slot authorship",
+        );
+
+        let mut hint_free = payload.clone();
+        hint_free.origin_proposal.payload_block_hint = None;
+        let attached = hint_free
+            .attach_global_hint_exact(
+                LaneBlockProposalPayloadHintV1 {
+                    proposal_height: descriptor.proposal_height,
+                    proposal_view: 91,
+                    proposal_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                        b"lane-author-independent-global-view",
+                    )),
+                },
+                chain_id_hash,
+                epoch,
+            )
+            .expect("global carrier view must not change autonomous authorship");
+        assert_eq!(attached.producer, payload.producer);
+        assert_eq!(attached.producer_signature, payload.producer_signature);
     }
 
     #[test]
@@ -10584,77 +10704,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn commit_vote_locks_are_namespaced_by_lane_incarnation() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
-        let mut cache = LaneBlockSessionCache::new(8);
-
-        let original = lane_block_proposal_at_height(&validator_set, 13);
-        assert_eq!(
-            cache.insert_proposal(original.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        for signer in &keys {
-            let prepare = signed_vote(&original.vote_body(CertPhase::Prepare), signer);
-            assert_eq!(
-                cache.insert_vote(prepare.clone(), Some(&prepare.signer)),
-                Ok(LaneBlockSessionInsertOutcome::Inserted)
-            );
-        }
-        let original_commit = signed_vote(&original.vote_body(CertPhase::Commit), &keys[0]);
-        assert_eq!(
-            cache.insert_vote(original_commit.clone(), Some(&original_commit.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-
-        let recreated_incarnation = Hash::new(b"recreated-commit-lock-incarnation");
-        let mut recreated = retag_lane_block_proposal_payload(original, 0xD7);
-        recreated.descriptor.lane_incarnation = recreated_incarnation;
-        recreated.descriptor.descriptor_hash = recreated.descriptor.computed_descriptor_hash();
-        recreated.proposal_hash = recreated.computed_proposal_hash();
-        assert_eq!(
-            cache.insert_proposal(recreated.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted),
-            "a recreated lane must own a distinct local-height namespace"
-        );
-        for signer in &keys {
-            let prepare = signed_vote(&recreated.vote_body(CertPhase::Prepare), signer);
-            assert_eq!(
-                cache.insert_vote(prepare.clone(), Some(&prepare.signer)),
-                Ok(LaneBlockSessionInsertOutcome::Inserted)
-            );
-        }
-        let recreated_commit = signed_vote(&recreated.vote_body(CertPhase::Commit), &keys[0]);
-        assert_eq!(
-            cache.insert_vote(recreated_commit.clone(), Some(&recreated_commit.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted),
-            "an old-incarnation signer lock must not block the recreated lane"
-        );
-        assert_eq!(cache.commit_vote_lock_len(), 2);
-
-        assert_eq!(
-            cache.prune_commit_vote_locks_for_inactive_incarnations(
-                |_lane_id, _dataspace_id, incarnation| incarnation == recreated_incarnation,
-            ),
-            1,
-            "retiring an incarnation should remove only its obsolete signer lock"
-        );
-        assert_eq!(
-            cache.commit_vote_lock_slots(),
-            BTreeSet::from([(
-                recreated.descriptor.lane_id,
-                recreated.descriptor.dataspace_id,
-                recreated_incarnation,
-                recreated.descriptor.lane_block_height,
-            )])
-        );
-    }
+    include!("lane_consensus/commit_vote_lock_incarnation_test.rs");
 
     #[test]
     fn lane_block_session_cache_reports_undrained_committed_admissible_lanes() {

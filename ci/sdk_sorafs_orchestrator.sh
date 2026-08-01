@@ -487,9 +487,26 @@ run_javascript_parity() {
   )"
 
   (
+    native_build_target="$(
+      mktemp -d "${TMPDIR:-/tmp}/iroha-sorafs-js-native-target.XXXXXX"
+    )"
+    trap 'rm -rf -- "${native_build_target}"' EXIT
+    native_cargo="$(rustup which cargo)"
+    native_rustc="$(rustup which rustc)"
+    native_rustdoc="$(rustup which rustdoc)"
+
     cd "${sdk_root}"
     npm ci
-    IROHA_JS_NATIVE_BUILD_PROFILE=release npm run build:native
+    CARGO_BUILD_JOBS=1 \
+      CARGO_INCREMENTAL=0 \
+      CARGO_NET_OFFLINE=true \
+      CARGO_TARGET_DIR="${native_build_target}" \
+      IROHA_JS_CARGO_LOCKFILE_PATH="${REPO_ROOT}/Cargo.lock" \
+      IROHA_JS_CARGO_PATH="${native_cargo}" \
+      RUSTC="${native_rustc}" \
+      RUSTC_BOOTSTRAP=1 \
+      RUSTDOC="${native_rustdoc}" \
+      IROHA_JS_NATIVE_BUILD_PROFILE=release npm run build:native
   )
   python3 -I "${REPO_ROOT}/scripts/check_native_sdk_abi21_artifact.py" \
     record \

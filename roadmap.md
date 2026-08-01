@@ -1,9 +1,22 @@
 # Roadmap
 
-Last updated: 2026-07-31
+Last updated: 2026-08-01
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## Dependabot remediation closure
+
+- Land the exact remediation through the signed commit and merge path, wait
+  for Dependabot to rescan `main`, and reconcile all 26 mapped alerts against
+  the resulting default-branch dashboard. Investigate any alert that remains
+  open or any newly exposed transitive path before declaring dashboard
+  closure.
+- Resolve the separate Python SDK support-policy decision. Patched `pytest`,
+  `requests`, and `urllib3` releases now require Python 3.10+, while the
+  standalone Torii client still advertises Python 3.9. Either retain 3.9 with
+  maintained secure upstream floors or raise the SDK minimum and update its
+  package metadata, classifiers, CI lock, tests, and documentation together.
 
 ## First-release security remediation validation
 
@@ -104,44 +117,42 @@ The deferred authority-paid receipt-settlement spend lease and generic Verus
 effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
 classified outside the multilane closure ledger.
 
-A fresh 49-case `iroha_core` regression sweep is green for the reported
-Native/retirement/consensus/recovery failures, including exact deterministic
-merge-carrier header admission and adjacent SoraFS repair decoding boundaries.
-This focused repair evidence does not replace the outstanding archived
-`G-UNIT`, real-network, soak, scale, or source-sealed final gates below.
-The first-release queue-plan restart boundary now reconciles reservation
-Commit barriers against exact globally certified V4 journal bindings, and the
-journal-disabled startup path is retired. Full queue-hash/coordinator identity,
-semantic request-kernel validation, atomic constant-scan batch cleanup,
-mandatory first-release journaling, and successful backpressure refresh are
-now pinned across restart. Three additional Native latest-index regressions
-reject a legacy V1 pointer filename, a fully unbacked pointer, and
-receipt-absent executed-wire/finality/manifest binding drift. They establish
-the prior 280-test G-UNIT checkpoint. One exact in-flight refinement-kernel
-regression and eight reservation-journal checked-application/adversarial
-regressions now raise the current source inventory to 289 tests. The fresh
-24-test queue/configuration slice and 130-test Native AMX slice are green; the
-exact-source isolated reservation-journal slice is green at `65/65`, and the
-identity-bound in-flight refinement regression is green at `1/1`. The complete
-289-test archived execution receipt is still outstanding.
+Historical autonomous recovery now uses one bounded canonical namespace
+scanner across startup replay binding, disk accounting, and lane-geometry
+reconstruction. It identity-binds the exact nested directory and its records,
+counts the bytes once, rejects noncanonical, temporary, nested, symlinked,
+hardlinked, or oversized artifacts, and removes the former unbounded
+directory-list collection. Pinned Rust 1.93.1 locked/offline execution in
+isolated source/target space passed 12 current-source focused restart,
+accounting, crash-window, Native-retention, and B/A/B recreation tests. Earlier
+same-day isolated slices passed 18 Kura replica tests and four configuration
+tests. The isolated `iroha_core` library check also passed before the final
+reader deduplication, with post-edit startup-binding and B/A/B regressions
+green. This focused evidence does not replace the complete release gates.
 
-The in-flight carrier formal corpus is now bound to the versions that
-production actually accepts: schema V2 in the `LaneExecutablePayloadV1`
-container, QueuePlan journal V4, and reservation journal V5. Schema 4 of the
-multilane binding ledger keeps this as
-`layout_only_no_transition_refinement`, source-binds exact payload,
-reservation, queue-order, Kura persistence/recovery, runner, and release
-receipt consumers, and requires a distinct fifth layout-only Apalache result
-after the four refinement rows. The schema-4 structural/source-binding checks,
-exact 738-test production inventory, 289-test G-UNIT source inventory, 12
-fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
-contract controls are fresh and green. The G-UNIT inventory has 290 TSV lines
-and SHA-256
-`1bee8acd32f2296adda465a85c27eccb86ef5ce7df59e1a63acb144e5e913733`.
-The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
-again and passes all 15 focused tests. No TLC or Apalache engine execution is
-claimed by those static checks, and the total Rust transition projection
-remains open.
+The static release inventory now matches `806/806` production tests across 39
+modules and `338/338` focused `G-UNIT` entries. Its canonical 339-line TSV has
+SHA-256
+`9132298b180884e25cf22c9246ca7395331a0ed02cafa7bbb4c9678e0624e0b7`.
+Schema 5 machine-maps 30 conceptual multilane rows to 73 exact mutation
+configurations. The authenticated Kura retention contract binds 44 production
+symbols, three ordered checks, and 14 mutations with no pending source check;
+the final pre-self-documentation source manifest is
+`01754c06f060330a30cddd03c48203a55909832dfcb8475aee3f5b95651a4d5c`.
+The proof-ledger release-inventory subset passes `42/42`, the aggregate
+multilane model/source contract suite passes `100/100`, and the static
+Apalache-runner contract passes all 14 fail-closed controls. No current TLC or
+Apalache engine run is claimed.
+
+The Rust-owned protocol-4 grouped fixture contains 52 negative controls and
+hashes to
+`0fb9bf6a490f4974e65a5a03985bfe75321e3de1f54be064c3b088ccffc061d1`;
+the synchronized 48-line wire TSV hashes to
+`f4ed50fb3db8aba9a8f50c542a58b72099c162e5cb927637c83634bca5120ae7`.
+Direct OpenAPI `7/7`, Python `58/58`, JavaScript grouped `56/56`, and
+JavaScript status/diagnostics `43/43` checks pass. Rust, Swift, Kotlin, Java,
+and one archived aggregate source/distribution replay remain open under
+`G-SDK`.
 
 The remaining work is evidence-driven and must stay in order:
 
@@ -173,26 +184,25 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 738-test,
-  38-module production inventory legs and archived G-UNIT execution.
+  mutations before promotion, then finish the remaining 806-test,
+  39-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
   obligations remain in the formal dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 289 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 338 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
   source/distribution, Swift, Kotlin, and Java for
-  `ML-API-04`/`G-SDK`. The current harness contract requires OpenAPI `7`,
-  Python `56`, JavaScript `54`, Swift `3`, Kotlin `6`, and Java `5` cases. Its
-  exact fixture SHA-256 is
-  `ccdfa7dc54301889152a199da01dad4b8b3a469214063f52c338ee3d66c9f0fd`,
-  and its suite-source manifest SHA-256 is
-  `ad932dcf6feee2c60b26aa7d7aa3b3d8375a665c44108236799e59937f16f93b`.
-  Current standalone OpenAPI and installed-package Python runs pass `7/7` and
-  `56/56`, respectively. Those results are not an archived all-surface replay;
-  the remaining SDK blocker is one archived release replay of every required
-  language surface together.
+  `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 52 negative controls,
+  fixture SHA-256
+  `0fb9bf6a490f4974e65a5a03985bfe75321e3de1f54be064c3b088ccffc061d1`,
+  and wire-TSV SHA-256
+  `f4ed50fb3db8aba9a8f50c542a58b72099c162e5cb927637c83634bca5120ae7`.
+  Current direct results are OpenAPI `7/7`, Python `58/58`, JavaScript grouped
+  `56/56`, and JavaScript status/diagnostics `43/43`. Those results are not an
+  archived all-surface replay; Rust, Swift, Kotlin, Java, and the aggregate
+  source/distribution harness remain required.
 - Complete the mandatory unskipped real-network `G-4P` expansion, drain,
   archive, recreation, Native rotation/pruning, and autonomous carrier suites.
 - Run the strict `G-12P` 10/10 deterministic-seed corridor and two-hour rotating
@@ -271,13 +281,14 @@ validation and four-peer exactly-once evidence remain release-blocking for the
 repair lane.
 
 Stream-token issuance is now controlled only by node TOML and binds one
-runtime-injected Ed25519 HSM/KMS signer by its non-secret handle and exact
-configured public key. The former file-seed loader, environment enablement,
-standard-launcher node-key derivation, and internal seed-signing API are
-deleted. Enabled startup fails closed on a missing or substituted signer, and
-Torii verifies every returned signature before releasing a token. Focused
-Cargo/workspace validation and reviewed reference-HSM deployment evidence
-remain open.
+runtime-injected Ed25519 HSM/KMS signer by its non-secret handle, exact public
+key, non-zero adapter revision, and non-zero public-policy digest. The former
+file-seed loader, environment enablement, standard-launcher node-key derivation,
+and internal seed-signing API are deleted. Enabled startup probes the public
+identity twice, and Torii revalidates it before and after every signature before
+strict verification and token release. Missing, substituted, stale, drifting,
+revoked, or test-marked providers fail closed. Focused Cargo/workspace
+validation and reviewed reference-HSM deployment evidence remain open.
 
 The mandatory SoraFS ABI-21 Python native reference lane is now pinned to exact
 Python 3.12. The obsolete tracked `_crypto.cpython-39-darwin.so` is removed, and
@@ -299,6 +310,18 @@ and guard are also exact Python 3.12 and install only the hash-locked,
 binary-only `requirements-ci.lock`; a fresh isolated CPython 3.12.13 venv is
 green at 3/3, including positive static coverage and
 version/resolver/major/workflow/lock negative controls.
+Kotlin/JVM contract-manifest and SCCP protocol-V4 source drift is closed at
+26/26 focused tests, the mirrored Java SCCP harness passes, and the complete
+51-test Android module now exercises the mandatory fresh transaction
+compatibility probe. The remaining Kotlin/JVM and Java core failures are
+explicit stale-ABI-21 native failures; rebuild and rerun them before `G-FINAL`.
+
+The SoraFS monitoring source slice is green under checksum-verified
+`promtool` 3.13.1: all 30 alert files pass rule validation, all 26 alert unit
+suites pass individually, all 50 dashboard JSON files parse, all 56 alert/test
+YAML files parse, and the wrapper regressions pass `3/3`. `G-FINAL` still
+requires the deployment-owned scrape, alert-delivery, and soak evidence; no
+historical source-suite mismatch remains open.
 
 Provider ingest is now an opt-in supervised `irohad` worker over one immutable,
 bounded finalized replication-order snapshot. Its durable single-writer

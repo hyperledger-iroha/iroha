@@ -245,11 +245,6 @@ impl AuthenticatedCertifiedBodyResponse {
     pub(crate) const fn response(&self) -> &wire::CertifiedBodyResponse {
         &self.response
     }
-
-    /// Consume the token and recover the authenticated response.
-    pub(crate) fn into_inner(self) -> wire::CertifiedBodyResponse {
-        self.response
-    }
 }
 
 /// Commit-certificate request admitted through structural, outer-identity,

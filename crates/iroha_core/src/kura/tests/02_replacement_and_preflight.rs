@@ -1865,8 +1865,7 @@
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
 
         let (kura, _) = Kura::new(&kura_cfg, &initial_lane_config).expect("init kura");
@@ -2005,8 +2004,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let (kura, _) = Kura::new(&kura_cfg, &configured).expect("init Kura");
         let stale_dir = configured
@@ -2122,8 +2120,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let (kura, _) = Kura::new(&kura_cfg, &configured).expect("init Kura");
         let configured_incarnation = Hash::new(b"configured primary restore incarnation");
@@ -2192,8 +2189,7 @@
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
 
         let (kura, _) = Kura::new(&kura_cfg, &initial_lane_config).expect("init kura");
@@ -2265,8 +2261,7 @@
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
 
         let (kura, _) = Kura::new(&kura_cfg, &initial_lane_config).expect("init kura");
@@ -2524,8 +2519,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -2607,8 +2601,7 @@
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         }
     }
 
@@ -2692,6 +2685,27 @@
                 .is_err(),
             "configured QueuePlan capacity must reject the second identity"
         );
+    }
+
+    #[test]
+    fn configured_historical_recovery_bytes_follow_runtime_limits() {
+        for (label, byte_limit) in [
+            ("lower", V2_PENDING_CONTROL_SIDECAR_BYTES_MIN),
+            ("higher", V2_PENDING_CONTROL_SIDECAR_BYTES_MAX),
+        ] {
+            let temp = TempDir::new().expect("temporary configured Kura root");
+            let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+            let mut limits = SumeragiV2RuntimeLimits::default();
+            limits.pending_control_sidecar_bytes =
+                NonZeroUsize::new(byte_limit).expect("configured byte limit is non-zero");
+            let (kura, _) = open_configured_kura_with_pending_limits(&config, &limits)
+                .unwrap_or_else(|error| panic!("open {label}-bound configured Kura: {error}"));
+            assert_eq!(
+                kura.historical_autonomous_recovery_aggregate_byte_limit(),
+                u64::try_from(byte_limit).expect("configured byte limit fits u64"),
+                "historical recovery must use the {label} configured sidecar byte bound",
+            );
+        }
     }
 
     #[test]

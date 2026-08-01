@@ -5045,20 +5045,7 @@ mod tests {
         assert_eq!(view.iter().count(), 0);
     }
 
-    #[test]
-    fn persist_record_rejects_missing_signature_mutation() {
-        let ctx = test_context();
-        let context = ctx.validation_context();
-        let evidence = double_vote_with_unchecked(&ctx, |v1, v2| {
-            v1.bls_sig.clear();
-            v2.bls_sig.clear();
-        });
-        assert_invalid_evidence_rejected(
-            &context,
-            &evidence,
-            EvidenceValidationError::SignatureMissing,
-        );
-    }
+    include!("evidence/signature_missing_test.rs");
 
     #[test]
     fn persist_record_rejects_truncated_signature_mutation() {

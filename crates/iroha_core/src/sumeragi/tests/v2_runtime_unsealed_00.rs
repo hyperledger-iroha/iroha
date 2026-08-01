@@ -855,6 +855,96 @@
             .expect("real test fair ingress produces exact source ownership")
     }
 
+    fn preowned_leader_wire_ownerships(
+        context: &wire::HeightContext,
+        messages: &[(wire::ConsensusMessageV2, PeerId)],
+        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+    ) -> (
+        TempDir,
+        Arc<super::super::FairV2Ingress>,
+        Vec<FairV2IngressOwnershipEvidence>,
+    ) {
+        let directory = TempDir::new().expect("temporary preowned leader-wire directory");
+        let ingress = Arc::new(super::super::FairV2Ingress::new(
+            64,
+            512 * 1024 * 1024,
+            64 * 1024 * 1024,
+            8 * 1024 * 1024,
+            8 * 1024 * 1024,
+        ));
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        ingress
+            .configure_roster_for_context(roster.clone(), &context.chain_id, context.da_layout)
+            .expect("preowned leader-wire geometry");
+        ingress.require_leader_wire_lifecycle_gate();
+        let capacity =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
+                roster.len(),
+                context.da_layout.max_chunk_count,
+            )
+            .expect("finite preowned leader-wire capacity");
+        let recovery_authority =
+            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+                context.id(),
+                context.height,
+                [0xE7; 32],
+                0,
+                false,
+            );
+        let (gate, restore) =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+                &directory.path().join("leader-wire-preowned.wal"),
+                context.id(),
+                context.height,
+                [0xE7; 32],
+                roster.iter().cloned().collect(),
+                capacity,
+                context.da_layout.max_chunk_count,
+                recovery_authority,
+                &[],
+                &[],
+            )
+            .expect("open preowned leader-wire gate");
+        ingress
+            .bind_leader_wire_lifecycle_gate(
+                gate,
+                restore,
+                lifecycle_ordinals,
+                context.id(),
+                context.height,
+            )
+            .expect("bind preowned leader-wire gate");
+        ingress.open().expect("open preowned fair ingress");
+
+        let ownerships = messages
+            .iter()
+            .map(|(message, semantic_origin)| {
+                assert!(matches!(
+                    ingress.try_push(InboundBlockMessage::new(
+                        BlockMessage::V2(message.clone()),
+                        Some(semantic_origin.clone()),
+                    )),
+                    Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+                ));
+                let mut admitted = ingress
+                    .try_recv()
+                    .expect("drain preowned leader-wire occurrence");
+                let mut ownership = admitted
+                    .take_ingress_ownership()
+                    .expect("preowned leader wire retains fair ownership");
+                ingress
+                    .bind_leader_wire_runtime_ownership(&mut ownership)
+                    .expect("bind preowned leader-wire runtime receipt");
+                ownership
+            })
+            .collect();
+        (directory, ingress, ownerships)
+    }
+
     struct LeaderWireProposalFixture {
         ingress: Arc<super::super::FairV2Ingress>,
         gate: Arc<super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate>,

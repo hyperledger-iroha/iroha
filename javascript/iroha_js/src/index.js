@@ -273,7 +273,6 @@ export {
   buildSetRwaKeyValueTransaction,
   buildRemoveRwaKeyValueTransaction,
   buildCreateKaigiTransaction,
-  buildPrivateKaigiFeeSpend,
   buildConfidentialTransferProofV2,
   buildConfidentialUnshieldProofV2,
   buildConfidentialUnshieldProofV3,

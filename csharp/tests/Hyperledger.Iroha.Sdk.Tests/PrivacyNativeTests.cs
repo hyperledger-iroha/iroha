@@ -151,19 +151,11 @@ public sealed class PrivacyNativeTests
     }
 
     [Fact]
-    public void Exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesWhenAvailable()
+    public void Exact12FixtureBundleRoundTripsAndRejectsAdversarialBytes()
     {
-        if (!PrivacyNative.IsAvailable())
-        {
-            Assert.False(
-                string.Equals(
-                    Environment.GetEnvironmentVariable(
-                        "IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE"),
-                    "1",
-                    StringComparison.Ordinal),
-                "ABI-21 connect_norito_bridge with exact-12 fixture symbols is required.");
-            return;
-        }
+        Assert.True(
+            PrivacyNative.IsAvailable(),
+            "ABI-21 connect_norito_bridge with exact-12 fixture symbols is required.");
 
         var bundle = PrivacyNative.Exact12FixtureBundleV1();
         var canonical = bundle.NoritoBytes;

@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -22,6 +23,7 @@ import java.util.Set;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.NativeAmxParticipantApplication;
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.NativeAmxParticipantApplicationState;
+import org.hyperledger.iroha.sdk.consensus.NativeAmxV2;
 import org.junit.Test;
 
 /** Shared grouped Native AMX v2 fixture-consumption tests. */

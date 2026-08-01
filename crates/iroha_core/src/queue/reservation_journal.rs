@@ -4,7 +4,8 @@
 //! the same transaction eligible for both the global scheduler and an independently ticking lane.
 //! The journal therefore uses checksummed, length-delimited frames and synchronizes every state
 //! transition before the queue exposes it to callers. The first-release admission-bound layout is V5
-//! only: earlier or unknown frame envelopes are retained and rejected without legacy decoding.
+//! only: its bootstrap digest binds the exact no-prune operation schema, and earlier or unknown
+//! frame envelopes are retained and rejected without legacy decoding.
 
 #[cfg(test)]
 use std::sync::Barrier;
@@ -27,12 +28,11 @@ use crate::sumeragi::v2_core::{
     IDENTITY_KIND_LANE_QUEUE_RELEASE_BARRIER, IDENTITY_KIND_LANE_QUEUE_RESERVATION,
     IN_FLIGHT_RESERVATION_ACTION_COMMIT, IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE,
     IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT, IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE,
-    IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE, IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED,
-    IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT, IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT,
-    IN_FLIGHT_RESERVATION_ACTION_RESERVE, IN_FLIGHT_RESERVATION_STATE_ABSENT,
-    IN_FLIGHT_RESERVATION_STATE_COMMITTED, IN_FLIGHT_RESERVATION_STATE_LIVE,
-    IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED, IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED,
-    ProductionInFlightReservationOwnerProjection,
+    IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE, IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT,
+    IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT, IN_FLIGHT_RESERVATION_ACTION_RESERVE,
+    IN_FLIGHT_RESERVATION_STATE_ABSENT, IN_FLIGHT_RESERVATION_STATE_COMMITTED,
+    IN_FLIGHT_RESERVATION_STATE_LIVE, IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED,
+    IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED, ProductionInFlightReservationOwnerProjection,
     ProductionInFlightReservationTransitionProjection,
     check_production_in_flight_reservation_transition,
 };
@@ -46,6 +46,8 @@ use super::{
 
 const RESERVATION_JOURNAL_FRAME_DOMAIN: &[u8] = b"iroha:queue-lane-reservation-frame:v5";
 const RESERVATION_JOURNAL_BOOTSTRAP_DOMAIN: &[u8] = b"iroha:queue-lane-reservation-bootstrap:v5";
+const RESERVATION_JOURNAL_OPERATION_SCHEMA_V5: &[u8] =
+    b"iroha:queue-lane-reservation-operations:v5:no-prune";
 const RESERVATION_JOURNAL_FRAME_MAGIC: [u8; 8] = *b"IRQRJNL5";
 const RESERVATION_JOURNAL_FRAME_COMMIT: [u8; 8] = *b"IRQRDONE";
 const RESERVATION_JOURNAL_FRAME_FORMAT_VERSION: u16 = 5;
@@ -198,13 +200,6 @@ enum LaneQueueReservationJournalFrameV5 {
     Commit(LaneQueueReservationKeyV2),
     /// Forget a commit barrier after the queue-plan tombstone is independently durable.
     ForgetCommit(LaneQueueReservationKeyV2),
-    /// Release only reservations owned by this exact lane incarnation.
-    Prune {
-        /// Lane being retired or reconciled.
-        lane_id: LaneId,
-        /// Exact retired incarnation; a recreated lane has a different value.
-        lane_incarnation: Hash,
-    },
     /// Durably claim an exact FIFO-ordered live reservation set for release.
     PrepareRelease(LaneQueueReservationReleaseBarrierV3),
     /// Atomically move the exact prepared live records into restartable completion state.
@@ -796,10 +791,6 @@ impl IndexedReservationReplayState {
             LaneQueueReservationJournalFrameV5::ForgetCommit(key) => {
                 self.transition_forget_commit(*key, apply)
             }
-            LaneQueueReservationJournalFrameV5::Prune {
-                lane_id,
-                lane_incarnation,
-            } => self.transition_prune(*lane_id, *lane_incarnation, apply),
             LaneQueueReservationJournalFrameV5::PrepareRelease(barrier) => {
                 self.transition_prepare_release(barrier, apply)
             }
@@ -984,31 +975,6 @@ impl IndexedReservationReplayState {
                     before,
                     after,
                 )
-            }
-            LaneQueueReservationJournalFrameV5::Prune {
-                lane_id,
-                lane_incarnation,
-            } => {
-                let lane = (*lane_id, *lane_incarnation);
-                for hash in self
-                    .live_by_lane_incarnation
-                    .get(&lane)
-                    .into_iter()
-                    .flatten()
-                {
-                    let before = self.ownership.get(hash).copied().ok_or_else(|| {
-                        invalid_data("lane reservation prune index has no primitive owner")
-                    })?;
-                    self.retain_in_flight_owner_transition(
-                        &mut retained,
-                        IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED,
-                        before.key(),
-                        None,
-                        Some(before),
-                        None,
-                    )?;
-                }
-                Ok(())
             }
             LaneQueueReservationJournalFrameV5::PrepareRelease(barrier) => {
                 let release_digest = barrier.digest();
@@ -1385,52 +1351,6 @@ impl IndexedReservationReplayState {
         {
             self.committed.remove(&key.signed_transaction_hash);
             self.ownership.remove(&key.signed_transaction_hash);
-        }
-        Ok(())
-    }
-
-    fn transition_prune(
-        &mut self,
-        lane_id: LaneId,
-        lane_incarnation: Hash,
-        apply: bool,
-    ) -> io::Result<()> {
-        let lane = (lane_id, lane_incarnation);
-        let hashes = self
-            .live_by_lane_incarnation
-            .get(&lane)
-            .cloned()
-            .unwrap_or_default();
-        let mut removals = Vec::with_capacity(hashes.len());
-        for hash in hashes {
-            let key = match self.ownership.get(&hash).copied() {
-                Some(DurableReservationOwnership::Live(key))
-                    if key.lane_id == lane_id && key.lane_incarnation == lane_incarnation =>
-                {
-                    key
-                }
-                Some(DurableReservationOwnership::Prepared { .. }) => {
-                    return Err(invalid_data(
-                        "lane reservation prune overlaps a prepared ordered release barrier",
-                    ));
-                }
-                Some(_) => {
-                    return Err(invalid_data(
-                        "lane reservation prune index overlaps conflicting durable ownership",
-                    ));
-                }
-                None => {
-                    return Err(invalid_data(
-                        "lane reservation prune index has no primitive owner",
-                    ));
-                }
-            };
-            removals.push(self.validate_live_secondary_indexes(hash, key)?);
-        }
-        if apply {
-            for record in &removals {
-                self.remove_preflighted_live(record);
-            }
         }
         Ok(())
     }
@@ -1967,16 +1887,6 @@ impl LaneQueueReservationJournal {
     /// Durably forget one exact commit barrier after queue-plan cleanup.
     pub(super) fn forget_commit(&mut self, key: LaneQueueReservationKeyV2) -> io::Result<()> {
         self.append_durable(&LaneQueueReservationJournalFrameV5::ForgetCommit(key))?;
-        self.terminal_frames = self.terminal_frames.saturating_add(1);
-        Ok(())
-    }
-
-    /// Durably release every reservation for an exact lane incarnation.
-    pub(super) fn prune(&mut self, lane_id: LaneId, lane_incarnation: Hash) -> io::Result<()> {
-        self.append_durable(&LaneQueueReservationJournalFrameV5::Prune {
-            lane_id,
-            lane_incarnation,
-        })?;
         self.terminal_frames = self.terminal_frames.saturating_add(1);
         Ok(())
     }
@@ -2664,8 +2574,7 @@ fn validate_frame_cardinality(
     match frame {
         LaneQueueReservationJournalFrameV5::Bootstrap { .. }
         | LaneQueueReservationJournalFrameV5::Commit(_)
-        | LaneQueueReservationJournalFrameV5::ForgetCommit(_)
-        | LaneQueueReservationJournalFrameV5::Prune { .. } => Ok(()),
+        | LaneQueueReservationJournalFrameV5::ForgetCommit(_) => Ok(()),
         LaneQueueReservationJournalFrameV5::Snapshot {
             live,
             committed,
@@ -2778,7 +2687,6 @@ fn preflight_frame_ownership_bound(
         | LaneQueueReservationJournalFrameV5::ReleaseBatch(_)
         | LaneQueueReservationJournalFrameV5::Commit(_)
         | LaneQueueReservationJournalFrameV5::ForgetCommit(_)
-        | LaneQueueReservationJournalFrameV5::Prune { .. }
         | LaneQueueReservationJournalFrameV5::PrepareRelease(_)
         | LaneQueueReservationJournalFrameV5::CompleteRelease(_)
         | LaneQueueReservationJournalFrameV5::ForgetRelease(_) => {}
@@ -2939,25 +2847,6 @@ fn apply_frame_with_ownership_limit(
         LaneQueueReservationJournalFrameV5::ForgetCommit(key) => {
             key.validate().map_err(invalid_data)?;
             committed.retain(|committed_key| *committed_key != key);
-        }
-        LaneQueueReservationJournalFrameV5::Prune {
-            lane_id,
-            lane_incarnation,
-        } => {
-            if records.iter().any(|record| {
-                record.key.lane_id == lane_id
-                    && record.key.lane_incarnation == lane_incarnation
-                    && release_barriers
-                        .iter()
-                        .any(|barrier| barrier_contains_signed_hash(barrier, &record.key))
-            }) {
-                return Err(invalid_data(
-                    "lane reservation prune overlaps a prepared ordered release barrier",
-                ));
-            }
-            records.retain(|record| {
-                record.key.lane_id != lane_id || record.key.lane_incarnation != lane_incarnation
-            });
         }
         LaneQueueReservationJournalFrameV5::PrepareRelease(barrier) => {
             apply_prepare_release(
@@ -3438,6 +3327,7 @@ fn bootstrap_frame() -> LaneQueueReservationJournalFrameV5 {
         version,
         format_digest: Hash::new_from_chunks(&[
             RESERVATION_JOURNAL_BOOTSTRAP_DOMAIN,
+            RESERVATION_JOURNAL_OPERATION_SCHEMA_V5,
             &RESERVATION_JOURNAL_FRAME_MAGIC,
             &version_bytes,
             &RESERVATION_JOURNAL_FRAME_COMMIT,
@@ -4374,6 +4264,30 @@ mod tests {
         Bootstrap { version: u16, format_digest: Hash },
     }
 
+    /// Prefix of the superseded development-only V5 operation enum. The last
+    /// tag used to name an unauthenticated lane-wide removal operation; current
+    /// V5 must reject its bytes instead of interpreting the shifted tag as an
+    /// ordered release.
+    #[allow(dead_code)]
+    #[derive(Clone, Debug, PartialEq, Eq, Encode)]
+    enum LaneQueueReservationJournalFrameV5RetiredRemovalFixture {
+        Bootstrap { version: u16, format_digest: Hash },
+        Snapshot {
+            live: Vec<LaneQueueReservationRecordV5>,
+            committed: Vec<LaneQueueReservationKeyV2>,
+            release_barriers: Vec<LaneQueueReservationReleaseBarrierV3>,
+            completed_releases: Vec<LaneQueueReservationReleaseCompletionV5>,
+        },
+        PutBatch(Vec<LaneQueueReservationRecordV5>),
+        ReleaseBatch(Vec<LaneQueueReservationKeyV2>),
+        Commit(LaneQueueReservationKeyV2),
+        ForgetCommit(LaneQueueReservationKeyV2),
+        RetiredLaneWideRemoval {
+            lane_id: LaneId,
+            lane_incarnation: Hash,
+        },
+    }
+
     fn typed_hash<T>(label: &[u8]) -> HashOf<T> {
         HashOf::from_untyped_unchecked(Hash::new(label))
     }
@@ -4539,6 +4453,75 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "lane reservation journal payload is not canonically encoded"
+        );
+    }
+
+    #[test]
+    fn retired_v5_lane_wide_removal_fails_closed_at_bootstrap_and_operation_decode() {
+        let retired = record(19, 4);
+        let payload = norito::encode_canonical(
+            &LaneQueueReservationJournalFrameV5RetiredRemovalFixture::RetiredLaneWideRemoval {
+                lane_id: retired.key.lane_id,
+                lane_incarnation: retired.key.lane_incarnation,
+            },
+        )
+        .expect("encode retired V5 lane-wide removal fixture");
+        let limits = LaneQueueReservationJournalLimits::new(
+            u64::MAX,
+            u64::from(u32::MAX),
+            u64::MAX,
+            usize::MAX,
+        );
+        let decode_error = decode_frame(&payload, limits)
+            .expect_err("retired V5 operation tag must not decode as an ordered release");
+        assert_eq!(decode_error.kind(), io::ErrorKind::InvalidData);
+
+        let version = RESERVATION_JOURNAL_FRAME_FORMAT_VERSION;
+        let version_bytes = version.to_le_bytes();
+        let payload_len = u32::try_from(payload.len()).expect("retired payload length fits u32");
+        let payload_len_bytes = payload_len.to_le_bytes();
+        let payload_len_guard = (!payload_len).to_le_bytes();
+        let payload_checksum = frame_checksum(
+            &version_bytes,
+            &payload_len_bytes,
+            &payload_len_guard,
+            &payload,
+        );
+        let mut retired_operation_frame = Vec::new();
+        retired_operation_frame.extend_from_slice(&RESERVATION_JOURNAL_FRAME_MAGIC);
+        retired_operation_frame.extend_from_slice(&version_bytes);
+        retired_operation_frame.extend_from_slice(&payload_len_bytes);
+        retired_operation_frame.extend_from_slice(&payload_len_guard);
+        retired_operation_frame.extend_from_slice(&payload);
+        retired_operation_frame.extend_from_slice(payload_checksum.as_ref());
+        retired_operation_frame.extend_from_slice(&RESERVATION_JOURNAL_FRAME_COMMIT);
+        let retired_bootstrap = LaneQueueReservationJournalFrameV5::Bootstrap {
+            version,
+            format_digest: Hash::new_from_chunks(&[
+                RESERVATION_JOURNAL_BOOTSTRAP_DOMAIN,
+                &RESERVATION_JOURNAL_FRAME_MAGIC,
+                &version_bytes,
+                &RESERVATION_JOURNAL_FRAME_COMMIT,
+            ]),
+        };
+        let mut bytes =
+            encode_frame(&retired_bootstrap).expect("encode retired V5 bootstrap fixture");
+        bytes.extend_from_slice(&retired_operation_frame);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("retired-v5-lane-wide-removal.norito");
+        fs::write(&path, &bytes).expect("write retired V5 bootstrap fixture");
+        let error = LaneQueueReservationJournal::open(&path, u64::MAX)
+            .err()
+            .expect("retired V5 schema digest must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error.to_string().contains("invalid V5 bootstrap claim"),
+            "unexpected retired V5 bootstrap rejection: {error}"
+        );
+        assert_eq!(
+            fs::read(&path).expect("retain retired V5 evidence"),
+            bytes,
+            "retired V5 evidence must not be repaired or rewritten"
         );
     }
 
@@ -5180,13 +5163,6 @@ mod tests {
             (
                 "forget-commit",
                 LaneQueueReservationJournalFrameV5::ForgetCommit(first.key),
-            ),
-            (
-                "prune",
-                LaneQueueReservationJournalFrameV5::Prune {
-                    lane_id: first.key.lane_id,
-                    lane_incarnation: first.key.lane_incarnation,
-                },
             ),
             (
                 "snapshot",

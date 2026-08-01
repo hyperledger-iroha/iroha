@@ -19,8 +19,7 @@
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-                eviction_required_replicas:
-                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+                replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -2871,4 +2870,3 @@
         assert!(!data_path.exists());
         assert!(!index_path.exists());
     }
-

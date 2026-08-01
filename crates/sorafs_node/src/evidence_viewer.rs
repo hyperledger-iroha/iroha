@@ -8581,7 +8581,10 @@ mod tests {
             .expect("record signed interaction");
         let rotated_grant = rotated_grant.expose().to_owned();
 
-        let legacy = fixture.node.moderation_evidence_viewer_snapshot();
+        let legacy = fixture
+            .node
+            .export_moderation_evidence_viewer_snapshot()
+            .expect("export legacy evidence viewer snapshot");
         assert!(
             legacy.sessions.is_empty() && legacy.access_events.is_empty(),
             "the production viewer must not populate the competing local registry"
@@ -8673,7 +8676,10 @@ mod tests {
                 .expect("rebuild signed projection after restart"),
             full_projection
         );
-        let legacy = fixture.node.moderation_evidence_viewer_snapshot();
+        let legacy = fixture
+            .node
+            .export_moderation_evidence_viewer_snapshot()
+            .expect("export legacy evidence viewer snapshot");
         assert!(legacy.sessions.is_empty() && legacy.access_events.is_empty());
     }
 

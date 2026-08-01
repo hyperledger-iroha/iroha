@@ -28,12 +28,14 @@ use iroha_config::{
         actual::{
             Fastpq as FastpqConfig, Kura as Config, LaneConfig, LaneConfigEntry,
             SnapshotBootstrapPolicy, SumeragiV2RuntimeLimits,
+            kura_replica_advert_registry_key_capacity,
         },
         defaults::{
             kura::{
                 BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, EVICTION_REQUIRED_REPLICAS,
                 FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
-                ROSTER_SIDECAR_RETENTION,
+                REPLICA_ADVERT_EVICTABLE_WINDOW, REPLICA_ADVERT_REFRESH_INTERVAL,
+                REPLICA_ADVERT_TTL, ROSTER_SIDECAR_RETENTION,
             },
             sumeragi::{
                 V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
@@ -46,11 +48,8 @@ use iroha_config::{
         },
     },
 };
-#[cfg(test)]
-use iroha_crypto::Algorithm;
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 use iroha_crypto::KeyPair;
-use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, PublicKey};
+use iroha_crypto::{Algorithm, Hash, HashOf, MerkleProof, MerkleTree, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
@@ -60,7 +59,8 @@ use iroha_data_model::{
         BlockHeader, SignedBlock,
         consensus::{
             CertPhase, ExecWitness, LaneBlockCommitment, LaneBlockDescriptorV1,
-            LaneBlockProposalV1, LaneBlockQcV1, NativeAmxReceipt, SumeragiLanePayloadOwnership,
+            LaneBlockProposalV1, LaneBlockQcV1, LanePayloadAvailabilityBodyV1, NativeAmxReceipt,
+            SumeragiLanePayloadOwnership,
         },
         consensus_v2::{
             BlockSubject, ConsensusMode, DataAvailabilityLayout, DualQuorum, ExecutionCommitment,
@@ -105,7 +105,7 @@ use parking_lot::{Condvar, Mutex, RwLock};
 use crate::lane_consensus::{
     DurableLaneBlockNewViewCertificateV1, DurableLaneBlockViewCheckpointV1,
     DurableLanePayloadAvailabilityCertificateV1, LaneExecutablePayloadV1,
-    MAX_LANE_NEW_VIEW_CERTIFICATES,
+    MAX_LANE_NEW_VIEW_CERTIFICATES, lane_payload_availability_body,
 };
 #[cfg(test)]
 use crate::merge::reduce_merge_hint_roots;
@@ -114,10 +114,14 @@ use crate::{
     block::CommittedBlock,
     commit_roster_journal::{CommitRosterJournal, CommitRosterJournalError},
     queue::{
-        LaneQueueReservationGroupIdentityV1, LaneQueueReservationKeyV2,
-        LaneQueueReservationReconciliationGroupV1, RoutingPlan,
+        LaneQueueReservationGroupBindingV1, LaneQueueReservationGroupIdentityV1,
+        LaneQueueReservationKeyV2, LaneQueueReservationReconciliationGroupV1, RoutingPlan,
+        lane_queue_reservation_group_binding_from_ordered_keys,
     },
-    sumeragi::output_guard::ConsensusOutputGuard,
+    sumeragi::{
+        lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal,
+        message::KuraReplicaAdvertV1, output_guard::ConsensusOutputGuard,
+    },
 };
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
 
@@ -153,6 +157,7 @@ const EVICTION_COMPACTION_INDEX_FILE_NAME: &str = "blocks.index.eviction-v1";
 const MAX_EVICTION_COMPACTION_STAGE_BYTES: u64 = 1024 * 1024;
 const MAX_EVICTION_COMPACTION_ENTRIES: usize = 4096;
 const EVICTION_FILE_DIGEST_DOMAIN: &[u8] = b"iroha:kura:eviction-file:v1\0";
+const KURA_REPLICA_KEEPER_SELECTION_DOMAIN_V1: &[u8] = b"iroha:kura-replica-keeper-selection:v1";
 const CANONICAL_ASSOCIATION_STAGE_FILE_NAME: &str = "canonical_association_stage.norito";
 const CANONICAL_ASSOCIATION_STAGE_VERSION: u16 = 1;
 const WSV_CHECKPOINTS_DIR_NAME: &str = "wsv_checkpoints";
@@ -265,6 +270,10 @@ const MAX_AUTONOMOUS_LANE_CLAIM_FILES: usize =
 const CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET: usize = 64;
 const LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE: &str = "execution_inputs.norito";
 const LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE: &str = "execution_inputs.index";
+const AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE: &str = "merge_source_bundles_v1.norito";
+const AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE: &str = "merge_source_bundles_v1.index";
+const LANE_READY_EXECUTION_INPUT_AUTHORIZATION_DOMAIN_V1: &[u8] =
+    b"iroha:kura:lane-ready-execution-input-authorization:v1\0";
 const LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE: &str = "execution_preflights.norito";
 const LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE: &str = "execution_preflights.index";
 /// Lane evidence that authorizes a later durable publication must cross the
@@ -303,7 +312,6 @@ const INDEXED_SIDECAR_BASE_CHECK_MASK: u64 = 0x6B75_7261_2D69_6478;
 /// Keep a single sparse append bounded even when its height came from untrusted metadata.
 const MAX_INDEXED_SIDECAR_GAP_ENTRIES: u64 = 4_096;
 const DISK_USAGE_TOTAL_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
-const BLOCK_REPLICA_ADVERT_TTL: Duration = Duration::from_secs(60 * 60);
 const BLOCK_NOTIFY_CHANNEL_CAPACITY: usize = 1;
 
 /// Whether this target provides the descriptor-relative, crash-safe storage
@@ -610,6 +618,8 @@ pub struct Kura {
     block_plain_text_path: Mutex<Option<PathBuf>>,
     /// Serialize sidecar writes to avoid index/data races.
     sidecar_lock: Mutex<()>,
+    /// Serializes complete historical-autonomous recovery preflight/install batches.
+    historical_autonomous_recovery_mutation_lock: Mutex<()>,
     /// Bounded identities of immutable v2 finality sidecars already BLS-verified.
     v2_finality_verification_cache: Mutex<VecDeque<VerifiedV2FinalityCacheEntry>>,
     /// Startup-scoped identities produced by the complete finality inventory audit.
@@ -664,8 +674,18 @@ pub struct Kura {
     max_disk_usage_bytes: u64,
     /// Distinct remote peers required before Kura may evict a local canonical block body.
     eviction_required_replicas: NonZeroUsize,
-    /// Recently advertised remote canonical block replicas, keyed by height and hash.
+    /// Authoritative process-local peer identity used to pin selected keeper bodies.
+    local_peer_id: OnceLock<PeerId>,
+    /// Recently authenticated exact canonical block replicas.
     replica_registry: Mutex<BlockReplicaRegistry>,
+    /// Protected-tail plus historical-window capacity for exact canonical advert identities.
+    replica_registry_key_capacity: NonZeroUsize,
+    /// Number of historical advert identities retained immediately before the protected tail.
+    replica_advert_evictable_window: NonZeroUsize,
+    /// Lifetime of one authenticated remote replica observation.
+    replica_advert_ttl: Duration,
+    /// Cadence for proactively refreshing selected-keeper replica adverts.
+    replica_advert_refresh_interval: Duration,
     /// Cached disk usage for budget enforcement.
     disk_usage: AtomicU64,
     /// Cached total disk usage.
@@ -702,7 +722,7 @@ pub struct Kura {
     block_sync_roster_retention: NonZeroUsize,
     /// Number of recent roster sidecars retained alongside the block store.
     roster_sidecar_retention: NonZeroUsize,
-    /// Fingerprint-bound limits for pre-carrier certified merge and QueuePlan evidence.
+    /// Fingerprint-bound limits shared by pre-carrier controls and historical recovery evidence.
     pending_control_sidecar_limits: PendingControlSidecarLimits,
     /// Exact maximum encoded Native AMX pair-prune journal for the configured
     /// retained-history window.
@@ -801,6 +821,9 @@ pub struct Kura {
     /// projection was built.
     #[cfg(test)]
     startup_replay_historical_payload_reads: AtomicUsize,
+    /// Number of complete active historical-recovery inventory scans.
+    #[cfg(test)]
+    historical_autonomous_recovery_inventory_scans: AtomicUsize,
     /// Test hook for forcing a bounded number of roster sidecar writes to fail.
     #[cfg(test)]
     fail_next_roster_sidecar_writes: AtomicUsize,
@@ -822,6 +845,15 @@ pub struct Kura {
     /// Test hook indicating eviction is paused after releasing the block-store lock.
     #[cfg(test)]
     eviction_paused_after_snapshot: AtomicBool,
+    /// Test hook that pauses eviction immediately before the final keeper-freshness check.
+    #[cfg(test)]
+    pause_eviction_before_stage_publication: AtomicBool,
+    /// Test hook indicating eviction reached its last pre-publication freshness boundary.
+    #[cfg(test)]
+    eviction_paused_before_stage_publication: AtomicBool,
+    /// Number of complete body reads performed by local replica-advert build/revalidation.
+    #[cfg(test)]
+    kura_replica_advert_body_reads: AtomicUsize,
     /// Test hook that pauses an inline read immediately before its cache publication recheck.
     #[cfg(test)]
     pause_block_read_before_cache_recheck: AtomicBool,
@@ -1976,219 +2008,11 @@ impl Kura {
         let mut index = self.block_height_index.lock();
         index.retain(|_, height| height.get() <= keep);
     }
+}
 
-    /// Return `true` when the block payload is available locally (in memory, `blocks.data`, or the
-    /// local sidecar cache).
-    #[cfg(test)]
-    pub(crate) fn block_payload_available_by_hash(&self, hash: HashOf<BlockHeader>) -> bool {
-        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
-            return false;
-        }
-        let Some(height) = self.get_block_height_by_hash(hash) else {
-            return false;
-        };
-        self.block_payload_available_by_height(height)
-    }
+include!("kura/replica_advert_and_body_status.rs");
 
-    #[cfg(test)]
-    fn block_payload_available_by_height(&self, block_height: NonZeroUsize) -> bool {
-        matches!(
-            self.block_body_status_by_height(block_height),
-            Some(BlockBodyStatus::Cached | BlockBodyStatus::Inline | BlockBodyStatus::LocalSidecar)
-        )
-    }
-
-    /// Record that a remote peer advertised a canonical block body replica.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
-    pub(crate) fn record_block_replica_advert(
-        &self,
-        peer: PeerId,
-        height: u64,
-        hash: HashOf<BlockHeader>,
-        payload_len: u64,
-    ) {
-        if self.prune_recovery_is_required() {
-            return;
-        }
-        if height == 0 || payload_len == 0 {
-            return;
-        }
-        let now = Instant::now();
-        let mut registry = self.replica_registry.lock();
-        if self.prune_recovery_is_required() {
-            return;
-        }
-        Self::prune_expired_replica_adverts(&mut registry, now);
-        registry.entry((height, hash)).or_default().insert(
-            peer,
-            BlockReplicaAdvert {
-                payload_len,
-                observed_at: now,
-            },
-        );
-    }
-
-    /// Return local/remote body status for a canonical block hash known to Kura.
-    #[cfg(test)]
-    pub(crate) fn block_body_status_by_hash(
-        &self,
-        hash: HashOf<BlockHeader>,
-    ) -> Option<BlockBodyStatus> {
-        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
-            return None;
-        }
-        let height = self.get_block_height_by_hash(hash)?;
-        self.block_body_status_by_height(height)
-    }
-
-    #[cfg(test)]
-    fn block_body_status_by_height(&self, block_height: NonZeroUsize) -> Option<BlockBodyStatus> {
-        if self.prune_recovery_is_required()
-            || self.canonical_storage_poisoned.load(Ordering::Acquire)
-        {
-            return None;
-        }
-        let (block_index, has_cached) = {
-            let data = self.block_data.lock();
-            if self.prune_recovery_is_required() {
-                return None;
-            }
-            let idx = block_height.get().saturating_sub(1);
-            if data.len() <= idx {
-                return None;
-            }
-            (idx, data[idx].1.is_some())
-        };
-        if has_cached {
-            if self.prune_recovery_is_required() {
-                return None;
-            }
-            return Some(BlockBodyStatus::Cached);
-        }
-
-        let (index, expected_hash, blocks_dir, da_blocks_dir, da_path) = {
-            let mut store = self.block_store.lock();
-            if self.prune_recovery_is_required() {
-                return None;
-            }
-            let index = match store.read_block_index(block_index as u64) {
-                Ok(index) => index,
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        block_index,
-                        "failed to read block index while checking payload availability"
-                    );
-                    return Some(BlockBodyStatus::Missing);
-                }
-            };
-            let expected_hash = match store.read_block_hashes(block_index as u64, 1) {
-                Ok(hashes) => hashes.first().copied(),
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        block_index,
-                        "failed to read block hash while checking payload availability"
-                    );
-                    None
-                }
-            };
-            let blocks_dir = store.path_to_blockchain.clone();
-            let da_blocks_dir = store.da_blocks_dir.clone();
-            let da_path = store.da_block_path(block_height.get() as u64);
-            (index, expected_hash, blocks_dir, da_blocks_dir, da_path)
-        };
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-
-        if index.length == 0 {
-            return Some(BlockBodyStatus::Missing);
-        }
-        if !index.is_evicted() {
-            return Some(if has_cached {
-                BlockBodyStatus::Cached
-            } else {
-                BlockBodyStatus::Inline
-            });
-        }
-
-        let Some(expected_hash) = expected_hash else {
-            return Some(BlockBodyStatus::Missing);
-        };
-        let height = block_height.get() as u64;
-        let has_local_candidate = std::fs::symlink_metadata(&da_path).is_ok_and(|metadata| {
-            metadata.file_type().is_file()
-                && !metadata.file_type().is_symlink()
-                && metadata.len() == index.length
-        });
-        if has_local_candidate
-            && let Ok(Some((finality_wire_len, finality_wire_hash))) =
-                self.verified_v2_finality_wire_hash_for_eviction(&blocks_dir, height, expected_hash)
-            && finality_wire_len == index.length
-            && let Ok(Some(bytes)) = self.read_regular_sidecar_bytes(
-                &da_path,
-                &da_blocks_dir,
-                usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).unwrap_or(usize::MAX),
-            )
-            && u64::try_from(bytes.len()).ok() == Some(index.length)
-            && Hash::new(&bytes) == finality_wire_hash
-        {
-            return Some(BlockBodyStatus::LocalSidecar);
-        }
-
-        let replicas = self.matching_replica_count(height, expected_hash, index.length);
-        if self.prune_recovery_is_required()
-            || self.canonical_storage_poisoned.load(Ordering::Acquire)
-        {
-            return None;
-        }
-        if replicas >= self.eviction_required_replicas.get() {
-            Some(BlockBodyStatus::RemoteOnly { replicas })
-        } else {
-            Some(BlockBodyStatus::Missing)
-        }
-    }
-
-    fn prune_expired_replica_adverts(registry: &mut BlockReplicaRegistry, now: Instant) {
-        registry.retain(|_, peers| {
-            peers.retain(|_, advert| {
-                now.saturating_duration_since(advert.observed_at) <= BLOCK_REPLICA_ADVERT_TTL
-            });
-            !peers.is_empty()
-        });
-    }
-
-    fn matching_replica_count(
-        &self,
-        height: u64,
-        hash: HashOf<BlockHeader>,
-        payload_len: u64,
-    ) -> usize {
-        let now = Instant::now();
-        let mut registry = self.replica_registry.lock();
-        Self::prune_expired_replica_adverts(&mut registry, now);
-        registry
-            .get(&(height, hash))
-            .map(|peers| {
-                peers
-                    .values()
-                    .filter(|advert| advert.payload_len == payload_len)
-                    .count()
-            })
-            .unwrap_or(0)
-    }
-
-    fn has_required_remote_replicas(
-        &self,
-        height: u64,
-        hash: HashOf<BlockHeader>,
-        payload_len: u64,
-    ) -> bool {
-        self.matching_replica_count(height, hash, payload_len)
-            >= self.eviction_required_replicas.get()
-    }
-
+impl Kura {
     /// Initialize a fresh Kura with the canonical single-lane storage geometry.
     ///
     /// This does _not_ start the thread which receives and stores new blocks, see [`Self::start`].
@@ -2555,6 +2379,10 @@ impl Kura {
         if configured_store_dir.as_os_str().is_empty() {
             return Err(Error::EmptyStoreRoot);
         }
+        let replica_registry_key_capacity = config
+            .replica_advert
+            .validate(config.blocks_in_memory)
+            .map_err(|error| Error::InvalidKuraReplicaAdvertConfiguration(error.to_string()))?;
         let native_amx_evidence_prune_intent_max_bytes =
             Self::native_amx_evidence_prune_intent_max_bytes_for_retention(
                 config.roster_sidecar_retention,
@@ -2916,6 +2744,7 @@ impl Kura {
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(block_plain_text_path),
             sidecar_lock: Mutex::new(()),
+            historical_autonomous_recovery_mutation_lock: Mutex::new(()),
             v2_finality_verification_cache: Mutex::new(VecDeque::new()),
             v2_startup_finality_verification_inventory: Mutex::new(None),
             merge_carrier_lock: Mutex::new(()),
@@ -2942,8 +2771,13 @@ impl Kura {
             certified_frontier_artifact_validation: Mutex::new(BTreeMap::new()),
             lane_geometry_lock: Mutex::new(()),
             max_disk_usage_bytes: config.max_disk_usage_bytes.get(),
-            eviction_required_replicas: config.eviction_required_replicas,
+            eviction_required_replicas: config.replica_advert.eviction_required_replicas,
+            local_peer_id: OnceLock::new(),
             replica_registry: Mutex::new(BTreeMap::new()),
+            replica_registry_key_capacity,
+            replica_advert_evictable_window: config.replica_advert.evictable_window,
+            replica_advert_ttl: config.replica_advert.ttl,
+            replica_advert_refresh_interval: config.replica_advert.refresh_interval,
             disk_usage: AtomicU64::new(0),
             disk_usage_total: AtomicU64::new(0),
             disk_usage_total_accounting: Mutex::new(TotalDiskUsageAccountingState::default()),
@@ -3026,6 +2860,8 @@ impl Kura {
             #[cfg(test)]
             startup_replay_historical_payload_reads: AtomicUsize::new(0),
             #[cfg(test)]
+            historical_autonomous_recovery_inventory_scans: AtomicUsize::new(0),
+            #[cfg(test)]
             fail_next_roster_sidecar_writes: AtomicUsize::new(0),
             #[cfg(test)]
             fail_retained_rewrite_discard_after: AtomicUsize::new(usize::MAX),
@@ -3039,6 +2875,12 @@ impl Kura {
             pause_eviction_after_snapshot: AtomicBool::new(false),
             #[cfg(test)]
             eviction_paused_after_snapshot: AtomicBool::new(false),
+            #[cfg(test)]
+            pause_eviction_before_stage_publication: AtomicBool::new(false),
+            #[cfg(test)]
+            eviction_paused_before_stage_publication: AtomicBool::new(false),
+            #[cfg(test)]
+            kura_replica_advert_body_reads: AtomicUsize::new(0),
             #[cfg(test)]
             pause_block_read_before_cache_recheck: AtomicBool::new(false),
             #[cfg(test)]
@@ -3075,6 +2917,7 @@ impl Kura {
 
             kura.repair_lane_merge_application_frontiers_on_startup()?;
             kura.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
+            kura.repair_autonomous_lane_merge_bundles_on_startup()?;
             kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
             kura.refresh_v2_startup_replay_auxiliary_binding()?;
         }
@@ -3176,6 +3019,8 @@ impl Kura {
         block_store
             .create_files_if_they_do_not_exist()
             .expect("initialize empty canonical Kura journal for tests");
+        std::fs::create_dir_all(Self::lane_artifact_dir(&blocks_root))
+            .expect("create primary test lane artifact directory");
         let merge_log_path = primary_lane.merge_log_path(&store_root);
         let merge_log = MergeLedgerLog::open_at(&merge_log_path, MERGE_LEDGER_CACHE_CAPACITY)
             .expect("create temporary Kura merge ledger for tests");
@@ -3220,6 +3065,7 @@ impl Kura {
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(None),
             sidecar_lock: Mutex::new(()),
+            historical_autonomous_recovery_mutation_lock: Mutex::new(()),
             v2_finality_verification_cache: Mutex::new(VecDeque::new()),
             v2_startup_finality_verification_inventory: Mutex::new(None),
             merge_carrier_lock: Mutex::new(()),
@@ -3247,7 +3093,16 @@ impl Kura {
             lane_geometry_lock: Mutex::new(()),
             max_disk_usage_bytes: MAX_DISK_USAGE_BYTES.get(),
             eviction_required_replicas: EVICTION_REQUIRED_REPLICAS,
+            local_peer_id: OnceLock::new(),
             replica_registry: Mutex::new(BTreeMap::new()),
+            replica_registry_key_capacity: kura_replica_advert_registry_key_capacity(
+                blocks_in_memory,
+                REPLICA_ADVERT_EVICTABLE_WINDOW,
+            )
+            .expect("default replica-advert registry geometry is representable"),
+            replica_advert_evictable_window: REPLICA_ADVERT_EVICTABLE_WINDOW,
+            replica_advert_ttl: REPLICA_ADVERT_TTL,
+            replica_advert_refresh_interval: REPLICA_ADVERT_REFRESH_INTERVAL,
             disk_usage: AtomicU64::new(0),
             disk_usage_total: AtomicU64::new(0),
             disk_usage_total_accounting: Mutex::new(TotalDiskUsageAccountingState::default()),
@@ -3332,6 +3187,8 @@ impl Kura {
             #[cfg(test)]
             startup_replay_historical_payload_reads: AtomicUsize::new(0),
             #[cfg(test)]
+            historical_autonomous_recovery_inventory_scans: AtomicUsize::new(0),
+            #[cfg(test)]
             fail_next_roster_sidecar_writes: AtomicUsize::new(0),
             #[cfg(test)]
             fail_retained_rewrite_discard_after: AtomicUsize::new(usize::MAX),
@@ -3345,6 +3202,12 @@ impl Kura {
             pause_eviction_after_snapshot: AtomicBool::new(false),
             #[cfg(test)]
             eviction_paused_after_snapshot: AtomicBool::new(false),
+            #[cfg(test)]
+            pause_eviction_before_stage_publication: AtomicBool::new(false),
+            #[cfg(test)]
+            eviction_paused_before_stage_publication: AtomicBool::new(false),
+            #[cfg(test)]
+            kura_replica_advert_body_reads: AtomicUsize::new(0),
             #[cfg(test)]
             pause_block_read_before_cache_recheck: AtomicBool::new(false),
             #[cfg(test)]
@@ -3852,6 +3715,23 @@ impl Kura {
     }
 
     #[cfg(test)]
+    fn maybe_pause_eviction_before_stage_publication_for_tests(&self) {
+        if self
+            .pause_eviction_before_stage_publication
+            .swap(false, Ordering::AcqRel)
+        {
+            self.eviction_paused_before_stage_publication
+                .store(true, Ordering::Release);
+            while self
+                .eviction_paused_before_stage_publication
+                .load(Ordering::Acquire)
+            {
+                std::thread::yield_now();
+            }
+        }
+    }
+
+    #[cfg(test)]
     fn maybe_pause_block_read_before_cache_recheck_for_tests(&self) {
         if self
             .pause_block_read_before_cache_recheck
@@ -4247,7 +4127,6 @@ impl Kura {
         if bytes_needed == 0 || self.store_root.as_os_str().is_empty() {
             return Ok(0);
         }
-
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.resolve_canonical_storage_before_mutation()?;
         let _write_guard = self.block_store_write_lock.lock();
@@ -4276,6 +4155,15 @@ impl Kura {
             block_store.flush_pending_fsync(true)?;
 
             let persisted = usize::try_from(block_store.read_durable_index_count()?)?;
+            let canonical_tip = u64::try_from(persisted)?;
+            let (minimum_height, maximum_height) =
+                self.replica_registry_height_horizon(canonical_tip);
+            self.prune_replica_adverts_for_horizon(
+                &mut self.replica_registry.lock(),
+                Instant::now(),
+                minimum_height,
+                maximum_height,
+            );
             if persisted <= 1 {
                 return Ok(0);
             }
@@ -4382,24 +4270,35 @@ impl Kura {
                 }
                 let height = idx.saturating_add(1) as u64;
                 let hash = hashes[idx];
-                if !self.has_required_remote_replicas(height, hash, entry.length) {
-                    debug!(
-                        height,
-                        block = %hash,
-                        required_replicas = self.eviction_required_replicas.get(),
-                        payload_len = entry.length,
-                        "skipping Kura body eviction without enough remote replicas"
-                    );
-                    continue;
-                }
-                if self
-                    .verified_v2_finality_wire_hash_for_eviction(&blocks_dir, height, hash)?
-                    .is_none_or(|(wire_len, _)| wire_len != entry.length)
-                {
+                let Some(authority) =
+                    self.verified_kura_replica_authority_for_eviction(&blocks_dir, height, hash)?
+                else {
                     debug!(
                         height,
                         block = %hash,
                         "skipping Kura body eviction without signed complete-wire finality"
+                    );
+                    continue;
+                };
+                if authority.key.executed_block_wire_len != entry.length {
+                    debug!(
+                        height,
+                        block = %hash,
+                        indexed_len = entry.length,
+                        finality_len = authority.key.executed_block_wire_len,
+                        "skipping Kura body eviction with a mismatched authenticated wire length"
+                    );
+                    continue;
+                }
+                if !self.has_all_selected_remote_keepers(&authority, canonical_tip) {
+                    debug!(
+                        height,
+                        block = %hash,
+                        selected_keepers = authority.selected_keepers.len(),
+                        matching_adverts = self
+                            .matching_selected_keeper_count(&authority, canonical_tip),
+                        local_peer_bound = self.local_peer_id.get().is_some(),
+                        "skipping Kura body eviction without every exact remote keeper advert"
                     );
                     continue;
                 }
@@ -4452,6 +4351,8 @@ impl Kura {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let mut evicted =
             Vec::with_capacity(evict_mask.iter().filter(|selected| **selected).count());
+        let mut eviction_authorities =
+            Vec::with_capacity(evict_mask.iter().filter(|selected| **selected).count());
         let mut data_source = FileWrap::open_with(data_path.clone(), |opts| {
             opts.read(true);
         })?;
@@ -4466,8 +4367,8 @@ impl Kura {
             }
             let height = idx.saturating_add(1) as u64;
             let canonical_hash = hashes[idx];
-            let (finality_wire_len, finality_wire_hash) = self
-                .verified_v2_finality_wire_hash_for_eviction(&blocks_dir, height, canonical_hash)?
+            let authority = self
+                .verified_kura_replica_authority_for_eviction(&blocks_dir, height, canonical_hash)?
                 .ok_or_else(|| {
                     Error::IO(
                         std::io::Error::new(
@@ -4477,6 +4378,11 @@ impl Kura {
                         Self::v2_finality_artifact_path_for(&blocks_dir, height),
                     )
                 })?;
+            if !self.has_all_selected_remote_keepers(&authority, u64::try_from(persisted)?) {
+                return Err(Error::InvalidKuraReplicaAdvert(
+                    "exact keeper authority changed or expired during body eviction".to_owned(),
+                ));
+            }
             let path = da_blocks_dir.join(format!("{height:020}.norito"));
             let length: usize = entry.length.try_into()?;
             buffer.resize(length, 0);
@@ -4499,10 +4405,10 @@ impl Kura {
                     actual: actual_hash,
                 });
             }
-            if finality_wire_len != entry.length {
+            if authority.key.executed_block_wire_len != entry.length {
                 return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
             }
-            if Hash::new(&buffer) != finality_wire_hash {
+            if Hash::new(&buffer) != authority.key.executed_block_wire_hash {
                 return Err(Error::V2FinalityExecutedBlockWireHashMismatch { height });
             }
             self.persist_retained_block_record(&blocks_dir, canonical_hash, &block)?;
@@ -4522,6 +4428,7 @@ impl Kura {
             }
             let da_after = Self::file_len_or_zero(&path)?;
             self.update_total_disk_usage_delta(da_before, da_after);
+            eviction_authorities.push(authority.key);
             evicted.push(EvictionCompactionEntryV1 {
                 height,
                 block_hash: canonical_hash,
@@ -4652,6 +4559,56 @@ impl Kura {
                 return Ok(0);
             }
 
+            #[cfg(test)]
+            self.maybe_pause_eviction_before_stage_publication_for_tests();
+
+            let fresh_authority = if eviction_authorities.len() == evicted.len() {
+                evicted.iter().zip(&eviction_authorities).try_fold(
+                    true,
+                    |all_fresh, (entry, expected_authority)| {
+                        if !all_fresh {
+                            return Ok(false);
+                        }
+                        let Some(current_authority) = self
+                            .verified_kura_replica_authority_for_eviction(
+                                &blocks_dir,
+                                entry.height,
+                                entry.block_hash,
+                            )?
+                        else {
+                            return Ok(false);
+                        };
+                        Ok(current_authority.key == *expected_authority
+                            && current_authority.key.executed_block_wire_len == entry.wire_len
+                            && current_authority.key.executed_block_wire_hash
+                                == entry.canonical_wire_hash
+                            && self.has_all_selected_remote_keepers(
+                                &current_authority,
+                                u64::try_from(current_persisted)?,
+                            ))
+                    },
+                )
+            } else {
+                Ok(false)
+            };
+            let fresh_authority = match fresh_authority {
+                Ok(fresh_authority) => fresh_authority,
+                Err(error) => {
+                    block_store.cleanup_unpublished_eviction_compaction_files()?;
+                    self.invalidate_durable_budget_snapshot();
+                    return Err(error);
+                }
+            };
+            if !fresh_authority {
+                warn!(
+                    selected_bodies = evicted.len(),
+                    "Kura replica authority changed or expired before eviction stage publication; discarding temp files"
+                );
+                block_store.cleanup_unpublished_eviction_compaction_files()?;
+                self.invalidate_durable_budget_snapshot();
+                return Ok(0);
+            }
+
             let stage = EvictionCompactionStageV1 {
                 format_version: EVICTION_COMPACTION_STAGE_VERSION,
                 marker,
@@ -4748,6 +4705,31 @@ impl Kura {
     #[must_use]
     pub fn block_sync_roster_retention(&self) -> NonZeroUsize {
         self.block_sync_roster_retention
+    }
+
+    /// Number of newest canonical block bodies protected from Kura eviction.
+    #[must_use]
+    pub(crate) fn blocks_in_memory(&self) -> NonZeroUsize {
+        self.blocks_in_memory
+    }
+
+    /// Number of body-evictable historical identities retained for advert refresh.
+    #[must_use]
+    pub(crate) fn replica_advert_evictable_window(&self) -> NonZeroUsize {
+        self.replica_advert_evictable_window
+    }
+
+    /// Lifetime of one authenticated remote replica observation.
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn replica_advert_ttl(&self) -> Duration {
+        self.replica_advert_ttl
+    }
+
+    /// Cadence for proactively refreshing selected-keeper replica adverts.
+    #[must_use]
+    pub(crate) fn replica_advert_refresh_interval(&self) -> Duration {
+        self.replica_advert_refresh_interval
     }
 
     /// Return the single shared owner of the structurally validated legacy archival journal.
@@ -5211,6 +5193,7 @@ impl Kura {
         drop(_canonical_chain_guard);
         drop(_prune_guard);
         self.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
+        self.repair_autonomous_lane_merge_bundles_on_startup()?;
         self.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
         if let Err(err) = self.refresh_disk_usage_bytes() {
             warn!(
@@ -5314,6 +5297,7 @@ impl Kura {
             ));
         }
         self.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
+        self.repair_autonomous_lane_merge_bundles_on_startup()?;
         self.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
         if let Err(err) = self.refresh_disk_usage_bytes() {
             warn!(
@@ -6173,6 +6157,23 @@ impl Kura {
         &self,
         expected_directory: &Path,
     ) -> Result<StableSidecarDirectoryInventory> {
+        self.stable_sidecar_directory_inventory_with_recognized_child(expected_directory, None)
+    }
+
+    fn stable_sidecar_directory_inventory_with_recognized_child(
+        &self,
+        expected_directory: &Path,
+        recognized_child: Option<&Path>,
+    ) -> Result<StableSidecarDirectoryInventory> {
+        if recognized_child.is_some_and(|child| child.parent() != Some(expected_directory)) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "recognized startup replay child is not direct",
+                ),
+                expected_directory.to_path_buf(),
+            ));
+        }
         let before = self.stable_sidecar_directory_metadata(expected_directory)?;
         let mut files = BTreeMap::new();
         if before.metadata.is_some() {
@@ -6182,6 +6183,18 @@ impl Kura {
                 let entry =
                     entry.map_err(|error| Error::IO(error, expected_directory.to_path_buf()))?;
                 let path = entry.path();
+                if recognized_child == Some(path.as_path()) {
+                    self.canonical_sidecar_directory(&path)?.ok_or_else(|| {
+                        Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "recognized startup replay child directory disappeared during identity capture",
+                            ),
+                            path.clone(),
+                        )
+                    })?;
+                    continue;
+                }
                 let metadata = self
                     .regular_sidecar_metadata(&path, expected_directory)?
                     .ok_or_else(|| {
@@ -6210,6 +6223,60 @@ impl Kura {
             directory: after,
             files,
         })
+    }
+
+    fn stable_historical_autonomous_recovery_directory_inventory(
+        &self,
+        expected_directory: &Path,
+        record_limit: usize,
+        aggregate_byte_limit: u64,
+    ) -> Result<(StableSidecarDirectoryInventory, usize, u64)> {
+        let before = self.stable_sidecar_directory_metadata(expected_directory)?;
+        let mut files = BTreeMap::new();
+        let mut encoded_bytes = 0_u64;
+        if before.metadata.is_some() {
+            let (entries, bytes) = bounded_historical_autonomous_recovery_entries(
+                expected_directory,
+                record_limit,
+                aggregate_byte_limit,
+                |path| {
+                    let metadata = self
+                        .regular_sidecar_metadata(path, expected_directory)?
+                        .ok_or_else(|| {
+                            Error::IO(
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    "historical autonomous recovery sidecar disappeared during identity capture",
+                                ),
+                                path.to_path_buf(),
+                            )
+                        })?;
+                    let file_metadata = metadata.file.clone();
+                    Ok((metadata, file_metadata))
+                },
+            )?;
+            encoded_bytes = bytes;
+            files.extend(entries);
+        }
+        let after = self.stable_sidecar_directory_metadata(expected_directory)?;
+        if !Self::stable_sidecar_directory_metadata_unchanged(&before, &after) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "historical autonomous recovery directory changed during identity capture",
+                ),
+                expected_directory.to_path_buf(),
+            ));
+        }
+        let record_count = files.len();
+        Ok((
+            StableSidecarDirectoryInventory {
+                directory: after,
+                files,
+            },
+            record_count,
+            encoded_bytes,
+        ))
     }
 
     fn stable_sidecar_directory_inventory_unchanged(
@@ -8843,8 +8910,9 @@ impl Kura {
 
     /// Resolve the complete committed merge entry carried at a canonical block height.
     ///
-    /// The lookup is index-backed and validates the sparse carrier record, canonical
-    /// block hash, compact block reference, and full merge-log entry before returning.
+    /// The lookup is index-backed and validates the complete durable log length,
+    /// sparse carrier record, canonical block hash, compact block reference, and
+    /// full merge-log entry before returning.
     ///
     /// # Errors
     /// Returns an error when the canonical carrier metadata or full merge entry is
@@ -8853,6 +8921,9 @@ impl Kura {
         &self,
         block_height: NonZeroUsize,
     ) -> Result<Option<MergeLedgerEntry>> {
+        self.ensure_prune_recovery_not_required()?;
+        self.ensure_canonical_storage_not_poisoned()?;
+        self.merge_log.lock().validate_indexed_file_length()?;
         let Some(block_hash) = self.get_block_hash(block_height) else {
             return Ok(None);
         };
@@ -11802,86 +11873,6 @@ impl Kura {
         Ok(entries)
     }
 
-    /// Resolve exact queue reservations for a bounded set of committed transaction hashes.
-    ///
-    /// The lookup reuses Kura's canonical transaction-to-block index, requires one unique carrier
-    /// height per requested hash, and authenticates that carrier's exact merge sidecar through the
-    /// existing carrier and merge-frame indexes. Work and temporary memory are therefore
-    /// proportional to `requested`, never to complete merge history.
-    ///
-    /// # Errors
-    /// Returns an error when the durable log changed after index construction, an indexed frame is
-    /// malformed, or one transaction has ambiguous committed reservation evidence.
-    pub(crate) fn committed_merge_queue_reservations(
-        &self,
-        requested: &BTreeSet<HashOf<SignedTransaction>>,
-    ) -> Result<BTreeMap<HashOf<SignedTransaction>, LaneQueueReservationKeyV2>> {
-        self.ensure_prune_recovery_not_required()?;
-        self.ensure_canonical_storage_not_poisoned()?;
-        self.merge_log.lock().validate_indexed_file_length()?;
-        let mut requested_by_height =
-            BTreeMap::<NonZeroUsize, BTreeSet<HashOf<SignedTransaction>>>::new();
-        {
-            let transaction_index = self.transaction_entrypoint_index.lock();
-            self.ensure_prune_recovery_not_required()?;
-            self.ensure_canonical_storage_not_poisoned()?;
-            if !transaction_index.complete {
-                return Err(Error::MergeCarrierConflict(
-                    "canonical transaction index is incomplete during reservation recovery"
-                        .to_owned(),
-                ));
-            }
-            for transaction_hash in requested {
-                let mut heights = transaction_index
-                    .heights_by_transaction
-                    .get(transaction_hash)
-                    .into_iter()
-                    .flatten()
-                    .copied();
-                let Some(height) = heights.next() else {
-                    continue;
-                };
-                if heights.next().is_some() {
-                    return Err(Error::MergeCarrierConflict(format!(
-                        "committed transaction {transaction_hash} has multiple canonical carrier heights"
-                    )));
-                }
-                requested_by_height
-                    .entry(height)
-                    .or_default()
-                    .insert(*transaction_hash);
-            }
-        }
-
-        let mut reservations = BTreeMap::new();
-        for (height, hashes) in requested_by_height {
-            let Some(entry) = self.get_merge_entry_by_carrier_height(height)? else {
-                continue;
-            };
-            for (transaction_hash, reservation) in
-                crate::state::certified_merge_queue_reservations(&entry).map_err(|error| {
-                    Error::MergeCarrierConflict(format!(
-                        "indexed committed merge reservations are invalid: {error}"
-                    ))
-                })?
-            {
-                if !hashes.contains(&transaction_hash) {
-                    continue;
-                }
-                if let Some(existing) = reservations.insert(transaction_hash, reservation)
-                    && existing != reservation
-                {
-                    return Err(Error::MergeCarrierConflict(format!(
-                        "committed merge history binds transaction {transaction_hash} to conflicting reservations"
-                    )));
-                }
-            }
-        }
-        self.ensure_prune_recovery_not_required()?;
-        self.ensure_canonical_storage_not_poisoned()?;
-        Ok(reservations)
-    }
-
     /// Return the latest committed lane-local execution height for every active
     /// `(lane, dataspace, incarnation)` identity.
     ///
@@ -11978,9 +11969,13 @@ impl Kura {
     /// Start the background block writer after all provisional startup authority is finalized.
     ///
     /// # Errors
-    /// Returns an error while signed snapshot authentication is pending or canonical storage is
-    /// fail-stop poisoned.
+    /// Returns an error when the immutable local peer identity has not been
+    /// bound, while signed snapshot authentication is pending, or canonical
+    /// storage is fail-stop poisoned.
     pub fn start(kura: Arc<Self>, shutdown_signal: ShutdownSignal) -> Result<Child> {
+        if kura.local_peer_id.get().is_none() {
+            return Err(Error::KuraReplicaLocalPeerUnbound);
+        }
         kura.ensure_snapshot_bootstrap_authenticated()?;
         kura.ensure_canonical_storage_not_poisoned()?;
         let shutdown_notify_tx = kura.block_notify_tx.clone();
@@ -13814,1628 +13809,11 @@ impl Kura {
     fn commit_manifest_path(&self, height: u64) -> PathBuf {
         Self::commit_manifest_path_for(&self.active_blocks_dir.lock(), height)
     }
+}
 
-    fn retained_block_record_dir_for(blocks_dir: &Path) -> PathBuf {
-        blocks_dir.join(RETAINED_BLOCKS_DIR_NAME)
-    }
+include!("kura/retained_finality_replica_authority.rs");
 
-    fn retained_block_record_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
-        Self::retained_block_record_dir_for(blocks_dir).join(format!("{height:020}.norito"))
-    }
-
-    fn retained_block_rewrite_staging_dir_for(blocks_dir: &Path) -> PathBuf {
-        blocks_dir.join(RETAINED_BLOCK_REWRITE_STAGING_DIR_NAME)
-    }
-
-    fn retained_block_rewrite_staging_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
-        Self::retained_block_rewrite_staging_dir_for(blocks_dir)
-            .join(format!("{height:020}.norito"))
-    }
-
-    #[cfg(test)]
-    fn retained_block_record_dir(&self) -> PathBuf {
-        Self::retained_block_record_dir_for(&self.active_blocks_dir.lock())
-    }
-
-    #[cfg(test)]
-    fn retained_block_record_path(&self, height: u64) -> PathBuf {
-        Self::retained_block_record_path_for(&self.active_blocks_dir.lock(), height)
-    }
-
-    fn canonical_height_sidecar_heights_for(
-        store_root: &Path,
-        directory: &Path,
-        label: &'static str,
-        max_canonical_entries: u64,
-    ) -> Result<Vec<u64>> {
-        if Self::canonical_sidecar_directory_for(store_root, directory)?.is_none() {
-            return Ok(Vec::new());
-        }
-        let entries = std::fs::read_dir(directory)
-            .map_err(|error| Error::IO(error, directory.to_path_buf()))?;
-        let mut heights = Vec::new();
-        let mut entries_seen = 0_u64;
-        let mut canonical_entries_seen = 0_u64;
-        const TRANSIENT_ENTRY_SLACK: u64 = 32;
-        for entry in entries {
-            let entry = entry.map_err(|error| Error::IO(error, directory.to_path_buf()))?;
-            let path = entry.path();
-            entries_seen = entries_seen.saturating_add(1);
-            if entries_seen > max_canonical_entries.saturating_add(TRANSIENT_ENTRY_SLACK) {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!("{label} inventory exceeds the durable-chain bound"),
-                    ),
-                    directory.to_path_buf(),
-                ));
-            }
-            let file_name = entry.file_name();
-            let name = file_name.to_str().ok_or_else(|| {
-                Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!("{label} directory contains a non-UTF-8 entry"),
-                    ),
-                    path.clone(),
-                )
-            })?;
-            if name.starts_with(".kura-sidecar-") {
-                continue;
-            }
-            if let Some(stem) = name.strip_suffix(".norito.tmp")
-                && stem.len() == 20
-                && stem.as_bytes().iter().all(u8::is_ascii_digit)
-            {
-                continue;
-            }
-            let Some(stem) = name.strip_suffix(".norito") else {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!("{label} directory contains an unknown entry"),
-                    ),
-                    path,
-                ));
-            };
-            if stem.len() != 20 || !stem.as_bytes().iter().all(u8::is_ascii_digit) {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!("{label} name is not a canonical 20-digit height"),
-                    ),
-                    path,
-                ));
-            }
-            let height = stem.parse::<u64>().map_err(|_| {
-                Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!("{label} height exceeds the supported range"),
-                    ),
-                    path.clone(),
-                )
-            })?;
-            if height == 0 {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!("{label} height must be non-zero"),
-                    ),
-                    path,
-                ));
-            }
-            canonical_entries_seen = canonical_entries_seen.saturating_add(1);
-            if canonical_entries_seen > max_canonical_entries.saturating_add(TRANSIENT_ENTRY_SLACK)
-            {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!(
-                            "{label} count exceeds the durable-chain bound plus recovery slack"
-                        ),
-                    ),
-                    directory.to_path_buf(),
-                ));
-            }
-            Self::regular_sidecar_metadata_for(store_root, &path, directory)?.ok_or_else(|| {
-                Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!("{label} disappeared during inventory validation"),
-                    ),
-                    path.clone(),
-                )
-            })?;
-            heights.push(height);
-        }
-        heights.sort_unstable();
-        Ok(heights)
-    }
-
-    fn retained_block_record_heights_for(
-        store_root: &Path,
-        blocks_dir: &Path,
-        max_canonical_entries: u64,
-    ) -> Result<Vec<u64>> {
-        Self::canonical_height_sidecar_heights_for(
-            store_root,
-            &Self::retained_block_record_dir_for(blocks_dir),
-            "retained block sidecar",
-            max_canonical_entries,
-        )
-    }
-
-    fn invalid_retained_sccp_archive(height: u64, reason: impl Into<String>) -> Error {
-        Error::InvalidRetainedSccpArchive {
-            height,
-            reason: reason.into(),
-        }
-    }
-
-    fn canonical_block_wire_hash(block: &SignedBlock) -> Result<Hash> {
-        Self::canonical_block_wire_identity(block).map(|(_, hash)| hash)
-    }
-
-    fn canonical_block_wire_identity(block: &SignedBlock) -> Result<(u64, Hash)> {
-        let wire = block.encode_wire().map_err(Error::NoritoFrame)?;
-        let len = u64::try_from(wire.len())?;
-        if len == 0 || len > STRICT_INIT_MAX_BLOCK_BYTES {
-            return Err(Error::CorruptedBlockLength {
-                length: len,
-                limit: STRICT_INIT_MAX_BLOCK_BYTES,
-            });
-        }
-        Ok((len, Hash::new(&wire)))
-    }
-
-    fn canonical_proposal_wire_hash(block: &SignedBlock) -> Result<Hash> {
-        block
-            .canonical_proposal_wire_hash()
-            .map_err(Error::NoritoFrame)
-    }
-
-    fn validate_v2_finality_wire_bindings(
-        height: u64,
-        artifact: &V2FinalityArtifact,
-        proposal_wire_hash: Hash,
-        executed_block_wire_len: u64,
-        executed_block_wire_hash: Hash,
-    ) -> Result<()> {
-        if artifact.subject.payload_hash != proposal_wire_hash {
-            return Err(Error::V2FinalityPayloadHashMismatch { height });
-        }
-        if artifact
-            .commit_qc
-            .execution_commitment
-            .executed_block_wire_len
-            != executed_block_wire_len
-        {
-            return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
-        }
-        if artifact
-            .commit_qc
-            .execution_commitment
-            .executed_block_wire_hash
-            != executed_block_wire_hash
-        {
-            return Err(Error::V2FinalityExecutedBlockWireHashMismatch { height });
-        }
-        Ok(())
-    }
-
-    fn ensure_existing_block_wire_matches(
-        &self,
-        block: &SignedBlock,
-        height: u64,
-        canonical_hash: HashOf<BlockHeader>,
-    ) -> Result<()> {
-        self.ensure_durable_block_at_height(height, canonical_hash)?;
-        let (incoming_wire_len, incoming_wire_hash) = Self::canonical_block_wire_identity(block)?;
-        let blocks_dir = self.active_blocks_dir.lock().clone();
-        let durable_index = self
-            .block_store
-            .lock()
-            .read_block_index(height.saturating_sub(1))?;
-        if durable_index.length != incoming_wire_len {
-            return Err(Error::CanonicalBlockWireMismatch { height });
-        }
-        if durable_index.is_evicted() {
-            // An evicted index has no independently readable canonical complete wire. This is also
-            // true for authenticated hash-only snapshot entries: their header hash is canonical,
-            // but it does not select one SignedBlock envelope. Never let an unsigned retained
-            // record fill that gap; existing-body admission requires signed complete-wire finality
-            // for every evicted shape.
-            let (signed_wire_len, signed_wire_hash) = self
-                .verified_v2_finality_wire_hash_for_eviction(&blocks_dir, height, canonical_hash)?
-                .ok_or(Error::MissingV2FinalityArtifact { height })?;
-            if incoming_wire_len != durable_index.length
-                || incoming_wire_len != signed_wire_len
-                || incoming_wire_hash != signed_wire_hash
-            {
-                return Err(Error::CanonicalBlockWireMismatch { height });
-            }
-            return Ok(());
-        }
-
-        if let Some((retained_header, _, retained_wire_len, retained_wire_hash, _)) =
-            self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
-        {
-            if retained_header != block.header()
-                || retained_wire_len != durable_index.length
-                || retained_wire_len != incoming_wire_len
-                || retained_wire_hash != incoming_wire_hash
-            {
-                return Err(Error::CanonicalBlockWireMismatch { height });
-            }
-            return Ok(());
-        }
-
-        let block_height = NonZeroUsize::new(usize::try_from(height)?)
-            .ok_or(Error::CanonicalBlockWireMismatch { height })?;
-        let canonical_block = self
-            .get_block_without_merge_sidecar(block_height)
-            .ok_or(Error::CanonicalBlockWireMismatch { height })?;
-        if canonical_block.header() != block.header()
-            || Self::canonical_block_wire_hash(canonical_block.as_ref())? != incoming_wire_hash
-        {
-            return Err(Error::CanonicalBlockWireMismatch { height });
-        }
-        Ok(())
-    }
-
-    fn retained_sccp_archive_from_block(
-        block: &SignedBlock,
-    ) -> Result<Vec<KuraRetainedSccpMessage>> {
-        let height = block.header().height().get();
-        crate::bridge::validate_sccp_commitment_root_for_signed_block(block).map_err(|error| {
-            Self::invalid_retained_sccp_archive(
-                height,
-                format!("committed block SCCP validation failed: {error:?}"),
-            )
-        })?;
-        let messages = crate::bridge::collect_sccp_messages_from_signed_block(block);
-        let max =
-            usize::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1)?;
-        if messages.len() > max {
-            return Err(Self::invalid_retained_sccp_archive(
-                height,
-                format!(
-                    "archive contains {} messages; maximum is {max}",
-                    messages.len()
-                ),
-            ));
-        }
-        let mut archive = Vec::new();
-        archive.try_reserve_exact(messages.len())?;
-        for (index, message) in messages.into_iter().enumerate() {
-            let commitment_index = u32::try_from(index)?;
-            let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&message.payload)
-                .map_err(|_| {
-                    Self::invalid_retained_sccp_archive(
-                        height,
-                        format!("message {commitment_index} cannot be canonically encoded"),
-                    )
-                })?;
-            if payload_bytes.is_empty()
-                || payload_bytes.len()
-                    > iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1
-            {
-                return Err(Self::invalid_retained_sccp_archive(
-                    height,
-                    format!("message {commitment_index} exceeds the canonical payload bound"),
-                ));
-            }
-            archive.push(KuraRetainedSccpMessage {
-                commitment_index,
-                context: message.context,
-                payload_bytes,
-            });
-        }
-        Ok(archive)
-    }
-
-    fn validate_retained_sccp_archive(
-        record: &KuraRetainedBlockRecord,
-    ) -> Result<Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>> {
-        let height = record.height;
-        let max =
-            usize::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1)?;
-        if record.sccp_archive.len() > max {
-            return Err(Self::invalid_retained_sccp_archive(
-                height,
-                format!(
-                    "archive contains {} messages; maximum is {max}",
-                    record.sccp_archive.len()
-                ),
-            ));
-        }
-        let mut projections = Vec::new();
-        projections.try_reserve_exact(record.sccp_archive.len())?;
-        let mut seen = BTreeSet::new();
-        for (index, archived) in record.sccp_archive.iter().enumerate() {
-            let expected_index = u32::try_from(index)?;
-            if archived.commitment_index != expected_index {
-                return Err(Self::invalid_retained_sccp_archive(
-                    height,
-                    format!(
-                        "archive is not dense: expected index {expected_index}, found {}",
-                        archived.commitment_index
-                    ),
-                ));
-            }
-            let validated = crate::bridge::validate_recorded_sccp_message_payload_bytes(
-                archived.context,
-                &archived.payload_bytes,
-            )
-            .map_err(|error| {
-                Self::invalid_retained_sccp_archive(
-                    height,
-                    format!("message {expected_index} is invalid: {error:?}"),
-                )
-            })?;
-            let canonical =
-                iroha_sccp::canonical_sccp_payload_bytes(&validated.payload).map_err(|_| {
-                    Self::invalid_retained_sccp_archive(
-                        height,
-                        format!("message {expected_index} cannot be canonically re-encoded"),
-                    )
-                })?;
-            if canonical != archived.payload_bytes {
-                return Err(Self::invalid_retained_sccp_archive(
-                    height,
-                    format!("message {expected_index} uses noncanonical payload bytes"),
-                ));
-            }
-            if !seen.insert(validated.key) {
-                return Err(Self::invalid_retained_sccp_archive(
-                    height,
-                    format!("message {expected_index} repeats an outbound replay key"),
-                ));
-            }
-            projections.push(crate::bridge::ValidatedSccpOutboundMessageProjectionV1 {
-                commitment_index: expected_index,
-                context: validated.context,
-                payload: validated.payload,
-                commitment: validated.commitment,
-            });
-        }
-        let commitments = projections
-            .iter()
-            .map(|projection| projection.commitment.clone())
-            .collect::<Vec<_>>();
-        let reconstructed = iroha_sccp::commitment_merkle_root(&commitments);
-        if reconstructed != record.block_header.sccp_commitment_root() {
-            return Err(Self::invalid_retained_sccp_archive(
-                height,
-                "archive commitment root differs from the retained canonical header",
-            ));
-        }
-        Ok(projections)
-    }
-
-    fn decode_retained_block_record_at(
-        &self,
-        path: &Path,
-        directory: &Path,
-    ) -> Result<Option<KuraRetainedBlockRecord>> {
-        Ok(self
-            .decode_retained_block_record_with_identity_at(path, directory)?
-            .map(|(record, _)| record))
-    }
-
-    fn decode_retained_block_record_with_identity_at(
-        &self,
-        path: &Path,
-        directory: &Path,
-    ) -> Result<Option<(KuraRetainedBlockRecord, StableSidecarRead)>> {
-        self.record_startup_replay_historical_payload_read();
-        let Some(snapshot) =
-            self.read_regular_sidecar_snapshot(path, directory, MAX_RETAINED_BLOCK_RECORD_BYTES)?
-        else {
-            return Ok(None);
-        };
-        let mut cursor = snapshot.bytes.as_slice();
-        let record =
-            KuraRetainedBlockRecord::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
-        if record.encode() != snapshot.bytes {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "Kura retained block record is not canonically encoded",
-                ),
-                path.to_path_buf(),
-            ));
-        }
-        Ok(Some((record, snapshot)))
-    }
-
-    fn validate_retained_block_record_at(
-        path: &Path,
-        expected_height: u64,
-        canonical_hash: HashOf<BlockHeader>,
-        record: &KuraRetainedBlockRecord,
-    ) -> Result<Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>> {
-        if record.format_version != RETAINED_BLOCK_RECORD_VERSION {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "unsupported Kura retained block record version",
-                ),
-                path.to_path_buf(),
-            ));
-        }
-        if record.height != expected_height || record.block_header.height().get() != expected_height
-        {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "retained block height does not match its canonical file name",
-                ),
-                path.to_path_buf(),
-            ));
-        }
-        let actual_hash = record.block_header.hash();
-        if record.block_hash != actual_hash {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "retained block hash field does not match its header",
-                ),
-                path.to_path_buf(),
-            ));
-        }
-        if actual_hash != canonical_hash {
-            return Err(Error::BlockHeightConflict {
-                height: expected_height,
-                expected: canonical_hash,
-                actual: actual_hash,
-            });
-        }
-        if record.executed_block_wire_len == 0
-            || record.executed_block_wire_len > STRICT_INIT_MAX_BLOCK_BYTES
-        {
-            return Err(Error::CorruptedBlockLength {
-                length: record.executed_block_wire_len,
-                limit: STRICT_INIT_MAX_BLOCK_BYTES,
-            });
-        }
-        let encoded_len = record.encode().len();
-        if encoded_len > MAX_RETAINED_BLOCK_RECORD_BYTES {
-            return Err(Error::RetainedBlockRecordTooLarge {
-                actual: encoded_len,
-                max: MAX_RETAINED_BLOCK_RECORD_BYTES,
-            });
-        }
-        Self::validate_retained_sccp_archive(record)
-    }
-
-    fn retained_block_record_at(
-        &self,
-        blocks_dir: &Path,
-        height: u64,
-        canonical_hash: HashOf<BlockHeader>,
-    ) -> Result<
-        Option<(
-            BlockHeader,
-            Hash,
-            u64,
-            Hash,
-            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
-        )>,
-    > {
-        self.retained_block_record_at_inner(blocks_dir, height, canonical_hash, true)
-    }
-
-    fn retained_block_record_at_without_live_body(
-        &self,
-        blocks_dir: &Path,
-        height: u64,
-        canonical_hash: HashOf<BlockHeader>,
-    ) -> Result<
-        Option<(
-            BlockHeader,
-            Hash,
-            u64,
-            Hash,
-            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
-        )>,
-    > {
-        self.retained_block_record_at_inner(blocks_dir, height, canonical_hash, false)
-    }
-
-    fn retained_block_record_at_with_identity(
-        &self,
-        blocks_dir: &Path,
-        height: u64,
-        canonical_hash: HashOf<BlockHeader>,
-        validate_live_body: bool,
-    ) -> Result<
-        Option<(
-            (
-                BlockHeader,
-                Hash,
-                u64,
-                Hash,
-                Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
-            ),
-            StableSidecarRead,
-        )>,
-    > {
-        self.retained_block_record_at_inner_with_identity(
-            blocks_dir,
-            height,
-            canonical_hash,
-            validate_live_body,
-        )
-    }
-
-    fn retained_block_record_at_inner(
-        &self,
-        blocks_dir: &Path,
-        height: u64,
-        canonical_hash: HashOf<BlockHeader>,
-        validate_live_body: bool,
-    ) -> Result<
-        Option<(
-            BlockHeader,
-            Hash,
-            u64,
-            Hash,
-            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
-        )>,
-    > {
-        Ok(self
-            .retained_block_record_at_inner_with_identity(
-                blocks_dir,
-                height,
-                canonical_hash,
-                validate_live_body,
-            )?
-            .map(|(record, _)| record))
-    }
-
-    fn retained_block_record_at_inner_with_identity(
-        &self,
-        blocks_dir: &Path,
-        height: u64,
-        canonical_hash: HashOf<BlockHeader>,
-        validate_live_body: bool,
-    ) -> Result<
-        Option<(
-            (
-                BlockHeader,
-                Hash,
-                u64,
-                Hash,
-                Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
-            ),
-            StableSidecarRead,
-        )>,
-    > {
-        // Callers that expose this result outside rewrite/recovery internals hold
-        // `canonical_chain_lock`, so a recoverable rewrite stage can never appear as a transient
-        // missing canonical record to proof-serving or state-validation readers.
-        let directory = Self::retained_block_record_dir_for(blocks_dir);
-        let path = Self::retained_block_record_path_for(blocks_dir, height);
-        let Some((record, read_identity)) =
-            self.decode_retained_block_record_with_identity_at(&path, &directory)?
-        else {
-            return Ok(None);
-        };
-        let archive =
-            Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
-        if validate_live_body
-            && let Some(block_height) = NonZeroUsize::new(usize::try_from(height)?)
-            && let Some(block) = self.get_block(block_height)
-        {
-            let (executed_block_wire_len, executed_block_wire_hash) =
-                Self::canonical_block_wire_identity(block.as_ref())?;
-            if block.header() != record.block_header
-                || Self::canonical_proposal_wire_hash(block.as_ref())? != record.proposal_wire_hash
-                || executed_block_wire_len != record.executed_block_wire_len
-                || executed_block_wire_hash != record.executed_block_wire_hash
-            {
-                return Err(Error::ConflictingRetainedBlockRecord { height });
-            }
-        }
-        Ok(Some((
-            (
-                record.block_header,
-                record.proposal_wire_hash,
-                record.executed_block_wire_len,
-                record.executed_block_wire_hash,
-                archive,
-            ),
-            read_identity,
-        )))
-    }
-
-    fn prepare_retained_block_record(
-        blocks_dir: &Path,
-        canonical_hash: HashOf<BlockHeader>,
-        block: &SignedBlock,
-    ) -> Result<KuraRetainedBlockRecord> {
-        let height = block.header().height().get();
-        if block.hash() != canonical_hash {
-            return Err(Error::BlockHeightConflict {
-                height,
-                expected: canonical_hash,
-                actual: block.hash(),
-            });
-        }
-        let path = Self::retained_block_record_path_for(blocks_dir, height);
-        let (executed_block_wire_len, executed_block_wire_hash) =
-            Self::canonical_block_wire_identity(block)?;
-        let record = KuraRetainedBlockRecord::new(
-            block.header(),
-            Self::canonical_proposal_wire_hash(block)?,
-            executed_block_wire_len,
-            executed_block_wire_hash,
-            Self::retained_sccp_archive_from_block(block)?,
-        );
-        let _ = Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
-        let bytes = record.encode();
-        if bytes.len() > MAX_RETAINED_BLOCK_RECORD_BYTES {
-            return Err(Error::RetainedBlockRecordTooLarge {
-                actual: bytes.len(),
-                max: MAX_RETAINED_BLOCK_RECORD_BYTES,
-            });
-        }
-        Ok(record)
-    }
-
-    fn persist_prepared_retained_block_record(
-        &self,
-        blocks_dir: &Path,
-        canonical_hash: HashOf<BlockHeader>,
-        record: &KuraRetainedBlockRecord,
-    ) -> Result<()> {
-        let height = record.height;
-        let directory = Self::retained_block_record_dir_for(blocks_dir);
-        let path = Self::retained_block_record_path_for(blocks_dir, height);
-        let _ = Self::validate_retained_block_record_at(&path, height, canonical_hash, record)?;
-        let indexed_wire_len = self
-            .block_store
-            .lock()
-            .read_block_index(height.saturating_sub(1))?
-            .length;
-        if record.executed_block_wire_len != indexed_wire_len {
-            return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
-        }
-        let bytes = record.encode();
-        if bytes.len() > MAX_RETAINED_BLOCK_RECORD_BYTES {
-            return Err(Error::RetainedBlockRecordTooLarge {
-                actual: bytes.len(),
-                max: MAX_RETAINED_BLOCK_RECORD_BYTES,
-            });
-        }
-
-        if let Some(existing) = self.decode_retained_block_record_at(&path, &directory)? {
-            let _ =
-                Self::validate_retained_block_record_at(&path, height, canonical_hash, &existing)?;
-            return if existing == *record {
-                Ok(())
-            } else {
-                Err(Error::ConflictingRetainedBlockRecord { height })
-            };
-        }
-
-        create_dir_all_with_context(&directory)?;
-        if let Some(parent) = directory.parent() {
-            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-        }
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        if !self.write_atomic_synced_noclobber(&path, &bytes)? {
-            let Some(existing) = self.decode_retained_block_record_at(&path, &directory)? else {
-                return Err(Error::ConflictingRetainedBlockRecord { height });
-            };
-            let _ =
-                Self::validate_retained_block_record_at(&path, height, canonical_hash, &existing)?;
-            return if existing == *record {
-                Ok(())
-            } else {
-                Err(Error::ConflictingRetainedBlockRecord { height })
-            };
-        }
-        self.add_total_disk_usage_bytes(u64::try_from(bytes.len())?);
-
-        let Some(persisted) = self.decode_retained_block_record_at(&path, &directory)? else {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::NotFound,
-                    "new retained block sidecar is missing after durable rename",
-                ),
-                path,
-            ));
-        };
-        let _ = Self::validate_retained_block_record_at(&path, height, canonical_hash, &persisted)?;
-        if persisted != *record {
-            return Err(Error::ConflictingRetainedBlockRecord { height });
-        }
-        accounting_mutation.finish();
-        Ok(())
-    }
-
-    fn persist_retained_block_record(
-        &self,
-        blocks_dir: &Path,
-        canonical_hash: HashOf<BlockHeader>,
-        block: &SignedBlock,
-    ) -> Result<()> {
-        let record = Self::prepare_retained_block_record(blocks_dir, canonical_hash, block)?;
-        self.persist_prepared_retained_block_record(blocks_dir, canonical_hash, &record)
-    }
-
-    /// Read a bounded, root-authenticated SCCP archive retained independently of the block body.
-    #[cfg(test)]
-    pub(crate) fn retained_sccp_archive(
-        &self,
-        height: u64,
-    ) -> Result<
-        Option<(
-            BlockHeader,
-            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
-        )>,
-    > {
-        self.ensure_canonical_storage_not_poisoned()?;
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let Some(block_height) = NonZeroUsize::new(usize::try_from(height)?) else {
-            return Err(Error::MissingRetainedBlockRecord { height });
-        };
-        let canonical_hash = self
-            .get_durable_block_hash(block_height)
-            .ok_or(Error::MissingRetainedBlockRecord { height })?;
-        let blocks_dir = self.active_blocks_dir.lock().clone();
-        if let Some((header, _, _, _, archive)) =
-            self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
-        {
-            return Ok(Some((header, archive)));
-        }
-
-        if let Some(block) = self.get_block(block_height) {
-            if block.header().sccp_commitment_root().is_none() {
-                return Ok(None);
-            }
-        } else {
-            let finality_dir = Self::v2_finality_artifact_dir_for(&blocks_dir);
-            let finality_path = Self::v2_finality_artifact_path_for(&blocks_dir, height);
-            if let Some((record, _)) =
-                self.decode_v2_finality_record_at(&finality_path, &finality_dir)?
-            {
-                Self::validate_v2_finality_record_at(
-                    &finality_path,
-                    height,
-                    canonical_hash,
-                    &record,
-                )?;
-                if record.block_header.sccp_commitment_root().is_none() {
-                    return Ok(None);
-                }
-            }
-        }
-        Err(Error::MissingRetainedBlockRecord { height })
-    }
-
-    /// Inventory nonempty retained SCCP archives through an exact committed-height boundary.
-    ///
-    /// Selected records are decoded one at a time, bound to Kura's canonical hash journal, and
-    /// fully archive-validated. The result retains only fixed-size summaries, so canonical SCCP
-    /// payloads are never accumulated or duplicated across heights. Valid rootless/empty retained
-    /// records are deliberately omitted. Retained suffix records above `committed_height` are not
-    /// decoded and cannot leak a Kura-ahead-of-WSV suffix into snapshot validation.
-    pub(crate) fn retained_nonempty_sccp_archive_inventory_at_or_below(
-        &self,
-        committed_height: u64,
-    ) -> Result<Vec<RetainedSccpArchiveSummary>> {
-        self.ensure_canonical_storage_not_poisoned()?;
-        if committed_height == 0 {
-            return Ok(Vec::new());
-        }
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let blocks_dir = self.active_blocks_dir.lock().clone();
-        // The directory can legitimately contain an immutable finalized suffix above the WSV
-        // boundary selected by snapshot rollback validation. Bound directory enumeration by the
-        // durable canonical chain, then decode only the selected prefix below. Using the WSV
-        // boundary as the inventory bound would reject that valid suffix before `take_while` can
-        // exclude it.
-        let durable_height = self.block_store.lock().read_durable_index_count()?;
-        let heights =
-            Self::retained_block_record_heights_for(&self.store_root, &blocks_dir, durable_height)?;
-        if let Some(retained_height) = heights.last().copied()
-            && retained_height > durable_height
-        {
-            return Err(Error::RetainedBlockBeyondDurableChain {
-                retained_height,
-                durable_height,
-            });
-        }
-        let mut summaries = Vec::new();
-        for height in heights
-            .into_iter()
-            .take_while(|height| *height <= committed_height)
-        {
-            let block_height = NonZeroUsize::new(usize::try_from(height)?)
-                .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            let canonical_hash = self
-                .get_durable_block_hash(block_height)
-                .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            let (header, _, _, _, archive) = self
-                .retained_block_record_at(&blocks_dir, height, canonical_hash)?
-                .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            if archive.is_empty() {
-                continue;
-            }
-            summaries.push(RetainedSccpArchiveSummary {
-                height,
-                block_hash: header.hash(),
-                message_count: u32::try_from(archive.len())?,
-            });
-        }
-        Ok(summaries)
-    }
-
-    fn validate_retained_block_inventory_on_startup(&self) -> Result<()> {
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let blocks_dir = self.active_blocks_dir.lock().clone();
-        let (durable_height, indices, hashes) = {
-            let mut block_store = self.block_store.lock();
-            let durable_height = usize::try_from(block_store.read_durable_index_count()?)?;
-            let mut indices = vec![BlockIndex::default(); durable_height];
-            block_store.read_block_indices(0, &mut indices)?;
-            let hashes = block_store.read_block_hashes(0, durable_height)?;
-            (durable_height, indices, hashes)
-        };
-        let durable_height_u64 = u64::try_from(durable_height)?;
-        let boundary = ExactReplayBoundary {
-            count: durable_height_u64,
-            hashes: hashes.clone(),
-        };
-        let canonical_storage = self.canonical_block_store_metadata(&blocks_dir)?;
-        let reuse_startup_validation = {
-            let inventory = self.v2_startup_finality_verification_inventory.lock();
-            inventory.as_ref().is_some_and(|inventory| {
-                inventory.boundary == boundary
-                    && Self::canonical_block_store_metadata_unchanged(
-                        &inventory.canonical_storage,
-                        &canonical_storage,
-                    )
-            })
-        };
-        let retained_heights = Self::retained_block_record_heights_for(
-            &self.store_root,
-            &blocks_dir,
-            durable_height_u64,
-        )?;
-        if let Some(retained_height) = retained_heights.last().copied()
-            && retained_height > durable_height_u64
-        {
-            return Err(Error::RetainedBlockBeyondDurableChain {
-                retained_height,
-                durable_height: durable_height_u64,
-            });
-        }
-        let retained_height_set = retained_heights.iter().copied().collect::<BTreeSet<_>>();
-        for height in retained_heights {
-            let index = usize::try_from(height.saturating_sub(1))?;
-            let canonical_hash = hashes[index];
-            let bodyless = self
-                .retained_block_record_at_with_identity(&blocks_dir, height, canonical_hash, false)?
-                .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            if bodyless.0.2 != indices[index].length {
-                return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
-            }
-            if indices[index].is_evicted()
-                || !reuse_startup_validation
-                || !self.v2_startup_retained_entry_matches(height, &bodyless.1)
-            {
-                self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
-                    .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            }
-        }
-        for (index, block_index) in indices.iter().enumerate() {
-            if block_index.is_evicted() && block_index.length > 0 {
-                let height = u64::try_from(index)?.saturating_add(1);
-                if !retained_height_set.contains(&height) {
-                    return Err(Error::MissingRetainedBlockRecord { height });
-                }
-            }
-        }
-        let finalized_heights = Self::v2_finality_artifact_heights_for(
-            &self.store_root,
-            &blocks_dir,
-            durable_height_u64,
-        )?;
-        let finalized_height_set = finalized_heights.iter().copied().collect::<BTreeSet<_>>();
-        for (index, block_index) in indices.iter().enumerate() {
-            if block_index.is_evicted() && block_index.length > 0 {
-                let height = u64::try_from(index)?.saturating_add(1);
-                if !finalized_height_set.contains(&height) {
-                    return Err(Error::MissingV2FinalityArtifact { height });
-                }
-            }
-        }
-        for height in finalized_heights {
-            if !retained_height_set.contains(&height) {
-                return Err(Error::MissingRetainedBlockRecord { height });
-            }
-        }
-        if reuse_startup_validation {
-            let after_boundary = self.exact_replay_boundary()?;
-            let after_storage = self.canonical_block_store_metadata(&blocks_dir)?;
-            if after_boundary != boundary
-                || !Self::canonical_block_store_metadata_unchanged(
-                    &canonical_storage,
-                    &after_storage,
-                )
-            {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        "canonical block storage changed during retained startup validation",
-                    ),
-                    blocks_dir,
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn prune_retained_block_records_from(
-        &self,
-        blocks_dir: &Path,
-        first_removed_height: u64,
-    ) -> Result<()> {
-        let authority = StartupRecoveryMutationAuthority::Authenticated;
-        self.prune_retained_block_records_from_with_authority(
-            blocks_dir,
-            first_removed_height,
-            &authority,
-        )
-    }
-
-    fn prune_retained_block_records_from_during_snapshot_finalization(
-        &self,
-        blocks_dir: &Path,
-        first_removed_height: u64,
-        authority: &SnapshotFinalizationMutationAuthority<'_>,
-    ) -> Result<()> {
-        let authority = StartupRecoveryMutationAuthority::SnapshotFinalization(authority);
-        self.prune_retained_block_records_from_with_authority(
-            blocks_dir,
-            first_removed_height,
-            &authority,
-        )
-    }
-
-    fn prune_retained_block_records_from_with_authority(
-        &self,
-        blocks_dir: &Path,
-        first_removed_height: u64,
-        authority: &StartupRecoveryMutationAuthority<'_>,
-    ) -> Result<()> {
-        authority.validate_for(self)?;
-        let directory = Self::retained_block_record_dir_for(blocks_dir);
-        let durable_height = self.block_store.lock().read_durable_index_count()?;
-        let heights =
-            Self::retained_block_record_heights_for(&self.store_root, blocks_dir, durable_height)?;
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let mut removed = false;
-        let mut removed_bytes = 0_u64;
-        for height in heights
-            .into_iter()
-            .filter(|height| *height >= first_removed_height)
-        {
-            let path = Self::retained_block_record_path_for(blocks_dir, height);
-            self.regular_sidecar_metadata(&path, &directory)?
-                .ok_or_else(|| {
-                    Error::IO(
-                        std::io::Error::new(
-                            ErrorKind::InvalidData,
-                            "retained block sidecar disappeared during canonical prune",
-                        ),
-                        path.clone(),
-                    )
-                })?;
-            removed_bytes = removed_bytes.saturating_add(Self::file_len_or_zero(&path)?);
-            authority.validate_for(self)?;
-            std::fs::remove_file(&path).map_err(|error| Error::IO(error, path))?;
-            removed = true;
-        }
-        if removed {
-            authority.validate_for(self)?;
-            sync_dir(&directory).map_err(|error| Error::IO(error, directory))?;
-            self.sub_total_disk_usage_bytes(removed_bytes);
-        }
-        accounting_mutation.finish();
-        Ok(())
-    }
-
-    fn staged_retained_block_record(
-        &self,
-        stage: &StagedRetainedBlockRewrite,
-        entry: &StagedRetainedBlockRewriteEntry,
-    ) -> Result<KuraRetainedBlockRecord> {
-        let directory = Self::retained_block_rewrite_staging_dir_for(&stage.blocks_dir);
-        let path = Self::retained_block_rewrite_staging_path_for(&stage.blocks_dir, entry.height);
-        let Some(snapshot) =
-            self.read_regular_sidecar_snapshot(&path, &directory, MAX_RETAINED_BLOCK_RECORD_BYTES)?
-        else {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::NotFound,
-                    "staged retained block record disappeared during canonical rewrite",
-                ),
-                path,
-            ));
-        };
-        if snapshot.bytes_hash != entry.bytes_hash
-            || u64::try_from(snapshot.bytes.len())? != entry.bytes_len
-        {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "staged retained block record changed during canonical rewrite",
-                ),
-                path,
-            ));
-        }
-        let mut input = snapshot.bytes.as_slice();
-        let record = KuraRetainedBlockRecord::decode_all(&mut input).map_err(Error::NoritoFrame)?;
-        if record.encode() != snapshot.bytes {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "staged retained block record is not canonically encoded",
-                ),
-                path,
-            ));
-        }
-        let _ = Self::validate_retained_block_record_at(
-            &path,
-            entry.height,
-            entry.block_hash,
-            &record,
-        )?;
-        Ok(record)
-    }
-
-    fn stage_retained_block_records_for_rewrite(
-        &self,
-        blocks_dir: &Path,
-        first_rewritten_height: u64,
-    ) -> Result<Option<StagedRetainedBlockRewrite>> {
-        let retained_directory = Self::retained_block_record_dir_for(blocks_dir);
-        let staging_directory = Self::retained_block_rewrite_staging_dir_for(blocks_dir);
-        if std::fs::symlink_metadata(&staging_directory).is_ok() {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::AlreadyExists,
-                    "an unresolved retained-block rewrite stage already exists",
-                ),
-                staging_directory,
-            ));
-        }
-
-        let durable_height = self.block_store.lock().read_durable_index_count()?;
-        let heights =
-            Self::retained_block_record_heights_for(&self.store_root, blocks_dir, durable_height)?;
-        let mut entries = Vec::new();
-        let mut removed_total_bytes = 0_u64;
-        for height in heights
-            .into_iter()
-            .filter(|height| *height >= first_rewritten_height)
-        {
-            let block_height = NonZeroUsize::new(usize::try_from(height)?)
-                .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            let canonical_hash = self
-                .get_durable_block_hash(block_height)
-                .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            let path = Self::retained_block_record_path_for(blocks_dir, height);
-            let Some(record) = self.decode_retained_block_record_at(&path, &retained_directory)?
-            else {
-                return Err(Error::MissingRetainedBlockRecord { height });
-            };
-            let _ =
-                Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
-            let bytes = record.encode();
-            let bytes_len = u64::try_from(bytes.len())?;
-            removed_total_bytes = removed_total_bytes.saturating_add(bytes_len);
-            entries.push(StagedRetainedBlockRewriteEntry {
-                height,
-                block_hash: canonical_hash,
-                bytes_hash: Hash::new(&bytes),
-                bytes_len,
-            });
-        }
-        if entries.is_empty() {
-            return Ok(None);
-        }
-
-        create_dir_all_with_context(&staging_directory)?;
-        if let Some(parent) = staging_directory.parent() {
-            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-        }
-        let _ = self
-            .canonical_sidecar_directory(&staging_directory)?
-            .ok_or_else(|| {
-                Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::NotFound,
-                        "retained-block rewrite staging directory disappeared",
-                    ),
-                    staging_directory.clone(),
-                )
-            })?;
-
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let mut moved = 0_usize;
-        let move_result = (|| -> Result<()> {
-            for entry in &entries {
-                let source = Self::retained_block_record_path_for(blocks_dir, entry.height);
-                let target =
-                    Self::retained_block_rewrite_staging_path_for(blocks_dir, entry.height);
-                if std::fs::symlink_metadata(&target).is_ok() {
-                    return Err(Error::IO(
-                        std::io::Error::new(
-                            ErrorKind::AlreadyExists,
-                            "retained-block rewrite staging destination already exists",
-                        ),
-                        target,
-                    ));
-                }
-                std::fs::rename(&source, &target)
-                    .map_err(|error| Error::IO(error, source.clone()))?;
-                moved = moved.saturating_add(1);
-            }
-            sync_dir(&retained_directory)
-                .map_err(|error| Error::IO(error, retained_directory.clone()))?;
-            sync_dir(&staging_directory)
-                .map_err(|error| Error::IO(error, staging_directory.clone()))?;
-            Ok(())
-        })();
-        if let Err(error) = move_result {
-            for entry in entries.iter().take(moved).rev() {
-                let source =
-                    Self::retained_block_rewrite_staging_path_for(blocks_dir, entry.height);
-                let target = Self::retained_block_record_path_for(blocks_dir, entry.height);
-                if let Err(restore_error) = std::fs::rename(&source, &target) {
-                    return Err(Error::IO(restore_error, source));
-                }
-            }
-            let _ = sync_dir(&retained_directory);
-            let _ = sync_dir(&staging_directory);
-            let _ = std::fs::remove_dir(&staging_directory);
-            accounting_mutation.finish();
-            return Err(error);
-        }
-        accounting_mutation.finish();
-        Ok(Some(StagedRetainedBlockRewrite {
-            blocks_dir: blocks_dir.to_path_buf(),
-            entries,
-            removed_total_bytes,
-        }))
-    }
-
-    fn reconcile_staged_retained_block_rewrite_after_error(
-        &self,
-        stage: &StagedRetainedBlockRewrite,
-    ) -> Result<()> {
-        let retained_directory = Self::retained_block_record_dir_for(&stage.blocks_dir);
-        let staging_directory = Self::retained_block_rewrite_staging_dir_for(&stage.blocks_dir);
-        let mut restore = Vec::with_capacity(stage.entries.len());
-        let mut removed_total_bytes = 0_u64;
-        for entry in &stage.entries {
-            let record = self.staged_retained_block_record(stage, entry)?;
-            let canonical_hash = NonZeroUsize::new(usize::try_from(entry.height)?)
-                .and_then(|height| self.get_durable_block_hash(height));
-            let destination = Self::retained_block_record_path_for(&stage.blocks_dir, entry.height);
-            if canonical_hash == Some(entry.block_hash) {
-                if let Some(existing) =
-                    self.decode_retained_block_record_at(&destination, &retained_directory)?
-                {
-                    let _ = Self::validate_retained_block_record_at(
-                        &destination,
-                        entry.height,
-                        entry.block_hash,
-                        &existing,
-                    )?;
-                    if existing != record {
-                        return Err(Error::ConflictingRetainedBlockRecord {
-                            height: entry.height,
-                        });
-                    }
-                    restore.push(false);
-                    removed_total_bytes = removed_total_bytes.saturating_add(entry.bytes_len);
-                } else {
-                    restore.push(true);
-                }
-            } else {
-                restore.push(false);
-                removed_total_bytes = removed_total_bytes.saturating_add(entry.bytes_len);
-            }
-        }
-
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        for (entry, restore) in stage.entries.iter().zip(restore) {
-            let source =
-                Self::retained_block_rewrite_staging_path_for(&stage.blocks_dir, entry.height);
-            if restore {
-                let destination =
-                    Self::retained_block_record_path_for(&stage.blocks_dir, entry.height);
-                std::fs::rename(&source, &destination)
-                    .map_err(|error| Error::IO(error, source.clone()))?;
-            } else {
-                std::fs::remove_file(&source).map_err(|error| Error::IO(error, source.clone()))?;
-            }
-        }
-        sync_dir(&retained_directory)
-            .map_err(|error| Error::IO(error, retained_directory.clone()))?;
-        sync_dir(&staging_directory)
-            .map_err(|error| Error::IO(error, staging_directory.clone()))?;
-        std::fs::remove_dir(&staging_directory)
-            .map_err(|error| Error::IO(error, staging_directory.clone()))?;
-        if let Some(parent) = staging_directory.parent() {
-            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-        }
-        self.sub_total_disk_usage_bytes(removed_total_bytes);
-        accounting_mutation.finish();
-        Ok(())
-    }
-
-    fn discard_staged_retained_block_rewrite(
-        &self,
-        stage: &StagedRetainedBlockRewrite,
-    ) -> Result<()> {
-        let staging_directory = Self::retained_block_rewrite_staging_dir_for(&stage.blocks_dir);
-        for entry in &stage.entries {
-            let _ = self.staged_retained_block_record(stage, entry)?;
-        }
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        #[cfg(test)]
-        let fail_after = self
-            .fail_retained_rewrite_discard_after
-            .swap(usize::MAX, Ordering::AcqRel);
-        for (_index, entry) in stage.entries.iter().enumerate() {
-            let path =
-                Self::retained_block_rewrite_staging_path_for(&stage.blocks_dir, entry.height);
-            std::fs::remove_file(&path).map_err(|error| Error::IO(error, path))?;
-            #[cfg(test)]
-            if _index == fail_after {
-                return Err(Error::IO(
-                    std::io::Error::other("injected retained-rewrite discard failure"),
-                    staging_directory,
-                ));
-            }
-        }
-        sync_dir(&staging_directory)
-            .map_err(|error| Error::IO(error, staging_directory.clone()))?;
-        std::fs::remove_dir(&staging_directory)
-            .map_err(|error| Error::IO(error, staging_directory.clone()))?;
-        if let Some(parent) = staging_directory.parent() {
-            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-        }
-        self.sub_total_disk_usage_bytes(stage.removed_total_bytes);
-        accounting_mutation.finish();
-        Ok(())
-    }
-
-    fn with_retained_block_records_staged_for_rewrite<T>(
-        &self,
-        blocks_dir: &Path,
-        first_rewritten_height: u64,
-        mutation: impl FnOnce() -> Result<T>,
-    ) -> Result<RetainedBlockRewritePublication<T>> {
-        let Some(stage) =
-            self.stage_retained_block_records_for_rewrite(blocks_dir, first_rewritten_height)?
-        else {
-            return mutation().map(RetainedBlockRewritePublication::Complete);
-        };
-        match mutation() {
-            Ok(output) => match self.discard_staged_retained_block_rewrite(&stage) {
-                Ok(()) => Ok(RetainedBlockRewritePublication::Complete(output)),
-                Err(discard_error) => {
-                    warn!(
-                        ?discard_error,
-                        "retained-record cleanup failed after canonical rewrite publication; attempting immediate recovery"
-                    );
-                    match self.recover_retained_block_rewrite_stage_on_startup(blocks_dir) {
-                        Ok(()) => {
-                            warn!(
-                                ?discard_error,
-                                "recovered retained-record cleanup after canonical rewrite publication"
-                            );
-                            Ok(RetainedBlockRewritePublication::Complete(output))
-                        }
-                        Err(cleanup_error) => {
-                            error!(
-                                ?discard_error,
-                                ?cleanup_error,
-                                "canonical rewrite is committed but retained-record cleanup remains deferred"
-                            );
-                            Ok(
-                                RetainedBlockRewritePublication::CommittedWithDeferredCleanup {
-                                    cleanup_error,
-                                },
-                            )
-                        }
-                    }
-                }
-            },
-            Err(
-                error @ (Error::DaBlockRewriteCommitStateUnknown { .. }
-                | Error::CanonicalBlockCommittedRecoveryRequired { .. }
-                | Error::CanonicalStoragePoisoned),
-            ) => {
-                // The DA write-ahead stage is the only authority that can decide whether the old
-                // or replacement canonical suffix won. Keep the retained-record stage intact so
-                // startup can resolve DA first and only then restore/discard retained evidence.
-                Err(error)
-            }
-            Err(error) => {
-                self.reconcile_staged_retained_block_rewrite_after_error(&stage)?;
-                Err(error)
-            }
-        }
-    }
-
-    fn resolve_retained_block_rewrite_stage_before_canonical_mutation(
-        &self,
-        blocks_dir: &Path,
-    ) -> Result<()> {
-        let staging_directory = Self::retained_block_rewrite_staging_dir_for(blocks_dir);
-        match std::fs::symlink_metadata(&staging_directory) {
-            Ok(_) => self.recover_retained_block_rewrite_stage_on_startup(blocks_dir),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(Error::IO(error, staging_directory)),
-        }
-    }
-
-    fn recover_retained_block_rewrite_stage_on_startup(&self, blocks_dir: &Path) -> Result<()> {
-        let authority = StartupRecoveryMutationAuthority::Authenticated;
-        self.recover_retained_block_rewrite_stage_with_authority(blocks_dir, &authority)
-    }
-
-    fn recover_retained_block_rewrite_stage_during_snapshot_finalization(
-        &self,
-        blocks_dir: &Path,
-        authority: &SnapshotFinalizationMutationAuthority<'_>,
-    ) -> Result<()> {
-        let authority = StartupRecoveryMutationAuthority::SnapshotFinalization(authority);
-        self.recover_retained_block_rewrite_stage_with_authority(blocks_dir, &authority)
-    }
-
-    fn recover_retained_block_rewrite_stage_with_authority(
-        &self,
-        blocks_dir: &Path,
-        authority: &StartupRecoveryMutationAuthority<'_>,
-    ) -> Result<()> {
-        authority.validate_for(self)?;
-        let staging_directory = Self::retained_block_rewrite_staging_dir_for(blocks_dir);
-        #[cfg(test)]
-        if self
-            .fail_next_retained_rewrite_recovery
-            .swap(false, Ordering::AcqRel)
-        {
-            return Err(Error::IO(
-                std::io::Error::other("injected retained-rewrite recovery failure"),
-                staging_directory,
-            ));
-        }
-        let durable_height = self.block_store.lock().read_durable_index_count()?;
-        let heights = Self::canonical_height_sidecar_heights_for(
-            &self.store_root,
-            &staging_directory,
-            "retained block rewrite staging sidecar",
-            durable_height,
-        )?;
-        if heights.is_empty() {
-            if staging_directory.exists() {
-                authority.validate_for(self)?;
-                let _accounting_mutation = self.begin_total_disk_usage_mutation();
-                std::fs::remove_dir(&staging_directory)
-                    .map_err(|error| Error::IO(error, staging_directory.clone()))?;
-                if let Some(parent) = staging_directory.parent() {
-                    sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-                }
-            }
-            return Ok(());
-        }
-        authority.validate_for(self)?;
-        let _accounting_mutation = self.begin_total_disk_usage_mutation();
-        let retained_directory = Self::retained_block_record_dir_for(blocks_dir);
-        create_dir_all_with_context(&retained_directory)?;
-        for height in heights {
-            let path = Self::retained_block_rewrite_staging_path_for(blocks_dir, height);
-            let Some(record) = self.decode_retained_block_record_at(&path, &staging_directory)?
-            else {
-                return Err(Error::MissingRetainedBlockRecord { height });
-            };
-            let _ =
-                Self::validate_retained_block_record_at(&path, height, record.block_hash, &record)?;
-            let canonical_hash = NonZeroUsize::new(usize::try_from(height)?)
-                .and_then(|height| self.get_durable_block_hash(height));
-            let destination = Self::retained_block_record_path_for(blocks_dir, height);
-            authority.validate_for(self)?;
-            if canonical_hash == Some(record.block_hash) {
-                if let Some(existing) =
-                    self.decode_retained_block_record_at(&destination, &retained_directory)?
-                {
-                    let _ = Self::validate_retained_block_record_at(
-                        &destination,
-                        height,
-                        record.block_hash,
-                        &existing,
-                    )?;
-                    if existing != record {
-                        return Err(Error::ConflictingRetainedBlockRecord { height });
-                    }
-                    authority.validate_for(self)?;
-                    std::fs::remove_file(&path).map_err(|error| Error::IO(error, path.clone()))?;
-                } else {
-                    authority.validate_for(self)?;
-                    std::fs::rename(&path, &destination)
-                        .map_err(|error| Error::IO(error, path.clone()))?;
-                }
-            } else {
-                authority.validate_for(self)?;
-                std::fs::remove_file(&path).map_err(|error| Error::IO(error, path.clone()))?;
-            }
-        }
-        sync_dir(&retained_directory)
-            .map_err(|error| Error::IO(error, retained_directory.clone()))?;
-        sync_dir(&staging_directory)
-            .map_err(|error| Error::IO(error, staging_directory.clone()))?;
-        authority.validate_for(self)?;
-        std::fs::remove_dir(&staging_directory)
-            .map_err(|error| Error::IO(error, staging_directory.clone()))?;
-        if let Some(parent) = staging_directory.parent() {
-            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-        }
-        Ok(())
-    }
-
-    fn v2_finality_artifact_dir_for(blocks_dir: &Path) -> PathBuf {
-        blocks_dir.join(V2_FINALITY_ARTIFACTS_DIR_NAME)
-    }
-
-    fn v2_finality_artifact_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
-        Self::v2_finality_artifact_dir_for(blocks_dir).join(format!("{height:020}.norito"))
-    }
-
-    fn v2_finality_artifact_dir(&self) -> PathBuf {
-        Self::v2_finality_artifact_dir_for(&self.active_blocks_dir.lock())
-    }
-
-    fn v2_finality_artifact_path(&self, height: u64) -> PathBuf {
-        Self::v2_finality_artifact_path_for(&self.active_blocks_dir.lock(), height)
-    }
-
-    fn v2_finality_artifact_heights_for(
-        store_root: &Path,
-        blocks_dir: &Path,
-        durable_height_bound: u64,
-    ) -> Result<Vec<u64>> {
-        let directory = Self::v2_finality_artifact_dir_for(blocks_dir);
-        Self::canonical_height_sidecar_heights_for(
-            store_root,
-            &directory,
-            "v2 finality artifact",
-            durable_height_bound,
-        )
-    }
-
-    fn highest_v2_finality_artifact_height_for(
-        store_root: &Path,
-        blocks_dir: &Path,
-        durable_height_bound: u64,
-    ) -> Result<Option<u64>> {
-        Ok(
-            Self::v2_finality_artifact_heights_for(store_root, blocks_dir, durable_height_bound)?
-                .last()
-                .copied(),
-        )
-    }
-
-    fn highest_v2_finality_artifact_height(&self, blocks_dir: &Path) -> Result<Option<u64>> {
-        let durable_height = self.block_store.lock().read_durable_index_count()?;
-        Self::highest_v2_finality_artifact_height_for(&self.store_root, blocks_dir, durable_height)
-    }
-
-    fn ensure_v2_finality_allows_rewrite_from(
-        &self,
-        blocks_dir: &Path,
-        rewrite_from_height: u64,
-    ) -> Result<()> {
-        if let Some(finalized_height) = self.highest_v2_finality_artifact_height(blocks_dir)?
-            && finalized_height >= rewrite_from_height
-        {
-            return Err(Error::FinalizedV2BlockMutation {
-                rewrite_from_height,
-                finalized_height,
-            });
-        }
-        Ok(())
-    }
-
-    fn ensure_replay_metadata_allows_top_replacement_while_sidecars_locked(
-        &self,
-        blocks_dir: &Path,
-        height: u64,
-    ) -> Result<()> {
-        // The caller holds `sidecar_lock` across this preflight (and, for the
-        // final check, canonical marker publication). Read the two sidecars
-        // directly: the public accessors acquire the same non-reentrant mutex.
-        self.ensure_prune_recovery_not_required()?;
-        let checkpoint_path = Self::wsv_checkpoint_path_for(blocks_dir, height);
-        if let Some(checkpoint) = Self::decode_wsv_checkpoint_at(&checkpoint_path)? {
-            if checkpoint.height != height {
-                return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
-                    "WSV checkpoint height mismatch: expected {height}, got {}",
-                    checkpoint.height
-                ))));
-            }
-            self.ensure_durable_block_at_height(height, checkpoint.block_hash)?;
-            return Err(Error::CommittedBlockReplacementForbidden { height });
-        }
-
-        let manifest_path = Self::commit_manifest_path_for(blocks_dir, height);
-        if let Some(manifest) = Self::decode_commit_manifest_at(&manifest_path)? {
-            if manifest.height != height {
-                return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
-                    "commit manifest height mismatch: expected {height}, got {}",
-                    manifest.height
-                ))));
-            }
-            self.ensure_durable_block_at_height(height, manifest.block_hash)?;
-            return Err(Error::CommittedBlockReplacementForbidden { height });
-        }
-
-        Ok(())
-    }
-
-    /// Return the independently signed complete-wire length and hash required before body eviction.
-    fn verified_v2_finality_wire_hash_for_eviction(
-        &self,
-        blocks_dir: &Path,
-        height: u64,
-        canonical_hash: HashOf<BlockHeader>,
-    ) -> Result<Option<(u64, Hash)>> {
-        let directory = Self::v2_finality_artifact_dir_for(blocks_dir);
-        let path = Self::v2_finality_artifact_path_for(blocks_dir, height);
-        let Some((record, read_identity)) = self.decode_v2_finality_record_at(&path, &directory)?
-        else {
-            return Ok(None);
-        };
-        Self::validate_v2_finality_record_at(&path, height, canonical_hash, &record)?;
-        // `get_block` calls this while holding the block-store guard. Validate the immutable
-        // retained record directly here; recursively asking `get_block` to compare the live body
-        // would deadlock on a cold read of an evicted height. The caller compares any available
-        // body/DA bytes with the returned signed complete-wire hash before exposing them.
-        let Some((
-            retained_header,
-            proposal_wire_hash,
-            executed_block_wire_len,
-            executed_block_wire_hash,
-            _,
-        )) = self.retained_block_record_at_without_live_body(blocks_dir, height, canonical_hash)?
-        else {
-            return Err(Error::MissingRetainedBlockRecord { height });
-        };
-        if retained_header != record.block_header {
-            return Err(Error::ConflictingRetainedBlockRecord { height });
-        }
-        Self::validate_v2_finality_wire_bindings(
-            height,
-            &record.artifact,
-            proposal_wire_hash,
-            executed_block_wire_len,
-            executed_block_wire_hash,
-        )?;
-        self.verify_v2_finality_artifact_at(&path, &directory, &record.artifact, &read_identity)?;
-        Ok(Some((executed_block_wire_len, executed_block_wire_hash)))
-    }
-
+impl Kura {
     fn canonical_block_store_metadata(
         &self,
         blocks_dir: &Path,
@@ -15471,29 +13849,148 @@ impl Kura {
             && Self::stable_sidecar_metadata_unchanged(&left.commit_marker, &right.commit_marker)
     }
 
-    fn v2_startup_replay_auxiliary_sidecar_directories(&self) -> Vec<PathBuf> {
-        let mut directories = vec![self.wsv_checkpoint_dir(), self.commit_manifest_dir()];
-        directories.extend(
-            self.lane_storage_entries
-                .lock()
-                .values()
-                .map(|entry| Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root))),
-        );
-        directories.sort();
-        directories.dedup();
-        directories
+    fn v2_startup_replay_lane_auxiliary_sidecar_directories(
+        &self,
+    ) -> Result<BTreeMap<PathBuf, PathBuf>> {
+        let entries = self
+            .lane_storage_entries
+            .lock()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut directories = BTreeMap::new();
+        for entry in entries {
+            let lane_artifacts = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
+            let historical_recoveries =
+                Self::historical_autonomous_recovery_directory_for_entry(&entry, &self.store_root);
+            if directories
+                .insert(lane_artifacts.clone(), historical_recoveries.clone())
+                .is_some()
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "active lanes alias one startup replay sidecar directory",
+                    ),
+                    lane_artifacts,
+                ));
+            }
+        }
+        Ok(directories)
+    }
+
+    fn capture_v2_startup_replay_lane_auxiliary_sidecars(
+        &self,
+    ) -> Result<BTreeMap<PathBuf, StableSidecarDirectoryInventory>> {
+        let directories = self.v2_startup_replay_lane_auxiliary_sidecar_directories()?;
+        let mut inventories = BTreeMap::new();
+        let mut historical_records = 0_usize;
+        let mut historical_bytes = 0_u64;
+        let historical_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
+        for (lane_artifacts, historical_recoveries) in directories {
+            let lane_inventory = self.stable_sidecar_directory_inventory_with_recognized_child(
+                &lane_artifacts,
+                Some(&historical_recoveries),
+            )?;
+            if inventories
+                .insert(lane_artifacts.clone(), lane_inventory)
+                .is_some()
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "duplicate lane-artifact startup replay inventory",
+                    ),
+                    lane_artifacts,
+                ));
+            }
+
+            let remaining_records = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS
+                .checked_sub(historical_records)
+                .ok_or_else(|| {
+                    Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "historical autonomous recovery record count overflowed",
+                        ),
+                        historical_recoveries.clone(),
+                    )
+                })?;
+            let remaining_bytes = historical_byte_limit
+                .checked_sub(historical_bytes)
+                .ok_or_else(|| {
+                    Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "historical autonomous recovery byte count overflowed",
+                        ),
+                        historical_recoveries.clone(),
+                    )
+                })?;
+            let (historical_inventory, record_count, encoded_bytes) = self
+                .stable_historical_autonomous_recovery_directory_inventory(
+                    &historical_recoveries,
+                    remaining_records,
+                    remaining_bytes,
+                )?;
+            historical_records = historical_records
+                .checked_add(record_count)
+                .ok_or_else(|| {
+                    Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "historical autonomous recovery record count overflowed",
+                        ),
+                        historical_recoveries.clone(),
+                    )
+                })?;
+            historical_bytes = historical_bytes.checked_add(encoded_bytes).ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "historical autonomous recovery byte count overflowed",
+                    ),
+                    historical_recoveries.clone(),
+                )
+            })?;
+            if inventories
+                .insert(historical_recoveries.clone(), historical_inventory)
+                .is_some()
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "duplicate historical recovery startup replay inventory",
+                    ),
+                    historical_recoveries,
+                ));
+            }
+        }
+        Ok(inventories)
     }
 
     fn capture_v2_startup_replay_auxiliary_sidecars(
         &self,
     ) -> Result<BTreeMap<PathBuf, StableSidecarDirectoryInventory>> {
-        self.v2_startup_replay_auxiliary_sidecar_directories()
+        let mut inventories = [self.wsv_checkpoint_dir(), self.commit_manifest_dir()]
             .into_iter()
             .map(|directory| {
                 self.stable_sidecar_directory_inventory(&directory)
                     .map(|inventory| (directory, inventory))
             })
-            .collect()
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        for (directory, inventory) in self.capture_v2_startup_replay_lane_auxiliary_sidecars()? {
+            if inventories.insert(directory.clone(), inventory).is_some() {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "startup replay auxiliary directories alias each other",
+                    ),
+                    directory,
+                ));
+            }
+        }
+        Ok(inventories)
     }
 
     fn decode_v2_startup_wsv_checkpoint(
@@ -15710,6 +14207,11 @@ impl Kura {
     /// Refresh only the auxiliary directory binding after deterministic
     /// startup repair or State geometry setup has published lane evidence.
     ///
+    /// The lane-derived subset is replaced with the current catalog rather
+    /// than extended. This removes identities from a pre-snapshot catalog
+    /// after a legitimate contraction or relabel while retaining the exact
+    /// checkpoint, manifest, and any other non-lane auxiliary identities.
+    ///
     /// Checkpoint and manifest projections must still match byte-for-byte
     /// stable file identities. Finality, retained-block, and canonical journal
     /// bindings are deliberately not refreshed here; a change there forces a
@@ -15719,20 +14221,12 @@ impl Kura {
     ///
     /// Returns an error when the authenticated startup inventory is absent or
     /// already shared, when checkpoint or manifest identity changed, or when
-    /// the active lane sidecar inventory cannot be captured safely.
+    /// the active lane sidecar inventory cannot be captured or reconciled
+    /// safely.
     pub fn refresh_v2_startup_replay_auxiliary_binding(&self) -> Result<()> {
         let blocks_dir = self.active_blocks_dir.lock().clone();
-        let checkpoint_dir = Self::wsv_checkpoint_dir_for(&blocks_dir);
-        let manifest_dir = Self::commit_manifest_dir_for(&blocks_dir);
-        let lane_auxiliary = self
-            .v2_startup_replay_auxiliary_sidecar_directories()
-            .into_iter()
-            .filter(|directory| directory != &checkpoint_dir && directory != &manifest_dir)
-            .map(|directory| {
-                self.stable_sidecar_directory_inventory(&directory)
-                    .map(|inventory| (directory, inventory))
-            })
-            .collect::<Result<BTreeMap<_, _>>>()?;
+        let lane_auxiliary = self.capture_v2_startup_replay_lane_auxiliary_sidecars()?;
+        let lane_auxiliary_directories = lane_auxiliary.keys().cloned().collect::<BTreeSet<_>>();
         let mut installed = self.v2_startup_finality_verification_inventory.lock();
         let Some(inventory) = installed.as_mut().and_then(Arc::get_mut) else {
             return Err(Error::IO(
@@ -15755,7 +14249,38 @@ impl Kura {
                 blocks_dir,
             ));
         }
+        if inventory
+            .lane_auxiliary_directories
+            .iter()
+            .any(|directory| !inventory.auxiliary_sidecars.contains_key(directory))
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "tracked startup replay lane identity is absent from the auxiliary inventory",
+                ),
+                blocks_dir,
+            ));
+        }
+        if lane_auxiliary_directories.iter().any(|directory| {
+            inventory.auxiliary_sidecars.contains_key(directory)
+                && !inventory.lane_auxiliary_directories.contains(directory)
+        }) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "startup replay lane identity aliases non-lane auxiliary evidence",
+                ),
+                blocks_dir,
+            ));
+        }
+
+        let previous_lane_auxiliary = std::mem::take(&mut inventory.lane_auxiliary_directories);
+        for directory in previous_lane_auxiliary {
+            inventory.auxiliary_sidecars.remove(&directory);
+        }
         inventory.auxiliary_sidecars.extend(lane_auxiliary);
+        inventory.lane_auxiliary_directories = lane_auxiliary_directories;
         Ok(())
     }
 
@@ -15949,6 +14474,7 @@ impl Kura {
             finality_directory: after_finality_directory,
             retained_directory: after_retained_directory,
             auxiliary_sidecars,
+            lane_auxiliary_directories: BTreeSet::new(),
             hash_only_heights,
             entries: verified
                 .into_iter()
@@ -19804,37 +18330,132 @@ impl Kura {
         Ok(required.saturating_add(self.lane_artifact_required_bytes_for_block(block)?))
     }
 
-    fn sidecar_bytes(store_dir: &Path) -> Result<u64> {
+    fn sidecar_bytes_with_historical_budget(
+        store_dir: &Path,
+        historical_record_budget: &mut usize,
+        historical_byte_budget: &mut u64,
+    ) -> Result<u64> {
         if store_dir.as_os_str().is_empty() {
             return Ok(0);
         }
         let mut total = 0u64;
         for dir_name in [PIPELINE_DIR_NAME, LANE_ARTIFACTS_DIR_NAME] {
             let dir = store_dir.join(dir_name);
-            let entries = match std::fs::read_dir(&dir) {
-                Ok(entries) => entries,
+            let before = match std::fs::symlink_metadata(&dir) {
+                Ok(metadata) => metadata,
                 Err(err) if err.kind() == ErrorKind::NotFound => continue,
-                Err(err) => return Err(Error::IO(err, dir)),
+                Err(err) => return Err(Error::IO(err, dir.clone())),
             };
+            if before.file_type().is_symlink() || !before.file_type().is_dir() {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "Kura sidecar namespace is not a direct directory",
+                    ),
+                    dir,
+                ));
+            }
+            let entries = std::fs::read_dir(&dir).map_err(|err| Error::IO(err, dir.clone()))?;
             for entry in entries {
                 let entry = entry.map_err(|err| Error::IO(err, dir.clone()))?;
                 let path = entry.path();
-                let file_type = entry
-                    .file_type()
-                    .map_err(|err| Error::IO(err, path.clone()))?;
-                if file_type.is_file() {
-                    let len = entry
-                        .metadata()
-                        .map_err(|err| Error::IO(err, path.clone()))?
-                        .len();
-                    total = total.saturating_add(len);
+                let metadata =
+                    std::fs::symlink_metadata(&path).map_err(|err| Error::IO(err, path.clone()))?;
+                if metadata.file_type().is_file()
+                    && !metadata.file_type().is_symlink()
+                    && Self::sidecar_is_single_link(&metadata)
+                {
+                    total = total.checked_add(metadata.len()).ok_or_else(|| {
+                        Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "Kura sidecar byte count overflowed",
+                            ),
+                            path.clone(),
+                        )
+                    })?;
+                    continue;
                 }
+                let name = entry.file_name();
+                if dir_name == LANE_ARTIFACTS_DIR_NAME
+                    && name.as_os_str()
+                        == std::ffi::OsStr::new(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1)
+                    && metadata.file_type().is_dir()
+                    && !metadata.file_type().is_symlink()
+                {
+                    let (records, bytes) = bounded_historical_autonomous_recovery_entries(
+                        &path,
+                        *historical_record_budget,
+                        *historical_byte_budget,
+                        |record_path| {
+                            let record_metadata = std::fs::symlink_metadata(record_path)
+                                .map_err(|err| Error::IO(err, record_path.to_path_buf()))?;
+                            Ok(((), record_metadata))
+                        },
+                    )?;
+                    *historical_record_budget = historical_record_budget
+                        .checked_sub(records.len())
+                        .ok_or_else(|| {
+                            Error::IO(
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    "historical autonomous recovery record count overflowed",
+                                ),
+                                path.clone(),
+                            )
+                        })?;
+                    *historical_byte_budget =
+                        historical_byte_budget.checked_sub(bytes).ok_or_else(|| {
+                            Error::IO(
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    "historical autonomous recovery byte count overflowed",
+                                ),
+                                path.clone(),
+                            )
+                        })?;
+                    total = total.checked_add(bytes).ok_or_else(|| {
+                        Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "Kura sidecar byte count overflowed",
+                            ),
+                            path,
+                        )
+                    })?;
+                    continue;
+                }
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "Kura sidecar namespace contains an unrecognized linked or non-regular entry",
+                    ),
+                    path,
+                ));
+            }
+            let after =
+                std::fs::symlink_metadata(&dir).map_err(|err| Error::IO(err, dir.clone()))?;
+            if after.file_type().is_symlink()
+                || !after.file_type().is_dir()
+                || !Self::sidecar_directory_metadata_unchanged(&before, &after)
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "Kura sidecar namespace changed during disk accounting",
+                    ),
+                    dir,
+                ));
             }
         }
         Ok(total)
     }
 
-    fn block_store_bytes(blocks_dir: &Path) -> Result<u64> {
+    fn block_store_bytes_with_historical_budget(
+        blocks_dir: &Path,
+        historical_record_budget: &mut usize,
+        historical_byte_budget: &mut u64,
+    ) -> Result<u64> {
         if blocks_dir.as_os_str().is_empty() {
             return Ok(0);
         }
@@ -19858,11 +18479,28 @@ impl Kura {
                 files = files.saturating_add(len);
             }
         }
-        let sidecars = Self::sidecar_bytes(blocks_dir)?;
+        let sidecars = Self::sidecar_bytes_with_historical_budget(
+            blocks_dir,
+            historical_record_budget,
+            historical_byte_budget,
+        )?;
         Ok(files.saturating_add(sidecars))
     }
 
-    fn blocks_root_bytes(root: &Path) -> Result<u64> {
+    fn block_store_bytes_with_historical_limit(
+        blocks_dir: &Path,
+        historical_byte_limit: u64,
+    ) -> Result<u64> {
+        let mut historical_record_budget = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS;
+        let mut historical_byte_budget = historical_byte_limit;
+        Self::block_store_bytes_with_historical_budget(
+            blocks_dir,
+            &mut historical_record_budget,
+            &mut historical_byte_budget,
+        )
+    }
+
+    fn blocks_root_bytes(root: &Path, historical_byte_limit: u64) -> Result<u64> {
         if root.as_os_str().is_empty() {
             return Ok(0);
         }
@@ -19872,6 +18510,8 @@ impl Kura {
             Err(err) => return Err(Error::IO(err, root.to_path_buf())),
         };
         let mut total = 0u64;
+        let mut historical_record_budget = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS;
+        let mut historical_byte_budget = historical_byte_limit;
         for entry in entries {
             let entry = entry.map_err(|err| Error::IO(err, root.to_path_buf()))?;
             let path = entry.path();
@@ -19879,7 +18519,11 @@ impl Kura {
                 .file_type()
                 .map_err(|err| Error::IO(err, path.clone()))?;
             if file_type.is_dir() {
-                total = total.saturating_add(Self::block_store_bytes(&path)?);
+                total = total.saturating_add(Self::block_store_bytes_with_historical_budget(
+                    &path,
+                    &mut historical_record_budget,
+                    &mut historical_byte_budget,
+                )?);
             }
         }
         Ok(total)
@@ -19912,8 +18556,16 @@ impl Kura {
         Ok(total)
     }
 
-    fn block_store_total_bytes(blocks_dir: &Path) -> Result<u64> {
-        let mut total = Self::block_store_bytes(blocks_dir)?;
+    fn block_store_total_bytes_with_historical_budget(
+        blocks_dir: &Path,
+        historical_record_budget: &mut usize,
+        historical_byte_budget: &mut u64,
+    ) -> Result<u64> {
+        let mut total = Self::block_store_bytes_with_historical_budget(
+            blocks_dir,
+            historical_record_budget,
+            historical_byte_budget,
+        )?;
         let da_dir = blocks_dir.join(DA_BLOCKS_DIR_NAME);
         total = total.saturating_add(Self::dir_file_bytes(&da_dir)?);
         for directory in [
@@ -19930,7 +18582,7 @@ impl Kura {
         Ok(total)
     }
 
-    fn blocks_root_total_bytes(root: &Path) -> Result<u64> {
+    fn blocks_root_total_bytes(root: &Path, historical_byte_limit: u64) -> Result<u64> {
         if root.as_os_str().is_empty() {
             return Ok(0);
         }
@@ -19940,6 +18592,8 @@ impl Kura {
             Err(err) => return Err(Error::IO(err, root.to_path_buf())),
         };
         let mut total = 0u64;
+        let mut historical_record_budget = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS;
+        let mut historical_byte_budget = historical_byte_limit;
         for entry in entries {
             let entry = entry.map_err(|err| Error::IO(err, root.to_path_buf()))?;
             let path = entry.path();
@@ -19947,7 +18601,11 @@ impl Kura {
                 .file_type()
                 .map_err(|err| Error::IO(err, path.clone()))?;
             if file_type.is_dir() {
-                total = total.saturating_add(Self::block_store_total_bytes(&path)?);
+                total = total.saturating_add(Self::block_store_total_bytes_with_historical_budget(
+                    &path,
+                    &mut historical_record_budget,
+                    &mut historical_byte_budget,
+                )?);
             }
         }
         Ok(total)
@@ -20073,11 +18731,18 @@ impl Kura {
         let retired_blocks_root = retired_root.join("blocks");
         let retired_merge_root = retired_root.join("merge_ledger");
         let retired_geometry_root = retired_root.join("lane_geometry");
+        let historical_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
 
         let mut used = 0u64;
-        used = used.saturating_add(Self::blocks_root_bytes(&blocks_root)?);
+        used = used.saturating_add(Self::blocks_root_bytes(
+            &blocks_root,
+            historical_byte_limit,
+        )?);
         used = used.saturating_add(Self::merge_root_bytes(&merge_root)?);
-        used = used.saturating_add(Self::blocks_root_bytes(&retired_blocks_root)?);
+        used = used.saturating_add(Self::blocks_root_bytes(
+            &retired_blocks_root,
+            historical_byte_limit,
+        )?);
         used = used.saturating_add(Self::merge_root_bytes(&retired_merge_root)?);
         used = used.saturating_add(Self::directory_tree_file_bytes(&retired_geometry_root)?);
         used = used.saturating_add(Self::directory_tree_file_bytes(
@@ -20120,11 +18785,18 @@ impl Kura {
         let retired_blocks_root = retired_root.join("blocks");
         let retired_merge_root = retired_root.join("merge_ledger");
         let retired_geometry_root = retired_root.join("lane_geometry");
+        let historical_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
 
         let mut used = 0u64;
-        used = used.saturating_add(Self::blocks_root_total_bytes(&blocks_root)?);
+        used = used.saturating_add(Self::blocks_root_total_bytes(
+            &blocks_root,
+            historical_byte_limit,
+        )?);
         used = used.saturating_add(Self::merge_root_bytes(&merge_root)?);
-        used = used.saturating_add(Self::blocks_root_total_bytes(&retired_blocks_root)?);
+        used = used.saturating_add(Self::blocks_root_total_bytes(
+            &retired_blocks_root,
+            historical_byte_limit,
+        )?);
         used = used.saturating_add(Self::merge_root_bytes(&retired_merge_root)?);
         used = used.saturating_add(Self::directory_tree_file_bytes(&retired_geometry_root)?);
         used = used.saturating_add(Self::directory_tree_file_bytes(
@@ -20237,9 +18909,12 @@ impl Kura {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let mut accounting_complete = true;
         if retired_blocks_root.exists() {
-            let sizes = Self::blocks_root_bytes(&retired_blocks_root).and_then(|budget| {
-                Self::blocks_root_total_bytes(&retired_blocks_root).map(|total| (budget, total))
-            });
+            let historical_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();
+            let sizes = Self::blocks_root_bytes(&retired_blocks_root, historical_byte_limit)
+                .and_then(|budget| {
+                    Self::blocks_root_total_bytes(&retired_blocks_root, historical_byte_limit)
+                        .map(|total| (budget, total))
+                });
             match sizes {
                 Ok((budget, total)) => {
                     self.durable_mutation_authorized()?;
@@ -23443,7 +22118,7 @@ impl Kura {
         self.truncate_transaction_entrypoint_index(keep);
         self.replica_registry
             .lock()
-            .retain(|(block_height, _), _| *block_height <= height);
+            .retain(|key, _| key.height <= height);
         self.hard_fork_hash_only_block_count
             .fetch_min(keep, Ordering::Relaxed);
         self.invalidate_pending_budget_cache();
@@ -23962,6 +22637,48 @@ impl Kura {
 
 #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 impl Kura {
+    /// Inject a semantically valid selected-keeper observation in focused
+    /// storage tests which do not own the keeper private key.  Production
+    /// ingress can only use [`Self::admit_kura_replica_advert`].
+    fn record_block_replica_advert(
+        &self,
+        peer: PeerId,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        executed_block_wire_len: u64,
+    ) {
+        if height == 0 || executed_block_wire_len == 0 {
+            return;
+        }
+        let blocks_dir = self.active_blocks_dir.lock().clone();
+        let Ok(Some(authority)) =
+            self.verified_kura_replica_authority_for_eviction(&blocks_dir, height, block_hash)
+        else {
+            return;
+        };
+        if authority.key.executed_block_wire_len != executed_block_wire_len {
+            return;
+        }
+        let Some((keeper_index, _)) = authority
+            .selected_keepers
+            .iter()
+            .find(|(_, keeper)| keeper == &peer)
+        else {
+            return;
+        };
+        self.replica_registry
+            .lock()
+            .entry(authority.key)
+            .or_default()
+            .insert(
+                peer,
+                BlockReplicaAdvert {
+                    keeper_index: *keeper_index,
+                    observed_at: Instant::now(),
+                },
+            );
+    }
+
     /// Persist a benchmark block directly into the canonical block store.
     ///
     /// # Errors
@@ -24001,24 +22718,44 @@ impl Kura {
     /// Advertise enough matching remote replicas for the block at `height`.
     #[must_use]
     pub fn advertise_required_replicas_for_bench(&self, height: NonZeroUsize) -> Option<u64> {
-        let (block_hash, payload_len) = {
+        let height_u64 = u64::try_from(height.get()).ok()?;
+        let (block_hash, payload_len, blocks_dir) = {
             let index = u64::try_from(height.get().saturating_sub(1)).ok()?;
             let mut store = self.block_store.lock();
             let payload_len = store.read_block_index(index).ok()?.length;
             let block_hash = store.read_block_hashes(index, 1).ok()?.first().copied()?;
-            (block_hash, payload_len)
+            (block_hash, payload_len, store.path_to_blockchain.clone())
         };
         if payload_len == 0 {
             return None;
         }
-
-        for _ in 0..self.eviction_required_replicas.get() {
-            let peer = checked_peer_id();
-            self.record_block_replica_advert(
-                peer,
-                u64::try_from(height.get()).ok()?,
-                block_hash,
-                payload_len,
+        let authority = self
+            .verified_kura_replica_authority_for_eviction(&blocks_dir, height_u64, block_hash)
+            .ok()??;
+        if authority.selected_keepers.is_empty() {
+            return None;
+        }
+        if self.local_peer_id.get().is_none() {
+            let mut local = checked_peer_id();
+            while authority
+                .selected_keepers
+                .iter()
+                .any(|(_, keeper)| keeper == &local)
+            {
+                local = checked_peer_id();
+            }
+            self.bind_local_peer_id(local).ok()?;
+        }
+        let now = Instant::now();
+        let mut registry = self.replica_registry.lock();
+        let peers = registry.entry(authority.key).or_default();
+        for (keeper_index, keeper) in &authority.selected_keepers {
+            peers.insert(
+                keeper.clone(),
+                BlockReplicaAdvert {
+                    keeper_index: *keeper_index,
+                    observed_at: now,
+                },
             );
         }
         Some(payload_len)
@@ -24261,6 +22998,23 @@ impl Kura {
 
     fn resume_eviction_after_snapshot_for_tests(&self) {
         self.eviction_paused_after_snapshot
+            .store(false, Ordering::Release);
+    }
+
+    fn pause_next_eviction_before_stage_publication_for_tests(&self) {
+        self.eviction_paused_before_stage_publication
+            .store(false, Ordering::Release);
+        self.pause_eviction_before_stage_publication
+            .store(true, Ordering::Release);
+    }
+
+    fn eviction_paused_before_stage_publication_for_tests(&self) -> bool {
+        self.eviction_paused_before_stage_publication
+            .load(Ordering::Acquire)
+    }
+
+    fn resume_eviction_before_stage_publication_for_tests(&self) {
+        self.eviction_paused_before_stage_publication
             .store(false, Ordering::Release);
     }
 
@@ -25769,45 +24523,7 @@ impl AutonomousLaneBlockLatestAttemptV1 {
     }
 }
 
-/// Complete hash-addressed evidence required to execute one autonomous lane
-/// block in a canonical merge batch on a validator that missed original
-/// committee fanout.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-pub(crate) struct AutonomousLaneMergeBundleV1 {
-    /// Bundle schema version. Only version one is accepted.
-    pub(crate) version: u8,
-    /// Immutable payload, origin availability proof, and authenticated cursor chain.
-    pub(crate) autonomous: AutonomousLaneBlockArtifact,
-    /// Immutable origin proposal with prepare/commit QCs and signer PoPs.
-    pub(crate) certified: CertifiedLaneBlockArtifact,
-}
-
-impl AutonomousLaneMergeBundleV1 {
-    /// Canonical framed bytes used by authenticated bundle transport and merge logs.
-    pub(crate) fn encode_framed(&self) -> Result<Vec<u8>> {
-        let bytes = norito::encode_canonical(self)?;
-        if bytes.len() > MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES {
-            return Err(Error::NoritoFrame(norito::Error::Message(
-                "autonomous lane merge bundle exceeds hard byte limit".to_owned(),
-            )));
-        }
-        Ok(bytes)
-    }
-
-    /// Domain-separated digest committed by canonical merge batches.
-    pub(crate) fn bundle_hash(&self) -> Result<Hash> {
-        let bytes = self.encode_framed()?;
-        Ok(Hash::new_from_chunks(&[
-            b"iroha:nexus:autonomous-lane-merge-bundle:v1\0",
-            &bytes,
-        ]))
-    }
-
-    /// Exact producer-authenticated executable payload.
-    pub(crate) const fn executable_payload(&self) -> &LaneExecutablePayloadV1 {
-        &self.autonomous.executable_payload
-    }
-}
+include!("kura/autonomous_merge_bundle_support.rs");
 
 /// Durable state of one autonomous executable-entrypoint owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
@@ -25964,12 +24680,6 @@ impl AutonomousLaneSlotRetirementV1 {
 
     fn matches_payload(&self, payload: &LaneExecutablePayloadV1) -> bool {
         self.version == Self::VERSION && self == &Self::from_payload(payload)
-    }
-
-    /// Exact FIFO-ordered reservations released after this record is durable.
-    #[must_use]
-    pub(crate) fn reservation_keys(&self) -> &[crate::queue::LaneQueueReservationKeyV2] {
-        &self.reservation_keys
     }
 
     pub(crate) fn digest(&self) -> Result<Hash> {
@@ -27580,6 +26290,14 @@ impl Kura {
         Self::autonomous_two_height_coordinates(name, AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX)
     }
 
+    fn autonomous_lane_block_attempt_view_temp_coordinates(name: &str) -> Option<(u64, u64)> {
+        let stable_name = name.strip_suffix(".tmp")?;
+        Self::autonomous_two_height_coordinates(
+            stable_name,
+            AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
+        )
+    }
+
     fn autonomous_one_height_coordinate(name: &str, prefix: &str) -> Option<u64> {
         let raw = name
             .strip_prefix(prefix)?
@@ -27852,230 +26570,6 @@ impl Kura {
             std::io::Error::new(ErrorKind::InvalidData, message.into()),
             path,
         )
-    }
-
-    pub(crate) fn validate_certified_lane_block_artifact(
-        artifact: &CertifiedLaneBlockArtifact,
-    ) -> std::result::Result<(), &'static str> {
-        #[cfg(test)]
-        if FAIL_NEXT_CERTIFIED_LANE_BLOCK_ARTIFACT_VALIDATION.with(|flag| flag.replace(false)) {
-            return Err("injected certified lane block artifact validation failure");
-        }
-        artifact
-            .encode_framed()
-            .map_err(|_| "certified lane block exceeds the merge source envelope byte limit")?;
-        crate::lane_consensus::validate_lane_block_proposal(&artifact.proposal)
-            .map_err(|_| "invalid lane block proposal")?;
-        crate::lane_consensus::validate_lane_block_qc(&artifact.prepare_qc)
-            .map_err(|_| "invalid prepare lane block QC")?;
-        crate::lane_consensus::validate_lane_block_qc(&artifact.commit_qc)
-            .map_err(|_| "invalid commit lane block QC")?;
-
-        let descriptor = &artifact.proposal.descriptor;
-        let prepare_body = artifact.proposal.vote_body(CertPhase::Prepare);
-        let commit_body = artifact.proposal.vote_body(CertPhase::Commit);
-        if artifact.prepare_qc.body != prepare_body {
-            return Err("prepare QC body does not match proposal");
-        }
-        if artifact.commit_qc.body != commit_body {
-            return Err("commit QC body does not match proposal");
-        }
-        for qc in [&artifact.prepare_qc, &artifact.commit_qc] {
-            if qc.validator_set_hash_version != descriptor.validator_set_hash_version
-                || qc.validator_set_hash != descriptor.validator_set_hash
-                || qc.validator_set != descriptor.validator_set
-            {
-                return Err("QC validator set does not match proposal");
-            }
-        }
-        let mut expected_pops = Self::lane_block_qc_signer_keys(&artifact.prepare_qc)?;
-        expected_pops.extend(Self::lane_block_qc_signer_keys(&artifact.commit_qc)?);
-        let actual_pops = artifact
-            .signer_pops
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if actual_pops != expected_pops {
-            return Err("certified lane block signer PoPs do not match QC signers");
-        }
-        crate::lane_consensus::validate_lane_block_qc_aggregate(
-            &artifact.prepare_qc,
-            &artifact.signer_pops,
-        )
-        .map_err(|_| "invalid prepare lane block QC aggregate")?;
-        crate::lane_consensus::validate_lane_block_qc_aggregate(
-            &artifact.commit_qc,
-            &artifact.signer_pops,
-        )
-        .map_err(|_| "invalid commit lane block QC aggregate")?;
-        Ok(())
-    }
-
-    fn validate_autonomous_lane_block_artifact(
-        artifact: &AutonomousLaneBlockArtifact,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-    ) -> std::result::Result<LaneBlockProposalV1, &'static str> {
-        artifact
-            .encode_framed()
-            .map_err(|_| "autonomous lane block exceeds the merge source byte limit")?;
-        match artifact.format {
-            AutonomousLaneBlockArtifactFormat::Current => {}
-        }
-        artifact
-            .executable_payload
-            .validate(expected_chain_id_hash, expected_epoch)
-            .map_err(|_| "invalid autonomous executable payload")?;
-        if artifact
-            .executable_payload
-            .origin_proposal
-            .descriptor
-            .lane_block_view
-            != 0
-        {
-            return Err("autonomous executable payload must originate at lane view zero");
-        }
-        if artifact.new_view_certificates.len() > MAX_LANE_NEW_VIEW_CERTIFICATES {
-            return Err("autonomous lane NewView certificate limit exceeded");
-        }
-        if let Some(certificate) = &artifact.availability_certificate {
-            crate::lane_consensus::validate_lane_payload_availability_certificate(
-                certificate,
-                &artifact.executable_payload,
-                expected_chain_id_hash,
-                expected_epoch,
-            )
-            .map_err(|_| "invalid autonomous lane payload availability certificate")?;
-        }
-
-        let mut current = artifact.executable_payload.origin_proposal.clone();
-        if let Some(checkpoint) = &artifact.view_checkpoint {
-            crate::lane_consensus::validate_lane_block_view_checkpoint(
-                checkpoint,
-                &artifact.executable_payload,
-                expected_chain_id_hash,
-                expected_epoch,
-            )
-            .map_err(|_| "invalid autonomous lane view checkpoint")?;
-            current = checkpoint.target_proposal.clone();
-        }
-        for durable in &artifact.new_view_certificates {
-            let target = crate::lane_consensus::retarget_lane_block_proposal_view(
-                &current,
-                durable.certificate.body.target_view,
-            )
-            .map_err(|_| "autonomous lane NewView target is not contiguous")?;
-            crate::lane_consensus::validate_lane_block_new_view_transition(
-                &current,
-                &target,
-                &artifact.executable_payload,
-                durable,
-                expected_chain_id_hash,
-                expected_epoch,
-            )
-            .map_err(|_| "invalid autonomous lane NewView transition")?;
-            current = target;
-        }
-        Ok(current)
-    }
-
-    /// Validate a complete autonomous merge source without consulting mutable
-    /// committee state or local sidecars.
-    pub(crate) fn validate_autonomous_lane_merge_bundle(
-        bundle: &AutonomousLaneMergeBundleV1,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-    ) -> std::result::Result<(), &'static str> {
-        if bundle.version != 1 {
-            return Err("unsupported autonomous lane merge bundle version");
-        }
-        if bundle
-            .encode_framed()
-            .map_err(|_| "oversized autonomous lane merge bundle")?
-            .len()
-            > MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES
-        {
-            return Err("autonomous lane merge bundle exceeds hard byte limit");
-        }
-        if bundle.autonomous.availability_certificate.is_none() {
-            return Err("autonomous lane merge bundle lacks a durable availability certificate");
-        }
-        let _cursor = Self::validate_autonomous_lane_block_artifact(
-            &bundle.autonomous,
-            expected_chain_id_hash,
-            expected_epoch,
-        )?;
-        Self::validate_certified_lane_block_artifact(&bundle.certified)?;
-        let availability = bundle
-            .autonomous
-            .availability_certificate
-            .as_ref()
-            .ok_or("autonomous lane merge bundle lacks a durable availability certificate")?;
-        let origin = &bundle.autonomous.executable_payload.origin_proposal;
-        if &bundle.certified.proposal != origin {
-            return Err("autonomous lane merge bundle must certify the immutable origin proposal");
-        }
-        if availability.certificate != bundle.certified.prepare_qc
-            || bundle.certified.prepare_qc.body != origin.vote_body(CertPhase::Prepare)
-        {
-            return Err("payload availability certificate is not the exact origin prepare QC");
-        }
-        Ok(())
-    }
-
-    /// Decode exact canonical framed bundle bytes and verify all embedded proofs.
-    pub(crate) fn decode_autonomous_lane_merge_bundle(
-        bytes: &[u8],
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-    ) -> std::result::Result<AutonomousLaneMergeBundleV1, &'static str> {
-        if bytes.len() > MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES {
-            return Err("autonomous lane merge bundle exceeds hard byte limit");
-        }
-        let bundle =
-            norito::decode_canonical::<AutonomousLaneMergeBundleV1>(bytes).map_err(|error| {
-                match error {
-                    norito::Error::NonCanonicalEncoding => {
-                        "autonomous lane merge bundle is not canonical framed Norito"
-                    }
-                    _ => "autonomous lane merge bundle is not valid framed Norito",
-                }
-            })?;
-        Self::validate_autonomous_lane_merge_bundle(
-            &bundle,
-            expected_chain_id_hash,
-            expected_epoch,
-        )?;
-        Ok(bundle)
-    }
-
-    /// Assemble the exact locally durable merge source for a certified proposal.
-    pub(crate) fn autonomous_lane_merge_bundle(
-        &self,
-        certified: CertifiedLaneBlockArtifact,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-    ) -> std::result::Result<AutonomousLaneMergeBundleV1, &'static str> {
-        let descriptor = &certified.proposal.descriptor;
-        let autonomous = self
-            .read_autonomous_lane_block_artifact(
-                descriptor.lane_id,
-                descriptor.lane_block_height,
-                expected_chain_id_hash,
-                expected_epoch,
-            )
-            .ok_or("autonomous lane merge payload is unavailable")?;
-        let bundle = AutonomousLaneMergeBundleV1 {
-            version: 1,
-            autonomous,
-            certified,
-        };
-        Self::validate_autonomous_lane_merge_bundle(
-            &bundle,
-            expected_chain_id_hash,
-            expected_epoch,
-        )?;
-        Ok(bundle)
     }
 
     pub(crate) fn validate_lane_block_execution_input_artifact(
@@ -30078,7 +28572,67 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         self.durable_mutation_authorized()?;
         let artifact = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
-        self.write_certified_lane_block_artifact_with_authority(&artifact, authority)
+        let autonomous_context = artifact
+            .prepare_qc
+            .payload_availability_qc
+            .as_ref()
+            .map(|availability| (availability.body.chain_id_hash, availability.body.epoch));
+        if let Some((chain_id_hash, epoch)) = autonomous_context.as_ref() {
+            let descriptor = &artifact.proposal.descriptor;
+            self.durable_autonomous_lane_merge_source_under_prune_guard(
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+                *chain_id_hash,
+                *epoch,
+                Some(&artifact),
+                false,
+            )
+            .map_err(|message| {
+                Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_owned())
+            })?;
+        }
+        self.write_certified_lane_block_artifact_with_authority(&artifact, authority)?;
+        if let Some((chain_id_hash, epoch)) = autonomous_context.as_ref() {
+            let descriptor = &artifact.proposal.descriptor;
+            let source = self
+                .durable_autonomous_lane_merge_source_under_prune_guard(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                    *chain_id_hash,
+                    *epoch,
+                    None,
+                    false,
+                )
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_owned())
+                })?;
+            if source.bundle.certified != artifact {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "durable autonomous merge source retained another certificate".to_owned(),
+                ));
+            }
+            self.persist_autonomous_lane_merge_bundle_under_prune_guard(&source)?;
+            let published = self
+                .durable_autonomous_lane_merge_source_under_prune_guard(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                    *chain_id_hash,
+                    *epoch,
+                    None,
+                    true,
+                )
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_owned())
+                })?;
+            if published != source {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "published autonomous merge bundle differs from its exact source".to_owned(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -30458,8 +29012,7 @@ impl Kura {
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
         let _sidecar_guard = self.sidecar_lock.lock();
         self.ensure_prune_recovery_not_required()?;
-        let frontier_read =
-            self.read_latest_certified_lane_block_frontier_locked(&entry, false)?;
+        let frontier_read = self.read_latest_certified_lane_block_frontier_locked(&entry, false)?;
         let Some(frontier_read) = frontier_read else {
             let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
             self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
@@ -30521,16 +29074,11 @@ impl Kura {
                     Some(existing) if existing == *artifact => false,
                     Some(existing) => {
                         let existing_is_active = self
-                            .require_active_lane_artifact(
-                                &entry,
-                                &existing.proposal.descriptor,
-                            )
+                            .require_active_lane_artifact(&entry, &existing.proposal.descriptor)
                             .is_ok();
                         if existing_is_active
-                            && !authority.permits_slot_replacement(
-                                &existing.proposal.descriptor,
-                                descriptor,
-                            )
+                            && !authority
+                                .permits_slot_replacement(&existing.proposal.descriptor, descriptor)
                         {
                             return Err(Self::invalid_lane_artifact_error(
                                 data_path,
@@ -33478,6 +32026,59 @@ impl Kura {
         Ok(record.and_then(|record| record.retirement))
     }
 
+    /// Return whether an active lane slot is already at or below durable certification.
+    ///
+    /// The caller holds the lane-geometry and sidecar locks. Neither frontier
+    /// nor indexed-pair recovery is permitted on this admission path.
+    fn autonomous_lane_slot_is_certified_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        lane_block_height: u64,
+    ) -> Result<bool> {
+        if self
+            .read_latest_certified_lane_block_frontier_structural_locked(entry, false)?
+            .is_some_and(|frontier| {
+                let descriptor = &frontier.frontier.artifact.proposal.descriptor;
+                descriptor.lane_id == entry.lane_id
+                    && descriptor.lane_block_height >= lane_block_height
+                    && self.require_active_lane_artifact(entry, descriptor).is_ok()
+            })
+        {
+            return Ok(true);
+        }
+        let (data_path, index_path) =
+            Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
+        let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+        self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+            &namespace,
+            &data_path,
+            &index_path,
+            "certified lane block pair",
+        )?;
+        let mut pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+        let exact_slot = match &mut pair {
+            BoundProgressPair::Absent(_) => false,
+            BoundProgressPair::Present(bound) => {
+                self.bound_indexed_sidecar_height_range(bound, "certified lane block")?;
+                self.read_active_certified_lane_block_artifact_from_bound_locked(
+                    entry,
+                    lane_block_height,
+                    bound,
+                )
+                .is_some()
+            }
+        };
+        if let BoundProgressPair::Present(bound) = &pair
+            && !self.bound_progress_sidecar_unchanged(bound)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                index_path,
+                "certified lane block pair changed during autonomous evidence admission",
+            ));
+        }
+        Ok(exact_slot)
+    }
+
     /// Persist the availability DELIVER certificate for an autonomous payload.
     ///
     /// The certificate is stored in the independently replaceable bounded
@@ -33547,6 +32148,12 @@ impl Kura {
                 "conflicting autonomous lane origin availability certificate",
             ));
         }
+        if self.autonomous_lane_slot_is_certified_locked(&entry, lane_block_height)? {
+            return Err(Self::invalid_lane_artifact_error(
+                slot_path,
+                "certified autonomous lane slot cannot add availability evidence",
+            ));
+        }
         artifact.availability_certificate = Some(certificate);
         self.write_autonomous_lane_block_view_state_locked(
             &artifact,
@@ -33592,47 +32199,6 @@ impl Kura {
     kura_autonomous_reservation_classifier_methods!();
     kura_historical_autonomous_recovery_methods!();
 
-    /// Resolve the exact durable slot retirement owning a live reservation.
-    ///
-    /// The lookup touches only the reservation's indexed lane height. A
-    /// retirement at that slot with a different reservation vector is an
-    /// identity conflict, not an orphan proof, and therefore fails closed.
-    pub(crate) fn autonomous_lane_retirement_matching_reservation(
-        &self,
-        key: &crate::queue::LaneQueueReservationKeyV2,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-    ) -> Result<Option<AutonomousLaneSlotRetirementV1>> {
-        let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let Some(entry) = self.lane_storage_entries.lock().get(&key.lane_id).cloned() else {
-            return Ok(None);
-        };
-        let _guard = self.sidecar_lock.lock();
-        let Some(retirement) = self
-            .read_autonomous_lane_block_attempt_record_locked(
-                &entry,
-                key.lane_id,
-                key.lane_block_height,
-                key.proposal_height,
-                expected_chain_id_hash,
-                expected_epoch,
-                true,
-            )?
-            .and_then(|record| record.retirement)
-        else {
-            return Ok(None);
-        };
-        if retirement.reservation_keys().contains(key) {
-            return Ok(Some(retirement));
-        }
-        Err(Self::invalid_lane_artifact_error(
-            self.store_root.clone(),
-            "autonomous lane retirement conflicts with a live reservation at the same slot",
-        ))
-    }
-
     /// Append one fully authenticated, contiguous NewView certificate to a
     /// durable lane-owned payload.
     pub(crate) fn persist_lane_new_view_certificate(
@@ -33673,6 +32239,12 @@ impl Kura {
             return Err(Self::invalid_lane_artifact_error(
                 record.view_state_path,
                 "durably retired autonomous lane slot cannot accept NewView evidence",
+            ));
+        }
+        if self.autonomous_lane_slot_is_certified_locked(&entry, lane_block_height)? {
+            return Err(Self::invalid_lane_artifact_error(
+                slot_path,
+                "certified autonomous lane slot cannot accept later NewView evidence",
             ));
         }
         let mut artifact = record.artifact;
@@ -33994,6 +32566,8 @@ impl Kura {
                 if !related {
                     continue;
                 }
+                let view_temp_identity =
+                    Self::autonomous_lane_block_attempt_view_temp_coordinates(&name);
                 inventory_files = inventory_files.checked_add(1).ok_or_else(|| {
                     Self::invalid_lane_artifact_error(
                         directory.clone(),
@@ -34006,8 +32580,25 @@ impl Kura {
                         "autonomous startup inventory exceeds its hard file-count limit",
                     ));
                 }
-                let metadata = std::fs::symlink_metadata(&path)
-                    .map_err(|error| Error::IO(error, path.clone()))?;
+                let metadata = match std::fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == ErrorKind::NotFound => {
+                        let Some(identity) = view_temp_identity else {
+                            return Err(Error::IO(error, path.clone()));
+                        };
+                        if !attempt_identities.contains(&identity) {
+                            return Err(Error::IO(error, path.clone()));
+                        }
+                        // Reading the corresponding immutable attempt performs the only
+                        // authenticated recovery of this named crash temporary. `read_dir`
+                        // may still yield the entry it snapshotted before that recovery
+                        // removed the file. Accept the disappearance only after the exact
+                        // attempt was decoded and its recovered main view revalidated.
+                        view_identities.insert(identity);
+                        continue;
+                    }
+                    Err(error) => return Err(Error::IO(error, path.clone())),
+                };
                 if metadata.file_type().is_symlink()
                     || !metadata.file_type().is_file()
                     || !Self::sidecar_is_single_link(&metadata)
@@ -34028,6 +32619,13 @@ impl Kura {
                         directory,
                         "autonomous startup inventory exceeds the shared sidecar aggregate byte budget",
                     ));
+                }
+                if let Some(identity) = view_temp_identity {
+                    // The corresponding attempt read below authenticates and resolves this
+                    // recovery file. Retain its identity now so an orphan temporary remains
+                    // fail-closed regardless of directory enumeration order.
+                    view_identities.insert(identity);
+                    continue;
                 }
                 if let Some((lane_block_height, proposal_height)) =
                     Self::autonomous_lane_block_attempt_coordinates(&name)
@@ -34281,24 +32879,29 @@ impl Kura {
                         "autonomous startup temporary cleanup lost its bound directory",
                     ));
                 }
-                for directory_entry in std::fs::read_dir(&directory)
-                    .map_err(|error| Error::IO(error, directory.clone()))?
-                {
-                    let directory_entry =
-                        directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
-                    if directory_entry
-                        .file_name()
-                        .to_str()
-                        .is_some_and(|name| name.starts_with(".kura-sidecar-"))
-                    {
-                        return Err(Self::invalid_lane_artifact_error(
-                            directory_entry.path(),
-                            "autonomous startup temporary cleanup left crash residue",
-                        ));
-                    }
-                }
                 self.sub_disk_usage_bytes(removed_bytes);
                 accounting_mutation.finish();
+            }
+            for directory_entry in std::fs::read_dir(&directory)
+                .map_err(|error| Error::IO(error, directory.clone()))?
+            {
+                let directory_entry =
+                    directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+                let name = directory_entry.file_name();
+                let name = name.to_str().ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        directory_entry.path(),
+                        "autonomous startup inventory contains a non-UTF-8 artifact",
+                    )
+                })?;
+                if name.starts_with(".kura-sidecar-")
+                    || Self::autonomous_lane_block_attempt_view_temp_coordinates(name).is_some()
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory_entry.path(),
+                        "autonomous startup temporary cleanup left crash residue",
+                    ));
+                }
             }
             if attempts.is_empty() {
                 continue;
@@ -35472,9 +34075,7 @@ impl Kura {
         &self,
         proposal: &LaneBlockProposalV1,
     ) -> bool {
-        self.lane_block_predecessor_application_receipt_available_with_repair_policy(
-            proposal, true,
-        )
+        self.lane_block_predecessor_application_receipt_available_with_repair_policy(proposal, true)
     }
 
     pub(crate) fn lane_block_predecessor_application_receipt_available_without_sidecar_repair(
@@ -39441,6 +38042,10 @@ impl Kura {
                 CertifiedLaneBlockArtifact::FORMAT_LABEL,
             ),
             (
+                Self::autonomous_lane_merge_bundle_paths_for_entry(entry, &self.store_root),
+                AutonomousLaneMergeBundleV1::FORMAT_LABEL,
+            ),
+            (
                 Self::lane_block_application_receipt_paths_for_entry(entry, &self.store_root),
                 LaneBlockApplicationReceiptArtifact::FORMAT_LABEL,
             ),
@@ -40033,9 +38638,15 @@ impl Kura {
             return Err(LaneBlockPayloadAvailability::DescriptorMismatch);
         }
 
-        let Some(artifact) =
+        let artifact = if repair_missing_sidecar {
             self.read_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height)
-        else {
+        } else {
+            self.read_lane_block_artifact_without_sidecar_repair(
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+            )
+        };
+        let Some(artifact) = artifact else {
             return self
                 .recover_lane_block_artifact_from_canonical_blocks(proposal, repair_missing_sidecar)
                 .ok_or(LaneBlockPayloadAvailability::MissingLaneArtifact);
@@ -50075,6 +48686,7 @@ std::thread_local! {
     static FAIL_PROGRESS_SIDECAR_ANCESTOR_SYNC_AT: std::cell::Cell<Option<ProgressAncestorSyncFault>> = const { std::cell::Cell::new(None) };
     static FAIL_ROLLBACK_AT: std::cell::Cell<Option<RollbackFaultPoint>> = const { std::cell::Cell::new(None) };
     static FAIL_NEXT_CERTIFIED_LANE_BLOCK_ARTIFACT_VALIDATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_NEXT_AUTONOMOUS_MERGE_BUNDLE_PERSISTENCE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static LATEST_CERTIFIED_FRONTIER_POST_VALIDATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
@@ -50097,6 +48709,11 @@ fn set_latest_certified_frontier_post_validation_hook_for_tests(hook: impl FnOnc
 #[cfg(test)]
 fn fail_next_certified_lane_block_artifact_validation_for_tests() {
     FAIL_NEXT_CERTIFIED_LANE_BLOCK_ARTIFACT_VALIDATION.with(|flag| flag.set(true));
+}
+
+#[cfg(test)]
+fn fail_next_autonomous_merge_bundle_persistence_for_tests() {
+    FAIL_NEXT_AUTONOMOUS_MERGE_BUNDLE_PERSISTENCE.with(|flag| flag.set(true));
 }
 
 fn rollback_fault_point(point: RollbackFaultPoint) -> Result<()> {
@@ -50519,6 +49136,14 @@ pub enum Error {
     },
     /// Kura is already bound to a different authoritative consensus output guard
     ConsensusOutputGuardAlreadyBound,
+    /// Kura is already bound to a different local peer identity
+    KuraReplicaLocalPeerConflict,
+    /// Kura cannot start its writer before the immutable local peer identity is bound
+    KuraReplicaLocalPeerUnbound,
+    /// Invalid authenticated Kura replica advert: {0}
+    InvalidKuraReplicaAdvert(String),
+    /// Invalid Kura replica-advert runtime configuration: {0}
+    InvalidKuraReplicaAdvertConfiguration(String),
     /// Canonical block at height `{height}` is missing its required durable retained record
     MissingRetainedBlockRecord {
         /// Height whose eviction/finality evidence lacks the required record.
@@ -50714,11 +49339,13 @@ impl<T> AddErrContextExt<T> for Result<T, std::io::Error> {
 mod tests {
     // Textual includes preserve every test in the existing `kura::tests` namespace.
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");
+    include!("kura/tests/01a_retained_eviction_and_rewrite_tail.rs");
     include!("kura/tests/02_replacement_and_preflight.rs");
     include!("kura/tests/03_preflight_and_merge_entry.rs");
     include!("kura/tests/03a_preflight_and_merge_entry_tail.rs");
     include!("kura/tests/04_merge_log_and_associations.rs");
     include!("kura/tests/05_merge_resolution_and_eviction.rs");
+    include!("kura/tests/05a_replica_advert_and_body_eviction.rs");
     include!("kura/tests/06_eviction_and_autonomous_lanes.rs");
     include!("kura/tests/07a_autonomous_reservation_reconciliation_support.rs");
     include!("kura/tests/07_autonomous_lanes_and_sidecars.rs");
@@ -50730,158 +49357,4 @@ mod tests {
     include!("kura/tests/11_roster_and_progress_sidecars.rs");
     include!("kura/tests/12_sidecar_index_and_pruning.rs");
     include!("kura/tests/13_manifests_and_fsync.rs");
-
-    #[test]
-    fn native_amx_startup_retention_waits_for_complete_post_wsv_evidence() {
-        use NativeAmxParticipantReceiptStartupEvidence::{
-            DurablyApplied, PendingManifestRepair, PendingTipMetadata,
-        };
-
-        assert!(native_amx_startup_retention_cleanup_authorized(
-            Some(DurablyApplied),
-            false,
-        ));
-        assert!(native_amx_startup_retention_cleanup_authorized(None, false,));
-        assert!(!native_amx_startup_retention_cleanup_authorized(
-            Some(PendingTipMetadata),
-            false,
-        ));
-        assert!(!native_amx_startup_retention_cleanup_authorized(
-            Some(PendingManifestRepair),
-            false,
-        ));
-        assert!(!native_amx_startup_retention_cleanup_authorized(
-            Some(DurablyApplied),
-            true,
-        ));
-    }
-
-    #[test]
-    fn native_amx_prepublication_retains_previous_pair_until_post_wsv_cleanup() {
-        let temp_dir = TempDir::new().expect("prepublication retention Kura directory");
-        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        config.roster_sidecar_retention =
-            NonZeroUsize::new(1).expect("one-record Native evidence retention");
-        let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) =
-            Kura::new(&config, &lane_config).expect("initialize prepublication retention Kura");
-        let entry = kura
-            .lane_storage_entry(LaneId::SINGLE)
-            .expect("prepublication primary lane entry");
-        let receipts = install_native_amx_evidence_fixture_heights(&kura, &entry, &[1, 2]);
-        let newest_receipt = receipts
-            .last()
-            .expect("newest prepublication receipt")
-            .clone();
-        let old_manifest_path =
-            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
-        let old_receipt_path =
-            Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
-        let newest_manifest_path =
-            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 2);
-        let newest_receipt_path =
-            Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 2);
-        let evidence_directory = Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root));
-        let namespace = kura
-            .native_amx_evidence_namespace_for_entry(&entry)
-            .expect("bind prepublication Native evidence namespace");
-        let newest_manifest = kura
-            .read_native_amx_participant_application_manifest_from_paths_locked(
-                &entry,
-                2,
-                &newest_manifest_path,
-                &namespace,
-            )
-            .expect("read newest prepublication manifest");
-        drop(namespace);
-
-        std::fs::remove_file(&newest_manifest_path)
-            .expect("remove newest manifest before replaying prepublication");
-        std::fs::remove_file(&newest_receipt_path)
-            .expect("remove newest receipt before replaying prepublication");
-        sync_dir(&evidence_directory).expect("sync prepublication evidence removal");
-        let checkpoint = kura
-            .wsv_checkpoint(1)
-            .expect("read fixture checkpoint")
-            .expect("fixture checkpoint exists");
-        let finality = kura
-            .v2_finality_artifact(1)
-            .expect("read fixture finality")
-            .expect("fixture finality exists");
-        kura.remove_commit_manifest_without_binding_for_tests(1)
-            .expect("remove post-apply commit manifest");
-        kura.remove_wsv_checkpoint_without_binding_for_tests(1)
-            .expect("remove post-apply WSV checkpoint");
-
-        {
-            let _publication_guard = kura.prune_lock.lock();
-            kura.write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard(
-                &newest_manifest,
-                false,
-            )
-            .expect("prepublish newest Native manifest without cleanup");
-            kura.write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard(
-                &newest_receipt,
-                &newest_manifest,
-                false,
-            )
-            .expect("prepublish newest Native receipt without cleanup");
-            kura.write_native_amx_participant_receipt_latest_index_under_publication_guard(
-                &newest_receipt,
-                &newest_manifest,
-                false,
-            )
-            .expect("prepublish newest Native latest index without cleanup");
-            kura.authenticate_native_amx_participant_application_prepublication_under_publication_guard(
-                &newest_manifest,
-                &newest_receipt,
-                false,
-            )
-            .expect("authenticate pre-WSV evidence without post-apply metadata");
-        }
-        assert!(
-            old_manifest_path.exists() && old_receipt_path.exists(),
-            "retention=1 must preserve the previous complete pair before WSV commit"
-        );
-
-        kura.store_wsv_checkpoint(
-            1,
-            newest_receipt.application_block_hash,
-            checkpoint.state_hash,
-        )
-        .expect("restore post-apply WSV checkpoint");
-        kura.store_commit_manifest(
-            CommitManifest::new(
-                1,
-                newest_receipt.application_block_hash,
-                None,
-                None,
-                checkpoint.state_hash,
-                None,
-            )
-            .with_authenticated_v2_commit_authority(&finality),
-        )
-        .expect("restore authenticated post-apply commit manifest");
-        {
-            let _publication_guard = kura.prune_lock.lock();
-            kura.authenticate_native_amx_participant_application_prepublication_under_publication_guard(
-                &newest_manifest,
-                &newest_receipt,
-                true,
-            )
-            .expect("reauthenticate Native evidence against post-WSV metadata");
-            kura.cleanup_native_amx_participant_application_evidence_under_publication_guard(
-                &newest_receipt,
-            )
-            .expect("perform post-WSV Native evidence cleanup");
-        }
-        assert!(
-            !old_manifest_path.exists() && !old_receipt_path.exists(),
-            "post-WSV cleanup may enforce retention after the exact join is authenticated"
-        );
-        assert!(
-            newest_manifest_path.exists() && newest_receipt_path.exists(),
-            "cleanup must retain the exact newest prepublished evidence"
-        );
-    }
 }

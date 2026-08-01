@@ -14834,14 +14834,7 @@ mod tests {
         assert_eq!(text, "[alpha] started\n[alpha] running");
     }
 
-    #[test]
-    fn collect_log_text_rejects_empty() {
-        let entries: Vec<(usize, String)> = Vec::new();
-        assert!(
-            super::collect_log_text(&entries).is_err(),
-            "export should fail when no logs are available"
-        );
-    }
+    include!("gui/collect_log_text_empty_test.rs");
 
     #[test]
     fn save_logs_to_file_writes_filtered_entries() {

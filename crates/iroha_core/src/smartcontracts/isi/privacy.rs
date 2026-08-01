@@ -209,8 +209,9 @@ fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
         PrivacyVerificationErrorV1::ZkX509State(detail) => {
             detail.code == PrivacyZkX509StateFailureCodeV1::MissingTrustedState
         }
+        #[cfg(not(feature = "zk-stark"))]
+        PrivacyVerificationErrorV1::EngineUnavailable(_) => false,
         PrivacyVerificationErrorV1::Envelope(_)
-        | PrivacyVerificationErrorV1::EngineUnavailable(_)
         | PrivacyVerificationErrorV1::NativeVeRange(_)
         | PrivacyVerificationErrorV1::NativeVega(_)
         | PrivacyVerificationErrorV1::NativeJindo(_)
@@ -6033,13 +6034,7 @@ mod tests {
         SecretScalarV1::from_bytes(bytes).expect("canonical non-zero scalar")
     }
 
-    fn active_lifecycle() -> PrivacyProtocolLifecycleV1 {
-        PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-            proposed_at_height: 1,
-            activated_at_height: 2,
-            state_since_height: 2,
-        })
-    }
+    include!("privacy/active_lifecycle_helper.rs");
 
     fn valid_bootstrap_instruction() -> BootstrapPrivacyPgcAccountsV1 {
         static INSTRUCTION: OnceLock<BootstrapPrivacyPgcAccountsV1> = OnceLock::new();

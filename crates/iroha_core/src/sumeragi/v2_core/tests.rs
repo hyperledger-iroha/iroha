@@ -6038,27 +6038,7 @@ fn certificate_first_decision_validates_and_applies_without_a_proposal() {
     assert!(reducer.durable_state().commit_intent(round).is_none());
 }
 
-#[test]
-fn empty_replay_resume_is_one_applied_stutter_then_duplicate() {
-    let context = context();
-    let mut recovered = Reducer::recover(
-        context,
-        Some(id(1)),
-        Generation::new(21),
-        std::iter::empty(),
-    )
-    .unwrap();
-    let resumed = resume_after_replay(&mut recovered);
-    assert_eq!(resumed.disposition(), StepDisposition::Applied);
-    assert!(resumed.effects().is_empty());
-
-    let duplicate = resume_after_replay(&mut recovered);
-    assert_eq!(
-        duplicate.disposition(),
-        StepDisposition::Ignored(IgnoreReason::Duplicate)
-    );
-    assert!(duplicate.effects().is_empty());
-}
+include!("tests/empty_replay_resume_test.rs");
 
 #[test]
 fn replay_rejects_non_contiguous_or_post_timeout_vote_records() {

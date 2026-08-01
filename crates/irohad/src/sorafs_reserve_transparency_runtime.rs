@@ -4,17 +4,14 @@ use std::{sync::Arc, time::Duration};
 
 use eyre::{Result, bail};
 use iroha_config::parameters::actual::SorafsReserveTransparencyRuntime;
-use iroha_core::state::{State, StateReadOnly as _};
+use iroha_core::state::{State, WorldStateSnapshot as _};
 use iroha_data_model::{ChainId, sorafs::reserve::ReserveFinalizedCursorV1};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use sorafs_node::{
     NodeHandle,
-    reputation::runtime::{
-        ReputationFinalizedQueryV1, ReputationRuntimeProviderQualificationV1,
-    },
+    reputation::runtime::{ReputationFinalizedQueryV1, ReputationRuntimeProviderQualificationV1},
     reserve_transparency_runtime::{
-        ReputationReserveTransparencyQueryAdapterV1,
-        ReserveTransparencyCommittedProjectionErrorV1,
+        ReputationReserveTransparencyQueryAdapterV1, ReserveTransparencyCommittedProjectionErrorV1,
         ReserveTransparencyCommittedProjectionV1, ReserveTransparencyFinalizedQueryV1,
         ReserveTransparencyScannerV1, ReserveTransparencySourceSinkV1,
     },
@@ -22,22 +19,17 @@ use sorafs_node::{
 
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 
-#[derive(Debug)]
 struct StateReserveTransparencyCommittedProjectionV1 {
     state: Arc<State>,
 }
 
-impl ReserveTransparencyCommittedProjectionV1
-    for StateReserveTransparencyCommittedProjectionV1
-{
+impl ReserveTransparencyCommittedProjectionV1 for StateReserveTransparencyCommittedProjectionV1 {
     fn verify_committed_anchors(
         &self,
         chain_id: &ChainId,
         expected: &[ReserveFinalizedCursorV1],
-    ) -> std::result::Result<
-        ReserveFinalizedCursorV1,
-        ReserveTransparencyCommittedProjectionErrorV1,
-    > {
+    ) -> std::result::Result<ReserveFinalizedCursorV1, ReserveTransparencyCommittedProjectionErrorV1>
+    {
         let view = self.state.query_view();
         if &view.chain_id != chain_id {
             return Err(ReserveTransparencyCommittedProjectionErrorV1::ForkOrReorg);
@@ -103,9 +95,8 @@ pub(crate) fn start(
     let query: Arc<dyn ReserveTransparencyFinalizedQueryV1> = Arc::new(
         ReputationReserveTransparencyQueryAdapterV1::new(finalized_query),
     );
-    let projection: Arc<dyn ReserveTransparencyCommittedProjectionV1> = Arc::new(
-        StateReserveTransparencyCommittedProjectionV1 { state },
-    );
+    let projection: Arc<dyn ReserveTransparencyCommittedProjectionV1> =
+        Arc::new(StateReserveTransparencyCommittedProjectionV1 { state });
     let sink: Arc<dyn ReserveTransparencySourceSinkV1> = Arc::new(node);
     let mut scanner = ReserveTransparencyScannerV1::try_new(
         config,
@@ -129,9 +120,7 @@ pub(crate) fn start(
                 () = shutdown_signal.receive() => return,
             };
             let Ok((returned_scanner, result)) = joined else {
-                iroha_logger::error!(
-                    "finalized reserve transparency scanner task failed closed"
-                );
+                iroha_logger::error!("finalized reserve transparency scanner task failed closed");
                 shutdown_signal.send();
                 return;
             };
@@ -149,11 +138,7 @@ pub(crate) fn start(
                     poll_interval
                 }
                 Err(error) if error.is_retryable() => {
-                    retry_delay = next_retry_delay(
-                        retry_delay,
-                        poll_interval,
-                        retry_max_interval,
-                    );
+                    retry_delay = next_retry_delay(retry_delay, poll_interval, retry_max_interval);
                     iroha_logger::warn!(
                         %error,
                         retry_delay_ms = retry_delay.as_millis(),
@@ -238,7 +223,10 @@ mod tests {
         let base = Duration::from_millis(100);
         let maximum = Duration::from_millis(350);
         assert_eq!(next_retry_delay(Duration::ZERO, base, maximum), base);
-        assert_eq!(next_retry_delay(base, base, maximum), Duration::from_millis(200));
+        assert_eq!(
+            next_retry_delay(base, base, maximum),
+            Duration::from_millis(200)
+        );
         assert_eq!(
             next_retry_delay(Duration::from_millis(200), base, maximum),
             maximum

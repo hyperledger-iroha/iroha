@@ -32,7 +32,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "es2020",
     // Browser package mapping is defined for checked-in dist paths, so audit the
     // shipped entrypoint rather than the Node-capable source graph. The protected
-    // pre-reset tree measured 290,498 bytes; current V1 is 297,228 bytes (+2.32%).
+    // pre-reset tree measured 290,498 bytes; current V1 is 298,550 bytes (+2.77%).
     // The 297 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 297,
     forbidNodeInputs: true,
@@ -44,7 +44,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
-    // pre-reset tree and 380,431 bytes in current V1 (+2.43%). The 380 KiB ceiling
+    // pre-reset tree and 378,321 bytes in current V1 (+1.86%). The 380 KiB ceiling
     // remains below a 5% predecessor regression.
     limitKb: 380,
     forbidNodeInputs: true,
@@ -77,8 +77,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // Pinned-esbuild predecessor is 52,156 bytes. Exact V1 manifest state-type,
-    // feature-bit, and dynamic-access validation produces 52,735 bytes
-    // (+1.11%); the 53 KiB ceiling keeps this required boundary hardening
+    // feature-bit, and dynamic-access validation produces 52,769 bytes
+    // (+1.18%); the 53 KiB ceiling keeps this required boundary hardening
     // below the release-wide 5% regression limit.
     limitKb: 53,
     forbidNodeInputs: true,
@@ -90,7 +90,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The protected pre-reset browser aggregate measured 458,081 bytes on the
-    // same pinned runner; current V1 is 476,074 bytes (+3.93%). The 469 KiB
+    // same pinned runner; current V1 is 474,956 bytes (+3.68%). The 469 KiB
     // ceiling remains below a 5% predecessor regression.
     limitKb: 469,
     forbidNodeInputs: true,

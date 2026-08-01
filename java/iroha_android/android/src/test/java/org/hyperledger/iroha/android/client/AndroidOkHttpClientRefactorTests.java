@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
+import static org.hyperledger.iroha.android.client.TransactionCompatibilityMockResponses.compatibleCapabilities;
 
 import java.lang.reflect.Field;
 import java.net.URI;
@@ -107,6 +108,7 @@ public final class AndroidOkHttpClientRefactorTests {
 
   private static void restTelemetryParity(final TelemetryOptions options) throws Exception {
     try (MockWebServer server = new MockWebServer()) {
+      server.enqueue(compatibleCapabilities());
       server.enqueue(new MockResponse().setResponseCode(202).setBody("{\"status\":\"ok\"}"));
       server.start();
 
@@ -124,11 +126,11 @@ public final class AndroidOkHttpClientRefactorTests {
 
       okTransport.submitTransaction(tx).get(2, TimeUnit.SECONDS);
 
-      final TelemetryRecord okRequest = okSink.awaitRequest();
-      assertRequestFields(okRequest, "/v1/pipeline/transactions", "POST");
+      final TelemetryRecord submitRequest = okSink.awaitRequest();
+      assertRequestFields(submitRequest, "/v1/pipeline/transactions", "POST");
 
-      final TelemetryRecord okResponse = okSink.awaitResponse();
-      assertEquals(202, okResponse.statusCode().orElseThrow());
+      final TelemetryRecord submitResponse = okSink.awaitResponse();
+      assertEquals(202, submitResponse.statusCode().orElseThrow());
     }
   }
 

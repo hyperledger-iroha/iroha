@@ -2421,36 +2421,62 @@ function decodeCancelAssetLockInstructionPayload(payload) {
  * accepted for either field.
  *
  * @param {{escrow_id: string, expected_remaining_amount: string}} value
- * @returns {Buffer}
+ * @returns {Uint8Array<ArrayBuffer>}
  */
 export function encodeCancelAssetLockV1(value) {
   const canonical = normalizeStrictCancelAssetLockV1(value);
   const payload = withNoritoCompactLengths(() =>
     encodeCancelAssetLockPayload(canonical),
   );
-  return frameNoritoPayload(
-    payload,
-    CANCEL_ASSET_LOCK_V1_SCHEMA_HASH,
-    COMPACT_LEN_FLAG,
+  return Uint8Array.from(
+    frameNoritoPayload(
+      payload,
+      CANCEL_ASSET_LOCK_V1_SCHEMA_HASH,
+      COMPACT_LEN_FLAG,
+    ),
   );
+}
+
+function isExactOwnedUint8Array(value) {
+  if (
+    !(value instanceof Uint8Array) ||
+    Buffer.isBuffer(value) ||
+    Object.getPrototypeOf(value) !== Uint8Array.prototype
+  ) {
+    return false;
+  }
+  try {
+    const buffer = value.buffer;
+    return (
+      Object.getPrototypeOf(buffer) === ArrayBuffer.prototype &&
+      value.byteOffset === 0 &&
+      value.byteLength === buffer.byteLength
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Decode one exact schema-bound bare `CancelAssetLock` V1 archive.
  *
- * Only byte containers are accepted. Textual hex/base64 aliases, arrays,
- * padding, substituted schemas or flags, and trailing bytes are rejected.
+ * Textual hex/base64 aliases, arrays, padding, substituted schemas or flags,
+ * and trailing bytes are rejected.
  *
- * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * The archive must be an ordinary, full-span `Uint8Array` backed by its own
+ * `ArrayBuffer`. Buffer, ArrayBuffer, shared, subclass, and partial-view aliases
+ * are rejected.
+ *
+ * @param {Uint8Array<ArrayBuffer>} bytes
  * @returns {{escrow_id: string, expected_remaining_amount: string}}
  */
 export function decodeCancelAssetLockV1(bytes) {
-  if (!isBinaryLike(bytes)) {
+  if (!isExactOwnedUint8Array(bytes)) {
     throw new TypeError(
-      "CancelAssetLockV1 archive must be a Buffer, ArrayBuffer, or typed array",
+      "CancelAssetLockV1 archive must be an owned, full-span Uint8Array",
     );
   }
-  const archive = toBuffer(bytes);
+  const archive = Buffer.from(bytes.buffer);
   const frame = validateNoritoFrame(archive, {
     context: "CancelAssetLockV1",
     expectedSchemaHash: CANCEL_ASSET_LOCK_V1_SCHEMA_HASH,

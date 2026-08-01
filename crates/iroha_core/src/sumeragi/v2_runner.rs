@@ -51,8 +51,10 @@ use super::{
     },
     v2_apply::{
         LaneReservationReconciliationPlanning, V2ReservationLifecycleError,
-        apply_lane_reservation_reconciliation_plan, install_historical_autonomous_lane_recovery,
-        plan_lane_reservation_ownership, preflight_historical_autonomous_lane_recovery,
+        apply_lane_reservation_reconciliation_plan,
+        persist_preflighted_historical_autonomous_lane_recoveries, plan_lane_reservation_ownership,
+        preflight_historical_autonomous_lane_recovery,
+        validate_installed_historical_autonomous_lane_recoveries,
     },
     v2_block_sync::{
         CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
@@ -87,8 +89,8 @@ use super::{
     v2_transport::AuthenticatedCertifiedBodyRequest,
     v2_worker::{
         CertifiedServeAdmission, CertifiedServeIngressGate, CertifiedServeNegativeOutcome,
-        CertifiedServePrepareError, ExactFanoutOwnership, ProductionV2Services,
-        V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
+        CertifiedServePrepareError, ExactFanoutOwnership, KuraReplicaAdvertRefreshOwner,
+        ProductionV2Services, V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
     },
 };
 use crate::{
@@ -957,6 +959,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let mut liveness_watchdog = super::status::V2LivenessWatchdog::default();
     let deferred_admission_ordinals = DeferredAdmissionOrdinalSource::new(0);
     let mut retained_merge_sidecars: Option<RetainedMergeSidecars> = None;
+    let kura_replica_advert_refresh = Arc::new(
+        KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())
+            .map_err(V2RunnerError::Service)?,
+    );
 
     loop {
         cleanup_supervisor.reap_finished();
@@ -1225,6 +1231,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             lifecycle_ordinals,
             Arc::clone(&output_guard),
             Arc::clone(&block_rx),
+            Arc::clone(&kura_replica_advert_refresh),
             exact_output_service_owner,
         )
         .map_err(V2RunnerError::Service)?;
@@ -1343,10 +1350,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             kura.as_ref(),
                             plan,
                         )?;
-                        let progressed = summary
-                            .ordinary_receipts
-                            .saturating_add(summary.native_carriers)
-                            .saturating_add(summary.merge_carriers);
+                        let progressed = summary.publication_count();
                         if planned_items == 0 || progressed == 0 {
                             return Err(V2RunnerError::Service(
                                 "lane application evidence startup repair made no bounded progress"
@@ -1355,6 +1359,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                         }
                         evidence_repair.complete();
                         iroha_logger::info!(
+                            ordinary_pairs = summary.ordinary_pairs,
                             ordinary_receipts = summary.ordinary_receipts,
                             native_carriers = summary.native_carriers,
                             native_routes = summary.native_routes,
@@ -1562,27 +1567,15 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                                 )
                             })
                             .collect::<Result<Vec<_>, _>>()?;
-                        kura.preflight_historical_autonomous_lane_recovery_records(&records)
-                            .map_err(V2ReservationLifecycleError::from)?;
-                        for install in &installs {
-                            let _ = install_historical_autonomous_lane_recovery(
-                                state.as_ref(),
+                        let _outcomes =
+                            persist_preflighted_historical_autonomous_lane_recoveries(
                                 kura.as_ref(),
-                                install,
+                                &records,
                             )?;
-                        }
-                        for record in &records {
-                            if !kura
-                                .historical_autonomous_lane_recovery_record_matches(record)
-                                .map_err(V2ReservationLifecycleError::from)?
-                            {
-                                return Err(V2ReservationLifecycleError::HistoricalRecoveryInstallationMissing {
-                                    recovery_id: record.recovery_id,
-                                    lane_id: record.payload.origin_proposal.descriptor.lane_id,
-                                }
-                                .into());
-                            }
-                        }
+                        validate_installed_historical_autonomous_lane_recoveries(
+                            kura.as_ref(),
+                            &records,
+                        )?;
                         historical_recovery.complete();
                         iroha_logger::info!(
                             install_count = installs.len(),
@@ -1913,6 +1906,18 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 &services,
                 control_queue_capacity,
             )?;
+            let advert_refresh = services
+                .service_kura_replica_advert_refresh_turn(Instant::now())
+                .map_err(V2RunnerError::Service)?;
+            if advert_refresh.fanout_attempted {
+                iroha_logger::debug!(
+                    height = context.height,
+                    probes = advert_refresh.probes,
+                    retained_source = advert_refresh.retained_source,
+                    scan_active = advert_refresh.scan_active,
+                    "advanced bounded Kura replica-advert refresh"
+                );
+            }
             services.drain_completions(&mut executor)?;
             let _ = retry_exact_output_and_apply_sidecar_admissions(
                 &mut lane_work,
@@ -2857,6 +2862,7 @@ enum DecidedLaneRecoveryCurrentServe {
 
 enum DecidedLaneRecoveryIngressPreparation {
     LaneLocal,
+    KuraReplicaAdvert,
     CurrentServe(DecidedLaneRecoveryCurrentServe),
     HistoricalServe,
     LeaderWireRetire,
@@ -2869,6 +2875,7 @@ enum DecidedLaneRecoveryCurrentDrain<Admission> {
 
 enum DecidedLaneRecoveryDrainAuthorization<Admission> {
     LaneLocal,
+    KuraReplicaAdvert,
     CurrentServe(DecidedLaneRecoveryCurrentDrain<Admission>),
     HistoricalServe,
     LeaderWireRetire,
@@ -2924,6 +2931,11 @@ fn authorize_decided_lane_recovery_drain<A: DecidedLaneRecoveryDrainAuthorizer>(
         DecidedLaneRecoveryIngressPreparation::LaneLocal => {
             DecidedLaneRecoveryDrainDecision::Authorized(
                 DecidedLaneRecoveryDrainAuthorization::LaneLocal,
+            )
+        }
+        DecidedLaneRecoveryIngressPreparation::KuraReplicaAdvert => {
+            DecidedLaneRecoveryDrainDecision::Authorized(
+                DecidedLaneRecoveryDrainAuthorization::KuraReplicaAdvert,
             )
         }
         DecidedLaneRecoveryIngressPreparation::HistoricalServe => {
@@ -2990,6 +3002,9 @@ fn prepare_decided_lane_recovery_ingress(
         &PeerId,
     ) -> Result<AuthenticatedCertifiedBodyRequest, String>,
 ) -> DecidedLaneRecoveryIngressPreparation {
+    if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
+        return DecidedLaneRecoveryIngressPreparation::KuraReplicaAdvert;
+    }
     if inbound.message().is_lane_local() {
         return DecidedLaneRecoveryIngressPreparation::LaneLocal;
     }
@@ -3082,6 +3097,104 @@ fn prepare_decided_lane_recovery_ingress(
             request: authenticated,
         },
     )
+}
+
+#[derive(Debug)]
+enum KuraReplicaAdvertAdmissionError {
+    InvalidAdvert(String),
+    Fatal(crate::kura::Error),
+}
+
+fn classify_kura_replica_advert_admission_error(
+    error: crate::kura::Error,
+) -> KuraReplicaAdvertAdmissionError {
+    match error {
+        crate::kura::Error::InvalidKuraReplicaAdvert(reason) => {
+            KuraReplicaAdvertAdmissionError::InvalidAdvert(reason)
+        }
+        error => KuraReplicaAdvertAdmissionError::Fatal(error),
+    }
+}
+
+/// Consume one fixed-small authenticated Kura replica advert without exposing
+/// it to either consensus reducer.
+///
+/// Fair admission already checks the signature and direct transport binding.
+/// This terminal seam repeats the complete local ownership proof so mutation
+/// of the queued carrier fails closed. Kura then revalidates the exact durable
+/// body, finality artifact, CommitQC signer, and deterministic keeper set; a
+/// remotely invalid claim is simply retired.
+fn admit_kura_replica_advert_ingress(
+    receiver: &FairV2Ingress,
+    kura: &Kura,
+    mut inbound: InboundBlockMessage,
+) -> Result<(), V2RunnerError> {
+    let advertised_keeper = match inbound.message() {
+        BlockMessage::KuraReplicaAdvert(advert) => advert.keeper.clone(),
+        _ => {
+            return Err(V2RunnerError::Service(
+                "Kura replica advert terminal received another message class".to_owned(),
+            ));
+        }
+    };
+    let authenticated_via = inbound.via().cloned();
+    let mut ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
+        V2RunnerError::Service(
+            "Kura replica advert lost its fair-ingress ownership carrier".to_owned(),
+        )
+    })?;
+    if !ingress_ownership.validate_exact()
+        || !ingress_ownership.matches_message(inbound.message())
+        || !ingress_ownership.matches_semantic_origin(inbound.sender())
+        || !ingress_ownership.matches_reply_routes(inbound.reply_routes())
+    {
+        return Err(V2RunnerError::Service(
+            "Kura replica advert carried altered fair-ingress ownership".to_owned(),
+        ));
+    }
+    receiver
+        .bind_leader_wire_runtime_ownership(&mut ingress_ownership)
+        .map_err(V2RunnerError::Service)?;
+    let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
+    let BlockMessage::KuraReplicaAdvert(advert) = message else {
+        return Err(V2RunnerError::Service(
+            "Kura replica advert changed message class after ownership validation".to_owned(),
+        ));
+    };
+    if sender.as_ref() != Some(&advertised_keeper)
+        || authenticated_via.as_ref() != Some(&advertised_keeper)
+        || advert.keeper != advertised_keeper
+        || !ingress_ownership.matches_reply_routes(reply_routes.as_ref())
+    {
+        return Err(V2RunnerError::Service(
+            "Kura replica advert changed its direct authenticated keeper route".to_owned(),
+        ));
+    }
+    match kura.admit_kura_replica_advert(&advert) {
+        Ok(()) => {
+            iroha_logger::debug!(
+                height = advert.height,
+                keeper = %advert.keeper,
+                "admitted authenticated Kura replica advert"
+            );
+        }
+        Err(error) => match classify_kura_replica_advert_admission_error(error) {
+            KuraReplicaAdvertAdmissionError::InvalidAdvert(reason) => {
+                iroha_logger::debug!(
+                    %reason,
+                    height = advert.height,
+                    keeper = %advert.keeper,
+                    "retired invalid Kura replica advert"
+                );
+            }
+            KuraReplicaAdvertAdmissionError::Fatal(error) => {
+                return Err(V2RunnerError::Service(format!(
+                    "Kura replica advert admission encountered local durable-state failure: {error}"
+                )));
+            }
+        },
+    }
+    Ok(())
 }
 
 fn drain_v2_ingress(
@@ -3281,6 +3394,10 @@ fn drain_v2_ingress(
         else {
             break;
         };
+        if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
+            admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
+            continue;
+        }
         if inbound.message().is_lane_local() {
             let _ = lane_work
                 .accept_lane_message_with_ingress_ownership(inbound, executor.current_tag().view());
@@ -3663,6 +3780,7 @@ fn drain_v2_ingress(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DecidedLaneRecoveryDrainCommitOutcome {
     LaneLocal,
+    KuraReplicaAdvert,
     CurrentServe,
     HistoricalServe,
     LeaderWireVolatile,
@@ -3672,6 +3790,8 @@ trait DecidedLaneRecoveryDrainCommitter {
     type Admission;
 
     fn commit_lane_local(&mut self) -> Result<(), V2RunnerError>;
+
+    fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError>;
 
     fn commit_current_serve(
         &mut self,
@@ -3693,6 +3813,10 @@ fn commit_decided_lane_recovery_drain<C: DecidedLaneRecoveryDrainCommitter>(
         DecidedLaneRecoveryDrainAuthorization::LaneLocal => {
             committer.commit_lane_local()?;
             Ok(DecidedLaneRecoveryDrainCommitOutcome::LaneLocal)
+        }
+        DecidedLaneRecoveryDrainAuthorization::KuraReplicaAdvert => {
+            committer.commit_kura_replica_advert()?;
+            Ok(DecidedLaneRecoveryDrainCommitOutcome::KuraReplicaAdvert)
         }
         DecidedLaneRecoveryDrainAuthorization::CurrentServe(current) => {
             committer.commit_current_serve(current)?;
@@ -3754,6 +3878,11 @@ impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCom
             .accept_lane_message_with_ingress_ownership(inbound, self.active_view);
         let _ = self.lane_work.service_next_historical_recovery()?;
         Ok(())
+    }
+
+    fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError> {
+        let inbound = self.take_inbound()?;
+        admit_kura_replica_advert_ingress(self.receiver, self.kura, inbound)
     }
 
     fn commit_current_serve(

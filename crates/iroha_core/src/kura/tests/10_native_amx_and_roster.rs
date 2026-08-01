@@ -2124,8 +2124,7 @@ fn roster_sidecar_roundtrip() {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),
     )
@@ -2230,8 +2229,7 @@ fn roster_sidecar_rejects_height_mismatch() {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),
     )
@@ -2286,8 +2284,7 @@ fn roster_sidecar_rejects_block_hash_mismatch() {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),
     )
@@ -2389,8 +2386,7 @@ fn roster_sidecar_rejects_commit_qc_mismatch() {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),
     )
@@ -2827,7 +2823,7 @@ fn native_amx_prepublication_token_rejects_every_state_frontier_drift_and_order_
     };
     let token = NativeAmxParticipantApplicationPrepublicationToken::from_plan(&plan, identities)
         .expect("build Native frontier prepublication token");
-    let frontiers = manifest
+    let expected_frontiers = manifest
         .entries()
         .iter()
         .map(|entry| {
@@ -2851,6 +2847,27 @@ fn native_amx_prepublication_token_rejects_every_state_frontier_drift_and_order_
             }
         })
         .collect::<Vec<_>>();
+    let frontiers = crate::state::State::native_amx_participant_frontier_markers(&block)
+        .expect("derive Native State frontiers from the mixed-role carrier");
+    assert_eq!(
+        frontiers, expected_frontiers,
+        "Kura prepublication identities and State must project the same exact participant evidence"
+    );
+    assert_eq!(
+        frontiers.len(),
+        2,
+        "the participant-form coordinator leg must not create Kura/State evidence"
+    );
+    let receipt = block
+        .execution_context()
+        .and_then(|bundle| bundle.external.first())
+        .and_then(|context| context.native_amx_receipt.as_ref())
+        .expect("mixed-role Native AMX receipt");
+    assert!(frontiers.iter().all(|frontier| {
+        frontier.lane_id != receipt.lane_id
+            || frontier.dataspace_id != receipt.dataspace_id
+            || frontier.lane_incarnation != receipt.lane_incarnation
+    }));
     assert!(token.authenticates_state_frontiers(&block, &manifest, &finality, &frontiers));
 
     let mutations: [fn(&mut crate::state::AppliedNativeAmxParticipantFrontierMarker); 14] = [

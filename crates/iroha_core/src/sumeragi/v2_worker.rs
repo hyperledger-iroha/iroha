@@ -39,6 +39,7 @@ use super::v2_core::{
 use super::v2_runtime::RuntimeQueueSnapshot;
 use iroha_config::parameters::{
     actual::{
+        KURA_REPLICA_ADVERT_REFRESH_INTERVAL_MIN,
         sumeragi_v2_exact_output_shared_ownership_capacity,
         validate_sumeragi_v2_exact_output_geometry,
     },
@@ -47,7 +48,7 @@ use iroha_config::parameters::{
 use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
     block::{
-        CertifiedMergeLedgerReference,
+        BlockHeader, CertifiedMergeLedgerReference,
         consensus::{LaneBlockCertificateV1, NativeAmxAttestationBodyV2, NativeAmxPhase},
         consensus_v2 as wire, decode_framed_signed_block,
     },
@@ -76,7 +77,7 @@ use norito::codec::{Decode, DecodeAll, Encode};
 use super::{
     FairV2Ingress, FairV2IngressOwnershipEvidence,
     message::{
-        BlockMessage, BlockMessageWire, LaneHistoricalRecoveryPayloadV1,
+        BlockMessage, BlockMessageWire, KuraReplicaAdvertV1, LaneHistoricalRecoveryPayloadV1,
         LaneHistoricalRecoveryRequestV1, LaneHistoricalRecoveryResponseV1,
     },
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
@@ -103,7 +104,7 @@ use super::{
 };
 use crate::{
     EventsSender, IrohaNetwork, NetworkMessage,
-    kura::{Kura, KuraV2CommitReceipt},
+    kura::{Kura, KuraReplicaAdvertSourceV1, KuraV2CommitReceipt},
     lane_consensus::LaneDrainVoteV1,
     merge_sidecar::{
         CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkAdmission,
@@ -1016,31 +1017,6 @@ impl CertifiedServeIngressGate {
     /// Return the exact live carrier currently selected by this gate.
     pub(crate) fn selected_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
         self.queue.serve_barrier()
-    }
-
-    /// Return the least scheduler ordinal owned by an admitted Serve request.
-    ///
-    /// The selected off-queue reservation and every bounded waiter are part of
-    /// one immutable admission prefix.  Fair ingress compares this value with
-    /// the durable leader-wire gate before selecting either source, so a later
-    /// carrier cannot pass an earlier provisional or physical Serve owner.
-    pub(crate) fn earliest_ingress_scheduler_ordinal(&self) -> Result<Option<u128>, String> {
-        let state = self.queue.lock();
-        let mut earliest = None;
-        for reservation in state
-            .serve_ingress_reservation
-            .iter()
-            .chain(state.serve_ingress_waiters.values())
-        {
-            let ordinal = reservation.id.0;
-            if ordinal == 0 {
-                return Err(
-                    "Sumeragi v2 Serve ingress retained the zero scheduler ordinal".to_owned(),
-                );
-            }
-            earliest = Some(earliest.map_or(ordinal, |current: u128| current.min(ordinal)));
-        }
-        Ok(earliest)
     }
 
     /// Return the least durable owner ordinal whose physical carrier is absent.
@@ -8315,485 +8291,7 @@ impl CertifiedSidecarTransferIdentity {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ExactOutputRolloverClaim {
-    /// Manually assembled output has no semantic rollover authority.
-    Exact,
-    GlobalV2(ExactOutputCreationScope),
-    Lane(ExactOutputCreationScope),
-    DurableCommitCertificateResponse {
-        scope: ExactOutputCreationScope,
-        target: PeerId,
-        responder: PeerId,
-        source_height: wire::Height,
-        source_context_id: wire::HeightContextId,
-        response_hash: HashOf<wire::CommitCertificateResponse>,
-    },
-    DurableCertifiedBodyResponse {
-        scope: ExactOutputCreationScope,
-        target: PeerId,
-        responder: PeerId,
-        source_round: wire::ConsensusRound,
-        source_subject: wire::BlockSubject,
-        response_hash: HashOf<wire::CertifiedBodyResponse>,
-    },
-    DurableLaneCertificateResponse {
-        scope: ExactOutputCreationScope,
-        target: PeerId,
-        lane_id: LaneId,
-        lane_block_height: u64,
-        proposal_height: u64,
-        proposal_hash: Hash,
-        certificate_hash: HashOf<LaneBlockCertificateV1>,
-    },
-    HistoricalLaneRecoveryRequest {
-        scope: ExactOutputCreationScope,
-        target: PeerId,
-        request_hash: HashOf<LaneHistoricalRecoveryRequestV1>,
-    },
-    HistoricalLaneRecoveryResponse {
-        scope: ExactOutputCreationScope,
-        target: PeerId,
-        request_hash: HashOf<LaneHistoricalRecoveryRequestV1>,
-        response_hash: HashOf<LaneHistoricalRecoveryResponseV1>,
-    },
-    HistoricalAutonomousLaneCertification {
-        scope: ExactOutputCreationScope,
-        target: PeerId,
-        source_height: u64,
-        lane_id: LaneId,
-        lane_block_height: u64,
-        proposal_hash: Hash,
-        message_hash: HashOf<BlockMessage>,
-    },
-    NativeAmx {
-        scope: ExactOutputCreationScope,
-        round: wire::ConsensusRound,
-        message_hash: HashOf<NativeAmxMessage>,
-    },
-    LaneDrainVote {
-        scope: ExactOutputCreationScope,
-        target: PeerId,
-        vote_hash: HashOf<LaneDrainVoteV1>,
-    },
-    MergeShare {
-        scope: ExactOutputCreationScope,
-        share_hash: HashOf<MergeCommitteeSignature>,
-    },
-    CertifiedSidecarRequest {
-        scope: ExactOutputCreationScope,
-        target: PeerId,
-        transfer: CertifiedSidecarTransferIdentity,
-        request_hash: HashOf<CertifiedMergeSidecarRequestV1>,
-    },
-    CertifiedSidecarControl {
-        scope: ExactOutputCreationScope,
-        target: PeerId,
-        message_hash: HashOf<CertifiedMergeSidecarMessage>,
-    },
-    CertifiedSidecarChunk {
-        scope: ExactOutputCreationScope,
-        target: PeerId,
-        transfer: CertifiedSidecarTransferIdentity,
-        chunk_index: u32,
-        chunk_count: u32,
-        response_hash: HashOf<CertifiedMergeSidecarChunkV1>,
-    },
-}
-
-fn native_amx_message_body(
-    message: &NativeAmxMessage,
-) -> Result<&NativeAmxAttestationBodyV2, String> {
-    let (body, expected_phase) = match message {
-        NativeAmxMessage::PrepareRequest(request) => (&request.body, NativeAmxPhase::Prepare),
-        NativeAmxMessage::PrepareVote(vote) => (&vote.body, NativeAmxPhase::Prepare),
-        NativeAmxMessage::CommitRequest(request) => {
-            request
-                .validate_shape()
-                .map_err(|error| error.to_string())?;
-            (&request.request.body, NativeAmxPhase::Commit)
-        }
-        NativeAmxMessage::CommitVote(vote) => (&vote.body, NativeAmxPhase::Commit),
-    };
-    if body.phase != expected_phase || body.authority_context_height != body.round.height {
-        return Err("Native AMX output has an invalid embedded round".to_owned());
-    }
-    Ok(body)
-}
-
-impl ExactOutputRolloverClaim {
-    fn scope(&self) -> Option<ExactOutputCreationScope> {
-        match self {
-            Self::Exact => None,
-            Self::GlobalV2(scope) | Self::Lane(scope) => Some(*scope),
-            Self::DurableCommitCertificateResponse { scope, .. }
-            | Self::DurableCertifiedBodyResponse { scope, .. }
-            | Self::DurableLaneCertificateResponse { scope, .. }
-            | Self::HistoricalLaneRecoveryRequest { scope, .. }
-            | Self::HistoricalLaneRecoveryResponse { scope, .. }
-            | Self::HistoricalAutonomousLaneCertification { scope, .. }
-            | Self::NativeAmx { scope, .. }
-            | Self::LaneDrainVote { scope, .. }
-            | Self::MergeShare { scope, .. }
-            | Self::CertifiedSidecarRequest { scope, .. }
-            | Self::CertifiedSidecarControl { scope, .. }
-            | Self::CertifiedSidecarChunk { scope, .. } => Some(*scope),
-        }
-    }
-
-    fn validate_fanout(&self, messages: &[NetworkMessage], peers: &[PeerId]) -> Result<(), String> {
-        match self {
-            Self::Exact => Ok(()),
-            Self::GlobalV2(_) => {
-                if messages.iter().all(|message| {
-                    matches!(
-                        message,
-                        NetworkMessage::SumeragiBlock(envelope)
-                            if matches!(envelope.as_message(), BlockMessage::V2(_))
-                    )
-                }) {
-                    Ok(())
-                } else {
-                    Err("global-v2 rollover claim covers a different output kind".to_owned())
-                }
-            }
-            Self::Lane(_) => {
-                if messages.iter().all(|message| {
-                    matches!(
-                        message,
-                        NetworkMessage::SumeragiBlock(envelope)
-                            if matches!(
-                                envelope.as_message(),
-                                BlockMessage::LaneBlockProposal(_)
-                                    | BlockMessage::LaneBlockVote(_)
-                                    | BlockMessage::LaneBlockQc(_)
-                                    | BlockMessage::LaneBlockCertificate(_)
-                            )
-                    )
-                }) {
-                    Ok(())
-                } else {
-                    Err("lane rollover claim covers a different output kind".to_owned())
-                }
-            }
-            Self::DurableCommitCertificateResponse {
-                target,
-                responder,
-                source_height,
-                source_context_id,
-                response_hash,
-                ..
-            } => {
-                let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
-                    return Err(
-                        "durable CommitQC response claim requires one exact message".to_owned()
-                    );
-                };
-                let BlockMessage::V2(message) = envelope.as_message() else {
-                    return Err("durable CommitQC response claim covers a lane message".to_owned());
-                };
-                let wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) =
-                    &message.payload
-                else {
-                    return Err(
-                        "durable CommitQC response claim covers another v2 payload".to_owned()
-                    );
-                };
-                if peers != std::slice::from_ref(target)
-                    || &response.responder != responder
-                    || response.certificate.round.height != *source_height
-                    || response.certificate.round.context_id != *source_context_id
-                    || HashOf::new(response) != *response_hash
-                {
-                    return Err("durable CommitQC response claim changed identity".to_owned());
-                }
-                Ok(())
-            }
-            Self::DurableCertifiedBodyResponse {
-                target,
-                source_round,
-                source_subject,
-                response_hash,
-                ..
-            } => {
-                let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
-                    return Err("durable body response claim requires one exact message".to_owned());
-                };
-                let BlockMessage::V2(message) = envelope.as_message() else {
-                    return Err("durable body response claim covers a lane message".to_owned());
-                };
-                let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) =
-                    &message.payload
-                else {
-                    return Err("durable body response claim covers another v2 payload".to_owned());
-                };
-                if peers != std::slice::from_ref(target)
-                    || response.manifest.round != *source_round
-                    || response.manifest.subject != *source_subject
-                    || HashOf::new(response) != *response_hash
-                {
-                    return Err("durable body response claim changed identity".to_owned());
-                }
-                Ok(())
-            }
-            Self::DurableLaneCertificateResponse {
-                target,
-                lane_id,
-                lane_block_height,
-                proposal_height,
-                proposal_hash,
-                certificate_hash,
-                ..
-            } => {
-                let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
-                    return Err(
-                        "durable lane-certificate claim requires one exact message".to_owned()
-                    );
-                };
-                let BlockMessage::LaneBlockCertificate(certificate) = envelope.as_message() else {
-                    return Err(
-                        "durable lane-certificate claim covers another block payload".to_owned(),
-                    );
-                };
-                let descriptor = &certificate.proposal.descriptor;
-                if peers != std::slice::from_ref(target)
-                    || descriptor.lane_id != *lane_id
-                    || descriptor.lane_block_height != *lane_block_height
-                    || descriptor.proposal_height != *proposal_height
-                    || certificate.proposal.proposal_hash != *proposal_hash
-                    || HashOf::new(certificate.as_ref()) != *certificate_hash
-                {
-                    return Err("durable lane-certificate claim changed identity".to_owned());
-                }
-                Ok(())
-            }
-            Self::HistoricalLaneRecoveryRequest {
-                target,
-                request_hash,
-                ..
-            } => {
-                let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
-                    return Err(
-                        "historical lane recovery request claim requires one exact message"
-                            .to_owned(),
-                    );
-                };
-                let BlockMessage::LaneHistoricalRecoveryRequest(request) = envelope.as_message()
-                else {
-                    return Err(
-                        "historical lane recovery request claim covers another block payload"
-                            .to_owned(),
-                    );
-                };
-                if peers != std::slice::from_ref(target)
-                    || HashOf::new(request.as_ref()) != *request_hash
-                {
-                    return Err(
-                        "historical lane recovery request claim changed identity".to_owned()
-                    );
-                }
-                Ok(())
-            }
-            Self::HistoricalLaneRecoveryResponse {
-                target,
-                request_hash,
-                response_hash,
-                ..
-            } => {
-                let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
-                    return Err(
-                        "historical lane recovery response claim requires one exact message"
-                            .to_owned(),
-                    );
-                };
-                let BlockMessage::LaneHistoricalRecoveryResponse(response) = envelope.as_message()
-                else {
-                    return Err(
-                        "historical lane recovery response claim covers another block payload"
-                            .to_owned(),
-                    );
-                };
-                if peers != std::slice::from_ref(target)
-                    || response.request_hash != *request_hash
-                    || HashOf::new(response.as_ref()) != *response_hash
-                {
-                    return Err(
-                        "historical lane recovery response claim changed identity".to_owned()
-                    );
-                }
-                Ok(())
-            }
-            Self::HistoricalAutonomousLaneCertification {
-                target,
-                source_height,
-                lane_id,
-                lane_block_height,
-                proposal_hash,
-                message_hash,
-                ..
-            } => {
-                let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
-                    return Err(
-                        "historical autonomous certification claim requires one exact message"
-                            .to_owned(),
-                    );
-                };
-                let message = envelope.as_message();
-                let identity = match message {
-                    BlockMessage::LaneBlockProposal(proposal) => Some((
-                        proposal.descriptor.proposal_height,
-                        proposal.descriptor.lane_id,
-                        proposal.descriptor.lane_block_height,
-                        proposal.proposal_hash,
-                    )),
-                    BlockMessage::LaneBlockVote(vote) => Some((
-                        vote.body.proposal_height,
-                        vote.body.lane_id,
-                        vote.body.lane_block_height,
-                        vote.body.proposal_hash,
-                    )),
-                    BlockMessage::LaneBlockQc(qc) => Some((
-                        qc.body.proposal_height,
-                        qc.body.lane_id,
-                        qc.body.lane_block_height,
-                        qc.body.proposal_hash,
-                    )),
-                    BlockMessage::LaneBlockCertificate(certificate) => Some((
-                        certificate.proposal.descriptor.proposal_height,
-                        certificate.proposal.descriptor.lane_id,
-                        certificate.proposal.descriptor.lane_block_height,
-                        certificate.proposal.proposal_hash,
-                    )),
-                    _ => None,
-                };
-                if peers != std::slice::from_ref(target)
-                    || identity
-                        != Some((*source_height, *lane_id, *lane_block_height, *proposal_hash))
-                    || HashOf::new(message) != *message_hash
-                {
-                    return Err(
-                        "historical autonomous certification claim changed identity".to_owned()
-                    );
-                }
-                Ok(())
-            }
-            Self::NativeAmx {
-                scope,
-                round,
-                message_hash,
-            } => {
-                let [NetworkMessage::NativeAmx(message)] = messages else {
-                    return Err("Native AMX rollover claim requires one exact message".to_owned());
-                };
-                let body = native_amx_message_body(message)?;
-                if body.round != *round
-                    || round.context_id != scope.context_id
-                    || round.height != scope.height
-                    || HashOf::new(message.as_ref()) != *message_hash
-                {
-                    return Err("Native AMX rollover claim changed semantic identity".to_owned());
-                }
-                Ok(())
-            }
-            Self::LaneDrainVote {
-                target, vote_hash, ..
-            } => {
-                let [NetworkMessage::LaneDrainVote(vote)] = messages else {
-                    return Err("lane-drain rollover claim requires one exact vote".to_owned());
-                };
-                vote.validate_ingress()
-                    .map_err(|error| format!("lane-drain rollover claim is invalid: {error}"))?;
-                if peers != std::slice::from_ref(target) || HashOf::new(vote.as_ref()) != *vote_hash
-                {
-                    return Err("lane-drain rollover claim changed semantic identity".to_owned());
-                }
-                Ok(())
-            }
-            Self::MergeShare { share_hash, .. } => {
-                let [NetworkMessage::MergeCommitteeSignature(signature)] = messages else {
-                    return Err("merge-share rollover claim requires one exact share".to_owned());
-                };
-                if HashOf::new(signature.as_ref()) != *share_hash {
-                    return Err("merge-share rollover claim changed semantic identity".to_owned());
-                }
-                Ok(())
-            }
-            Self::CertifiedSidecarRequest {
-                target,
-                transfer,
-                request_hash,
-                ..
-            } => {
-                let [NetworkMessage::CertifiedMergeSidecar(message)] = messages else {
-                    return Err(
-                        "sidecar-request rollover claim requires one exact request".to_owned()
-                    );
-                };
-                let CertifiedMergeSidecarMessage::Request(request) = message.as_ref() else {
-                    return Err("sidecar-request rollover claim covers a chunk".to_owned());
-                };
-                if peers != std::slice::from_ref(target)
-                    || CertifiedSidecarTransferIdentity::from_request(request) != *transfer
-                    || HashOf::new(request) != *request_hash
-                {
-                    return Err("sidecar-request rollover claim changed identity".to_owned());
-                }
-                Ok(())
-            }
-            Self::CertifiedSidecarControl {
-                target,
-                message_hash,
-                ..
-            } => {
-                let [NetworkMessage::CertifiedMergeSidecar(message)] = messages else {
-                    return Err(
-                        "sidecar-control rollover claim requires one exact message".to_owned()
-                    );
-                };
-                if !matches!(
-                    message.as_ref(),
-                    CertifiedMergeSidecarMessage::Close(_)
-                        | CertifiedMergeSidecarMessage::CloseAck(_)
-                        | CertifiedMergeSidecarMessage::GenerationHint(_)
-                ) {
-                    return Err("sidecar-control rollover claim covers a data transfer".to_owned());
-                }
-                if peers != std::slice::from_ref(target)
-                    || HashOf::new(message.as_ref()) != *message_hash
-                {
-                    return Err("sidecar-control rollover claim changed identity".to_owned());
-                }
-                Ok(())
-            }
-            Self::CertifiedSidecarChunk {
-                target,
-                transfer,
-                chunk_index,
-                chunk_count,
-                response_hash,
-                ..
-            } => {
-                let [NetworkMessage::CertifiedMergeSidecar(message)] = messages else {
-                    return Err(
-                        "sidecar-chunk rollover claim requires one exact response".to_owned()
-                    );
-                };
-                let CertifiedMergeSidecarMessage::Chunk(chunk) = message.as_ref() else {
-                    return Err("sidecar-chunk rollover claim covers a request".to_owned());
-                };
-                if peers != std::slice::from_ref(target)
-                    || CertifiedSidecarTransferIdentity::from_chunk(chunk) != *transfer
-                    || chunk.chunk_index != *chunk_index
-                    || chunk.chunk_count != *chunk_count
-                    || HashOf::new(chunk) != *response_hash
-                {
-                    return Err("sidecar-chunk rollover claim changed identity".to_owned());
-                }
-                Ok(())
-            }
-        }
-    }
-}
+include!("v2_worker/exact_output_rollover_claim.rs");
 
 #[derive(Debug)]
 struct PendingExactFanout {
@@ -10406,6 +9904,28 @@ impl PendingExactOutput {
                     .iter()
                     .any(|target| target.pending_flush.is_some())
         }) || !self.admitted_sidecar_chunks.is_empty()
+    }
+
+    fn pending_kura_replica_advert_heights(&self) -> Result<BTreeSet<u64>, String> {
+        let mut heights = BTreeSet::new();
+        for fanout in &self.fanouts {
+            let ExactOutputRolloverClaim::DurableKuraReplicaAdvert { source_height, .. } =
+                &fanout.rollover_claim
+            else {
+                continue;
+            };
+            fanout
+                .rollover_claim
+                .validate_fanout(&fanout.messages, &fanout.semantic_peers())?;
+            if *source_height == 0 {
+                return Err(
+                    "pending Kura replica advert lost its non-zero durable source height"
+                        .to_owned(),
+                );
+            }
+            heights.insert(*source_height);
+        }
+        Ok(heights)
     }
 
     fn close_certified_sidecar_prefix(
@@ -13238,6 +12758,37 @@ fn applied_height_reconstruction_covers(
             })?,
         );
     }
+    if let ExactOutputRolloverClaim::DurableKuraReplicaAdvert { source_height, .. } = rollover_claim
+    {
+        let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
+            return Err("durable Kura replica advert rollover lost its exact message".to_owned());
+        };
+        let BlockMessage::KuraReplicaAdvert(advert) = envelope.as_message() else {
+            return Err("durable Kura replica advert rollover changed output kind".to_owned());
+        };
+        if *source_height > artifact.height {
+            return Err(
+                "durable Kura replica advert belongs to a future applied height".to_owned(),
+            );
+        }
+        let expected_peers = artifact
+            .height_context
+            .roster
+            .iter()
+            .filter(|entry| entry.validator != advert.keeper)
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        if peers != expected_peers.as_slice() {
+            return Err("durable Kura replica advert changed its frozen roster fanout".to_owned());
+        }
+        durable_history
+            .ok_or_else(|| {
+                "durable Kura replica advert lacks an independently readable Kura source".to_owned()
+            })?
+            .revalidate_kura_replica_advert_source(advert)
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
     if matches!(
         rollover_claim,
         ExactOutputRolloverClaim::HistoricalLaneRecoveryRequest { .. }
@@ -13404,6 +12955,8 @@ type ExactOutputAdmissionHook = Box<
         + Send,
 >;
 
+include!("v2_worker/kura_replica_advert_refresh.rs");
+
 /// Concrete effect services used by the live v2 height runner.
 pub(crate) struct ProductionV2Services {
     context: wire::HeightContext,
@@ -13433,6 +12986,10 @@ pub(crate) struct ProductionV2Services {
     merge_sidecar_deferrals: VecDeque<DeferredMergeSidecarWork>,
     outbound_chunks: BTreeMap<HashOf<wire::PayloadManifest>, RetainedOutboundPayload>,
     pending_exact_output: Mutex<PendingExactOutput>,
+    /// Process-lifetime proactive refresh owner shared across immutable height
+    /// services. Its retained Kura token is not pending exact output and never
+    /// participates in finality sealing.
+    kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
     exact_output_handoff_owner: DurableExactOutputServiceOwner,
     #[cfg(test)]
     exact_output_admission_hook: Option<Mutex<ExactOutputAdmissionHook>>,
@@ -13514,6 +13071,7 @@ impl ProductionV2Services {
         lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
         output_guard: Arc<ConsensusOutputGuard>,
         leader_wire_ingress: Arc<FairV2Ingress>,
+        kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
         exact_output_handoff_owner: DurableExactOutputServiceOwner,
     ) -> Result<Self, String> {
         let construction_guard = Arc::clone(&output_guard);
@@ -13637,6 +13195,7 @@ impl ProductionV2Services {
             merge_sidecar_deferrals: VecDeque::new(),
             outbound_chunks: BTreeMap::new(),
             pending_exact_output: Mutex::new(pending_exact_output),
+            kura_replica_advert_refresh,
             exact_output_handoff_owner,
             #[cfg(test)]
             exact_output_admission_hook: None,
@@ -15113,7 +14672,17 @@ impl ProductionV2Services {
                         completion: V2IoCompletion::Applied(completion),
                         ..
                     } => {
-                        let _ = executor.complete_application(*completion, self)?;
+                        let source_height = completion.artifact().height;
+                        let source_block_hash = completion.artifact().block_hash;
+                        let disposition = executor.complete_application(*completion, self)?;
+                        if disposition == CompletionDisposition::Accepted {
+                            self.kura_replica_advert_refresh
+                                .note_durable_tip(
+                                    Some((source_height, source_block_hash)),
+                                    Instant::now(),
+                                )
+                                .map_err(|reason| executor.external_service_failed(reason, self))?;
+                        }
                     }
                     PendingServiceCompletion::Io {
                         completion: V2IoCompletion::ApplyDeferred { work_id, reference },
@@ -15852,6 +15421,39 @@ impl ProductionV2Services {
         }
     }
 
+    /// Advance the shared process-lifetime advert refresher by one bounded
+    /// turn.  A retained refresh token is independent of `PendingExactOutput`;
+    /// only an accepted enqueue gains an exact rollover claim.
+    pub(crate) fn service_kura_replica_advert_refresh_turn(
+        &self,
+        now: Instant,
+    ) -> Result<KuraReplicaAdvertRefreshTurnOutcome, String> {
+        if self.exact_output_handoff_owner.is_sealed() {
+            return Ok(KuraReplicaAdvertRefreshTurnOutcome::default());
+        }
+        let durable_tip = self
+            .kura
+            .exact_kura_replica_advert_tip()
+            .map_err(|error| error.to_string())?;
+        self.kura_replica_advert_refresh
+            .note_durable_tip(durable_tip, now)?;
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        let outcome = self.kura_replica_advert_refresh.drive_turn(
+            now,
+            |source_height| {
+                self.kura
+                    .probe_kura_replica_advert_source(source_height, &self.key_pair)
+                    .map_err(|error| error.to_string())
+            },
+            |source| self.post_kura_replica_advert_while_guarded(source, operation.permit()),
+        )?;
+        operation.complete();
+        Ok(outcome)
+    }
+
     fn current_lane_output_rollover_claim(
         &self,
         message: &BlockMessage,
@@ -15943,19 +15545,33 @@ impl ProductionV2Services {
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         self.validate_applied_height_output_handoff_authority(receipt, artifact)?;
-        let mut pending = self.lock_pending_exact_output()?;
-        if self.exact_output_handoff_owner.is_sealed() {
-            return Err("Sumeragi v2 applied-height output handoff is already sealed".to_owned());
-        }
-        let retired = pending.handoff_applied_height_to_durable_reconstruction(
-            artifact,
-            Some(durable_lane_authority),
-            Some(self.kura.as_ref()),
-        )?;
+        let (retired, retired_kura_replica_advert_heights) = {
+            let mut pending = self.lock_pending_exact_output()?;
+            if self.exact_output_handoff_owner.is_sealed() {
+                return Err(
+                    "Sumeragi v2 applied-height output handoff is already sealed".to_owned(),
+                );
+            }
+            let retired_kura_replica_advert_heights =
+                pending.pending_kura_replica_advert_heights()?;
+            let retired = pending.handoff_applied_height_to_durable_reconstruction(
+                artifact,
+                Some(durable_lane_authority),
+                Some(self.kura.as_ref()),
+            )?;
+            (retired, retired_kura_replica_advert_heights)
+        };
+        let scheduled_kura_replica_adverts = self
+            .kura_replica_advert_refresh
+            .schedule_retired_exact_output_heights(
+                retired_kura_replica_advert_heights,
+                Instant::now(),
+            )?;
         if retired != 0 {
             iroha_logger::debug!(
                 height = receipt.height(),
                 retired_posts = retired,
+                scheduled_kura_replica_adverts,
                 "handed backpressured finalized-height output to durable reconstruction"
             );
         }
@@ -16407,6 +16023,49 @@ impl ProductionV2Services {
             .filter(|entry| entry.validator != self.local_peer)
             .map(|entry| entry.validator.clone())
             .collect()
+    }
+
+    /// Publish one exact signed body-keeper advert from durable Kura state.
+    ///
+    /// The advert is rebuilt only after canonical application completes, then
+    /// independently revalidated before entering the exact-output corridor.
+    /// Its rollover claim remains reconstructible from the same body/finality
+    /// source and the frozen height roster.
+    fn post_kura_replica_advert_while_guarded(
+        &self,
+        source: &KuraReplicaAdvertSourceV1,
+        permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<ExactFanoutOwnership, String> {
+        let source_height = source.height();
+        if source_height == 0 || source_height > self.context.height {
+            return Err(
+                "Kura replica advert source is outside the active height authority".to_owned(),
+            );
+        }
+        let advert = self
+            .kura
+            .build_signed_kura_replica_advert_from_source(source, &self.key_pair)
+            .map_err(|error| error.to_string())?;
+        let rollover_claim = ExactOutputRolloverClaim::DurableKuraReplicaAdvert {
+            scope: self.exact_output_scope(),
+            source_height,
+            advert_hash: HashOf::new(&advert),
+        };
+        let wire =
+            BlockMessageWire::try_preencoded(Arc::new(BlockMessage::KuraReplicaAdvert(advert)))
+                .map_err(|error| {
+                    format!("failed to encode durable Kura replica advert: {error}")
+                })?;
+        // The active immutable roster is the only live, bounded transport
+        // authority available under validator rotation. Historical departed
+        // validators are not guessed or contacted; Kura pins bodies outside
+        // the configured proactive horizon fail-closed.
+        self.enqueue_exact_fanout_while_guarded(
+            vec![NetworkMessage::SumeragiBlock(Arc::new(wire))],
+            self.remote_voters(),
+            rollover_claim,
+            permit,
+        )
     }
 
     fn enqueue_fail_stop_io(&self, command: V2IoCommand) -> Result<(), String> {
@@ -18677,14 +18336,6 @@ pub(super) mod tests {
             Ok(None)
         }
 
-        fn enqueue_body_available(
-            &mut self,
-            _tag: EventTag,
-            _manifest: wire::PayloadManifest,
-        ) -> Result<(), EnqueueError> {
-            Self::reject_completion()
-        }
-
         fn reserve_body_available(
             &mut self,
             _tag: EventTag,
@@ -18947,13 +18598,18 @@ pub(super) mod tests {
             .iter()
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
+        let kura = Kura::blank_kura_for_testing();
+        let kura_replica_advert_refresh = Arc::new(
+            KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())
+                .expect("valid test Kura replica advert refresh owner"),
+        );
         let service = ProductionV2Services {
             context,
             local_peer,
             local_validator: Some(0),
             key_pair: keys[0].clone(),
             network: crate::IrohaNetwork::closed_for_tests(),
-            kura: Kura::blank_kura_for_testing(),
+            kura,
             chunk_root: PathBuf::new(),
             io: None,
             fetches: BTreeMap::new(),
@@ -18978,6 +18634,7 @@ pub(super) mod tests {
                 PendingExactOutput::new(16, 5, 4, &frozen_semantic_targets)
                     .expect("bounded test output corridor"),
             ),
+            kura_replica_advert_refresh,
             exact_output_handoff_owner,
             exact_output_admission_hook: None,
             active_tag,

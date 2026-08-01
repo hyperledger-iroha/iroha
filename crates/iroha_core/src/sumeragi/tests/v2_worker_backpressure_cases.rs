@@ -1,5 +1,5 @@
-// Backpressure and exact-output scheduling worker regression tests.
-// Included lexically by v2_worker::tests to preserve canonical test names.
+    // Backpressure and exact-output scheduling worker regression tests.
+    // Included lexically by v2_worker::tests to preserve canonical test names.
 
     #[test]
     fn closed_flush_racing_final_receiver_retirement_is_nonfatal() {
@@ -68,18 +68,15 @@
             .expect("retain the unavailable-race reply");
 
         assert_eq!(
-            pending.drive_with_budget_ack(
-                usize::MAX,
-                |_post, _ticket, attempted, _timeout_attempt| {
-                    let ExactTargetRoute::Reply(attempted) = attempted else {
-                        panic!("unavailable-race response changed route kind")
-                    };
-                    assert!(attempted.same_delivery(&route));
-                    assert!(routes.mark_reply_unwritable_while_delivery_active(&route));
-                    assert!(routes.retire(&route));
-                    Ok(ExactOutputAttemptOutcome::Unavailable)
-                }
-            ),
+            pending.drive_with_budget_ack(usize::MAX, |_post, _ticket, attempted, _timeout_attempt| {
+                let ExactTargetRoute::Reply(attempted) = attempted else {
+                    panic!("unavailable-race response changed route kind")
+                };
+                assert!(attempted.same_delivery(&route));
+                assert!(routes.mark_reply_unwritable_while_delivery_active(&route));
+                assert!(routes.retire(&route));
+                Ok(ExactOutputAttemptOutcome::Unavailable)
+            }),
             Ok(ExactOutputDriveOutcome::Drained)
         );
         let target = &pending.fanouts[0].targets[0];
@@ -223,9 +220,7 @@
         let mut reply_routes =
             NetworkReplyRoutes::try_from_route(route_a.clone()).expect("source A route set");
         reply_routes
-            .merge(
-                &NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"),
-            )
+            .merge(&NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"))
             .expect("retain both authenticated response sources");
 
         let mut pending =
@@ -293,19 +288,19 @@
             "a closed writer without Flushed must not advance the sidecar cursor"
         );
         let a_index = pending.fanouts[0]
-            .targets
-            .iter()
-            .position(|target| {
-                matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_a))
-            })
-            .expect("source A target retains the current item");
+                .targets
+                .iter()
+                .position(|target| {
+                    matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_a))
+                })
+                .expect("source A target retains the current item");
         let b_index = pending.fanouts[0]
-            .targets
-            .iter()
-            .position(|target| {
-                matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_b))
-            })
-            .expect("source B target remains backpressured");
+                .targets
+                .iter()
+                .position(|target| {
+                    matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_b))
+                })
+                .expect("source B target remains backpressured");
         assert_eq!(pending.fanouts[0].targets[a_index].message_index, 0);
         assert!(pending.fanouts[0].targets[a_index].current.is_none());
         assert!(pending.fanouts[0].targets[a_index].pending_flush.is_none());
@@ -345,8 +340,8 @@
         let later_a = routes
             .redeliver(&route_a)
             .expect("later delivery on the same source tenure");
-        let later_delivery = NetworkReplyRoutes::try_from_route(later_a.clone())
-            .expect("later pending-source delivery");
+        let later_delivery =
+            NetworkReplyRoutes::try_from_route(later_a.clone()).expect("later pending-source delivery");
         assert_eq!(
             pending
                 .enqueue(
@@ -389,8 +384,7 @@
             ExactFanoutOwnership::Owned
         );
         let fanout = &pending.fanouts[0];
-        let [NetworkMessage::CertifiedMergeSidecar(reconnected_payload)] =
-            fanout.messages.as_slice()
+        let [NetworkMessage::CertifiedMergeSidecar(reconnected_payload)] = fanout.messages.as_slice()
         else {
             panic!("reconnected sidecar fanout changed payload kind")
         };
@@ -541,25 +535,23 @@
         let mut initial_routes =
             NetworkReplyRoutes::try_from_route(route_a.clone()).expect("source A route set");
         initial_routes
-            .merge(
-                &NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"),
-            )
+            .merge(&NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"))
             .expect("retain both response sources");
         let retained = fanout(initial_routes);
         let a_index = retained
-            .targets
-            .iter()
-            .position(|target| {
-                matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_a))
-            })
-            .expect("source A target");
+                .targets
+                .iter()
+                .position(|target| {
+                    matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_a))
+                })
+                .expect("source A target");
         let b_index = retained
-            .targets
-            .iter()
-            .position(|target| {
-                matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_b))
-            })
-            .expect("source B target");
+                .targets
+                .iter()
+                .position(|target| {
+                    matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_b))
+                })
+                .expect("source B target");
 
         let mut pending =
             PendingExactOutput::new(2, 1, 2, &[]).expect("two shared ownership units fit");
@@ -702,8 +694,7 @@
     }
 
     #[test]
-    fn later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_attempts_progress()
-     {
+    fn later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_attempts_progress() {
         let (service, _) = fixture();
         let peer = service.context.roster[1].validator.clone();
         let (_, chunk_message) = certified_sidecar_outputs(&service.local_peer, &peer);
@@ -759,11 +750,8 @@
             assert_eq!(
                 pending
                     .enqueue(
-                        PendingExactFanout::new(
-                            vec![merge_share_message(label)],
-                            vec![peer.clone()],
-                        )
-                        .expect("one unrelated capacity blocker"),
+                        PendingExactFanout::new(vec![merge_share_message(label)], vec![peer.clone()],)
+                            .expect("one unrelated capacity blocker"),
                     )
                     .expect("fill the shared exact-output corridor"),
                 ExactFanoutOwnership::Owned
@@ -882,21 +870,16 @@
         let route_b = routes.mint_via(peer.clone(), hub_b);
         let route_c = routes.mint_via(peer.clone(), hub_c);
         let fanout = |reply_routes: NetworkReplyRoutes| {
-            PendingExactFanout::new_with_reply_routes(
-                vec![message.clone()],
-                peer.clone(),
-                reply_routes,
-            )
-            .expect("one exact sidecar response")
+            PendingExactFanout::new_with_reply_routes(vec![message.clone()], peer.clone(), reply_routes)
+                .expect("one exact sidecar response")
         };
 
-        let mut pending = PendingExactOutput::new(3, 1, 3, &[])
-            .expect("three authenticated response sources fit");
+        let mut pending =
+            PendingExactOutput::new(3, 1, 3, &[]).expect("three authenticated response sources fit");
         assert_eq!(
             pending
                 .enqueue_owned_reply_transfer(fanout(
-                    NetworkReplyRoutes::try_from_route(route_a.clone())
-                        .expect("source A route set"),
+                    NetworkReplyRoutes::try_from_route(route_a.clone()).expect("source A route set"),
                 ))
                 .expect("retain source A response"),
             ExactFanoutOwnership::Owned
@@ -923,8 +906,7 @@
         assert_eq!(
             pending
                 .enqueue_owned_reply_transfer(fanout(
-                    NetworkReplyRoutes::try_from_route(route_c.clone())
-                        .expect("source C route set"),
+                    NetworkReplyRoutes::try_from_route(route_c.clone()).expect("source C route set"),
                 ))
                 .expect("retain independent source C"),
             ExactFanoutOwnership::Owned
@@ -936,8 +918,7 @@
             NetworkReplyRoutes::try_from_route(later_a.clone()).expect("later source A route set");
         mixed_routes
             .merge(
-                &NetworkReplyRoutes::try_from_route(route_b.clone())
-                    .expect("new source B route set"),
+                &NetworkReplyRoutes::try_from_route(route_b.clone()).expect("new source B route set"),
             )
             .expect("candidate carries pending A and independent B");
         let mixed = fanout(mixed_routes);
@@ -951,8 +932,7 @@
             NetworkReplyRoutes::try_from_route(later_a.clone()).expect("later source A route set");
         mixed_routes
             .merge(
-                &NetworkReplyRoutes::try_from_route(route_b.clone())
-                    .expect("new source B route set"),
+                &NetworkReplyRoutes::try_from_route(route_b.clone()).expect("new source B route set"),
             )
             .expect("rebuild the exact mixed-source candidate");
         assert_eq!(
@@ -975,12 +955,12 @@
         );
         let target_for = |expected: &NetworkReplyRoute| {
             retained
-                .targets
-                .iter()
-                .find(|target| {
-                    matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(expected))
-                })
-                .expect("retained fanout contains the expected source")
+                    .targets
+                    .iter()
+                    .find(|target| {
+                        matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(expected))
+                    })
+                    .expect("retained fanout contains the expected source")
         };
         let pending_a = target_for(&later_a);
         assert_eq!(pending_a.message_index, 0);
@@ -1093,12 +1073,9 @@
         let mut reply_routes =
             NetworkReplyRoutes::try_from_route(route_a.clone()).expect("source A route set");
         reply_routes
-            .merge(
-                &NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"),
-            )
+            .merge(&NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"))
             .expect("retain two authenticated sources");
-        let mut pending =
-            PendingExactOutput::new(3, 1, 3, &[]).expect("three-source history corridor");
+        let mut pending = PendingExactOutput::new(3, 1, 3, &[]).expect("three-source history corridor");
         assert_eq!(
             pending
                 .enqueue(
@@ -1277,8 +1254,8 @@
             .rebuild_current_source_targets()
             .expect("manual fallback cursor has a valid local FIFO index");
 
-        let mut pending = PendingExactOutput::new(2, 2, 2, &[])
-            .expect("two independent authenticated sources fit");
+        let mut pending =
+            PendingExactOutput::new(2, 2, 2, &[]).expect("two independent authenticated sources fit");
         assert_eq!(
             pending.enqueue(predecessor).expect("predecessor fits"),
             ExactFanoutOwnership::Owned
@@ -1468,8 +1445,8 @@
         assert_eq!(pending.ownership_units, 1);
 
         let retired_during_admission = routes.mint(peer.clone());
-        let mut race_pending = PendingExactOutput::new(1, 1, 1, &[])
-            .expect("one independent admission-race source fits");
+        let mut race_pending =
+            PendingExactOutput::new(1, 1, 1, &[]).expect("one independent admission-race source fits");
         assert_eq!(
             race_pending
                 .enqueue(
@@ -1819,25 +1796,25 @@
 
         let mut completed_a = Vec::new();
         assert_eq!(
-            pending.drive_with(|post, ticket, route| {
-                assert!(ticket.is_none());
-                if matches!(route, ExactTargetRoute::Reply(route) if route.same_tenure(&route_a_reconnected))
-                {
-                    completed_a.push(merge_share_digest(&post.data));
-                    return Ok(());
-                }
-                assert!(matches!(
-                    route,
-                    ExactTargetRoute::Reply(route) if route.same_tenure(&route_b)
-                ));
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 23,
-                })
-            }),
-            Ok(Some(23))
-        );
+                pending.drive_with(|post, ticket, route| {
+                    assert!(ticket.is_none());
+                    if matches!(route, ExactTargetRoute::Reply(route) if route.same_tenure(&route_a_reconnected))
+                    {
+                        completed_a.push(merge_share_digest(&post.data));
+                        return Ok(());
+                    }
+                    assert!(matches!(
+                        route,
+                        ExactTargetRoute::Reply(route) if route.same_tenure(&route_b)
+                    ));
+                    Err(NetworkActorAdmissionError::Backpressured {
+                        message: post,
+                        ticket,
+                        rank: 23,
+                    })
+                }),
+                Ok(Some(23))
+            );
         assert_eq!(completed_a, vec![second_digest]);
         assert!(pending.fanouts[0].target_is_complete(0));
         assert_eq!(pending.fanouts[0].targets[1].message_index, 0);
@@ -1909,14 +1886,14 @@
             ProductionV2Services::preencode_v2_network_message(global_commit_qc_message(&artifact))
                 .expect("encode safety output");
         let lane = lane_commit_qc_message(peer.clone());
-        let bulk = ProductionV2Services::preencode_v2_network_message(
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk(
+        let bulk = ProductionV2Services::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::PayloadChunk(chunk(
                 manifest_hash(b"cross-class scheduler manifest"),
                 0,
                 b"bulk",
                 0,
-            ))),
-        )
+            )),
+        ))
         .expect("encode bulk output");
         assert_eq!(exact_output_class(&safety), Ok(ExactOutputClass::Safety));
         assert_eq!(exact_output_class(&lane), Ok(ExactOutputClass::Lane));
@@ -1935,9 +1912,7 @@
             .expect("shared slot plus three reserved classes");
         assert_eq!(
             pending
-                .enqueue(
-                    PendingExactFanout::new(vec![bulk], vec![peer.clone()]).expect("bulk fanout"),
-                )
+                .enqueue(PendingExactFanout::new(vec![bulk], vec![peer.clone()]).expect("bulk fanout"),)
                 .expect("bulk fanout within bounds"),
             ExactFanoutOwnership::Owned
         );
@@ -1968,8 +1943,8 @@
         let mut admitted = Vec::new();
         assert_eq!(
             pending.drive_with(|post, ticket, _route| {
-                let class = exact_output_class(&post.data)
-                    .expect("test messages have exact output classes");
+                let class =
+                    exact_output_class(&post.data).expect("test messages have exact output classes");
                 if class == ExactOutputClass::Bulk {
                     return Err(NetworkActorAdmissionError::Backpressured {
                         message: post,
@@ -1998,6 +1973,371 @@
             Ok(None)
         );
         assert!(!pending.is_pending());
+    }
+
+    #[test]
+    fn durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_drift() {
+        let (service, keys) = fixture();
+        let keeper = service.local_peer.clone();
+        let recipient = service.context.roster[1].validator.clone();
+        let sign_advert = |mut advert: KuraReplicaAdvertV1| {
+            advert.signature = Signature::new(keys[0].private_key(), &advert.signature_preimage())
+                .payload()
+                .to_vec();
+            advert
+        };
+        let advert = sign_advert(KuraReplicaAdvertV1 {
+            version: crate::sumeragi::message::KURA_REPLICA_ADVERT_VERSION_V1,
+            chain_id: ChainId::from("rollover-kura-replica-advert"),
+            height: 7,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"rollover-block")),
+            executed_block_wire_len: 1_024,
+            executed_block_wire_hash: Hash::new(b"rollover-executed-wire"),
+            finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"rollover-finality",
+            )),
+            keeper_index: 0,
+            keeper: keeper.clone(),
+            signature: Vec::new(),
+        });
+        let advert_message = |advert: KuraReplicaAdvertV1| {
+            let wire = BlockMessageWire::try_preencoded(Arc::new(
+                BlockMessage::KuraReplicaAdvert(advert),
+            ))
+            .expect("encode exact Kura replica advert");
+            NetworkMessage::SumeragiBlock(Arc::new(wire))
+        };
+        let exact_message = advert_message(advert.clone());
+        let claim = ExactOutputRolloverClaim::DurableKuraReplicaAdvert {
+            scope: service.exact_output_scope(),
+            source_height: advert.height,
+            advert_hash: HashOf::new(&advert),
+        };
+
+        assert_eq!(
+            claim.validate_fanout(
+                std::slice::from_ref(&exact_message),
+                std::slice::from_ref(&recipient),
+            ),
+            Ok(())
+        );
+        let mut pending = PendingExactOutput::new(4, 1, 1, std::slice::from_ref(&recipient))
+            .expect("bounded Kura advert output corridor");
+        let fanout = PendingExactFanout::claimed(
+            vec![exact_message.clone()],
+            vec![recipient.clone()],
+            claim.clone(),
+        )
+        .expect("validate pending Kura advert claim")
+        .expect("non-empty Kura advert fanout");
+        assert_eq!(
+            pending.enqueue(fanout),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+        assert_eq!(
+            pending
+                .pending_kura_replica_advert_heights()
+                .expect("extract exact rollover wake-up height"),
+            BTreeSet::from([advert.height])
+        );
+
+        let mut changed_hash = advert.clone();
+        changed_hash.executed_block_wire_hash = Hash::new(b"changed-executed-wire");
+        let changed_hash = sign_advert(changed_hash);
+        assert!(
+            claim
+                .validate_fanout(
+                    &[advert_message(changed_hash)],
+                    std::slice::from_ref(&recipient),
+                )
+                .is_err()
+        );
+
+        let mut changed_height = advert.clone();
+        changed_height.height = advert.height + 1;
+        let changed_height = sign_advert(changed_height);
+        assert!(
+            claim
+                .validate_fanout(
+                    &[advert_message(changed_height)],
+                    std::slice::from_ref(&recipient),
+                )
+                .is_err()
+        );
+        assert!(
+            claim
+                .validate_fanout(
+                    std::slice::from_ref(&exact_message),
+                    &[recipient.clone(), keeper],
+                )
+                .is_err()
+        );
+        assert!(
+            claim
+                .validate_fanout(
+                    std::slice::from_ref(&exact_message),
+                    &[recipient.clone(), recipient.clone()],
+                )
+                .is_err()
+        );
+        assert!(
+            claim
+                .validate_fanout(
+                    &[merge_share_message(b"wrong Kura advert rollover kind")],
+                    std::slice::from_ref(&recipient),
+                )
+                .is_err()
+        );
+
+        // Exercise the production rollover wiring against a real Kura block,
+        // finality artifact, deterministic keeper, and complete body. Binding
+        // is process-lifetime, so use one fresh durable fixture per candidate
+        // until the authenticated probe identifies a selected CommitQC keeper.
+        let signer_indices = durable_history_fixture().artifact.commit_qc.signers.clone();
+        let mut selected_history = None;
+        for local_validator in signer_indices {
+            let candidate = durable_history_fixture();
+            let local_index = usize::try_from(local_validator)
+                .expect("history-fixture signer index fits this platform");
+            let local_key = candidate
+                .validators
+                .get(local_index)
+                .expect("history-fixture signer belongs to its key roster")
+                .clone();
+            let local_peer = PeerId::new(local_key.public_key().clone());
+            candidate
+                .kura
+                .bind_local_peer_id(local_peer)
+                .expect("bind one candidate history-fixture keeper");
+            let source = candidate
+                .kura
+                .probe_kura_replica_advert_source(candidate.artifact.height, &local_key)
+                .expect("probe exact history-fixture keeper authority");
+            if let Some(source) = source {
+                selected_history = Some((candidate, local_validator, source));
+                break;
+            }
+        }
+        let (history, local_validator, initial_source) = selected_history
+            .expect("history fixture has a deterministic selected CommitQC keeper");
+        assert_eq!(initial_source.height(), history.artifact.height);
+        let local_index = usize::try_from(local_validator)
+            .expect("selected history-fixture keeper index fits this platform");
+        let keeper_key = history.validators[local_index].clone();
+        let selected_keeper = PeerId::new(keeper_key.public_key().clone());
+        let mut production_service = service_for_history_context_with_local_validator(
+            Arc::clone(&history.kura),
+            history.artifact.height_context.clone(),
+            &history.validators,
+            local_validator,
+        );
+        assert_eq!(production_service.local_peer, selected_keeper);
+        production_service.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+
+        let now = Instant::now();
+        let initial_refresh = production_service
+            .service_kura_replica_advert_refresh_turn(now)
+            .expect("publish an actual Kura-backed advert into exact output");
+        assert_eq!(initial_refresh.probes, 1);
+        assert!(initial_refresh.fanout_attempted);
+        assert!(!initial_refresh.retained_source);
+        assert!(
+            production_service
+                .has_pending_exact_output()
+                .expect("inspect backpressured Kura advert")
+        );
+        assert_eq!(
+            production_service
+                .lock_pending_exact_output()
+                .expect("inspect exact Kura advert rollover claim")
+                .pending_kura_replica_advert_heights()
+                .expect("revalidate exact pending Kura advert"),
+            BTreeSet::from([history.artifact.height])
+        );
+
+        let refresh_owner = Arc::clone(&production_service.kura_replica_advert_refresh);
+        let receipt = KuraV2CommitReceipt::for_test(&history.artifact);
+        let lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
+            &history.artifact,
+            Hash::new(b"Kura advert rollover wake-up lane witness"),
+        );
+        assert_eq!(
+            production_service
+                .handoff_applied_height_output_to_durable_reconstruction(
+                    &receipt,
+                    &history.artifact,
+                    &lane_authority,
+                )
+                .expect("durable handoff schedules the retired Kura advert"),
+            history.artifact.height_context.roster.len() - 1,
+            "one backpressured advert post is retired for every remote validator"
+        );
+        assert!(
+            !production_service
+                .has_pending_exact_output()
+                .expect("inspect cleared Kura advert output")
+        );
+        assert_eq!(
+            refresh_owner
+                .lock_state()
+                .expect("inspect rollover wake-up owner")
+                .urgent_heights,
+            BTreeSet::from([history.artifact.height]),
+            "production handoff must wake the exact retired durable source"
+        );
+        assert!(!production_service.output_guard.restart_required());
+        drop(production_service);
+
+        let mut successor = successor_service_for_history_as(
+            Arc::clone(&history.kura),
+            &history.artifact,
+            &history.validators,
+            local_validator,
+        );
+        successor.kura_replica_advert_refresh = Arc::clone(&refresh_owner);
+        let expected_targets = successor
+            .remote_voters()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let admitted_targets = Arc::new(Mutex::new(BTreeSet::new()));
+        let delivered_advert = Arc::new(Mutex::new(None::<KuraReplicaAdvertV1>));
+        let admitted_targets_for_hook = Arc::clone(&admitted_targets);
+        let delivered_advert_for_hook = Arc::clone(&delivered_advert);
+        let selected_keeper_for_hook = selected_keeper.clone();
+        let source_height = history.artifact.height;
+        successor.set_exact_output_admission_hook(move |post, ticket| {
+            assert!(ticket.is_none());
+            let NetworkMessage::SumeragiBlock(envelope) = &post.data else {
+                panic!("retried Kura advert changed its network message kind")
+            };
+            let BlockMessage::KuraReplicaAdvert(advert) = envelope.as_message() else {
+                panic!("retried Kura advert changed its block message kind")
+            };
+            assert_eq!(advert.height, source_height);
+            assert_eq!(advert.keeper, selected_keeper_for_hook);
+            let mut delivered = delivered_advert_for_hook
+                .lock()
+                .expect("record retried Kura advert");
+            if let Some(previous) = delivered.as_ref() {
+                assert_eq!(previous, advert, "all targets receive the same exact advert");
+            } else {
+                *delivered = Some(advert.clone());
+            }
+            drop(delivered);
+            admitted_targets_for_hook
+                .lock()
+                .expect("record retried Kura advert target")
+                .insert(post.peer_id);
+            Ok(())
+        });
+
+        let successor_refresh = successor
+            .service_kura_replica_advert_refresh_turn(now + Duration::from_millis(1))
+            .expect("successor retries the shared owner's exact retired source");
+        assert_eq!(successor_refresh.probes, 1);
+        assert!(successor_refresh.fanout_attempted);
+        assert!(!successor_refresh.retained_source);
+        assert_eq!(
+            *admitted_targets
+                .lock()
+                .expect("inspect retried Kura advert targets"),
+            expected_targets
+        );
+        let delivered_advert = delivered_advert
+            .lock()
+            .expect("inspect retried Kura advert")
+            .clone()
+            .expect("successor publishes the retried Kura advert");
+        history
+            .kura
+            .revalidate_kura_replica_advert_source(&delivered_advert)
+            .expect("retried advert remains bound to actual Kura evidence");
+        assert!(
+            refresh_owner
+                .lock_state()
+                .expect("inspect completed rollover wake-up")
+                .urgent_heights
+                .is_empty()
+        );
+        assert!(
+            !successor
+                .has_pending_exact_output()
+                .expect("inspect retried Kura advert delivery")
+        );
+        assert!(!successor.output_guard.restart_required());
+    }
+
+    #[test]
+    fn retained_replica_advert_source_survives_service_rollover_without_pending_ownership() {
+        let (service, _) = fixture();
+        let refresh = Arc::clone(&service.kura_replica_advert_refresh);
+        let source = KuraReplicaAdvertSourceV1::for_refresh_owner_test(1, service.local_peer.clone());
+        refresh
+            .lock_state()
+            .expect("retain exact refresh source")
+            .retained_source = Some(source.clone());
+        assert!(
+            !service
+                .has_pending_exact_output()
+                .expect("refresh source is not exact-output ownership")
+        );
+
+        let (mut successor, _) = fixture();
+        successor.kura_replica_advert_refresh = Arc::clone(&refresh);
+        drop(service);
+        assert_eq!(
+            successor
+                .kura_replica_advert_refresh
+                .lock_state()
+                .expect("inspect successor refresh source")
+                .retained_source,
+            Some(source),
+            "the exact opaque Kura token must outlive one height service"
+        );
+    }
+
+    #[test]
+    fn retained_replica_advert_source_never_blocks_handoff_or_seal() {
+        let (service, keys) = fixture();
+        let source = KuraReplicaAdvertSourceV1::for_refresh_owner_test(1, service.local_peer.clone());
+        service
+            .kura_replica_advert_refresh
+            .lock_state()
+            .expect("retain exact refresh source")
+            .retained_source = Some(source.clone());
+        let (receipt, artifact) = durable_finality_fixture(&service, &keys);
+        let lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
+            &artifact,
+            Hash::new(b"refresh source rollover witness"),
+        );
+
+        assert_eq!(
+            service
+                .handoff_applied_height_output_to_durable_reconstruction(
+                    &receipt,
+                    &artifact,
+                    &lane_authority,
+                )
+                .expect("refresh source does not block exact-output handoff"),
+            0
+        );
+        let _handoff = service
+            .seal_applied_height_output_handoff(&receipt, &artifact, &lane_authority)
+            .expect("refresh source does not block final exact-output seal");
+        assert_eq!(
+            service
+                .kura_replica_advert_refresh
+                .lock_state()
+                .expect("refresh source survives seal")
+                .retained_source,
+            Some(source)
+        );
     }
 
     #[test]
@@ -2082,14 +2422,14 @@
             ProductionV2Services::preencode_v2_network_message(global_commit_qc_message(&artifact))
                 .expect("encode safety output");
         let lane = lane_commit_qc_message(validator.clone());
-        let bulk = ProductionV2Services::preencode_v2_network_message(
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk(
+        let bulk = ProductionV2Services::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::PayloadChunk(chunk(
                 manifest_hash(b"frozen reservation regression manifest"),
                 0,
                 b"bulk",
                 0,
-            ))),
-        )
+            )),
+        ))
         .expect("encode bulk output");
         for message in [safety, lane, bulk] {
             assert_eq!(

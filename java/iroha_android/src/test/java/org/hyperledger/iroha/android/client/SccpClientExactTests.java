@@ -42,9 +42,9 @@ public final class SccpClientExactTests {
       FeePaymentIntent.authority(Collections.emptyList());
   // These authenticate this fixture's semantic commitments and deployment code hashes.
   private static final String BSC_ROUTE_CONFIG_HASH =
-      "77D2C235AABDFFE9125F27F960FE58F34E9C418BBE452CCC926B10DE18B22BD1";
+      "65ABF3081D137062860FD712B5414A17C3664FD42C7567373FF3302BA331EFDD";
   private static final String TRON_ROUTE_CONFIG_HASH =
-      "6D14339A4E342F0F5E72947A19133426EAC1DA9F9A01FB15DCAC55078A842AE2";
+      "1BB8C081AA96766CF63FFE063E5B506FF17005E033C7B47E9760214C4C8D5519";
 
   private SccpClientExactTests() {}
 
@@ -1067,7 +1067,7 @@ public final class SccpClientExactTests {
     assert request.soraFinalityAnchor.checkpointContextId.equals(upper(0xa2, 32));
     assert request.soraFinalityAnchor.checkpointFinalityArtifactHash.equals(upper(0xa3, 32));
     assert request.soraFinalityAnchor.anchorHash.equals(
-        "0xec6c821caf5fa74368c08e9101ab310f132fb7f627a09f6f9481aa9484054bba");
+        "0x4410ee4ccfd06f2d0e3a658615d516ac8cf65255d8a8716ce511ea95e135c8c3");
     assert request.soraFinalityAnchor.anchorHash.equals(
         "0x" + finalityAnchorHash().toLowerCase());
 

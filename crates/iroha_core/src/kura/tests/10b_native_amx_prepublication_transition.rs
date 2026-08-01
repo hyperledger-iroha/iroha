@@ -741,3 +741,157 @@
             "unauthenticated redundant temporary must remain untouched"
         );
     }
+
+    #[test]
+    fn native_amx_startup_retention_waits_for_complete_post_wsv_evidence() {
+        use NativeAmxParticipantReceiptStartupEvidence::{
+            DurablyApplied, PendingManifestRepair, PendingTipMetadata,
+        };
+
+        assert!(native_amx_startup_retention_cleanup_authorized(
+            Some(DurablyApplied),
+            false,
+        ));
+        assert!(native_amx_startup_retention_cleanup_authorized(None, false,));
+        assert!(!native_amx_startup_retention_cleanup_authorized(
+            Some(PendingTipMetadata),
+            false,
+        ));
+        assert!(!native_amx_startup_retention_cleanup_authorized(
+            Some(PendingManifestRepair),
+            false,
+        ));
+        assert!(!native_amx_startup_retention_cleanup_authorized(
+            Some(DurablyApplied),
+            true,
+        ));
+    }
+
+    #[test]
+    fn native_amx_prepublication_retains_previous_pair_until_post_wsv_cleanup() {
+        let temp_dir = TempDir::new().expect("prepublication retention Kura directory");
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.roster_sidecar_retention =
+            NonZeroUsize::new(1).expect("one-record Native evidence retention");
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) =
+            Kura::new(&config, &lane_config).expect("initialize prepublication retention Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("prepublication primary lane entry");
+        let receipts = install_native_amx_evidence_fixture_heights(&kura, &entry, &[1, 2]);
+        let newest_receipt = receipts
+            .last()
+            .expect("newest prepublication receipt")
+            .clone();
+        let old_manifest_path =
+            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
+        let old_receipt_path =
+            Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
+        let newest_manifest_path =
+            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 2);
+        let newest_receipt_path =
+            Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 2);
+        let evidence_directory = Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root));
+        let namespace = kura
+            .native_amx_evidence_namespace_for_entry(&entry)
+            .expect("bind prepublication Native evidence namespace");
+        let newest_manifest = kura
+            .read_native_amx_participant_application_manifest_from_paths_locked(
+                &entry,
+                2,
+                &newest_manifest_path,
+                &namespace,
+            )
+            .expect("read newest prepublication manifest");
+        drop(namespace);
+
+        std::fs::remove_file(&newest_manifest_path)
+            .expect("remove newest manifest before replaying prepublication");
+        std::fs::remove_file(&newest_receipt_path)
+            .expect("remove newest receipt before replaying prepublication");
+        sync_dir(&evidence_directory).expect("sync prepublication evidence removal");
+        let checkpoint = kura
+            .wsv_checkpoint(1)
+            .expect("read fixture checkpoint")
+            .expect("fixture checkpoint exists");
+        let finality = kura
+            .v2_finality_artifact(1)
+            .expect("read fixture finality")
+            .expect("fixture finality exists");
+        kura.remove_commit_manifest_without_binding_for_tests(1)
+            .expect("remove post-apply commit manifest");
+        kura.remove_wsv_checkpoint_without_binding_for_tests(1)
+            .expect("remove post-apply WSV checkpoint");
+
+        {
+            let _publication_guard = kura.prune_lock.lock();
+            kura.write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard(
+                &newest_manifest,
+                false,
+            )
+            .expect("prepublish newest Native manifest without cleanup");
+            kura.write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard(
+                &newest_receipt,
+                &newest_manifest,
+                false,
+            )
+            .expect("prepublish newest Native receipt without cleanup");
+            kura.write_native_amx_participant_receipt_latest_index_under_publication_guard(
+                &newest_receipt,
+                &newest_manifest,
+                false,
+            )
+            .expect("prepublish newest Native latest index without cleanup");
+            kura.authenticate_native_amx_participant_application_prepublication_under_publication_guard(
+                &newest_manifest,
+                &newest_receipt,
+                false,
+            )
+            .expect("authenticate pre-WSV evidence without post-apply metadata");
+        }
+        assert!(
+            old_manifest_path.exists() && old_receipt_path.exists(),
+            "retention=1 must preserve the previous complete pair before WSV commit"
+        );
+
+        kura.store_wsv_checkpoint(
+            1,
+            newest_receipt.application_block_hash,
+            checkpoint.state_hash,
+        )
+        .expect("restore post-apply WSV checkpoint");
+        kura.store_commit_manifest(
+            CommitManifest::new(
+                1,
+                newest_receipt.application_block_hash,
+                None,
+                None,
+                checkpoint.state_hash,
+                None,
+            )
+            .with_authenticated_v2_commit_authority(&finality),
+        )
+        .expect("restore authenticated post-apply commit manifest");
+        {
+            let _publication_guard = kura.prune_lock.lock();
+            kura.authenticate_native_amx_participant_application_prepublication_under_publication_guard(
+                &newest_manifest,
+                &newest_receipt,
+                true,
+            )
+            .expect("reauthenticate Native evidence against post-WSV metadata");
+            kura.cleanup_native_amx_participant_application_evidence_under_publication_guard(
+                &newest_receipt,
+            )
+            .expect("perform post-WSV Native evidence cleanup");
+        }
+        assert!(
+            !old_manifest_path.exists() && !old_receipt_path.exists(),
+            "post-WSV cleanup may enforce retention after the exact join is authenticated"
+        );
+        assert!(
+            newest_manifest_path.exists() && newest_receipt_path.exists(),
+            "cleanup must retain the exact newest prepublished evidence"
+        );
+    }

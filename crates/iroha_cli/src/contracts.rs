@@ -1,5 +1,7 @@
 //! Contracts helpers.
 
+mod local_debug_rendering;
+
 use std::{
     collections::BTreeMap,
     fs,
@@ -39,6 +41,10 @@ use ivm::kotodama::driver::{
     load_source_project_manifest as load_kotodama_source_project_manifest,
 };
 use reqwest::StatusCode;
+
+use local_debug_rendering::{
+    build_local_debug_entrypoint, render_durable_state_overlay, render_queued_instructions,
+};
 
 use crate::{
     Run, RunContext, TransactionWaitArgs, apply_cli_gas_limit_override, wait_for_transaction_status,
@@ -3339,52 +3345,6 @@ fn execute_local_contract_debug_call<C: RunContext>(
         durable_state_mutation_count,
         durable_state_overlay: durable_state_overlay_json,
     })
-}
-
-fn build_local_debug_entrypoint(
-    descriptor: &ivm::EmbeddedEntrypointDescriptor,
-    entrypoint_pc: u64,
-) -> LocalContractDebugEntrypoint {
-    LocalContractDebugEntrypoint {
-        name: descriptor.name.clone(),
-        kind: format!("{:?}", descriptor.kind),
-        pc: entrypoint_pc,
-        return_type: descriptor.return_type.clone(),
-        params: descriptor
-            .params
-            .iter()
-            .map(|param| LocalContractDebugParam {
-                name: param.name.clone(),
-                type_name: param.type_name.clone(),
-            })
-            .collect(),
-    }
-}
-
-fn render_queued_instructions(
-    queued: &[iroha::data_model::isi::InstructionBox],
-) -> Result<norito::json::Value> {
-    let values = queued
-        .iter()
-        .map(norito::json::to_value)
-        .collect::<Result<Vec<_>, _>>()
-        .wrap_err("failed to serialize queued instructions")?;
-    Ok(norito::json::Value::Array(values))
-}
-
-fn render_durable_state_overlay(
-    overlay: &BTreeMap<StatePath, Option<Vec<u8>>>,
-) -> Result<norito::json::Value> {
-    let mut object = norito::json::Map::new();
-    for (path, value) in overlay {
-        object.insert(
-            path.as_ref().to_owned(),
-            value.as_ref().map_or(norito::json::Value::Null, |bytes| {
-                norito::json::Value::from(format!("0x{}", hex::encode(bytes)))
-            }),
-        );
-    }
-    Ok(norito::json::Value::Object(object))
 }
 
 fn build_local_debug_budget(

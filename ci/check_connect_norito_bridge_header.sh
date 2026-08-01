@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_LIB="${ROOT_DIR}/crates/connect_norito_bridge/src/lib.rs"
-DATA_MODEL_PRIVACY="${ROOT_DIR}/crates/iroha_data_model/src/privacy.rs"
+DATA_MODEL_PRIVACY="${ROOT_DIR}/crates/iroha_data_model/src/privacy/protocol.rs"
 HEADER="${ROOT_DIR}/crates/connect_norito_bridge/include/connect_norito_bridge.h"
 UMBRELLA="${ROOT_DIR}/crates/connect_norito_bridge/include/NoritoBridge.h"
 SWIFT_CONTRACT="${ROOT_DIR}/IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
@@ -760,12 +760,16 @@ run_contract_check \
   "${SWIFT_CONTRACT}" \
   "${DATA_MODEL_PRIVACY}"
 
-if command -v "${CC:-cc}" >/dev/null 2>&1; then
-  "${CC:-cc}" -fsyntax-only -x c \
-    -I"${ROOT_DIR}/crates/connect_norito_bridge/include" "${HEADER}"
+if ! command -v "${CC:-cc}" >/dev/null 2>&1; then
+  echo "[connect-norito-header] required C compiler not found: ${CC:-cc}" >&2
+  exit 1
 fi
+"${CC:-cc}" -fsyntax-only -x c \
+  -I"${ROOT_DIR}/crates/connect_norito_bridge/include" "${HEADER}"
 
-if command -v "${CXX:-c++}" >/dev/null 2>&1; then
-  "${CXX:-c++}" -fsyntax-only -x c++ \
-    -I"${ROOT_DIR}/crates/connect_norito_bridge/include" "${UMBRELLA}"
+if ! command -v "${CXX:-c++}" >/dev/null 2>&1; then
+  echo "[connect-norito-header] required C++ compiler not found: ${CXX:-c++}" >&2
+  exit 1
 fi
+"${CXX:-c++}" -fsyntax-only -x c++ \
+  -I"${ROOT_DIR}/crates/connect_norito_bridge/include" "${UMBRELLA}"

@@ -49,6 +49,16 @@ SORAFS_REPUTATION_PLAN = DOCS_SOURCE_DIR / "sorafs_reputation_plan.md"
 SORAFS_REPUTATION_RUNTIME_RS = (
     REPO_ROOT / "crates" / "sorafs_node" / "src" / "reputation" / "runtime.rs"
 )
+SORAFS_REPUTATION_PUBLICATION_TEST_RS = (
+    REPO_ROOT
+    / "crates"
+    / "sorafs_node"
+    / "src"
+    / "reputation"
+    / "runtime"
+    / "tests"
+    / "publication_admission.rs"
+)
 IROHAD_REPUTATION_RUNTIME_RS = (
     REPO_ROOT / "crates" / "irohad" / "src" / "sorafs_reputation_runtime.rs"
 )
@@ -59,6 +69,9 @@ PRODUCTION_READINESS_RUNNER = SCRIPTS_DIR / "run_sorafs_production_readiness.py"
 EXAMPLES_DIR = SCRIPTS_DIR / "examples"
 DASHBOARDS_DIR = REPO_ROOT / "dashboards"
 TELEMETRY_METRICS_RS = REPO_ROOT / "crates" / "iroha_telemetry" / "src" / "metrics.rs"
+TELEMETRY_METRICS_TEST_RS = (
+    REPO_ROOT / "crates" / "iroha_telemetry" / "src" / "metrics" / "test.rs"
+)
 HEDGING_FIXTURE_GENERATOR_RS = (
     REPO_ROOT
     / "crates"
@@ -359,6 +372,8 @@ ACTIVE_SORAFS_TODO_SCAN_ROOTS = (
     REPO_ROOT / "crates" / "sorafs_manifest",
     REPO_ROOT / "crates" / "sorafs_node",
     REPO_ROOT / "crates" / "sorafs_orchestrator",
+    REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_broker",
+    REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_registry",
     REPO_ROOT / "crates" / "iroha_torii" / "src" / "sorafs",
     REPO_ROOT / "crates" / "iroha_data_model" / "src" / "sorafs",
     REPO_ROOT
@@ -406,6 +421,9 @@ ACTIVE_SORAFS_TODO_DISCOVERY_EXCLUDED_PARTS = {
     "tests",
 }
 ACTIVE_SORAFS_TODO_SCAN_FILES = (
+    IROHAD_MAIN_RS,
+    REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_broker.rs",
+    REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_registry.rs",
     IROHA_CLI_SORAFS_RS,
     SORAFS_CLI_RS,
     TORII_OPENAPI_RS,
@@ -1753,6 +1771,20 @@ def test_active_sorafs_todo_scan_configuration_paths_exist() -> None:
     assert missing_files == []
 
 
+def test_active_sorafs_todo_scan_covers_runtime_provider_entrypoints() -> None:
+    scanned = {path.relative_to(REPO_ROOT) for path in active_sorafs_todo_scan_paths()}
+    required = {
+        Path("crates/irohad/src/main.rs"),
+        Path("crates/irohad/src/runtime_provider_broker.rs"),
+        Path("crates/irohad/src/runtime_provider_broker/api.rs"),
+        Path("crates/irohad/src/runtime_provider_broker/launcher.rs"),
+        Path("crates/irohad/src/runtime_provider_registry.rs"),
+        Path("crates/irohad/src/runtime_provider_registry/binding_collection.rs"),
+    }
+
+    assert required <= scanned
+
+
 def test_active_sorafs_todo_scan_covers_swift_sorafs_entrypoints() -> None:
     scanned = {path.relative_to(REPO_ROOT) for path in active_sorafs_todo_scan_paths()}
     required = {
@@ -1889,6 +1921,56 @@ def test_active_sorafs_source_todos_stay_closed() -> None:
     assert find_active_sorafs_todo_markers(active_sorafs_todo_scan_paths()) == []
 
 
+def test_moderation_local_snapshot_reads_have_no_empty_projection_fallback() -> None:
+    api = read(TORII_SORAFS_API_RS)
+    handlers = {
+        name: api.split(f"pub(crate) async fn {name}", 1)[1].split(
+            "\npub(crate) async fn", 1
+        )[0]
+        for name in (
+            "handle_get_sorafs_moderation_model_registry",
+            "handle_get_sorafs_moderation_screening_results",
+            "handle_get_sorafs_moderation_quarantine",
+            "handle_get_sorafs_moderation_quarantine_operator_panel",
+            "handle_post_sorafs_moderation_quarantine_appeal_handoff",
+        )
+    }
+    required = {
+        "handle_get_sorafs_moderation_model_registry": (
+            ("export_moderation_model_registry_snapshot", "moderation_model_registry_error_response"),
+        ),
+        "handle_get_sorafs_moderation_screening_results": (
+            ("export_moderation_screening_snapshot", "moderation_screening_error_response"),
+        ),
+        "handle_get_sorafs_moderation_quarantine": (
+            ("export_moderation_screening_snapshot", "moderation_screening_error_response"),
+        ),
+        "handle_get_sorafs_moderation_quarantine_operator_panel": (
+            ("export_moderation_screening_snapshot", "moderation_screening_error_response"),
+            (
+                "export_moderation_quarantine_object_snapshot",
+                "moderation_quarantine_object_error_response",
+            ),
+        ),
+        "handle_post_sorafs_moderation_quarantine_appeal_handoff": (
+            ("export_moderation_screening_snapshot", "moderation_screening_error_response"),
+        ),
+    }
+    for name, checks in required.items():
+        for export, error_mapper in checks:
+            assert export in handlers[name]
+            assert f"Err(err) => return {error_mapper}(err)" in handlers[name]
+
+    node = read(SORAFS_NODE_LIB_RS)
+    for snapshot in (
+        "model_registry",
+        "screening",
+        "quarantine_object",
+        "evidence_viewer",
+    ):
+        assert f"pub fn moderation_{snapshot}_snapshot(" not in node
+
+
 def test_sorafs_incentives_service_has_no_missing_budget_override() -> None:
     cli = read(IROHA_CLI_SORAFS_RS)
     reward_engine = read(SORAFS_ORCHESTRATOR_INCENTIVES_RS)
@@ -2020,7 +2102,10 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "raw_ticket_rejected_with_signed_key_present" in peer
     assert "SignedTicket::decode(bytes).map_err(ChallengeVerifyError::Pow)?" in verify_challenge_ticket
     assert "bytes.len() == pow::TICKET_LEN" not in verify_challenge_ticket
-    assert "self.verify_unsigned_ticket_bytes(bytes)" in verify_challenge_ticket
+    assert (
+        "self.verify_unsigned_ticket_bytes(bytes, transcript_hash)"
+        in verify_challenge_ticket
+    )
 
     assert "handshake_update_accepts_pow_overrides" in cli
     assert "soranet_handshake_update_applies" in kiso
@@ -6880,6 +6965,7 @@ def test_sorafs_hedging_billing_observability_pack_is_checked_in() -> None:
 
 def test_sorafs_hedging_billing_observability_metrics_are_registered() -> None:
     source = read(TELEMETRY_METRICS_RS)
+    test_source = read(TELEMETRY_METRICS_TEST_RS)
     expected_names = [
         "torii_sorafs_hedging_xor_usd_reference_price_micro_usd",
         "torii_sorafs_hedging_feed_lag_seconds",
@@ -6899,12 +6985,15 @@ def test_sorafs_hedging_billing_observability_metrics_are_registered() -> None:
         "record_sorafs_billing_statement_generation",
         "set_sorafs_billing_statement_ack_backlog",
         "set_sorafs_billing_escrow_runway_seconds",
-        "records_hedging_billing_metrics_used_by_dashboard_and_alerts",
     ]
     missing_helpers = [helper for helper in expected_helpers if helper not in source]
 
     assert missing_names == []
     assert missing_helpers == []
+    assert (
+        "records_hedging_billing_metrics_used_by_dashboard_and_alerts"
+        in test_source
+    )
 
 
 def test_sorafs_hedging_billing_fixture_generator_is_checked_in() -> None:
@@ -8494,6 +8583,7 @@ def test_sorafs_orchestrator_sdk_parity_gate_uses_no_follow_io() -> None:
 
 def test_sorafs_reference_ffi_header_gate_uses_no_follow_io() -> None:
     header_gate = read(REPO_ROOT / "ci" / "check_sorafs_reference_ffi_header.sh")
+    bridge_gate = read(REPO_ROOT / "ci" / "check_connect_norito_bridge_header.sh")
 
     assert "def read_open_flags() -> int" in header_gate
     assert "def write_open_flags() -> int" in header_gate
@@ -8517,6 +8607,19 @@ def test_sorafs_reference_ffi_header_gate_uses_no_follow_io() -> None:
     assert "os.write(write_fd, chunk)" not in header_gate
     assert 'cp "${RUST_FFI}"' not in header_gate
     assert 'cp "${HEADER}"' not in header_gate
+    for gate, label in (
+        (header_gate, "sorafs-reference-header"),
+        (bridge_gate, "connect-norito-header"),
+    ):
+        assert f'''if ! command -v "${{CC:-cc}}" >/dev/null 2>&1; then
+  echo "[{label}] required C compiler not found: ${{CC:-cc}}" >&2
+  exit 1
+fi''' in gate
+        assert f'''if ! command -v "${{CXX:-c++}}" >/dev/null 2>&1; then
+  echo "[{label}] required C++ compiler not found: ${{CXX:-c++}}" >&2
+  exit 1
+fi''' in gate
+        assert "skipping c" not in gate.lower()
 
 
 def test_sorafs_fixtures_gate_uses_no_follow_alias_json_reads() -> None:
@@ -18185,6 +18288,7 @@ def test_reputation_bootstrap_view_uses_full_exact_request_validation() -> None:
 
 def test_reputation_external_publication_dependencies_are_fenced() -> None:
     node_source = read(SORAFS_REPUTATION_RUNTIME_RS)
+    publication_test_source = read(SORAFS_REPUTATION_PUBLICATION_TEST_RS)
     daemon_source = read(IROHAD_REPUTATION_RUNTIME_RS)
 
     signing_call = node_source.index(
@@ -18210,9 +18314,13 @@ def test_reputation_external_publication_dependencies_are_fenced() -> None:
         "hasher.update(publisher_peer_id);",
         "hasher.update(&publisher_public_key);",
         "governance_dag_policy_digest",
-        "publication_construction_rejects_same_key_different_peer_qualification",
     ):
         assert phrase in node_source
+    assert "mod publication_admission;" in node_source
+    assert (
+        "publication_construction_rejects_same_key_different_peer_qualification"
+        in publication_test_source
+    )
 
     assert (
         "assembly_rejects_same_key_different_governance_peer_before_state_open"

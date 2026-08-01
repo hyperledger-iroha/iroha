@@ -17,8 +17,6 @@ use iroha_data_model::{
 use iroha_data_model::{block::BlockHeader, smart_contract::payloads::ExecutorContext};
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, Memory, VMError, host::IVMHost};
-#[cfg(not(feature = "iroha-core-tests"))]
-use norito::codec::Encode;
 
 struct LoggingHost;
 

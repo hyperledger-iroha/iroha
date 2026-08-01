@@ -422,7 +422,7 @@ fn expired_live_reservation_replays_payload_without_fifo_or_tombstone() {
 #[test]
 fn missing_replayed_reservation_owns_capacity_until_exact_payload_replay() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let state = lane_reservation_test_state();
+    let mut state = lane_reservation_test_state();
     let dir = tempdir().expect("tempdir");
     let plan_path = dir.path().join("queue-plans-owner-capacity.norito");
     let reservation_path = dir.path().join("lane-reservations-owner-capacity.norito");
@@ -470,11 +470,19 @@ fn missing_replayed_reservation_owns_capacity_until_exact_payload_replay() {
         .install_plan_journal(&plan_path, 1024 * 1024, true)
         .expect("install the payload journal");
     let unrelated = accepted_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(
+        Arc::get_mut(&mut state).expect("unshared owner-capacity test state"),
+        &unrelated,
+    );
     assert_ne!(unrelated.hash(), transaction_hash);
     let failure = queue
         .push_with_lane_with_state(unrelated, &state)
-        .expect_err("unrelated work must not consume the restored owner's slot");
-    assert!(matches!(failure.err, Error::Full));
+        .expect_err("startup quarantine must reject unrelated work before payload replay");
+    assert!(matches!(
+        failure.err,
+        Error::PlanJournalDurabilityRejected { ref reason }
+            if reason.contains("startup reconciliation")
+    ));
     assert_eq!(queue.active_len(), 1);
     assert_eq!(queue.retained_bytes(), TX_RETAINED_OVERHEAD_BYTES);
 
@@ -502,12 +510,24 @@ fn missing_replayed_reservation_owns_capacity_until_exact_payload_replay() {
             .missing_payload_hashes
             .is_empty()
     );
+    queue
+        .complete_lane_reservation_startup_reconciliation()
+        .expect("publish completed owner-capacity startup reconciliation");
+    let post_replay_unrelated = accepted_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(
+        Arc::get_mut(&mut state).expect("unshared owner-capacity test state"),
+        &post_replay_unrelated,
+    );
+    let failure = queue
+        .push_with_lane_with_state(post_replay_unrelated, &state)
+        .expect_err("the materialized reservation must retain its exact capacity slot");
+    assert!(matches!(failure.err, Error::Full));
 }
 
 #[test]
 fn missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let state = lane_reservation_test_state();
+    let mut state = lane_reservation_test_state();
     let dir = tempdir().expect("tempdir");
     let plan_path = dir.path().join("queue-plans-owner-bytes.norito");
     let reservation_path = dir.path().join("lane-reservations-owner-bytes.norito");
@@ -544,15 +564,27 @@ fn missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay(
         .expect("restore the payload-less reservation owner");
     assert_eq!(queue.active_len(), 1);
     assert_eq!(queue.retained_bytes(), TX_RETAINED_OVERHEAD_BYTES);
-    assert!(queue.pressure_snapshot().saturated_by_bytes);
+    let pressure = queue.pressure_snapshot();
+    assert!(pressure.saturated_by_count);
+    assert!(!pressure.saturated_by_bytes);
+    assert!(pressure.is_saturated());
     queue
         .install_plan_journal(&plan_path, 1024 * 1024, true)
         .expect("install the payload journal");
 
+    let unrelated = accepted_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(
+        Arc::get_mut(&mut state).expect("unshared owner-bytes test state"),
+        &unrelated,
+    );
     let failure = queue
-        .push_with_lane_with_state(accepted_tx_by_someone(&time_source), &state)
-        .expect_err("unrelated work must not consume the restored owner's byte budget");
-    assert!(matches!(failure.err, Error::Full));
+        .push_with_lane_with_state(unrelated, &state)
+        .expect_err("startup quarantine must reject unrelated work before payload replay");
+    assert!(matches!(
+        failure.err,
+        Error::PlanJournalDurabilityRejected { ref reason }
+            if reason.contains("startup reconciliation")
+    ));
     assert_eq!(queue.active_len(), 1);
     assert_eq!(queue.retained_bytes(), TX_RETAINED_OVERHEAD_BYTES);
 
@@ -571,6 +603,21 @@ fn missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay(
             .load(Ordering::Relaxed),
         0
     );
+    queue
+        .complete_lane_reservation_startup_reconciliation()
+        .expect("publish completed owner-bytes startup reconciliation");
+    let pressure = queue.pressure_snapshot();
+    assert!(!pressure.saturated_by_count);
+    assert!(pressure.saturated_by_bytes);
+    let post_replay_unrelated = accepted_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(
+        Arc::get_mut(&mut state).expect("unshared owner-bytes test state"),
+        &post_replay_unrelated,
+    );
+    let failure = queue
+        .push_with_lane_with_state(post_replay_unrelated, &state)
+        .expect_err("the materialized payload must retain its exact byte budget");
+    assert!(matches!(failure.err, Error::Full));
 }
 
 #[test]
@@ -1468,6 +1515,13 @@ fn commit_barrier_pressure_clears_only_after_explicit_proof_commit() {
             .expect("consume barrier after simulated external proof"),
         LaneQueueReservationOutcome::AlreadyFinalized
     );
+    assert!(
+        pressure.snapshot().is_saturated(),
+        "consuming the barrier cannot publish before startup reconciliation completes"
+    );
+    queue
+        .complete_lane_reservation_startup_reconciliation()
+        .expect("publish completed commit-barrier startup reconciliation");
     assert_eq!(
         pressure.snapshot(),
         BackpressureState::Healthy {
@@ -1637,8 +1691,7 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
             iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-        eviction_required_replicas:
-            iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let (kura, _) =
         Kura::new_with_configured_lane_catalog(&kura_config, &lane_geometry, &lane_catalog)

@@ -10008,23 +10008,10 @@ impl NodeHandle {
         Ok(record)
     }
 
-    /// Return a deterministic snapshot of the local moderation model registry.
-    ///
-    /// If the registry lock is poisoned, an empty snapshot is returned so callers
-    /// can treat the local registry as unavailable without panicking.
-    #[must_use]
-    pub fn moderation_model_registry_snapshot(&self) -> ModerationModelRegistrySnapshot {
-        self.moderation_model_registry.read().map_or_else(
-            |_| ModerationModelRegistrySnapshot::default(),
-            |guard| guard.snapshot(),
-        )
-    }
-
     /// Export a deterministic snapshot of the local moderation model registry.
     ///
-    /// Unlike [`Self::moderation_model_registry_snapshot`], this method reports
-    /// lock poisoning so callers can distinguish an unavailable registry from an
-    /// empty registry.
+    /// Lock poisoning is reported so callers cannot mistake an unavailable
+    /// registry for an authoritative empty projection.
     ///
     /// # Errors
     ///
@@ -10629,15 +10616,6 @@ impl NodeHandle {
         Ok(record)
     }
 
-    /// Return a deterministic snapshot of local screening and quarantine state.
-    #[must_use]
-    pub fn moderation_screening_snapshot(&self) -> ModerationScreeningSnapshot {
-        self.moderation_screening.read().map_or_else(
-            |_| ModerationScreeningSnapshot::default(),
-            |guard| guard.snapshot(),
-        )
-    }
-
     /// Export local screening and quarantine state, reporting lock failures.
     ///
     /// # Errors
@@ -11050,15 +11028,6 @@ impl NodeHandle {
         Ok(record)
     }
 
-    /// Return a deterministic snapshot of the local quarantine object index.
-    #[must_use]
-    pub fn moderation_quarantine_object_snapshot(&self) -> ModerationQuarantineObjectSnapshot {
-        self.moderation_quarantine_objects.read().map_or_else(
-            |_| ModerationQuarantineObjectSnapshot::default(),
-            |guard| guard.snapshot(),
-        )
-    }
-
     /// Export local quarantine object index state, reporting lock failures.
     ///
     /// # Errors
@@ -11240,15 +11209,6 @@ impl NodeHandle {
             });
         }
         Ok(record)
-    }
-
-    /// Return a deterministic snapshot of local evidence viewer audit state.
-    #[must_use]
-    pub fn moderation_evidence_viewer_snapshot(&self) -> ModerationEvidenceViewerSnapshot {
-        self.moderation_evidence_viewer.read().map_or_else(
-            |_| ModerationEvidenceViewerSnapshot::default(),
-            |guard| guard.snapshot(),
-        )
     }
 
     /// Export local evidence viewer audit state, reporting lock failures.
@@ -16018,6 +15978,17 @@ mod tests {
                 Some(_) => Err(reputation::runtime::ReputationRuntimeError::JournalSourceConflict),
             }
         }
+
+        fn record_authenticated_stream_token_validation(
+            &self,
+            _provider_id: ProviderId,
+            _outcome: iroha_data_model::sorafs::reputation::StreamTokenValidationOutcomeV1,
+        ) -> Result<
+            reputation::runtime::StreamTokenReputationAdmissionOutcomeV1,
+            reputation::runtime::ReputationRuntimeError,
+        > {
+            Err(reputation::runtime::ReputationRuntimeError::RuntimeBindingMismatch)
+        }
     }
 
     fn startup_por_archive_binding(seed: u8) -> PorFinalizedReplayArchiveBindingV1 {
@@ -20174,7 +20145,9 @@ mod tests {
             ModerationModelRegistryError::ConflictingReproManifest { .. }
         ));
 
-        let snapshot = handle.moderation_model_registry_snapshot();
+        let snapshot = handle
+            .export_moderation_model_registry_snapshot()
+            .expect("export moderation model registry snapshot");
         assert_eq!(snapshot.reproducibility_manifests, vec![record]);
         assert!(snapshot.adversarial_corpora.is_empty());
     }
@@ -20200,7 +20173,9 @@ mod tests {
             .expect("re-admit matching corpus manifest");
         assert_eq!(repeated, record);
 
-        let snapshot = handle.moderation_model_registry_snapshot();
+        let snapshot = handle
+            .export_moderation_model_registry_snapshot()
+            .expect("export moderation model registry snapshot");
         assert!(snapshot.reproducibility_manifests.is_empty());
         assert_eq!(snapshot.adversarial_corpora, vec![record]);
     }
@@ -20264,7 +20239,9 @@ mod tests {
             ModerationModelRegistryError::InvalidRegistrySnapshot { .. }
         ));
         assert_eq!(
-            handle.moderation_model_registry_snapshot(),
+            handle
+                .export_moderation_model_registry_snapshot()
+                .expect("export unchanged model registry snapshot"),
             ModerationModelRegistrySnapshot::default()
         );
     }
@@ -20305,7 +20282,9 @@ mod tests {
         assert_eq!(repeated.record, outcome.record);
         assert_eq!(repeated.quarantine, Some(quarantine.clone()));
 
-        let snapshot = handle.moderation_screening_snapshot();
+        let snapshot = handle
+            .export_moderation_screening_snapshot()
+            .expect("export moderation screening snapshot");
         assert_eq!(snapshot.screening_records, vec![outcome.record]);
         assert_eq!(snapshot.quarantine_records, vec![quarantine]);
     }
@@ -20322,7 +20301,9 @@ mod tests {
             ))
             .expect("record pass result");
         assert!(outcome.quarantine.is_none());
-        let snapshot = handle.moderation_screening_snapshot();
+        let snapshot = handle
+            .export_moderation_screening_snapshot()
+            .expect("export moderation screening snapshot");
         assert_eq!(snapshot.screening_records, vec![outcome.record]);
         assert!(snapshot.quarantine_records.is_empty());
     }
@@ -20669,7 +20650,8 @@ mod tests {
         let restored = node_with_test_quarantine_key_wrapper(cfg);
         assert!(
             restored
-                .moderation_quarantine_object_snapshot()
+                .export_moderation_quarantine_object_snapshot()
+                .expect("export moderation quarantine object snapshot")
                 .objects
                 .is_empty()
         );
@@ -20709,7 +20691,8 @@ mod tests {
         ));
         assert!(
             handle
-                .moderation_quarantine_object_snapshot()
+                .export_moderation_quarantine_object_snapshot()
+                .expect("export moderation quarantine object snapshot")
                 .objects
                 .is_empty()
         );
@@ -20881,8 +20864,12 @@ mod tests {
             1_800_000_200_000,
             &[],
         );
-        let screening_before = handle.moderation_screening_snapshot();
-        let objects_before = handle.moderation_quarantine_object_snapshot();
+        let screening_before = handle
+            .export_moderation_screening_snapshot()
+            .expect("export moderation screening snapshot");
+        let objects_before = handle
+            .export_moderation_quarantine_object_snapshot()
+            .expect("export moderation quarantine object snapshot");
 
         let screening_error = handle
             .restore_moderation_screening_snapshot(ModerationScreeningSnapshot::default())
@@ -20891,7 +20878,12 @@ mod tests {
             screening_error,
             ModerationScreeningError::InvalidSnapshot { .. }
         ));
-        assert_eq!(handle.moderation_screening_snapshot(), screening_before);
+        assert_eq!(
+            handle
+                .export_moderation_screening_snapshot()
+                .expect("export moderation screening snapshot"),
+            screening_before
+        );
 
         let object_error = handle
             .restore_moderation_quarantine_object_snapshot(
@@ -20903,7 +20895,9 @@ mod tests {
             ModerationQuarantineObjectError::InvalidSnapshot { .. }
         ));
         assert_eq!(
-            handle.moderation_quarantine_object_snapshot(),
+            handle
+                .export_moderation_quarantine_object_snapshot()
+                .expect("export moderation quarantine object snapshot"),
             objects_before
         );
     }
@@ -21080,7 +21074,9 @@ mod tests {
             ModerationEvidenceViewerAccessKind::SessionExpired
         );
 
-        let mut tampered = handle.moderation_evidence_viewer_snapshot();
+        let mut tampered = handle
+            .export_moderation_evidence_viewer_snapshot()
+            .expect("export moderation evidence viewer snapshot");
         tampered.sessions[0].evidence_digest = [0x44; 32];
         let err = handle
             .restore_moderation_evidence_viewer_snapshot(tampered)
@@ -21532,7 +21528,8 @@ mod tests {
         ));
         assert_eq!(
             handle
-                .moderation_screening_snapshot()
+                .export_moderation_screening_snapshot()
+                .expect("export moderation screening snapshot")
                 .quarantine_records
                 .first()
                 .map(|record| record.state),
@@ -21771,39 +21768,29 @@ mod tests {
                 limit: 2
             }
         ));
-        assert_eq!(
-            handle.moderation_quarantine_object_snapshot().objects.len(),
-            2
-        );
-        assert_eq!(
-            handle.moderation_evidence_viewer_snapshot().sessions.len(),
-            2
-        );
-        assert_eq!(
-            handle
-                .moderation_evidence_viewer_snapshot()
-                .access_events
-                .len(),
-            2
-        );
+        let objects = handle
+            .export_moderation_quarantine_object_snapshot()
+            .expect("export moderation quarantine object snapshot");
+        let viewer = handle
+            .export_moderation_evidence_viewer_snapshot()
+            .expect("export moderation evidence viewer snapshot");
+        assert_eq!(objects.objects.len(), 2);
+        assert_eq!(viewer.sessions.len(), 2);
+        assert_eq!(viewer.access_events.len(), 2);
         drop(handle);
 
         let restored = node_with_test_quarantine_key_wrapper(cfg);
-        assert_eq!(
-            restored
-                .moderation_screening_snapshot()
-                .screening_records
-                .len(),
-            2
-        );
-        assert_eq!(
-            restored
-                .moderation_quarantine_object_snapshot()
-                .objects
-                .len(),
-            2
-        );
-        let viewer = restored.moderation_evidence_viewer_snapshot();
+        let screening = restored
+            .export_moderation_screening_snapshot()
+            .expect("export restored moderation screening snapshot");
+        let objects = restored
+            .export_moderation_quarantine_object_snapshot()
+            .expect("export restored moderation quarantine object snapshot");
+        let viewer = restored
+            .export_moderation_evidence_viewer_snapshot()
+            .expect("export restored moderation evidence viewer snapshot");
+        assert_eq!(screening.screening_records.len(), 2);
+        assert_eq!(objects.objects.len(), 2);
         assert_eq!(viewer.sessions.len(), 2);
         assert_eq!(viewer.access_events.len(), 2);
         assert_eq!(
@@ -27582,24 +27569,7 @@ mod tests {
         assert_eq!(pending[0].chain_id, context.chain_id);
     }
 
-    #[test]
-    fn node_handle_storage_methods_error_when_disabled() {
-        let cfg = StorageConfig::builder().enabled(false).build();
-        let handle = NodeHandle::new(cfg);
-
-        let payload = b"disabled storage payload";
-        let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(payload, &plan)
-            .pin_policy(PinPolicy::default())
-            .build()
-            .expect("manifest");
-
-        let mut reader = &payload[..];
-        let err = handle
-            .ingest_manifest(&manifest, &plan, &mut reader)
-            .expect_err("storage disabled");
-        assert!(matches!(err, NodeStorageError::Disabled));
-    }
+    include!("lib/storage_disabled_test.rs");
 
     #[derive(Debug)]
     struct TestGovernanceDagSigner {

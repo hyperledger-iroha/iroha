@@ -52,7 +52,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install pinned workflow-test dependency
-        run: python3 -m pip install --disable-pip-version-check pytest==8.4.2
+        run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
       - name: Verify release-workflow semantics
         run: python3 -m pytest -q pytests/scripts/workspace_release_gate_test.py
       - name: Verify locked metadata and workspace formatting

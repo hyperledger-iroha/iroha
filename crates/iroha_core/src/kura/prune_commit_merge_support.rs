@@ -26,7 +26,14 @@ type OfflineOperationHeights = BTreeMap<(AccountId, [u8; 32]), BTreeSet<NonZeroU
 type TransactionAuthorityHeights = BTreeMap<AccountId, BTreeSet<NonZeroUsize>>;
 type TransactionTimestampHeights = BTreeMap<u64, BTreeSet<NonZeroUsize>>;
 type TransactionResultStatusHeights = BTreeMap<bool, BTreeSet<NonZeroUsize>>;
-type BlockReplicaKey = (u64, HashOf<BlockHeader>);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct BlockReplicaKey {
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    finality_artifact_hash: HashOf<V2FinalityArtifact>,
+    executed_block_wire_len: u64,
+    executed_block_wire_hash: Hash,
+}
 type BlockReplicaRegistry = BTreeMap<BlockReplicaKey, BTreeMap<PeerId, BlockReplicaAdvert>>;
 
 #[derive(Debug, Default)]
@@ -490,8 +497,27 @@ impl CommitManifest {
 
 #[derive(Clone, Copy, Debug)]
 struct BlockReplicaAdvert {
-    payload_len: u64,
+    keeper_index: u32,
     observed_at: Instant,
+}
+
+#[derive(Clone, Debug)]
+struct VerifiedKuraReplicaAuthority {
+    key: BlockReplicaKey,
+    chain_id: ChainId,
+    selected_keepers: Vec<(u32, PeerId)>,
+}
+
+#[derive(Encode)]
+struct KuraReplicaKeeperScoreV1 {
+    domain: Vec<u8>,
+    chain_id: ChainId,
+    context_id: HeightContextId,
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    finality_artifact_hash: HashOf<V2FinalityArtifact>,
+    signer_index: u32,
+    signer: PeerId,
 }
 
 /// Local body availability for a canonical block known to Kura.
@@ -791,4 +817,3 @@ impl MergeLedgerCarrierRecord {
         }
     }
 }
-

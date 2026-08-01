@@ -387,7 +387,7 @@
     }
 
     #[test]
-    fn replica_adverts_ignore_zero_height_and_zero_payload() {
+    fn unauthenticated_replica_test_injection_requires_exact_finality_and_bounds() {
         let temp_dir = TempDir::new().unwrap();
         populate_store(&temp_dir, 2);
 
@@ -404,12 +404,15 @@
             "invalid adverts must not enter the replica registry"
         );
 
-        let peer = checked_peer_id();
-        kura.record_block_replica_advert(peer, height.get() as u64, block_hash, payload_len);
-        assert_eq!(
-            kura.matching_replica_count(height.get() as u64, block_hash, payload_len),
-            1,
-            "valid adverts should still be recorded after ignored invalid inputs"
+        kura.record_block_replica_advert(
+            checked_peer_id(),
+            height.get() as u64,
+            block_hash,
+            payload_len,
+        );
+        assert!(
+            kura.replica_registry.lock().is_empty(),
+            "even well-shaped test observations require retained finality authority"
         );
     }
 
@@ -490,7 +493,13 @@
         height: NonZeroUsize,
     ) -> (HashOf<BlockHeader>, u64) {
         finalize_chain_through_for_eviction(kura, height);
-        advertise_unfinalized_required_replicas(kura, height)
+        let metadata = advertised_block_metadata(kura, height);
+        assert_eq!(
+            kura.advertise_required_replicas_for_bench(height),
+            Some(metadata.1),
+            "fixture must install every exact deterministic remote keeper"
+        );
+        metadata
     }
 
     fn sample_merge_entry(epoch: u64) -> MergeLedgerEntry {
@@ -1999,8 +2008,7 @@
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
 
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init kura");
@@ -2069,42 +2077,39 @@
     }
 
     #[test]
-    fn committed_merge_reservation_lookup_reconstructs_from_canonical_indexes_after_restart() {
+    fn committed_merge_entry_lookup_reconstructs_from_canonical_indexes_after_restart() {
         let dir = TempDir::new().expect("tempdir");
         let config = kura_config_for_dir(&dir, nonzero!(2_usize));
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("open Kura");
         let (transaction_hash, reservation, _) =
             store_indexed_reservation_carrier(kura.as_ref(), 0x61);
-        assert_eq!(
-            kura.committed_merge_queue_reservations(&BTreeSet::from([transaction_hash]))
-                .expect("resolve live indexed reservation"),
-            BTreeMap::from([(transaction_hash, reservation)])
-        );
+        let assert_exact_reservation = |kura: &Kura| {
+            let entry = kura
+                .get_merge_entry_by_carrier_height(nonzero!(2_usize))
+                .expect("resolve indexed merge carrier")
+                .expect("merge carrier has an indexed entry");
+            assert_eq!(
+                crate::state::certified_merge_queue_reservations(&entry)
+                    .expect("decode exact committed reservation"),
+                vec![(transaction_hash, reservation)]
+            );
+        };
+        assert_exact_reservation(kura.as_ref());
         drop(kura);
 
         let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
-        for height in 1..=2 {
-            reopened
-                .get_block(NonZeroUsize::new(height).expect("non-zero fixture height"))
-                .expect("hydrate canonical transaction index after restart");
-        }
         reopened.reset_merge_query_read_counters_for_test();
-        assert_eq!(
-            reopened
-                .committed_merge_queue_reservations(&BTreeSet::from([transaction_hash]))
-                .expect("resolve restarted indexed reservation"),
-            BTreeMap::from([(transaction_hash, reservation)])
-        );
+        assert_exact_reservation(reopened.as_ref());
         let (full_history_scans, _, indexed_lookups) =
             reopened.merge_query_read_counters_for_test();
         assert_eq!(
             full_history_scans, 0,
-            "reservation lookup must not materialize merge history"
+            "carrier lookup must not materialize merge history"
         );
         assert_eq!(
             indexed_lookups, 1,
-            "reservation lookup must decode only its exact carrier sidecar"
+            "carrier lookup must decode only its exact merge sidecar"
         );
     }
 
@@ -2164,14 +2169,13 @@
     }
 
     #[test]
-    fn committed_merge_reservation_lookup_fails_closed_on_log_mutation() {
+    fn committed_merge_entry_lookup_fails_closed_on_log_mutation() {
         for mutation in ["corrupt", "truncate", "oversize"] {
             let dir = TempDir::new().expect("tempdir");
             let config = kura_config_for_dir(&dir, nonzero!(2_usize));
             let lane_config = RuntimeLaneConfig::default();
             let (kura, _) = Kura::new(&config, &lane_config).expect("open Kura");
-            let (transaction_hash, _, frame) =
-                store_indexed_reservation_carrier(kura.as_ref(), 0x71);
+            let (_, _, frame) = store_indexed_reservation_carrier(kura.as_ref(), 0x71);
             let path = kura.active_merge_path.lock().clone();
             let mut file = std::fs::OpenOptions::new()
                 .read(true)
@@ -2225,25 +2229,25 @@
             file.sync_all().expect("sync merge log mutation");
 
             assert!(
-                kura.committed_merge_queue_reservations(&BTreeSet::from([transaction_hash]))
+                kura.get_merge_entry_by_carrier_height(nonzero!(2_usize))
                     .is_err(),
-                "reservation lookup must fail closed after {mutation}"
+                "carrier lookup must fail closed after {mutation}"
             );
         }
     }
 
     #[test]
-    fn committed_merge_reservation_lookup_requires_complete_unique_transaction_index() {
+    fn canonical_transaction_index_exposes_completeness_and_all_carrier_heights() {
         let dir = TempDir::new().expect("tempdir");
         let config = kura_config_for_dir(&dir, nonzero!(2_usize));
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("open Kura");
         let (transaction_hash, _, _) = store_indexed_reservation_carrier(kura.as_ref(), 0x81);
-        let requested = BTreeSet::from([transaction_hash]);
 
         kura.transaction_entrypoint_index.lock().complete = false;
-        assert!(
-            kura.committed_merge_queue_reservations(&requested).is_err(),
+        assert_eq!(
+            kura.get_block_heights_by_transaction_hash(transaction_hash),
+            None,
             "an incomplete canonical transaction index must fail closed"
         );
 
@@ -2256,9 +2260,10 @@
                 .expect("fixture transaction is indexed")
                 .insert(nonzero!(3_usize));
         }
-        assert!(
-            kura.committed_merge_queue_reservations(&requested).is_err(),
-            "multiple canonical carrier heights must fail closed"
+        assert_eq!(
+            kura.get_block_heights_by_transaction_hash(transaction_hash),
+            Some(BTreeSet::from([nonzero!(2_usize), nonzero!(3_usize)])),
+            "the planner must receive every conflicting canonical carrier height"
         );
     }
 

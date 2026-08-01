@@ -244,6 +244,13 @@ pub const TX_RETRIEVAL_INTERVAL: Duration = Duration::from_millis(100);
 /// The cap covers the largest valid embedded lane committee and is enforced by
 /// `irohad` before the vote reaches the Sumeragi actor queue.
 pub const MAX_LANE_DRAIN_VOTE_WIRE_BYTES: usize = lane_consensus::MAX_LANE_DRAIN_VOTE_BYTES;
+/// Maximum complete P2P frame admitted for one authenticated Kura replica advert.
+///
+/// The signed advert itself is capped at 16 KiB. The additional deterministic
+/// headroom covers the nested `BlockMessageWire` and `NetworkMessage` Norito
+/// frames without exposing the general network decoder to an attacker-sized
+/// signature allocation.
+pub const MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES: usize = 32 * 1024;
 const NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG: u32 = 4;
 const MAX_LANE_DRAIN_VOTE_DECODE_ELEMENTS: usize = MAX_LANE_DRAIN_VOTE_WIRE_BYTES;
 // A canonical 128-member BLS committee needs just over 256 KiB under Norito's
@@ -394,11 +401,7 @@ fn inbound_consensus_v2_topic(
     }
 }
 
-fn inbound_sumeragi_topic(
-    framed: &[u8],
-) -> Result<iroha_p2p::network::message::Topic, norito::core::Error> {
-    use iroha_p2p::network::message::Topic;
-
+fn inbound_sumeragi_enum_field(framed: &[u8]) -> Result<(u32, &[u8], u8), norito::core::Error> {
     let view = norito::core::from_bytes_view(framed)?;
     if view.schema() != <BlockMessage as norito::NoritoSerialize>::schema_hash() {
         return Err(norito::core::Error::SchemaMismatch);
@@ -419,12 +422,21 @@ fn inbound_sumeragi_topic(
     }
     let (tag, remaining) = inbound_enum_parts(view.as_bytes())?;
     let field = inbound_enum_field(remaining, view.flags())?;
+    Ok((tag, field, view.flags()))
+}
+
+fn inbound_sumeragi_topic(
+    framed: &[u8],
+) -> Result<iroha_p2p::network::message::Topic, norito::core::Error> {
+    use iroha_p2p::network::message::Topic;
+
+    let (tag, field, flags) = inbound_sumeragi_enum_field(framed)?;
     match tag {
         // Keep these discriminants synchronized with `BlockMessage`. They are
         // inspected before allocating or decoding the nested consensus value.
-        19 | 21 | 22 | 25..=28 => Ok(Topic::Consensus),
+        16 | 19 | 21 | 22 | 25..=28 => Ok(Topic::Consensus),
         20 | 29 => Ok(Topic::ConsensusPayload),
-        30 => inbound_consensus_v2_topic(field, view.flags()),
+        30 => inbound_consensus_v2_topic(field, flags),
         0..=29 => Ok(Topic::Other),
         _ => Err(norito::core::Error::Message(
             "unknown Sumeragi block discriminant".to_owned(),
@@ -634,6 +646,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::LaneBlockCertificate(_)
                 | BlockMessage::LaneHistoricalRecoveryRequest(_) => T::Consensus,
+                BlockMessage::KuraReplicaAdvert(_) => T::Consensus,
                 // Every remaining `BlockMessage` variant belongs to the retired
                 // global v1 protocol.  Keep those variants decodable for archive
                 // tooling, but never schedule them on correctness-critical live
@@ -753,14 +766,37 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     fn inbound_decode_limits(
         payload: &[u8],
         framed_len: usize,
-        _flags: u8,
+        flags: u8,
     ) -> Result<Option<norito::DecodeLimits>, norito::core::Error> {
         let discriminant = payload
             .get(..core::mem::size_of::<u32>())
             .ok_or(norito::core::Error::LengthMismatch)?;
         let mut discriminant_bytes = [0_u8; core::mem::size_of::<u32>()];
         discriminant_bytes.copy_from_slice(discriminant);
-        if u32::from_le_bytes(discriminant_bytes) != NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG {
+        let network_tag = u32::from_le_bytes(discriminant_bytes);
+        if network_tag == 0 {
+            let (_, remaining) = inbound_enum_parts(payload)?;
+            let framed = inbound_owned_enum_field(remaining, flags)?;
+            let (block_tag, _, _) = inbound_sumeragi_enum_field(framed)?;
+            if block_tag != 16 {
+                return Ok(None);
+            }
+            if framed_len > MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES {
+                return Err(norito::core::Error::ArchiveLengthExceeded {
+                    length: u64::try_from(framed_len).unwrap_or(u64::MAX),
+                    limit: u64::try_from(MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES)
+                        .unwrap_or(u64::MAX),
+                });
+            }
+            return Ok(Some(norito::DecodeLimits::new(
+                MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
+                MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
+                MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
+                4 * MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
+                64,
+            )));
+        }
+        if network_tag != NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG {
             return Ok(None);
         }
 
@@ -919,7 +955,7 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_crypto::{Hash, HashOf, KeyPair, SignatureOf};
+    use iroha_crypto::{Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::block::{BlockHeader, BlockSignature, builder::BlockBuilder};
     use iroha_data_model::nexus::{DataSpaceId, LaneId};
     use iroha_data_model::peer::PeerId;
@@ -934,7 +970,8 @@ mod tests {
     use norito::{codec::Encode, core as ncore};
 
     use crate::{
-        MAX_LANE_DRAIN_VOTE_WIRE_BYTES, NetworkMessage, PeerTrustGossip,
+        MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES, MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
+        NetworkMessage, PeerTrustGossip,
         gossiper::{GossipPlane, GossipRoute, GossipTransaction, TransactionGossip},
         queue::{RoutingDecision, RoutingPlan},
         role::RoleIdWithOwner,
@@ -951,6 +988,7 @@ mod tests {
             },
             message::{
                 BlockCreated, BlockMessage, BlockMessageWire, BlockSyncUpdate, FetchPendingBlock,
+                KURA_REPLICA_ADVERT_VERSION_V1, KuraReplicaAdvertV1,
             },
         },
         torii_proxy::{
@@ -1916,6 +1954,58 @@ mod tests {
             !legacy_vrf.is_outbound_allowed(),
             "legacy unversioned VRF frames remain decode-only"
         );
+    }
+
+    fn signed_kura_replica_advert_message() -> NetworkMessage {
+        let key = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+            .expect("generate BLS-normal Kura replica keeper key");
+        let mut advert = KuraReplicaAdvertV1 {
+            version: KURA_REPLICA_ADVERT_VERSION_V1,
+            chain_id: ChainId::from("network-kura-replica-advert-test"),
+            height: 9,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replica-block")),
+            executed_block_wire_len: 2048,
+            executed_block_wire_hash: Hash::new(b"replica-executed-wire"),
+            finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(b"replica-finality")),
+            keeper_index: 0,
+            keeper: PeerId::new(key.public_key().clone()),
+            signature: Vec::new(),
+        };
+        advert.signature = Signature::new(key.private_key(), &advert.signature_preimage())
+            .payload()
+            .to_vec();
+        NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
+            BlockMessage::KuraReplicaAdvert(advert),
+        )))
+    }
+
+    #[test]
+    fn kura_replica_advert_uses_bounded_consensus_auxiliary_topic() {
+        let message = signed_kura_replica_advert_message();
+        assert_eq!(message.topic(), NetworkTopic::Consensus);
+        assert_eq!(raw_network_topic(&message), NetworkTopic::Consensus);
+        assert!(message.is_outbound_allowed());
+
+        let encoded = ncore::to_bytes(&message).expect("encode Kura replica advert network frame");
+        let view = ncore::from_bytes_view(&encoded).expect("inspect Kura replica advert frame");
+        let limits = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+            view.as_bytes(),
+            encoded.len(),
+            view.flags(),
+        )
+        .expect("derive Kura replica advert decode limits");
+        assert!(
+            limits.is_some(),
+            "the auxiliary advert must decode under an explicit bound"
+        );
+        assert!(matches!(
+            <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+                view.as_bytes(),
+                MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES + 1,
+                view.flags(),
+            ),
+            Err(ncore::Error::ArchiveLengthExceeded { .. })
+        ));
     }
 
     #[test]

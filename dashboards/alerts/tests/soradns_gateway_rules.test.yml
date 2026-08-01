@@ -27,18 +27,37 @@ tests:
           - exp_labels:
               resolver_id: resolver-a
               severity: warning
+            exp_annotations:
+              summary: "SoraDNS resolver sync stale"
+              description: |
+                Resolver resolver-a has not refreshed bundles for at least
+                15 minutes (sync lag=1260s). Check RAD fetchers,
+                transparency tailer, and network reachability before proceeding with
+                new directory releases.
       - alertname: SoraDnsBundleProofStale
         eval_time: 10m
         exp_alerts:
           - exp_labels:
               resolver_id: resolver-a
               severity: warning
+            exp_annotations:
+              summary: "SoraDNS bundle proofs older than 10 minutes"
+              description: |
+                Resolver resolver-a reports bundle proofs older than 10 minutes
+                (age=700s). Investigate RAD freshness, resolver clock skew,
+                and bundle ingestion before proofs expire.
       - alertname: SoraDnsBundleProofExpiryRisk
         eval_time: 10m
         exp_alerts:
           - exp_labels:
               resolver_id: resolver-a
               severity: critical
+            exp_annotations:
+              summary: "SoraDNS bundle proofs expiring within 5 minutes"
+              description: |
+                Resolver resolver-a has bundle proofs with <5 minutes of TTL remaining
+                (min_ttl=180s). Refresh the directory or pause promotions
+                to avoid serving stale bundles.
       - alertname: SoraDnsCidDriftDetected
         eval_time: 10m
         exp_alerts:
@@ -46,18 +65,34 @@ tests:
               namehash: docs
               resolver_id: resolver-a
               severity: warning
+            exp_annotations:
+              summary: "SoraDNS bundle CID drift observed"
+              description: |
+                CID drift detected for resolver resolver-a / docs
+                within the last 15 minutes (delta=1). Validate the CAR/manifest
+                lineage and GAR bindings before promoting new aliases.
       - alertname: SoraDnsBundleCoverageMissing
         eval_time: 8m
         exp_alerts:
           - exp_labels:
               resolver_id: resolver-a
               severity: critical
+            exp_annotations:
+              summary: "SoraDNS resolver has no active bundles"
+              description: |
+                Resolver resolver-a is serving zero proof bundles for at least 5 minutes.
+                Rehydrate the directory snapshot and verify transparency ingestion.
       - alertname: SoraFsGatewayTlsExpiryWindowLow
         eval_time: 6m
         exp_alerts:
           - exp_labels:
               gateway: gw-1
               severity: warning
+            exp_annotations:
+              summary: "SoraFS gateway TLS certificate expires within 7 days"
+              description: |
+                Gateway TLS certificate expires in under 7 days (500000s remaining).
+                Trigger ACME renewal and confirm ECH state before the window closes.
       - alertname: SoraFsGatewayTlsRenewalFailures
         eval_time: 4m
         exp_alerts:
@@ -65,6 +100,11 @@ tests:
               gateway: gw-1
               result: failure
               severity: warning
+            exp_annotations:
+              summary: "SoraFS gateway TLS renewal failures detected"
+              description: |
+                At least one TLS renewal failure occurred in the last 15 minutes (result=failure).
+                Inspect ACME logs and retry automation before certificates age out.
       - alertname: SoraFsAliasCacheRefreshFailures
         eval_time: 6m
         exp_alerts:
@@ -72,6 +112,11 @@ tests:
               gateway: gw-1
               result: failure
               severity: warning
+            exp_annotations:
+              summary: "SoraFS alias cache refresh failures"
+              description: |
+                Alias cache refresh failures detected (2) in the last 10 minutes.
+                Confirm SoraFS alias proofs remain valid and review gateway logs for refresh errors.
   - interval: 1m
     input_series:
       - series: 'soradns_resolver_last_sync_unix_seconds{resolver_id="resolver-a"}'

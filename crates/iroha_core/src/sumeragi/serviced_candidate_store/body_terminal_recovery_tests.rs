@@ -81,12 +81,26 @@
             LeaderWireLifecycleStatus::Dormant
         );
         assert_eq!(restore.records()[0].runtime_owner(), Some(runtime_owner));
-        reopened.mark_ingress(&token).expect("replay ingress");
+        let replay = reopened
+            .reserve(token.clone())
+            .expect("reactivate replay ingress");
+        reopened
+            .mark_ingress(replay.token())
+            .expect("replay ingress");
         let runtime = reopened
-            .mark_runtime(&token, runtime_owner)
+            .mark_runtime(replay.token(), runtime_owner)
             .expect("rebind restored runtime");
         reopened
-            .mark_durable_body_terminal(&runtime, &durable_body)
+            .mark_terminal(
+                &runtime,
+                LeaderWireStableTerminalEvidence::DurableBody(
+                    LeaderWireDurableBodyTerminalEvidence::from_receipt(
+                        &durable_body,
+                        OWNER_A,
+                        runtime_owner,
+                    ),
+                ),
+            )
             .expect("publish body-backed terminal");
 
         let (_, stable) = LeaderWireLifecycleStoreGate::open(
@@ -203,4 +217,3 @@
             Some(LeaderWireStableTerminalEvidence::DurableBody(_))
         ));
     }
-

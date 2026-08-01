@@ -125,14 +125,14 @@ def pull_request_paths(workflow_name: str) -> set[str]:
 
     source = (WORKFLOW_ROOT / workflow_name).read_text(encoding="utf-8")
     match = re.search(
-        r"(?ms)^  pull_request:\n"
-        r"(?P<body>(?:^    .*\n)*)",
+        r"(?m)^  pull_request:\n"
+        r"(?P<body>(?:^    [^\n]*\n)*)",
         source,
     )
     assert match is not None, f"{workflow_name} must define pull_request"
     body = match.group("body")
     paths = re.search(
-        r"(?ms)^    paths:\n(?P<paths>(?:^      - .*\n)+)",
+        r'(?m)^    paths:\n(?P<paths>(?:^      - "[^"\n]+"\n)+)',
         body,
     )
     assert paths is not None, f"{workflow_name} must define pull_request.paths"
@@ -156,6 +156,10 @@ def test_native_sdk_workflows_cover_appeal_finance_and_escrow_sources(
     """Every relevant SDK job reruns for all shared native-escrow inputs."""
 
     paths = pull_request_paths(workflow_name)
+    assert not any(
+        path.startswith(("jobs:", "name:", "run:", "runs-on:", "uses:"))
+        for path in paths
+    ), f"{workflow_name} path parser leaked workflow job fields"
     assert NATIVE_ESCROW_TRIGGER_PATHS <= paths
     assert "scripts/check_sorafs_reference_sdk_fixtures.py" in paths
     assert "scripts/tests/check_sorafs_fixture_workflow_contract_test.py" in paths
@@ -446,6 +450,22 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
         "IROHA_JS_NATIVE_BUILD_PROFILE=release npm run build:native"
         in parity_runner
     )
+    assert 'mktemp -d "${TMPDIR:-/tmp}/iroha-sorafs-js-native-target.XXXXXX"' in parity_runner
+    assert "native_cargo=\"$(rustup which cargo)\"" in parity_runner
+    assert "native_rustc=\"$(rustup which rustc)\"" in parity_runner
+    assert "native_rustdoc=\"$(rustup which rustdoc)\"" in parity_runner
+    for build_binding in (
+        "CARGO_BUILD_JOBS=1",
+        "CARGO_INCREMENTAL=0",
+        "CARGO_NET_OFFLINE=true",
+        'CARGO_TARGET_DIR="${native_build_target}"',
+        'IROHA_JS_CARGO_LOCKFILE_PATH="${REPO_ROOT}/Cargo.lock"',
+        'IROHA_JS_CARGO_PATH="${native_cargo}"',
+        'RUSTC="${native_rustc}"',
+        "RUSTC_BOOTSTRAP=1",
+        'RUSTDOC="${native_rustdoc}"',
+    ):
+        assert build_binding in parity_runner
     assert "test/cancelAssetLockV1.test.js" in parity_runner
     assert "test/sorafsAppealFinanceValidation.test.js" in parity_runner
     assert "swift test --filter SorafsOrchestratorParityTests" in parity_runner
@@ -526,6 +546,7 @@ def test_python_native_lane_covers_appeal_finance_and_provider_ingest_without_sk
         in runner
     )
     assert "tests/cancel_asset_lock_v1_test.py" in runner
+    assert "tests/cancel_asset_lock_client_helpers_test.py" in runner
     assert "tests/client_ledger_helpers_test.py" in runner
     assert "tests/sorafs_reference_validation_test.py" in runner
     assert "tests/sorafs_replication_instruction_test.py" in runner
@@ -537,7 +558,7 @@ def test_python_native_lane_covers_appeal_finance_and_provider_ingest_without_sk
 def test_python_cancel_builder_has_exact_archive_and_typed_two_argument_coverage() -> None:
     """The native Python lane must decode and pin the hard-cut cancellation archive."""
 
-    tests = read("python/iroha_python/tests/client_ledger_helpers_test.py")
+    tests = read("python/iroha_python/tests/cancel_asset_lock_client_helpers_test.py")
     crypto = read("python/iroha_python/src/iroha_python/crypto.py")
     assert "instruction_json_bytes = draft.instructions[0].to_json().encode(\"utf-8\")" in tests
     assert "instruction_archive = base64.b64decode(" in tests

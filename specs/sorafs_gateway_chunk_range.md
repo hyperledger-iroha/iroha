@@ -63,6 +63,11 @@ Logs:
   enabled = true
   signer_handle = "pkcs11:prod/stream-token/v4"
   signer_public_key_hex = "<64-lowercase-hex-characters>"
+  signer_revision = 4
+  signer_policy_digest_hex = "<64-lowercase-nonzero-hex-characters>"
+  admission_provider_handle = "sealed-cas:prod/stream-token/admission/v1"
+  admission_provider_revision = 7
+  admission_provider_policy_digest_hex = "<64-lowercase-nonzero-hex-characters>"
   key_version = 4
   ```
 
@@ -70,17 +75,21 @@ Logs:
   key remains non-exportable in the HSM/KMS, and its credentials, session, and
   PIN are supplied only to the runtime-injected signer adapter. They must never
   appear in configuration, files, logs, or readiness artefacts.
-- **Startup binding.** An enabled issuer requires both configured values and an
-  injected signer. Startup fails closed unless the adapter reports the exact
-  configured handle and public key, and also rejects malformed or weak Ed25519
-  keys. A handle is an identifier, not a place to embed credentials. Disabling
-  issuance in TOML does not permit an injected signer to activate it.
-- **Signing boundary.** Torii sends the canonical domain-separated payload to
-  the injected signer and accepts only a raw 64-byte Ed25519 signature. It
-  assembles `StreamTokenV1` and strictly verifies the returned signature against
-  `signer_public_key_hex` before releasing the token. An unavailable/refusing
-  signer or any malformed, wrong-key, or non-verifying output fails closed and
-  must produce only a bounded, payload-free failure class.
+- **Startup binding.** An enabled issuer requires all four configured public
+  signer fields and an injected signer. Startup probes twice and fails closed
+  unless the adapter reports the exact configured handle, public key, non-zero
+  revision, and non-zero public-policy digest without drift. It also rejects
+  malformed or weak Ed25519 keys and stale, substituted, revoked, or test-marked
+  providers. A handle is an identifier, not a place to embed credentials.
+  Disabling issuance in TOML does not permit an injected signer to activate it.
+- **Signing boundary.** Torii revalidates all four public identity fields before
+  and after sending the canonical domain-separated payload to the injected
+  signer and accepts only a raw 64-byte Ed25519 signature. It assembles
+  `StreamTokenV1` and strictly verifies the returned signature against
+  `signer_public_key_hex` before releasing the token. Qualification drift, an
+  unavailable/refusing signer, or any malformed, wrong-key, or non-verifying
+  output fails closed and must produce only a bounded, payload-free failure
+  class.
 - **Distribution.** Orchestrators receive the corresponding 32-byte public key
   through authenticated provider deployment inventory and pass its 64-character
   hex encoding as `gateway-key`. The issuance response also reports
@@ -91,8 +100,9 @@ Logs:
   request. It never falls back to a key embedded in an untrusted response.
 - **Rotation.** Create the replacement key inside the approved HSM/KMS without
   exporting it. In one controlled rollout, inject the adapter for its new
-  non-secret handle, update `signer_handle`, `signer_public_key_hex`, and
-  `key_version`, and restart the issuer. Require the startup binding check and a
+  non-secret handle, update `signer_handle`, `signer_public_key_hex`,
+  `signer_revision`, `signer_policy_digest_hex`, and `key_version`, and restart
+  the issuer. Require both startup qualification probes and a
   strictly verified probe token before publishing the new public key through
   authenticated inventory. Atomically deploy a matching `gateway-key` and token.
   For overlap, use separately named old/new provider descriptors; remove the old

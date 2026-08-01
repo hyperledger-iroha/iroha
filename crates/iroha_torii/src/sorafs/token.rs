@@ -61,6 +61,74 @@ pub enum StreamTokenSigningError {
     Refused,
 }
 
+/// Public revision and policy identity reported by the stream-token signer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamTokenRuntimeSignerQualificationV1 {
+    revision: u64,
+    policy_digest: [u8; 32],
+}
+
+impl StreamTokenRuntimeSignerQualificationV1 {
+    /// Construct one public signer qualification.
+    ///
+    /// Call [`Self::validate`] before trusting a value returned by an external
+    /// provider.
+    #[must_use]
+    pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
+        Self {
+            revision,
+            policy_digest,
+        }
+    }
+
+    /// Return the exact non-zero adapter revision.
+    #[must_use]
+    pub const fn revision(self) -> u64 {
+        self.revision
+    }
+
+    /// Return the exact non-zero public-policy digest.
+    #[must_use]
+    pub const fn policy_digest(self) -> [u8; 32] {
+        self.policy_digest
+    }
+
+    /// Reject a zero revision or zero policy digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns the precise invalid public field.
+    pub fn validate(self) -> Result<(), StreamTokenRuntimeSignerQualificationValueErrorV1> {
+        if self.revision == 0 {
+            return Err(StreamTokenRuntimeSignerQualificationValueErrorV1::ZeroRevision);
+        }
+        if self.policy_digest == [0; 32] {
+            return Err(StreamTokenRuntimeSignerQualificationValueErrorV1::ZeroPolicyDigest);
+        }
+        Ok(())
+    }
+}
+
+/// Invalid public stream-token signer qualification value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamTokenRuntimeSignerQualificationValueErrorV1 {
+    /// Adapter revision is zero.
+    ZeroRevision,
+    /// Public-policy digest is all zeroes.
+    ZeroPolicyDigest,
+}
+
+/// Payload-free failure while probing a runtime stream-token signer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum StreamTokenRuntimeSignerProbeErrorV1 {
+    /// The signer or its backing HSM/KMS is temporarily unavailable.
+    #[error("stream-token runtime signer probe unavailable")]
+    Unavailable,
+    /// The signer identity is stale or revoked.
+    #[error("stream-token runtime signer probe stale or revoked")]
+    StaleOrRevoked,
+}
+
 /// Runtime-only pure-Ed25519 signing boundary for stream-token issuance.
 ///
 /// Implementations own their credentials, sessions, and bounded provider
@@ -73,6 +141,11 @@ pub trait StreamTokenRuntimeSigner: Send + Sync {
     /// Return the exact Ed25519 public key bound by configuration.
     fn public_key(&self) -> [u8; 32];
 
+    /// Probe the exact active adapter revision and public-policy digest.
+    fn qualification(
+        &self,
+    ) -> Result<StreamTokenRuntimeSignerQualificationV1, StreamTokenRuntimeSignerProbeErrorV1>;
+
     /// Sign one canonical, domain-separated stream-token payload.
     fn sign(
         &self,
@@ -83,6 +156,8 @@ pub trait StreamTokenRuntimeSigner: Send + Sync {
 /// Issuer used to sign stream tokens with configured defaults.
 pub struct StreamTokenIssuer {
     signer: Arc<dyn StreamTokenRuntimeSigner>,
+    expected_signer_handle: String,
+    expected_signer_qualification: StreamTokenRuntimeSignerQualificationV1,
     verifying_key: VerifyingKey,
     defaults: TokenDefaults,
     issuance_budgets: Mutex<BTreeMap<StreamTokenQuotaSubject, IssuanceBudget>>,
@@ -200,11 +275,43 @@ impl StreamTokenIssuer {
         if verifying_key.is_weak() {
             return Err(StreamTokenIssuerError::WeakRuntimeSignerPublicKey);
         }
+        validate_production_runtime_handle(signer.handle())
+            .map_err(|_| StreamTokenIssuerError::InvalidRuntimeSignerHandle)?;
         if signer.handle() != configured_handle {
             return Err(StreamTokenIssuerError::RuntimeSignerHandleMismatch);
         }
         if signer.public_key() != configured_public_key {
             return Err(StreamTokenIssuerError::RuntimeSignerPublicKeyMismatch);
+        }
+        let configured_revision = config
+            .signer_revision
+            .ok_or(StreamTokenIssuerError::MissingRuntimeSignerRevision)?;
+        let configured_policy_digest = config
+            .signer_policy_digest
+            .ok_or(StreamTokenIssuerError::MissingRuntimeSignerPolicyDigest)?;
+        let expected_signer_qualification = StreamTokenRuntimeSignerQualificationV1::new(
+            configured_revision,
+            configured_policy_digest,
+        );
+        expected_signer_qualification
+            .validate()
+            .map_err(|_| StreamTokenIssuerError::InvalidRuntimeSignerQualification)?;
+        let first = signer.qualification().map_err(map_runtime_signer_probe_error)?;
+        first
+            .validate()
+            .map_err(|_| StreamTokenIssuerError::InvalidRuntimeSignerQualification)?;
+        if first != expected_signer_qualification {
+            return Err(StreamTokenIssuerError::RuntimeSignerQualificationMismatch);
+        }
+        let second = signer.qualification().map_err(map_runtime_signer_probe_error)?;
+        second
+            .validate()
+            .map_err(|_| StreamTokenIssuerError::RuntimeSignerQualificationChanged)?;
+        if second != first
+            || signer.handle() != configured_handle
+            || signer.public_key() != configured_public_key
+        {
+            return Err(StreamTokenIssuerError::RuntimeSignerQualificationChanged);
         }
         let defaults = TokenDefaults {
             key_version: config.key_version,
@@ -216,6 +323,8 @@ impl StreamTokenIssuer {
         defaults.validate()?;
         Ok(Some(Self {
             signer,
+            expected_signer_handle: configured_handle.clone(),
+            expected_signer_qualification,
             verifying_key,
             defaults,
             issuance_budgets: Mutex::new(BTreeMap::new()),
@@ -284,6 +393,7 @@ impl StreamTokenIssuer {
             .signing_payload_bytes()
             .map_err(StreamTokenError::from)
             .map_err(StreamTokenIssuerError::StreamToken)?;
+        self.revalidate_runtime_signer()?;
         let signature = self
             .signer
             .sign(&signing_payload)
@@ -293,6 +403,7 @@ impl StreamTokenIssuer {
                 }
                 StreamTokenSigningError::Refused => StreamTokenIssuerError::RuntimeSignerRefused,
             })?;
+        self.revalidate_runtime_signer()?;
         let token = StreamTokenV1::from_external_signature(body, signature, &self.verifying_key)
             .map_err(|_| StreamTokenIssuerError::RuntimeSignerOutputInvalid)?;
 
@@ -300,6 +411,29 @@ impl StreamTokenIssuer {
             token,
             remaining_quota,
         })
+    }
+
+    fn revalidate_runtime_signer(&self) -> Result<(), StreamTokenIssuerError> {
+        if self.signer.handle() != self.expected_signer_handle
+            || validate_production_runtime_handle(self.signer.handle()).is_err()
+            || self.signer.public_key() != self.verifying_key.to_bytes()
+        {
+            return Err(StreamTokenIssuerError::RuntimeSignerQualificationChanged);
+        }
+        let qualification = self
+            .signer
+            .qualification()
+            .map_err(map_runtime_signer_probe_error)?;
+        qualification
+            .validate()
+            .map_err(|_| StreamTokenIssuerError::RuntimeSignerQualificationChanged)?;
+        if qualification != self.expected_signer_qualification
+            || self.signer.handle() != self.expected_signer_handle
+            || self.signer.public_key() != self.verifying_key.to_bytes()
+        {
+            return Err(StreamTokenIssuerError::RuntimeSignerQualificationChanged);
+        }
+        Ok(())
     }
 
     /// Return the Ed25519 verifying key bytes.
@@ -495,6 +629,19 @@ fn new_token_id_with_rng<R: TryCryptoRng>(rng: &mut R) -> Result<String, StreamT
     Ok(hex::encode(bytes))
 }
 
+const fn map_runtime_signer_probe_error(
+    error: StreamTokenRuntimeSignerProbeErrorV1,
+) -> StreamTokenIssuerError {
+    match error {
+        StreamTokenRuntimeSignerProbeErrorV1::Unavailable => {
+            StreamTokenIssuerError::RuntimeSignerUnavailable
+        }
+        StreamTokenRuntimeSignerProbeErrorV1::StaleOrRevoked => {
+            StreamTokenIssuerError::RuntimeSignerQualificationChanged
+        }
+    }
+}
+
 /// Errors encountered while configuring or issuing stream tokens.
 #[derive(Debug, Error)]
 pub enum StreamTokenIssuerError {
@@ -517,6 +664,12 @@ pub enum StreamTokenIssuerError {
     /// The enabled configuration omitted the public verification key.
     #[error("stream-token issuance requires a configured runtime signer public key")]
     MissingRuntimeSignerPublicKey,
+    /// The enabled configuration omitted the adapter revision.
+    #[error("stream-token issuance requires a configured runtime signer revision")]
+    MissingRuntimeSignerRevision,
+    /// The enabled configuration omitted the public-policy digest.
+    #[error("stream-token issuance requires a configured runtime signer policy digest")]
+    MissingRuntimeSignerPolicyDigest,
     /// The configured handle was non-canonical or marked for development use.
     #[error("invalid production stream-token runtime signer handle")]
     InvalidRuntimeSignerHandle,
@@ -532,6 +685,15 @@ pub enum StreamTokenIssuerError {
     /// The injected provider did not expose the exact configured public key.
     #[error("stream-token runtime signer public key does not match configuration")]
     RuntimeSignerPublicKeyMismatch,
+    /// The configured or first observed qualification contains a zero field.
+    #[error("invalid stream-token runtime signer qualification")]
+    InvalidRuntimeSignerQualification,
+    /// The injected provider did not expose the exact configured qualification.
+    #[error("stream-token runtime signer qualification does not match configuration")]
+    RuntimeSignerQualificationMismatch,
+    /// The provider identity changed across probes or one signing boundary.
+    #[error("stream-token runtime signer qualification changed")]
+    RuntimeSignerQualificationChanged,
     /// The bounded HSM/KMS signing operation was unavailable.
     #[error("stream-token runtime signer unavailable")]
     RuntimeSignerUnavailable,
@@ -753,6 +915,16 @@ mod tests {
         signing_key: SigningKey,
         advertised_public_key: [u8; 32],
         mode: TestSignerMode,
+        qualification: StreamTokenRuntimeSignerQualificationV1,
+        qualification_results: Mutex<
+            Vec<
+                Result<
+                    StreamTokenRuntimeSignerQualificationV1,
+                    StreamTokenRuntimeSignerProbeErrorV1,
+                >,
+            >,
+        >,
+        qualification_calls: std::sync::atomic::AtomicUsize,
         signing_payloads: Mutex<Vec<Vec<u8>>>,
         calls: std::sync::atomic::AtomicUsize,
     }
@@ -765,9 +937,28 @@ mod tests {
                 advertised_public_key: signing_key.verifying_key().to_bytes(),
                 signing_key,
                 mode,
+                qualification: StreamTokenRuntimeSignerQualificationV1::new(4, [0xb4; 32]),
+                qualification_results: Mutex::new(Vec::new()),
+                qualification_calls: std::sync::atomic::AtomicUsize::new(0),
                 signing_payloads: Mutex::new(Vec::new()),
                 calls: std::sync::atomic::AtomicUsize::new(0),
             }
+        }
+
+        fn with_qualification_results(
+            mut self,
+            results: Vec<
+                Result<
+                    StreamTokenRuntimeSignerQualificationV1,
+                    StreamTokenRuntimeSignerProbeErrorV1,
+                >,
+            >,
+        ) -> Self {
+            *self
+                .qualification_results
+                .get_mut()
+                .expect("test qualification results") = results;
+            self
         }
     }
 
@@ -778,6 +969,21 @@ mod tests {
 
         fn public_key(&self) -> [u8; 32] {
             self.advertised_public_key
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            StreamTokenRuntimeSignerQualificationV1,
+            StreamTokenRuntimeSignerProbeErrorV1,
+        > {
+            let index = self.qualification_calls.fetch_add(1, Ordering::Relaxed);
+            self.qualification_results
+                .lock()
+                .expect("test qualification results")
+                .get(index)
+                .copied()
+                .unwrap_or(Ok(self.qualification))
         }
 
         fn sign(
@@ -806,11 +1012,14 @@ mod tests {
             enabled: true,
             signer_handle: Some("pkcs11:prod/stream-token/v1".to_owned()),
             signer_public_key: Some(public_key),
+            signer_revision: Some(4),
+            signer_policy_digest: Some([0xb4; 32]),
             key_version: 1,
             default_ttl_secs: 900,
             default_max_streams: 2,
             default_rate_limit_bytes: 512 * 1024,
             default_requests_per_minute: requests_per_minute,
+            ..actual::SorafsTokenConfig::default()
         }
     }
 
@@ -875,6 +1084,18 @@ mod tests {
             Ok(_) => panic!("RNG failure must be reported"),
             Err(other) => panic!("expected RNG failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn signer_qualification_rejects_zero_public_fields() {
+        assert_eq!(
+            StreamTokenRuntimeSignerQualificationV1::new(0, [0xb4; 32]).validate(),
+            Err(StreamTokenRuntimeSignerQualificationValueErrorV1::ZeroRevision)
+        );
+        assert_eq!(
+            StreamTokenRuntimeSignerQualificationV1::new(4, [0; 32]).validate(),
+            Err(StreamTokenRuntimeSignerQualificationValueErrorV1::ZeroPolicyDigest)
+        );
     }
 
     #[test]
@@ -1021,6 +1242,98 @@ mod tests {
     }
 
     #[test]
+    fn runtime_signer_qualification_fails_closed_at_startup() {
+        let signer = Arc::new(TestStreamTokenRuntimeSigner::new(
+            "pkcs11:prod/stream-token/v1",
+            [0x33; 32],
+            TestSignerMode::Sign,
+        ));
+        let mut config = token_config(signer.public_key(), 2);
+
+        config.signer_revision = None;
+        assert!(matches!(
+            StreamTokenIssuer::from_config(
+                &config,
+                &configured_api_tokens(),
+                Some(signer.clone()),
+            ),
+            Err(StreamTokenIssuerError::MissingRuntimeSignerRevision)
+        ));
+        config.signer_revision = Some(4);
+        config.signer_policy_digest = None;
+        assert!(matches!(
+            StreamTokenIssuer::from_config(
+                &config,
+                &configured_api_tokens(),
+                Some(signer.clone()),
+            ),
+            Err(StreamTokenIssuerError::MissingRuntimeSignerPolicyDigest)
+        ));
+        config.signer_policy_digest = Some([0; 32]);
+        assert!(matches!(
+            StreamTokenIssuer::from_config(
+                &config,
+                &configured_api_tokens(),
+                Some(signer.clone()),
+            ),
+            Err(StreamTokenIssuerError::InvalidRuntimeSignerQualification)
+        ));
+        config.signer_policy_digest = Some([0xb4; 32]);
+        config.signer_revision = Some(5);
+        assert!(matches!(
+            StreamTokenIssuer::from_config(
+                &config,
+                &configured_api_tokens(),
+                Some(signer.clone()),
+            ),
+            Err(StreamTokenIssuerError::RuntimeSignerQualificationMismatch)
+        ));
+
+        let unavailable = Arc::new(
+            TestStreamTokenRuntimeSigner::new(
+                "pkcs11:prod/stream-token/v1",
+                [0x33; 32],
+                TestSignerMode::Sign,
+            )
+            .with_qualification_results(vec![Err(
+                StreamTokenRuntimeSignerProbeErrorV1::Unavailable,
+            )]),
+        );
+        let config = token_config(unavailable.public_key(), 2);
+        assert!(matches!(
+            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(unavailable)),
+            Err(StreamTokenIssuerError::RuntimeSignerUnavailable)
+        ));
+
+        let expected = StreamTokenRuntimeSignerQualificationV1::new(4, [0xb4; 32]);
+        let drifted = StreamTokenRuntimeSignerQualificationV1::new(5, [0xb4; 32]);
+        let drifting = Arc::new(
+            TestStreamTokenRuntimeSigner::new(
+                "pkcs11:prod/stream-token/v1",
+                [0x33; 32],
+                TestSignerMode::Sign,
+            )
+            .with_qualification_results(vec![Ok(expected), Ok(drifted)]),
+        );
+        let config = token_config(drifting.public_key(), 2);
+        assert!(matches!(
+            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(drifting)),
+            Err(StreamTokenIssuerError::RuntimeSignerQualificationChanged)
+        ));
+
+        let test_marked = Arc::new(TestStreamTokenRuntimeSigner::new(
+            "pkcs11:test/stream-token/v1",
+            [0x33; 32],
+            TestSignerMode::Sign,
+        ));
+        let config = token_config(test_marked.public_key(), 2);
+        assert!(matches!(
+            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(test_marked)),
+            Err(StreamTokenIssuerError::InvalidRuntimeSignerHandle)
+        ));
+    }
+
+    #[test]
     fn verify_rejects_modified_body() {
         let signing = SigningKey::from_bytes(&[0x24; 32]);
         let verifying = signing.verifying_key();
@@ -1074,6 +1387,111 @@ mod tests {
             .token
             .verify(issuer.verifying_key())
             .expect("issuer must release only a strictly verified token");
+        assert_eq!(
+            signer.qualification_calls.load(Ordering::Relaxed),
+            4,
+            "startup and the signing boundary each require two public probes"
+        );
+    }
+
+    #[test]
+    fn runtime_signer_qualification_is_fenced_before_and_after_signing() {
+        let expected = StreamTokenRuntimeSignerQualificationV1::new(4, [0xb4; 32]);
+        let drifted = StreamTokenRuntimeSignerQualificationV1::new(5, [0xb4; 32]);
+        for (label, reports, expected_sign_calls) in [
+            (
+                "before signing",
+                vec![Ok(expected), Ok(expected), Ok(drifted)],
+                0,
+            ),
+            (
+                "after signing",
+                vec![Ok(expected), Ok(expected), Ok(expected), Ok(drifted)],
+                1,
+            ),
+        ] {
+            let signer = Arc::new(
+                TestStreamTokenRuntimeSigner::new(
+                    "pkcs11:prod/stream-token/v1",
+                    [0x33; 32],
+                    TestSignerMode::Sign,
+                )
+                .with_qualification_results(reports),
+            );
+            let config = token_config(signer.public_key(), 1);
+            let issuer = StreamTokenIssuer::from_config(
+                &config,
+                &configured_api_tokens(),
+                Some(signer.clone()),
+            )
+            .expect("startup qualification")
+            .expect("enabled issuer");
+            assert!(matches!(
+                issuer.issue_token(
+                    quota_subject("credential-drift"),
+                    vec![0xAA],
+                    [0x11; 32],
+                    "sorafs.sf1@1.0.0".to_owned(),
+                    TokenOverrides::default(),
+                ),
+                Err(StreamTokenIssuerError::RuntimeSignerQualificationChanged)
+            ), "{label}");
+            assert_eq!(
+                signer.calls.load(Ordering::Relaxed),
+                expected_sign_calls,
+                "{label}"
+            );
+            assert!(matches!(
+                issuer.issue_token(
+                    quota_subject("credential-drift"),
+                    vec![0xAA],
+                    [0x11; 32],
+                    "sorafs.sf1@1.0.0".to_owned(),
+                    TokenOverrides::default(),
+                ),
+                Err(StreamTokenIssuerError::IssuanceQuotaExceeded { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn runtime_signer_probe_unavailability_before_signing_is_payload_free() {
+        let expected = StreamTokenRuntimeSignerQualificationV1::new(4, [0xb4; 32]);
+        let signer = Arc::new(
+            TestStreamTokenRuntimeSigner::new(
+                "pkcs11:prod/stream-token/v1",
+                [0x33; 32],
+                TestSignerMode::Sign,
+            )
+            .with_qualification_results(vec![
+                Ok(expected),
+                Ok(expected),
+                Err(StreamTokenRuntimeSignerProbeErrorV1::Unavailable),
+            ]),
+        );
+        let config = token_config(signer.public_key(), 1);
+        let issuer = StreamTokenIssuer::from_config(
+            &config,
+            &configured_api_tokens(),
+            Some(signer.clone()),
+        )
+        .expect("startup qualification")
+        .expect("enabled issuer");
+        let error = issuer
+            .issue_token(
+                quota_subject("credential-unavailable-probe"),
+                vec![0xAA],
+                [0x11; 32],
+                "sorafs.sf1@1.0.0".to_owned(),
+                TokenOverrides::default(),
+            )
+            .expect_err("unavailable provider probe must fail closed");
+        assert!(matches!(
+            error,
+            StreamTokenIssuerError::RuntimeSignerUnavailable
+        ));
+        assert_eq!(error.to_string(), "stream-token runtime signer unavailable");
+        assert_eq!(signer.calls.load(Ordering::Relaxed), 0);
     }
 
     #[test]

@@ -59,11 +59,11 @@ use crate::{
     block::{BlockValidationError, ValidBlock},
     kura::{
         AutonomousLaneReservationEvidenceError, AutonomousLaneReservationEvidenceV1,
-        AutonomousLaneSlotRetirementV1, CommitManifest,
+        AutonomousLaneSlotRetirementV1, CommitManifest, HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
         HistoricalAutonomousLaneRecoveryPersistOutcome, HistoricalAutonomousLaneRecoveryRecordV1,
         Kura, KuraV2CommitReceipt,
     },
-    lane_consensus::LaneExecutablePayloadV1,
+    lane_consensus::{LaneExecutablePayloadV1, deterministic_lane_author},
     queue::{
         LaneQueueReservationError, LaneQueueReservationGroupIdentityV1,
         LaneQueueReservationOutcome, LaneQueueReservationReconciliationGroupV1,
@@ -332,12 +332,6 @@ pub(crate) enum V2ReservationLifecycleError {
     CommittedMergeReferenceMismatch {
         /// Hash committed by the carrier's compact reference.
         entry_hash: HashOf<MergeLedgerEntry>,
-    },
-    /// Queue retained a release barrier whose exact Kura retirement is absent.
-    #[error("queue release barrier {retirement_hash} has no exact durable Kura retirement")]
-    MissingReleaseRetirement {
-        /// Digest of the missing retirement identity.
-        retirement_hash: Hash,
     },
     /// Queue and Kura disagree on a release barrier's full slot/payload binding.
     #[error("queue release barrier {retirement_hash} conflicts with durable Kura retirement")]
@@ -952,6 +946,116 @@ fn invalid_historical_autonomous_recovery(
     }
 }
 
+/// One complete, collision-checked recovery inventory indexed once for an
+/// immutable startup authority boundary.
+struct HistoricalAutonomousRecoveryInventory {
+    records: Vec<HistoricalAutonomousLaneRecoveryRecordV1>,
+    by_recovery_id: BTreeMap<Hash, usize>,
+    by_group: BTreeMap<LaneQueueReservationGroupIdentityV1, usize>,
+}
+
+impl HistoricalAutonomousRecoveryInventory {
+    fn read(kura: &Kura) -> Result<Self, V2ReservationLifecycleError> {
+        let records = kura.historical_autonomous_lane_recovery_records_bounded(
+            HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+        )?;
+        let mut by_recovery_id = BTreeMap::new();
+        let mut by_group = BTreeMap::new();
+        for (index, record) in records.iter().enumerate() {
+            if by_recovery_id.insert(record.recovery_id, index).is_some()
+                || by_group
+                    .insert(record.reservation_group.identity, index)
+                    .is_some()
+            {
+                return Err(invalid_historical_autonomous_recovery(
+                    &record.installation_input(),
+                    "bounded historical recovery inventory returned a duplicate identity",
+                ));
+            }
+        }
+        Ok(Self {
+            records,
+            by_recovery_id,
+            by_group,
+        })
+    }
+
+    fn record_for_group(
+        &self,
+        group: &LaneQueueReservationReconciliationGroupV1,
+    ) -> Result<Option<&HistoricalAutonomousLaneRecoveryRecordV1>, V2ReservationLifecycleError>
+    {
+        let Some(record) = self
+            .by_group
+            .get(&group.identity)
+            .and_then(|index| self.records.get(*index))
+        else {
+            return Ok(None);
+        };
+        if record.reservation_group != *group {
+            return Err(invalid_historical_autonomous_recovery(
+                &record.installation_input(),
+                "durable historical recovery has conflicting FIFO group membership",
+            ));
+        }
+        Ok(Some(record))
+    }
+
+    fn record_for_install(
+        &self,
+        install: &HistoricalAutonomousReservationInstallV1,
+    ) -> Result<Option<&HistoricalAutonomousLaneRecoveryRecordV1>, V2ReservationLifecycleError>
+    {
+        let Some(record) = self
+            .by_recovery_id
+            .get(&install.recovery_id)
+            .and_then(|index| self.records.get(*index))
+        else {
+            return Ok(None);
+        };
+        if record.installation_input() != *install {
+            return Err(invalid_historical_autonomous_recovery(
+                install,
+                "durable historical recovery conflicts with the requested installation",
+            ));
+        }
+        Ok(Some(record))
+    }
+
+    fn exact_record(
+        &self,
+        expected: &HistoricalAutonomousLaneRecoveryRecordV1,
+    ) -> Result<Option<&HistoricalAutonomousLaneRecoveryRecordV1>, V2ReservationLifecycleError>
+    {
+        let Some(record) = self
+            .by_recovery_id
+            .get(&expected.recovery_id)
+            .and_then(|index| self.records.get(*index))
+        else {
+            return Ok(None);
+        };
+        if record != expected {
+            return Err(invalid_historical_autonomous_recovery(
+                &expected.installation_input(),
+                "durable historical recovery conflicts with the expected canonical record",
+            ));
+        }
+        Ok(Some(record))
+    }
+}
+
+fn historical_autonomous_install_is_durable(
+    kura: &Kura,
+    inventory: &HistoricalAutonomousRecoveryInventory,
+    install: &HistoricalAutonomousReservationInstallV1,
+) -> Result<bool, V2ReservationLifecycleError> {
+    let Some(record) = inventory.record_for_install(install)? else {
+        return Ok(false);
+    };
+    kura.validate_historical_autonomous_lane_recovery_record_dependencies(record)?;
+    Ok(true)
+}
+
 /// Rebuild the complete State-aligned authority of one historical autonomous
 /// installation. The carrier body is required only at the one-time installer
 /// boundary; immutable record validation and hydration deliberately use the
@@ -1138,21 +1242,15 @@ fn preflight_historical_autonomous_lane_recovery_inner(
         descriptor.dataspace_id,
         &context_mode_tag,
     );
-    let validator_count_u64 = u64::try_from(expected_validators.len())?;
-    let author_index = usize::try_from(
-        descriptor.lane_block_height.checked_sub(1).ok_or_else(|| {
-            invalid_historical_autonomous_recovery(
-                input,
-                "historical autonomous lane-block height is zero",
-            )
-        })? % validator_count_u64,
-    )?;
-    let expected_author = expected_validators.get(author_index).ok_or_else(|| {
-        invalid_historical_autonomous_recovery(
-            input,
-            "deterministic historical autonomous author is unavailable",
-        )
-    })?;
+    let expected_author =
+        deterministic_lane_author(&expected_validators, descriptor.lane_block_height).ok_or_else(
+            || {
+                invalid_historical_autonomous_recovery(
+                    input,
+                    "deterministic historical autonomous author is unavailable",
+                )
+            },
+        )?;
     if descriptor.validator_set_hash_version
         != iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1
         || descriptor.validator_set != expected_validators
@@ -1339,15 +1437,81 @@ pub(crate) fn install_historical_autonomous_lane_recovery(
     input: &HistoricalAutonomousReservationInstallV1,
 ) -> Result<HistoricalAutonomousLaneRecoveryInstallOutcome, V2ReservationLifecycleError> {
     let record = preflight_historical_autonomous_lane_recovery(state, kura, input)?;
-    let outcome = kura.persist_historical_autonomous_lane_recovery_record(&record)?;
-    Ok(match outcome {
-        HistoricalAutonomousLaneRecoveryPersistOutcome::Installed => {
-            HistoricalAutonomousLaneRecoveryInstallOutcome::Installed
+    persist_preflighted_historical_autonomous_lane_recovery(kura, &record)
+}
+
+/// Persist one record whose complete State authority was already validated.
+/// Kura performs its bounded namespace preflight, durable dependency checks,
+/// and collision checks at the persistence boundary.
+pub(crate) fn persist_preflighted_historical_autonomous_lane_recovery(
+    kura: &Kura,
+    record: &HistoricalAutonomousLaneRecoveryRecordV1,
+) -> Result<HistoricalAutonomousLaneRecoveryInstallOutcome, V2ReservationLifecycleError> {
+    persist_preflighted_historical_autonomous_lane_recoveries(kura, std::slice::from_ref(record))?
+        .pop()
+        .ok_or_else(|| {
+            invalid_historical_autonomous_recovery(
+                &record.installation_input(),
+                "single historical recovery persistence produced no outcome",
+            )
+        })
+}
+
+/// Persist one State-preflighted runner batch through Kura's single bounded
+/// inventory/preflight pass and scan-free per-record durable writes.
+pub(crate) fn persist_preflighted_historical_autonomous_lane_recoveries(
+    kura: &Kura,
+    records: &[HistoricalAutonomousLaneRecoveryRecordV1],
+) -> Result<Vec<HistoricalAutonomousLaneRecoveryInstallOutcome>, V2ReservationLifecycleError> {
+    Ok(kura
+        .persist_historical_autonomous_lane_recovery_records(records)?
+        .into_iter()
+        .map(|outcome| match outcome {
+            HistoricalAutonomousLaneRecoveryPersistOutcome::Installed => {
+                HistoricalAutonomousLaneRecoveryInstallOutcome::Installed
+            }
+            HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled => {
+                HistoricalAutonomousLaneRecoveryInstallOutcome::AlreadyInstalled
+            }
+        })
+        .collect())
+}
+
+/// Revalidate one complete installed runner batch with exactly one bounded
+/// inventory scan, one recovery-ID index, and direct immutable dependency
+/// checks for every requested record.
+pub(crate) fn validate_installed_historical_autonomous_lane_recoveries(
+    kura: &Kura,
+    expected: &[HistoricalAutonomousLaneRecoveryRecordV1],
+) -> Result<(), V2ReservationLifecycleError> {
+    if expected.is_empty() {
+        return Ok(());
+    }
+    let inventory = HistoricalAutonomousRecoveryInventory::read(kura)?;
+    let mut requested = BTreeMap::<Hash, &HistoricalAutonomousLaneRecoveryRecordV1>::new();
+    for record in expected {
+        if requested
+            .insert(record.recovery_id, record)
+            .is_some_and(|existing| existing != record)
+        {
+            return Err(invalid_historical_autonomous_recovery(
+                &record.installation_input(),
+                "runner batch aliases one recovery ID to different canonical records",
+            ));
         }
-        HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled => {
-            HistoricalAutonomousLaneRecoveryInstallOutcome::AlreadyInstalled
-        }
-    })
+    }
+    for record in requested.into_values() {
+        let Some(installed) = inventory.exact_record(record)? else {
+            return Err(
+                V2ReservationLifecycleError::HistoricalRecoveryInstallationMissing {
+                    recovery_id: record.recovery_id,
+                    lane_id: record.payload.origin_proposal.descriptor.lane_id,
+                },
+            );
+        };
+        kura.validate_historical_autonomous_lane_recovery_record_dependencies(installed)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -1891,6 +2055,11 @@ pub(crate) fn plan_lane_reservation_ownership(
     )?;
     debug_assert_eq!(evidence.len(), evidence_inputs.len());
     let mut evidence = evidence.into_iter();
+    // The previous per-group lookup re-read the complete bounded namespace,
+    // turning startup into O(groups * records). Capture collision-checked
+    // authority once and use exact in-memory indexes for every group and
+    // canonical installation considered by this immutable planning pass.
+    let historical_inventory = HistoricalAutonomousRecoveryInventory::read(kura)?;
 
     let mut actions = Vec::with_capacity(inputs.len());
     let mut direct_release_groups = BTreeSet::new();
@@ -1920,18 +2089,9 @@ pub(crate) fn plan_lane_reservation_ownership(
             AutonomousLaneReservationEvidenceV1::ExactLive { payload, .. }
             | AutonomousLaneReservationEvidenceV1::ExactRetired { payload, .. } => Some(payload),
         };
-        if let Some(record) =
-            kura.historical_autonomous_lane_recovery_record_for_group(&input.group)?
-        {
-            validate_historical_autonomous_lane_recovery_record(state, kura, &record)?;
-            if !kura.historical_autonomous_lane_recovery_record_matches(&record)? {
-                return Err(
-                    V2ReservationLifecycleError::HistoricalRecoveryInstallationMissing {
-                        recovery_id: record.recovery_id,
-                        lane_id: record.payload.origin_proposal.descriptor.lane_id,
-                    },
-                );
-            }
+        if let Some(record) = historical_inventory.record_for_group(&input.group)? {
+            validate_historical_autonomous_lane_recovery_record(state, kura, record)?;
+            kura.validate_historical_autonomous_lane_recovery_record_dependencies(record)?;
             if pending_merge
                 || input.release_barrier.is_some()
                 || expected_payload.is_some_and(|payload| payload != &record.payload)
@@ -1981,7 +2141,11 @@ pub(crate) fn plan_lane_reservation_ownership(
                 }
                 match canonical {
                     CanonicalAutonomousCarrierDisposition::ExactAutonomous(install) => {
-                        if kura.historical_autonomous_lane_recovery_matches(&install)? {
+                        if historical_autonomous_install_is_durable(
+                            kura,
+                            &historical_inventory,
+                            &install,
+                        )? {
                             ReservationReconciliationAction::Retain {
                                 keys: input.group.ordered_keys.clone(),
                                 disposition: ReservationRetainDisposition::HistoricalRecovery(
@@ -2086,7 +2250,11 @@ pub(crate) fn plan_lane_reservation_ownership(
                             }
                         }
                         CanonicalAutonomousCarrierDisposition::ExactAutonomous(install) => {
-                            if kura.historical_autonomous_lane_recovery_matches(&install)? {
+                            if historical_autonomous_install_is_durable(
+                                kura,
+                                &historical_inventory,
+                                &install,
+                            )? {
                                 ReservationReconciliationAction::Retain {
                                     keys: input.group.ordered_keys.clone(),
                                     disposition: ReservationRetainDisposition::HistoricalRecovery(
@@ -2252,8 +2420,11 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
         recovered,
     } = plan;
     // Recovery durability is checked before acquiring any Queue ownership
-    // locks. The immutable Kura record is the authority which permits the
-    // startup gate to publish this historical owner.
+    // locks. Capture the complete collision-checked namespace once, then
+    // compare and dependency-check every requested owner through its exact
+    // recovery-ID index.
+    let mut historical_installs =
+        BTreeMap::<Hash, &HistoricalAutonomousReservationInstallV1>::new();
     for action in &actions {
         let ReservationReconciliationAction::Retain {
             disposition: ReservationRetainDisposition::HistoricalRecovery(install),
@@ -2262,7 +2433,22 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
         else {
             continue;
         };
-        if !kura.historical_autonomous_lane_recovery_matches(install)? {
+        if historical_installs
+            .insert(install.recovery_id, install)
+            .is_some_and(|existing| existing != install)
+        {
+            return Err(invalid_historical_autonomous_recovery(
+                install,
+                "reconciliation plan aliases one recovery ID to different installations",
+            ));
+        }
+    }
+    if !historical_installs.is_empty() {
+        let historical_inventory = HistoricalAutonomousRecoveryInventory::read(kura)?;
+        for install in historical_installs.into_values() {
+            if historical_autonomous_install_is_durable(kura, &historical_inventory, install)? {
+                continue;
+            }
             return Err(
                 V2ReservationLifecycleError::HistoricalRecoveryInstallationMissing {
                     recovery_id: install.recovery_id,
@@ -3616,7 +3802,13 @@ impl V2ApplyService {
             .map(|entry| entry.validator.clone())
             .collect();
         let state_events = state_block
-            .apply_without_execution_with_verified_v2_finality(&committed_block, commit_topology);
+            .apply_without_execution_with_verified_v2_finality(&committed_block, commit_topology)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "post-finality autonomous carrier metadata authorization",
+                    &error,
+                )
+            })?;
 
         // Stage the exact would-be committed WSV hash while the validated
         // `StateBlock` overlay is still available. Kura is already durable at

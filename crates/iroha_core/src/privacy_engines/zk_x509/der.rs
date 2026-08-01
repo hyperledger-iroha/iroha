@@ -112,8 +112,6 @@ impl ZkX509DerTagV1 {
     pub(crate) const BIT_STRING: Self = Self::universal(false, 3);
     /// Universal OCTET STRING.
     pub(crate) const OCTET_STRING: Self = Self::universal(false, 4);
-    /// Universal NULL.
-    pub(crate) const NULL: Self = Self::universal(false, 5);
     /// Universal OBJECT IDENTIFIER.
     pub(crate) const OBJECT_IDENTIFIER: Self = Self::universal(false, 6);
     /// Universal SEQUENCE.

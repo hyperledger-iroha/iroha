@@ -1172,15 +1172,6 @@ impl P256ScalarBitBusBoundSourceV1 {
     ) -> Result<P256ScalarBitBusStarkBaseRowProviderV1<'_>, P256ScalarBitBusErrorV1> {
         P256ScalarBitBusStarkBaseRowProviderV1::new_v1(self.material_v1()?)
     }
-
-    /// Verifier-owned fixed-row replay retained across the phase transition.
-    pub(crate) fn fixed_rows_v1(
-        &self,
-    ) -> Result<P256ScalarBitBusStarkFixedProviderV1, P256ScalarBitBusErrorV1> {
-        self.material_v1()?;
-        P256ScalarBitBusStarkFixedProviderV1::new_v1(P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1)
-    }
-
     /// Mint deterministic auxiliary replay under the bound X5B1 challenges.
     pub(crate) fn aux_source_v1(
         &self,

@@ -145,12 +145,6 @@ fn in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps() 
             absent,
         ),
         transition(
-            IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED,
-            CanonicalIdentityProjection::zero(),
-            live,
-            absent,
-        ),
-        transition(
             IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE,
             release,
             live,
@@ -282,6 +276,826 @@ fn in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps() 
             "expected rejected primitive transition: {rejected:?}"
         );
     }
+}
+
+fn in_flight_first_release_validator_mask(validator_count: u8) -> u128 {
+    assert!((1..=128).contains(&validator_count));
+    if validator_count == 128 {
+        !0u128
+    } else {
+        (1u128 << u32::from(validator_count)) - 1
+    }
+}
+
+fn in_flight_first_release_initial_state_with_validator_count(
+    validator_count: u8,
+) -> ProductionInFlightFirstReleaseStateProjection {
+    let validator_mask = in_flight_first_release_validator_mask(validator_count);
+    ProductionInFlightFirstReleaseStateProjection {
+        validator_count,
+        producer: 1,
+        producer_selected_owner: 1,
+        replicated_carrier_owners: validator_mask & !1,
+        payload_binding_a: 1,
+        binding_a: successor_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CANONICAL_PAYLOAD,
+            0x61,
+        ),
+        queue: ProductionInFlightFirstReleaseQueueProjection::default(),
+        carrier: ProductionInFlightFirstReleaseCarrierProjection::default(),
+        session: ProductionInFlightFirstReleaseSessionProjection {
+            bodies: 1,
+            ready_authorized: 0,
+            crashed: 0,
+            producer_alive: true,
+        },
+        history: ProductionInFlightFirstReleaseHistoryProjection::default(),
+        decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+        release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+    }
+}
+
+fn in_flight_first_release_initial_state() -> ProductionInFlightFirstReleaseStateProjection {
+    in_flight_first_release_initial_state_with_validator_count(3)
+}
+
+#[test]
+fn in_flight_first_release_dynamic_committees_bind_masks_custody_and_canonical_quorum() {
+    for (validator_count, expected_quorum) in [(1u8, 1u8), (3, 3), (4, 3), (128, 86)] {
+        let initial = in_flight_first_release_initial_state_with_validator_count(validator_count);
+        let validator_mask = in_flight_first_release_validator_mask(validator_count);
+        assert!(
+            production_in_flight_first_release_state_kernel(initial),
+            "{validator_count}-validator initial projection must be valid"
+        );
+        assert_eq!(
+            initial.replicated_carrier_owners,
+            validator_mask & !initial.producer
+        );
+        assert_eq!(
+            initial.payload_binding_a, initial.producer,
+            "authenticated producer custody must not imply all-validator knowledge"
+        );
+
+        let ready_signers = in_flight_first_release_validator_mask(expected_quorum);
+        let mut before = initial;
+        before.history.ever_ready_authorized = ready_signers;
+        before.history.ready_signed = ready_signers;
+        let mut after = before;
+        after.carrier.ready_qc_durable = true;
+        after.history.ever_ready_qc_durable = true;
+        checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC,
+            0,
+            0,
+            before,
+            after,
+        );
+
+        let one_short = ready_signers & !(1u128 << u32::from(expected_quorum - 1));
+        let mut insufficient_before = initial;
+        insufficient_before.history.ever_ready_authorized = one_short;
+        insufficient_before.history.ready_signed = one_short;
+        let mut insufficient_after = insufficient_before;
+        insufficient_after.carrier.ready_qc_durable = true;
+        insufficient_after.history.ever_ready_qc_durable = true;
+        assert!(
+            check_production_in_flight_first_release_transition(
+                ProductionInFlightFirstReleaseTransitionProjection {
+                    action: IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC,
+                    actor: 0,
+                    target: 0,
+                    before: insufficient_before,
+                    after: insufficient_after,
+                }
+            )
+            .is_none(),
+            "{validator_count}-validator READY QC must reject {one_short:#034x} below canonical quorum {expected_quorum}"
+        );
+
+        let mut missing_producer_custody = initial;
+        missing_producer_custody.payload_binding_a = validator_mask & !initial.producer;
+        assert!(
+            !production_in_flight_first_release_state_kernel(missing_producer_custody),
+            "authenticated custody must include the selected producer"
+        );
+        if validator_count < 128 {
+            let mut foreign_custody = initial;
+            foreign_custody.payload_binding_a |= 1u128 << u32::from(validator_count);
+            assert!(
+                !production_in_flight_first_release_state_kernel(foreign_custody),
+                "custody outside the canonical committee must fail closed"
+            );
+        }
+    }
+}
+
+fn checked_in_flight_first_release_step(
+    action: u8,
+    actor: u128,
+    target: u128,
+    before: ProductionInFlightFirstReleaseStateProjection,
+    after: ProductionInFlightFirstReleaseStateProjection,
+) -> ProductionInFlightFirstReleaseStateProjection {
+    let projection = ProductionInFlightFirstReleaseTransitionProjection {
+        action,
+        actor,
+        target,
+        before,
+        after,
+    };
+    assert_eq!(
+        check_production_in_flight_first_release_transition(projection)
+            .expect("exact composed first-release action must mint checked evidence")
+            .into_projection(),
+        projection
+    );
+    after
+}
+
+fn in_flight_first_release_reserved_state_with_selected_count(
+    selected_count: u64,
+) -> ProductionInFlightFirstReleaseStateProjection {
+    assert!((1..=4096).contains(&selected_count));
+    let mut state = in_flight_first_release_initial_state();
+    assert!(production_in_flight_first_release_state_kernel(state));
+
+    let before = state;
+    state.queue.plan_state = IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED;
+    state.queue.selected_count = selected_count;
+    state.history.ever_queue_plan_v4 = true;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4,
+        0,
+        0,
+        before,
+        state,
+    );
+
+    let before = state;
+    state.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE;
+    state.history.ever_reservation_v5 = true;
+    checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5,
+        0,
+        0,
+        before,
+        state,
+    )
+}
+
+fn in_flight_first_release_reserved_state() -> ProductionInFlightFirstReleaseStateProjection {
+    in_flight_first_release_reserved_state_with_selected_count(2)
+}
+
+fn in_flight_first_release_ready_state_with_selected_count(
+    selected_count: u64,
+) -> ProductionInFlightFirstReleaseStateProjection {
+    let mut state = in_flight_first_release_reserved_state_with_selected_count(selected_count);
+
+    let before = state;
+    state.session.bodies |= 2;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER,
+        2,
+        0,
+        before,
+        state,
+    );
+
+    let before = state;
+    state.session.bodies |= 4;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_SERVE_LATE_BODY,
+        2,
+        4,
+        before,
+        state,
+    );
+
+    for actor in [1u128, 2, 4] {
+        let before = state;
+        state.carrier.kura_active |= actor;
+        state = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,
+            actor,
+            0,
+            before,
+            state,
+        );
+
+        let before = state;
+        state.carrier.execution_input_durable |= actor;
+        state.history.ever_execution_input_durable |= actor;
+        state = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT,
+            actor,
+            0,
+            before,
+            state,
+        );
+
+        let before = state;
+        state.session.ready_authorized |= actor;
+        state.history.ever_ready_authorized |= actor;
+        state = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_AUTHORIZE_READY,
+            actor,
+            0,
+            before,
+            state,
+        );
+
+        let before = state;
+        state.history.ready_signed |= actor;
+        state = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_SIGN_READY,
+            actor,
+            0,
+            before,
+            state,
+        );
+    }
+
+    let before = state;
+    state.carrier.ready_qc_durable = true;
+    state.history.ever_ready_qc_durable = true;
+    checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC,
+        0,
+        0,
+        before,
+        state,
+    )
+}
+
+fn in_flight_first_release_ready_state() -> ProductionInFlightFirstReleaseStateProjection {
+    in_flight_first_release_ready_state_with_selected_count(2)
+}
+
+fn in_flight_first_release_applied_state_with_selected_count(
+    selected_count: u64,
+) -> ProductionInFlightFirstReleaseStateProjection {
+    let mut state = in_flight_first_release_ready_state_with_selected_count(selected_count);
+
+    let before = state;
+    state.decision.lane_commit_owner = 1;
+    state.decision.lane_commit_scope = state.binding_a;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT,
+        1,
+        0,
+        before,
+        state,
+    );
+
+    let before = state;
+    state.decision.wsv_committed = true;
+    state.decision.application_count = 1;
+    state.decision.applied_by = 1;
+    checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_APPLY_CARRIER,
+        1,
+        0,
+        before,
+        state,
+    )
+}
+
+fn in_flight_first_release_advance_commit_cleanup_prefixes(
+    mut state: ProductionInFlightFirstReleaseStateProjection,
+) -> ProductionInFlightFirstReleaseStateProjection {
+    for prefix in 1..=state.queue.selected_count {
+        let before = state;
+        state.history.reservation_committed_prefix = prefix;
+        if prefix == state.queue.selected_count {
+            state.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED;
+        }
+        state = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED,
+            0,
+            u128::from(prefix),
+            before,
+            state,
+        );
+    }
+    for prefix in 1..=state.queue.selected_count {
+        let before = state;
+        state.history.queue_plan_tombstoned_prefix = prefix;
+        if prefix == state.queue.selected_count {
+            state.queue.plan_state = IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED;
+        }
+        state = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE,
+            0,
+            u128::from(prefix),
+            before,
+            state,
+        );
+    }
+    for prefix in 1..=state.queue.selected_count {
+        let before = state;
+        state.history.reservation_commit_forgotten_prefix = prefix;
+        if prefix == state.queue.selected_count {
+            state.queue.reservation_state =
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN;
+        }
+        state = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT,
+            0,
+            u128::from(prefix),
+            before,
+            state,
+        );
+    }
+    state
+}
+
+#[test]
+fn in_flight_first_release_composed_commit_path_is_exact_and_terminal() {
+    let mut state = in_flight_first_release_ready_state();
+
+    let before = state;
+    state.session.crashed |= 4;
+    state.session.bodies &= !4;
+    state.session.ready_authorized &= !4;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_CRASH,
+        4,
+        0,
+        before,
+        state,
+    );
+
+    let before = state;
+    state.session.crashed &= !4;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER,
+        4,
+        0,
+        before,
+        state,
+    );
+
+    let before = state;
+    state.decision.lane_commit_owner = 1;
+    state.decision.lane_commit_scope = state.binding_a;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT,
+        1,
+        0,
+        before,
+        state,
+    );
+
+    let before = state;
+    state.decision.wsv_committed = true;
+    state.decision.application_count = 1;
+    state.decision.applied_by = 1;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_APPLY_CARRIER,
+        1,
+        0,
+        before,
+        state,
+    );
+
+    for prefix in 1..=state.queue.selected_count {
+        let before = state;
+        state.history.reservation_committed_prefix = prefix;
+        if prefix == state.queue.selected_count {
+            state.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED;
+        }
+        state = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED,
+            0,
+            u128::from(prefix),
+            before,
+            state,
+        );
+        assert!(
+            production_in_flight_first_release_terminal_owner(state).is_none(),
+            "Commit prefix alone must not publish terminal WSV ownership"
+        );
+    }
+
+    for prefix in 1..=state.queue.selected_count {
+        let before = state;
+        state.history.queue_plan_tombstoned_prefix = prefix;
+        if prefix == state.queue.selected_count {
+            state.queue.plan_state = IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED;
+        }
+        state = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE,
+            0,
+            u128::from(prefix),
+            before,
+            state,
+        );
+        assert!(
+            production_in_flight_first_release_terminal_owner(state).is_none(),
+            "QueuePlan tombstone prefix alone must not publish terminal WSV ownership"
+        );
+    }
+
+    for prefix in 1..=state.queue.selected_count {
+        let before = state;
+        state.history.reservation_commit_forgotten_prefix = prefix;
+        if prefix == state.queue.selected_count {
+            state.queue.reservation_state =
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN;
+        }
+        state = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT,
+            0,
+            u128::from(prefix),
+            before,
+            state,
+        );
+        if prefix < state.queue.selected_count {
+            assert!(
+                production_in_flight_first_release_terminal_owner(state).is_none(),
+                "partial ForgetCommit prefix must not publish terminal WSV ownership"
+            );
+        }
+    }
+
+    let before = state;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER,
+        0,
+        0,
+        before,
+        state,
+    );
+
+    assert_eq!(
+        production_in_flight_first_release_terminal_owner(state),
+        Some(ProductionInFlightFirstReleaseTerminalOwnerProjection {
+            ordinary_fifo_owner: false,
+            canonical_wsv_owner: true,
+            commit_terminal: true,
+            release_terminal: false,
+        })
+    );
+}
+
+#[test]
+fn in_flight_first_release_commit_cleanup_prefixes_cover_bounds_and_crash_recovery() {
+    for selected_count in [1, 4096] {
+        let state = in_flight_first_release_applied_state_with_selected_count(selected_count);
+        let terminal = in_flight_first_release_advance_commit_cleanup_prefixes(state);
+        assert_eq!(
+            terminal.history.reservation_committed_prefix,
+            selected_count
+        );
+        assert_eq!(
+            terminal.history.queue_plan_tombstoned_prefix,
+            selected_count
+        );
+        assert_eq!(
+            terminal.history.reservation_commit_forgotten_prefix,
+            selected_count
+        );
+        assert!(
+            production_in_flight_first_release_terminal_owner(terminal)
+                .is_some_and(|owner| owner.canonical_wsv_owner),
+            "the complete {selected_count}-key cleanup must end in WSV-only ownership"
+        );
+    }
+
+    let mut state = in_flight_first_release_applied_state_with_selected_count(4);
+    let before = state;
+    state.history.reservation_committed_prefix = 1;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED,
+        0,
+        1,
+        before,
+        state,
+    );
+    let before_crash = state;
+    state.session.crashed |= 4;
+    state.session.bodies &= !4;
+    state.session.ready_authorized &= !4;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_CRASH,
+        4,
+        0,
+        before_crash,
+        state,
+    );
+    assert_eq!(state.history.reservation_committed_prefix, 1);
+    let before_recover = state;
+    state.session.crashed &= !4;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER,
+        4,
+        0,
+        before_recover,
+        state,
+    );
+    assert_eq!(state.history.reservation_committed_prefix, 1);
+    assert!(production_in_flight_first_release_terminal_owner(state).is_none());
+}
+
+#[test]
+fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reordering() {
+    let applied = in_flight_first_release_applied_state_with_selected_count(4);
+
+    let mut skipped_commit = applied;
+    skipped_commit.history.reservation_committed_prefix = 2;
+    assert!(production_in_flight_first_release_state_kernel(skipped_commit));
+    assert!(
+        check_production_in_flight_first_release_transition(
+            ProductionInFlightFirstReleaseTransitionProjection {
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED,
+                actor: 0,
+                target: 2,
+                before: applied,
+                after: skipped_commit,
+            }
+        )
+        .is_none()
+    );
+
+    let mut committed = applied;
+    for prefix in 1..=4 {
+        let before = committed;
+        committed.history.reservation_committed_prefix = prefix;
+        if prefix == 4 {
+            committed.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED;
+        }
+        committed = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED,
+            0,
+            u128::from(prefix),
+            before,
+            committed,
+        );
+    }
+
+    let mut decreasing_commit = committed;
+    decreasing_commit.history.reservation_committed_prefix = 3;
+    decreasing_commit.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE;
+    assert!(production_in_flight_first_release_state_kernel(decreasing_commit));
+    assert!(
+        check_production_in_flight_first_release_transition(
+            ProductionInFlightFirstReleaseTransitionProjection {
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED,
+                actor: 0,
+                target: 3,
+                before: committed,
+                after: decreasing_commit,
+            }
+        )
+        .is_none()
+    );
+
+    let mut skipped_tombstone = committed;
+    skipped_tombstone.history.queue_plan_tombstoned_prefix = 2;
+    assert!(production_in_flight_first_release_state_kernel(skipped_tombstone));
+    assert!(
+        check_production_in_flight_first_release_transition(
+            ProductionInFlightFirstReleaseTransitionProjection {
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE,
+                actor: 0,
+                target: 2,
+                before: committed,
+                after: skipped_tombstone,
+            }
+        )
+        .is_none()
+    );
+
+    let mut tombstoned = committed;
+    for prefix in 1..=4 {
+        let before = tombstoned;
+        tombstoned.history.queue_plan_tombstoned_prefix = prefix;
+        if prefix == 4 {
+            tombstoned.queue.plan_state = IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED;
+        }
+        tombstoned = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE,
+            0,
+            u128::from(prefix),
+            before,
+            tombstoned,
+        );
+    }
+
+    let mut decreasing_tombstone = tombstoned;
+    decreasing_tombstone.history.queue_plan_tombstoned_prefix = 3;
+    decreasing_tombstone.queue.plan_state = IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED;
+    assert!(production_in_flight_first_release_state_kernel(decreasing_tombstone));
+    assert!(
+        check_production_in_flight_first_release_transition(
+            ProductionInFlightFirstReleaseTransitionProjection {
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE,
+                actor: 0,
+                target: 3,
+                before: tombstoned,
+                after: decreasing_tombstone,
+            }
+        )
+        .is_none()
+    );
+
+    let mut skipped_forget = tombstoned;
+    skipped_forget.history.reservation_commit_forgotten_prefix = 2;
+    assert!(production_in_flight_first_release_state_kernel(skipped_forget));
+    assert!(
+        check_production_in_flight_first_release_transition(
+            ProductionInFlightFirstReleaseTransitionProjection {
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT,
+                actor: 0,
+                target: 2,
+                before: tombstoned,
+                after: skipped_forget,
+            }
+        )
+        .is_none()
+    );
+
+    let mut forgotten = tombstoned;
+    for prefix in 1..=4 {
+        let before = forgotten;
+        forgotten.history.reservation_commit_forgotten_prefix = prefix;
+        if prefix == 4 {
+            forgotten.queue.reservation_state =
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN;
+        }
+        forgotten = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT,
+            0,
+            u128::from(prefix),
+            before,
+            forgotten,
+        );
+    }
+
+    let mut decreasing_forget = forgotten;
+    decreasing_forget.history.reservation_commit_forgotten_prefix = 3;
+    decreasing_forget.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED;
+    assert!(production_in_flight_first_release_state_kernel(decreasing_forget));
+    assert!(
+        check_production_in_flight_first_release_transition(
+            ProductionInFlightFirstReleaseTransitionProjection {
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT,
+                actor: 0,
+                target: 3,
+                before: forgotten,
+                after: decreasing_forget,
+            }
+        )
+        .is_none()
+    );
+
+    let mut tombstone_before_commit = applied;
+    tombstone_before_commit.history.queue_plan_tombstoned_prefix = 1;
+    assert!(!production_in_flight_first_release_state_kernel(
+        tombstone_before_commit
+    ));
+    let mut forget_before_tombstone = committed;
+    forget_before_tombstone.history.reservation_commit_forgotten_prefix = 1;
+    assert!(!production_in_flight_first_release_state_kernel(
+        forget_before_tombstone
+    ));
+}
+
+#[test]
+fn in_flight_first_release_composed_four_stage_release_is_exact_and_terminal() {
+    let mut state = in_flight_first_release_ready_state();
+
+    let before = state;
+    state.decision.release_owner = 1;
+    state.decision.release_scope = state.binding_a;
+    state.release.kura_retired = true;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_KURA_RETIREMENT,
+        1,
+        0,
+        before,
+        state,
+    );
+
+    for prefix in 1..=2 {
+        let before = state;
+        state.release.pending_prefix = prefix;
+        state.history.pending_high_water = prefix;
+        state = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING,
+            0,
+            0,
+            before,
+            state,
+        );
+    }
+
+    let before = state;
+    state.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_PREPARE_RESERVATION_RELEASE,
+        0,
+        0,
+        before,
+        state,
+    );
+
+    for prefix in 1..=2 {
+        let before = state;
+        state.release.released_prefix = prefix;
+        state.history.released_high_water = prefix;
+        state = checked_in_flight_first_release_step(
+            IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED,
+            0,
+            0,
+            before,
+            state,
+        );
+    }
+
+    let before = state;
+    state.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE,
+        0,
+        0,
+        before,
+        state,
+    );
+
+    let before = state;
+    state.release.fifo_restored = true;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO,
+        0,
+        0,
+        before,
+        state,
+    );
+
+    let before = state;
+    state.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN;
+    state = checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE,
+        0,
+        0,
+        before,
+        state,
+    );
+
+    let terminal = production_in_flight_first_release_terminal_owner(state)
+        .expect("ordered release must expose its terminal FIFO owner");
+    assert!(terminal.ordinary_fifo_owner);
+    assert!(!terminal.canonical_wsv_owner);
+    assert!(terminal.release_terminal);
+}
+
+#[test]
+fn in_flight_first_release_snapshot_and_direct_release_are_exactly_aligned() {
+    let reserved = in_flight_first_release_reserved_state();
+    checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT,
+        0,
+        0,
+        reserved,
+        reserved,
+    );
+
+    let mut after = reserved;
+    after.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED;
+    after.release.fifo_restored = true;
+    checked_in_flight_first_release_step(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT,
+        0,
+        0,
+        reserved,
+        after,
+    );
+    let terminal = production_in_flight_first_release_terminal_owner(after)
+        .expect("direct release must expose its terminal FIFO owner");
+    assert!(terminal.ordinary_fifo_owner);
+    assert!(!terminal.canonical_wsv_owner);
+
+    let mut fabricated = reserved;
+    fabricated.decision.wsv_committed = true;
+    fabricated.decision.application_count = 1;
+    fabricated.decision.applied_by = 1;
+    assert!(
+        check_production_in_flight_first_release_transition(
+            ProductionInFlightFirstReleaseTransitionProjection {
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_APPLY_CARRIER,
+                actor: 1,
+                target: 0,
+                before: reserved,
+                after: fabricated,
+            }
+        )
+        .is_none(),
+        "WSV application without a lane-commit owner must fail closed"
+    );
 }
 
 fn retirement_projection_accepts(

@@ -66,8 +66,7 @@ use super::{
         ZkX509ShaCallScheduleV1, ZkX509ShaCallWitnessV1, validate_zk_x509_sha_call_witnesses_v1,
     },
     stark::{
-        ZkX509MainVerifierProfileV1, ZkX509StarkErrorV1,
-        construct_zk_x509_main_verifier_profile_v1, validate_zk_x509_main_verifier_profile_v1,
+        ZkX509MainVerifierProfileV1, ZkX509StarkErrorV1, construct_zk_x509_main_verifier_profile_v1,
     },
 };
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
@@ -276,9 +275,6 @@ pub(crate) enum ZkX509MainAssemblyErrorV1 {
     /// A canonical source, role, ordering, or fixed-width conversion failed.
     #[error("zk-X509 MAIN source assembly is invalid")]
     Source,
-    /// Revalidation did not reproduce the exact canonical assembly.
-    #[error("zk-X509 MAIN assembly differs from its canonical source replay")]
-    ReplayMismatch,
     /// Bounded allocation or checked arithmetic failed.
     #[error("zk-X509 MAIN assembly resource envelope is exceeded")]
     Resource,
@@ -288,38 +284,6 @@ impl From<ZkX509StarkErrorV1> for ZkX509MainAssemblyErrorV1 {
     fn from(_: ZkX509StarkErrorV1) -> Self {
         Self::Registration
     }
-}
-
-/// Rebuild all challenge-independent material from externally retained source
-/// references and reject any omission, reorder, duplicate, or substitution.
-///
-/// The assembly deliberately owns no second copy of the private witness or
-/// governed source records.
-pub(crate) fn validate_zk_x509_main_trace_assembly_v1(
-    assembly: &ZkX509MainTraceAssemblyV1,
-    statement: &IrohaZkX509StarkP256StatementV1,
-    governance: ZkX509GovernanceV1<'_>,
-    witness: &ZkX509WitnessV1,
-) -> Result<(), ZkX509MainAssemblyErrorV1> {
-    validate_zk_x509_main_verifier_profile_v1(assembly.verifier_profile)?;
-    let expected = build_zk_x509_main_trace_assembly_v1(statement, governance, witness)?;
-    if assembly.relation_output != expected.relation_output
-        || assembly.rfc_trace != expected.rfc_trace
-        || assembly.der_base != expected.der_base
-        || assembly.rfc_base != expected.rfc_base
-        || assembly.projection_trace != expected.projection_trace
-        || assembly.ca_accumulator_trace != expected.ca_accumulator_trace
-        || assembly.sha_schedule != expected.sha_schedule
-        || assembly.sha_witnesses != expected.sha_witnesses
-        || assembly.p256_witnesses != expected.p256_witnesses
-        || assembly.p256_materials != expected.p256_materials
-        || assembly.optional_certificate_selection != expected.optional_certificate_selection
-        || assembly.io != expected.io
-        || assembly.verifier_profile != expected.verifier_profile
-    {
-        return Err(ZkX509MainAssemblyErrorV1::ReplayMismatch);
-    }
-    Ok(())
 }
 
 fn rfc_statement_with_crl_number_v1(

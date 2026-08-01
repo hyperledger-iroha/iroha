@@ -1,6 +1,16 @@
 "use strict";
 
-import { compareUtf16 } from "./ordering.js";
+function compareUtf16(left, right) {
+  if (left === right) return 0;
+  const a = String(left);
+  const b = String(right);
+  const minimum = Math.min(a.length, b.length);
+  for (let index = 0; index < minimum; index += 1) {
+    const difference = a.charCodeAt(index) - b.charCodeAt(index);
+    if (difference !== 0) return difference;
+  }
+  return a.length - b.length;
+}
 
 function normalizePositiveInteger(value, context, { allowZero = false, max = Number.MAX_SAFE_INTEGER } = {}) {
   if (value === null || value === undefined) {

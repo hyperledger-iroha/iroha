@@ -246,14 +246,68 @@ fn collect_storage_security_bindings(
     match (
         storage.stream_tokens.signer_handle.as_deref(),
         storage.stream_tokens.signer_public_key,
+        storage.stream_tokens.signer_revision,
+        storage.stream_tokens.signer_policy_digest,
     ) {
-        (Some(handle), Some(public_key)) => bindings.push(
-            IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(handle, public_key)?,
-        ),
-        (None, None) => {}
+        (Some(handle), Some(public_key), Some(revision), Some(policy_digest))
+            if storage.stream_tokens.enabled =>
+        {
+            bindings.push(IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(
+                handle,
+                public_key,
+                revision,
+                policy_digest,
+            )?);
+        }
+        (None, None, None, None) => {}
         _ => {
             return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
                 IrohaRuntimeProviderSlotV1::StreamTokenSigner,
+            ));
+        }
+    }
+    match (
+        storage.stream_tokens.admission_provider_handle.as_deref(),
+        storage.stream_tokens.admission_provider_revision,
+        storage.stream_tokens.admission_provider_policy_digest,
+    ) {
+        (Some(handle), Some(revision), Some(policy_digest)) if storage.stream_tokens.enabled => {
+            let compliance = config.torii.sorafs_gateway.compliance.as_ref().ok_or(
+                IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                    IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission,
+                )
+            )?;
+            let gateway_id =
+                iroha_data_model::sorafs::reputation::derive_stream_token_gateway_id_v1(
+                    &config.common.chain,
+                    &compliance.gateway_id,
+                )
+                .map_err(|_| {
+                    IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                        IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission,
+                    )
+                })?;
+            bindings.push(
+                IrohaRuntimeProviderBindingV1::try_new_stream_token_gateway_admission(
+                    handle,
+                    iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1 {
+                        gateway_id,
+                        revision,
+                        policy_digest,
+                        max_pending: storage.stream_tokens.admission_max_pending,
+                        max_tracked_tokens: storage.stream_tokens.admission_max_tracked_tokens,
+                        lease_ttl_ms: storage.stream_tokens.admission_lease_ttl_ms,
+                    },
+                    storage.stream_tokens.admission_max_pending,
+                    storage.stream_tokens.admission_max_tracked_tokens,
+                    storage.stream_tokens.admission_reconcile_max_items,
+                )?,
+            );
+        }
+        (None, None, None) if !storage.stream_tokens.enabled => {}
+        _ => {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission,
             ));
         }
     }

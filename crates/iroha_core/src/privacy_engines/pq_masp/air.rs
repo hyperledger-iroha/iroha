@@ -17,7 +17,12 @@ use super::relation::{
     PQ_MASP_TREE_DEPTH_V1, PqMaspNotePlaintextV1, PqMaspSha256InvocationV1, PqMaspSha256RoleV1,
     PqMaspWitnessV1, namespace_v1, validate_pq_masp_relation_v1, validate_statement_v1,
 };
-use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
+use crate::privacy_engines::{
+    proof_managed_note_stark::{
+        NoteCopyCellPolicyV1, NoteCopyScheduleV1, ProofManagedNoteStarkErrorV1,
+    },
+    transparent_stark::GoldilocksFieldV1 as F,
+};
 
 pub(super) const PQ_MASP_TRACE_LOG2_V1: u8 = 14;
 pub(super) const PQ_MASP_TRACE_SIZE_V1: usize = 1 << PQ_MASP_TRACE_LOG2_V1;
@@ -1166,6 +1171,7 @@ fn build_pq_masp_trace_v1(
     }
 
     let mut builder = TraceBuilderV1::new(statement, witness)?;
+    let statement = builder.statement;
     let mut input_variables = Vec::with_capacity(statement.nullifiers.len());
     for index in 0..statement.nullifiers.len() {
         let input = witness.and_then(|witness| witness.inputs.get(index));
@@ -1478,15 +1484,33 @@ pub(super) fn build_pq_masp_fixed_trace_v1(
     Ok(build_pq_masp_trace_v1(statement, None)?.fixed)
 }
 
+fn map_copy_schedule_error_v1(error: ProofManagedNoteStarkErrorV1) -> PqMaspAirErrorV1 {
+    match error {
+        ProofManagedNoteStarkErrorV1::Copy => PqMaspAirErrorV1::Copy,
+        ProofManagedNoteStarkErrorV1::Resource => PqMaspAirErrorV1::Resource,
+        ProofManagedNoteStarkErrorV1::InvalidProfile
+        | ProofManagedNoteStarkErrorV1::InvalidTrace
+        | ProofManagedNoteStarkErrorV1::Constraint
+        | ProofManagedNoteStarkErrorV1::ProofWire
+        | ProofManagedNoteStarkErrorV1::TraceOpening
+        | ProofManagedNoteStarkErrorV1::Composition
+        | ProofManagedNoteStarkErrorV1::Fri
+        | ProofManagedNoteStarkErrorV1::Transcript
+        | ProofManagedNoteStarkErrorV1::Randomness
+        | ProofManagedNoteStarkErrorV1::Internal => PqMaspAirErrorV1::Topology,
+    }
+}
+
+fn validate_copy_schedule_v1(schedule: &NoteCopyScheduleV1) -> Result<(), PqMaspAirErrorV1> {
+    schedule
+        .validate(PQ_MASP_TRACE_SIZE_V1)
+        .map_err(map_copy_schedule_error_v1)
+}
+
 /// Compile witness-allocation identities into the shared copy-chip policy.
 pub(super) fn build_pq_masp_copy_schedule_v1(
     statement: &PqMaspStarkStatementV1,
-) -> Result<crate::privacy_engines::proof_managed_note_stark::NoteCopyScheduleV1, PqMaspAirErrorV1>
-{
-    use crate::privacy_engines::proof_managed_note_stark::{
-        NoteCopyCellPolicyV1, NoteCopyScheduleV1,
-    };
-
+) -> Result<NoteCopyScheduleV1, PqMaspAirErrorV1> {
     let fixed = build_pq_masp_fixed_trace_v1(statement)?;
     let policies = fixed
         .copy_cells
@@ -1499,8 +1523,31 @@ pub(super) fn build_pq_masp_copy_schedule_v1(
             })
         })
         .collect();
-    Ok(NoteCopyScheduleV1 {
+    let schedule = NoteCopyScheduleV1 {
         policies,
         sigma: fixed.copy_sigma,
-    })
+    };
+    validate_copy_schedule_v1(&schedule)?;
+    Ok(schedule)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_schedule_validation_preserves_copy_and_resource_errors() {
+        let invalid = NoteCopyScheduleV1 {
+            policies: Vec::new(),
+            sigma: Vec::new(),
+        };
+        assert_eq!(
+            validate_copy_schedule_v1(&invalid),
+            Err(PqMaspAirErrorV1::Copy)
+        );
+        assert_eq!(
+            map_copy_schedule_error_v1(ProofManagedNoteStarkErrorV1::Resource),
+            PqMaspAirErrorV1::Resource
+        );
+    }
 }

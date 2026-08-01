@@ -7,6 +7,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
+import static org.hyperledger.iroha.android.client.TransactionCompatibilityMockResponses.compatibleCapabilities;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -39,6 +40,7 @@ public final class HttpClientTransportOkHttpTests {
   @Test
   public void submitsTransactionWithOkHttpExecutorAndNotifiesObservers() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
+      server.enqueue(compatibleCapabilities());
       server.enqueue(new MockResponse().setResponseCode(202).setBody("{\"status\":\"accepted\"}"));
       server.start();
 
@@ -91,9 +93,13 @@ public final class HttpClientTransportOkHttpTests {
       assertEquals(202, response.statusCode());
       assertEquals(SignedTransactionHasher.hashHex(tx), response.hashHex().orElse(null));
       observer.assertNoFailure();
-      assertEquals(1, observer.requestsCount());
-      assertEquals(1, observer.responsesCount());
+      assertEquals(2, observer.requestsCount());
+      assertEquals(2, observer.responsesCount());
 
+      final RecordedRequest compatibility = server.takeRequest(1, TimeUnit.SECONDS);
+      assertNotNull(compatibility);
+      assertEquals("/v1/node/capabilities", compatibility.getPath());
+      assertEquals("GET", compatibility.getMethod());
       final RecordedRequest recorded = server.takeRequest(1, TimeUnit.SECONDS);
       assertNotNull(recorded);
       assertEquals("/v1/pipeline/transactions", recorded.getPath());

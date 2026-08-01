@@ -658,7 +658,7 @@
             signer_pops.clone(),
         );
         let bundle = AutonomousLaneMergeBundleV1 {
-            version: 1,
+            version: AutonomousLaneMergeBundleV1::VERSION,
             autonomous: autonomous.clone(),
             certified: certified_origin,
         };
@@ -676,7 +676,7 @@
         )
         .expect("synthetic cursor commit QC");
         let cursor_bundle = AutonomousLaneMergeBundleV1 {
-            version: 1,
+            version: AutonomousLaneMergeBundleV1::VERSION,
             autonomous: autonomous.clone(),
             certified: CertifiedLaneBlockArtifact::new(
                 crate::lane_consensus::CommittedLaneBlockSession {
@@ -704,6 +704,435 @@
             Err("invalid autonomous lane payload availability certificate"),
             "the durable artifact must reject a next-view READY QC before merge validation",
         );
+    }
+
+    #[test]
+    fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_restart() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::new(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) =
+            autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist autonomous payload");
+
+        let availability = durable_lane_payload_availability_for_kura(
+            &payload,
+            &payload.origin_proposal,
+            &signer,
+        );
+        let (mut session, signer_pops) =
+            committed_lane_block_session_for_kura_proposal(&payload.origin_proposal, &signer);
+        session.prepare_qc = availability.certificate.clone();
+        assert!(
+            kura.persist_committed_lane_block_session(&session, &signer_pops)
+                .is_err(),
+            "a certificate must not publish before the exact execution input and READY evidence"
+        );
+        assert!(
+            kura.read_certified_lane_block_artifact(lane_id, 1)
+                .is_none(),
+            "failed autonomous prepublication must not leave a certified pair"
+        );
+
+        let recovered = kura
+            .recover_autonomous_lane_block_payload(
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+            )
+            .expect("recover exact autonomous execution input");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("persist exact autonomous execution input");
+        assert!(
+            kura.persist_committed_lane_block_session(&session, &signer_pops)
+                .is_err(),
+            "the execution input alone must not substitute for durable READY evidence"
+        );
+        kura.persist_lane_payload_availability_certificate(
+            lane_id,
+            1,
+            availability,
+            chain_id_hash,
+            epoch,
+        )
+        .expect("persist exact READY certificate");
+        assert_eq!(
+            kura.durable_autonomous_lane_merge_source(lane_id, 1, chain_id_hash, epoch),
+            Err("certified lane block pair lacks the exact autonomous slot"),
+            "READY plus an execution input cannot substitute for the exact certified pair",
+        );
+        fail_next_autonomous_merge_bundle_persistence_for_tests();
+        assert!(
+            kura.persist_committed_lane_block_session(&session, &signer_pops)
+                .is_err(),
+            "an injected crash boundary must stop after certificate durability and before bundle eligibility",
+        );
+        assert!(
+            kura.read_certified_lane_block_artifact(lane_id, 1)
+                .is_some(),
+            "the independently durable certificate must survive the bundle crash boundary",
+        );
+        assert_eq!(
+            kura.durable_autonomous_lane_merge_source(lane_id, 1, chain_id_hash, epoch),
+            Err("durable autonomous merge bundle is unavailable"),
+            "a certificate must not become merge eligible before the bundle's own barrier",
+        );
+        drop(kura);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("repair bundle on startup");
+
+        let source = kura
+            .durable_autonomous_lane_merge_source(lane_id, 1, chain_id_hash, epoch)
+            .expect("read complete durable autonomous source");
+        assert_eq!(source.bundle.certified.proposal, payload.origin_proposal);
+        assert_eq!(source.input, LaneBlockExecutionInputArtifact::new(recovered));
+        assert_eq!(
+            source.source_bundle,
+            source.bundle.encode_framed().expect("canonical bundle")
+        );
+        assert_eq!(
+            source.bundle_hash,
+            source.bundle.bundle_hash().expect("canonical bundle hash")
+        );
+
+        let delayed_new_view = next_durable_lane_view_certificate_for_kura(
+            &payload.origin_proposal,
+            &payload,
+            &signer,
+            chain_id_hash,
+            epoch,
+        );
+        assert!(
+            kura.persist_lane_new_view_certificate(
+                lane_id,
+                1,
+                delayed_new_view,
+                chain_id_hash,
+                epoch,
+            )
+            .is_err(),
+            "a durable certificate must freeze the exact reconstructed bundle bytes"
+        );
+
+        let view_state_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+            lane_entry,
+            &kura.store_root,
+            1,
+            payload.origin_proposal.descriptor.proposal_height,
+        );
+        let view_state_temp = Kura::autonomous_lane_block_view_state_temp_path(&view_state_path);
+        fs::copy(&view_state_path, &view_state_temp).expect("stage exact view-state crash temp");
+        assert_eq!(
+            kura.durable_autonomous_lane_merge_source(lane_id, 1, chain_id_hash, epoch),
+            Err("autonomous lane view state has unresolved recovery state"),
+            "merge admission must not choose a view while startup recovery can still replace it",
+        );
+
+        drop(kura);
+        let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+        assert_eq!(
+            reopened
+                .durable_autonomous_lane_merge_source(lane_id, 1, chain_id_hash, epoch)
+                .expect("restart must recover the same exact source"),
+            source
+        );
+    }
+
+    #[test]
+    fn durable_autonomous_merge_source_rejects_execution_input_drift() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::new(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) =
+            autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist autonomous payload");
+        let recovered = kura
+            .recover_autonomous_lane_block_payload(
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+            )
+            .expect("recover autonomous execution input");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("persist autonomous execution input");
+        let availability = durable_lane_payload_availability_for_kura(
+            &payload,
+            &payload.origin_proposal,
+            &signer,
+        );
+        kura.persist_lane_payload_availability_certificate(
+            lane_id,
+            1,
+            availability.clone(),
+            chain_id_hash,
+            epoch,
+        )
+        .expect("persist READY evidence");
+        let (mut session, signer_pops) =
+            committed_lane_block_session_for_kura_proposal(&payload.origin_proposal, &signer);
+        session.prepare_qc = availability.certificate;
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist certified autonomous source");
+        kura.durable_autonomous_lane_merge_source(lane_id, 1, chain_id_hash, epoch)
+            .expect("complete source is initially eligible");
+
+        let mut drifted = LaneBlockExecutionInputArtifact::new(recovered);
+        drifted.autonomous_payload_hash = Some(Hash::new(b"drifted autonomous input hash"));
+        let drifted_bytes = drifted.encode_framed().expect("encode drifted input");
+        let (data_path, index_path) =
+            Kura::lane_block_execution_input_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(Kura::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            1,
+            &drifted_bytes,
+            "lane block execution input",
+            FsyncMode::Always,
+            None,
+            SidecarIndexOrigin::FirstWrite,
+        ));
+        assert_eq!(
+            kura.durable_autonomous_lane_merge_source(lane_id, 1, chain_id_hash, epoch),
+            Err("durable execution input differs from the certified autonomous payload"),
+            "a self-consistent but payload-divergent input must lose merge eligibility"
+        );
+    }
+
+    #[test]
+    fn durable_autonomous_merge_source_rejects_persisted_bundle_drift() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::new(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) =
+            autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist autonomous payload");
+        let recovered = kura
+            .recover_autonomous_lane_block_payload(
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+            )
+            .expect("recover autonomous execution input");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("persist autonomous execution input");
+        let availability = durable_lane_payload_availability_for_kura(
+            &payload,
+            &payload.origin_proposal,
+            &signer,
+        );
+        kura.persist_lane_payload_availability_certificate(
+            lane_id,
+            1,
+            availability.clone(),
+            chain_id_hash,
+            epoch,
+        )
+        .expect("persist READY evidence");
+        let (mut session, signer_pops) =
+            committed_lane_block_session_for_kura_proposal(&payload.origin_proposal, &signer);
+        session.prepare_qc = availability.certificate;
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist certified autonomous source");
+        let source = kura
+            .durable_autonomous_lane_merge_source(lane_id, 1, chain_id_hash, epoch)
+            .expect("complete source is initially eligible");
+
+        let mut drifted = source.bundle;
+        drifted
+            .autonomous
+            .new_view_certificates
+            .push(next_durable_lane_view_certificate_for_kura(
+                &payload.origin_proposal,
+                &payload,
+                &signer,
+                chain_id_hash,
+                epoch,
+            ));
+        Kura::validate_autonomous_lane_merge_bundle(&drifted, chain_id_hash, epoch)
+            .expect("drift fixture remains internally valid");
+        let drifted_bytes = drifted.encode_framed().expect("encode drifted bundle");
+        let (data_path, index_path) =
+            Kura::autonomous_lane_merge_bundle_paths_for_entry(lane_entry, temp_dir.path());
+        fs::write(&data_path, &drifted_bytes).expect("write divergent canonical bundle data");
+        fs::write(
+            &index_path,
+            SidecarIndexEntry {
+                offset: 0,
+                len: u64::try_from(drifted_bytes.len()).expect("bundle length fits u64"),
+            }
+            .to_bytes(),
+        )
+        .expect("write divergent canonical bundle index");
+        assert_eq!(
+            kura.durable_autonomous_lane_merge_source(lane_id, 1, chain_id_hash, epoch),
+            Err("persisted autonomous merge bundle differs from exact durable components"),
+            "an internally valid but separately divergent persisted bundle must lose eligibility",
+        );
+    }
+
+    #[test]
+    fn autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_and_linked_artifacts()
+    {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::new(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) =
+            autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist autonomous payload");
+        let recovered = kura
+            .recover_autonomous_lane_block_payload(
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+            )
+            .expect("recover autonomous execution input");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("persist autonomous execution input");
+        let availability = durable_lane_payload_availability_for_kura(
+            &payload,
+            &payload.origin_proposal,
+            &signer,
+        );
+        kura.persist_lane_payload_availability_certificate(
+            lane_id,
+            1,
+            availability.clone(),
+            chain_id_hash,
+            epoch,
+        )
+        .expect("persist READY evidence");
+        let (mut session, signer_pops) =
+            committed_lane_block_session_for_kura_proposal(&payload.origin_proposal, &signer);
+        session.prepare_qc = availability.certificate;
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist certified autonomous source");
+        kura.durable_autonomous_lane_merge_source(lane_id, 1, chain_id_hash, epoch)
+            .expect("complete source is initially eligible");
+
+        let (data_path, index_path) =
+            Kura::autonomous_lane_merge_bundle_paths_for_entry(lane_entry, temp_dir.path());
+        let backup_dir = TempDir::new().expect("bundle backup dir");
+        let data_backup = backup_dir.path().join("merge_bundle_data.backup");
+        let index_backup = backup_dir.path().join("merge_bundle_index.backup");
+        fs::copy(&data_path, &data_backup).expect("backup bundle data");
+        fs::copy(&index_path, &index_backup).expect("backup bundle index");
+        let canonical_data = fs::read(&data_backup).expect("read canonical bundle data");
+        let canonical_index = fs::read(&index_backup).expect("read canonical bundle index");
+        let restore_pair = || {
+            if fs::symlink_metadata(&data_path).is_ok() {
+                fs::remove_file(&data_path).expect("remove mutated bundle data");
+            }
+            if fs::symlink_metadata(&index_path).is_ok() {
+                fs::remove_file(&index_path).expect("remove mutated bundle index");
+            }
+            fs::copy(&data_backup, &data_path).expect("restore bundle data");
+            fs::copy(&index_backup, &index_path).expect("restore bundle index");
+        };
+        let assert_rejected = |case: &str| {
+            assert!(
+                kura.durable_autonomous_lane_merge_source(lane_id, 1, chain_id_hash, epoch)
+                    .is_err(),
+                "{case} must fail closed before merge eligibility",
+            );
+        };
+
+        let mut malformed_data = canonical_data.clone();
+        let malformed_midpoint = malformed_data.len() / 2;
+        malformed_data[malformed_midpoint] ^= 0x80;
+        fs::write(&data_path, malformed_data).expect("write malformed bundle data");
+        assert_rejected("malformed canonical bundle bytes");
+        restore_pair();
+
+        fs::write(
+            &index_path,
+            &canonical_index[..canonical_index.len() - 1],
+        )
+        .expect("write truncated bundle index");
+        assert_rejected("truncated bundle index");
+        restore_pair();
+
+        let mut trailing_index = canonical_index.clone();
+        trailing_index.push(0);
+        fs::write(&index_path, trailing_index).expect("write trailing bundle index byte");
+        assert_rejected("partial trailing bundle index entry");
+        restore_pair();
+
+        let oversized_index_len = u64::try_from(
+            kura.autonomous_lane_merge_bundle_pair_entry_limit()
+                .saturating_add(1),
+        )
+        .expect("entry limit fits u64")
+        .saturating_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
+        .saturating_add(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&index_path)
+            .expect("open bundle index for oversizing")
+            .set_len(oversized_index_len)
+            .expect("oversize bundle index sparsely");
+        assert_rejected("oversized bundle index");
+        restore_pair();
+
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&data_path)
+            .expect("open bundle data for oversizing")
+            .set_len(
+                u64::try_from(kura.autonomous_lane_merge_bundle_pair_byte_limit())
+                    .expect("aggregate budget fits u64")
+                    .saturating_add(1),
+            )
+            .expect("oversize bundle data sparsely");
+        assert_rejected("oversized bundle data");
+        restore_pair();
+
+        fs::remove_file(&index_path).expect("remove one bundle pair half");
+        assert_rejected("partial bundle data/index pair");
+        restore_pair();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            fs::remove_file(&data_path).expect("remove bundle data before symlink");
+            symlink(&data_backup, &data_path).expect("symlink bundle data");
+            assert_rejected("symlinked bundle data");
+            restore_pair();
+
+            fs::remove_file(&data_path).expect("remove bundle data before hardlink");
+            fs::hard_link(&data_backup, &data_path).expect("hardlink bundle data");
+            assert_rejected("hardlinked bundle data");
+            drop(kura);
+            assert!(
+                Kura::new(&config, &lane_config).is_err(),
+                "startup must reject a hardlinked canonical bundle pair",
+            );
+            fs::remove_file(&data_path).expect("remove hardlink fixture");
+        }
     }
 
     #[test]
@@ -1286,80 +1715,6 @@
     }
 
     #[test]
-    fn old_reservation_retirement_remains_exactly_addressable_after_same_height_reproposal() {
-        let temp_dir = TempDir::new().expect("temp dir");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        let lane_config = two_lane_runtime_config();
-        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
-        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (chain_id_hash, epoch, first) =
-            autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
-        let successor = repropose_autonomous_lane_payload_for_kura(
-            &first,
-            first
-                .origin_proposal
-                .descriptor
-                .proposal_height
-                .saturating_add(1),
-            &signer,
-        );
-        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
-        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
-        kura.persist_lane_executable_payload(&first, chain_id_hash, epoch)
-            .expect("persist first attempt");
-        let retirement = AutonomousLaneSlotRetirementV1::from_payload(&first);
-        kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
-            .expect("retire first attempt");
-        let barrier = retirement
-            .queue_release_barrier()
-            .expect("exact Queue release barrier");
-        kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, chain_id_hash, epoch)
-            .expect("finalize first attempt release");
-        kura.persist_lane_executable_payload(&successor, chain_id_hash, epoch)
-            .expect("persist successor attempt");
-
-        assert_eq!(
-            kura.autonomous_lane_retirement_matching_reservation(
-                &first.reservation_keys[0],
-                chain_id_hash,
-                epoch,
-            )
-            .expect("proposal-height-indexed old retirement lookup"),
-            Some(retirement.clone()),
-        );
-        kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, chain_id_hash, epoch)
-            .expect("old finalized release remains idempotently provable");
-        let successor_group =
-            autonomous_reservation_reconciliation_group(successor.reservation_keys.clone());
-        let classified = kura
-            .classify_autonomous_lane_reservation_groups(
-                &[successor_group],
-                chain_id_hash,
-                &[epoch],
-            )
-            .expect("strict classifier resolves the fresh exact attempt");
-        assert!(matches!(
-            classified.as_slice(),
-            [AutonomousLaneReservationEvidenceV1::ExactLive {
-                payload: exact_payload,
-                ..
-            }] if exact_payload == &successor
-        ));
-        drop(kura);
-        let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
-        assert_eq!(
-            reopened
-                .autonomous_lane_retirement_matching_reservation(
-                    &first.reservation_keys[0],
-                    chain_id_hash,
-                    epoch,
-                )
-                .expect("restart old retirement lookup"),
-            Some(retirement),
-        );
-    }
-
-    #[test]
     fn autonomous_payload_duplicate_requires_exact_producer_authenticated_bytes() {
         let temp_dir = TempDir::new().expect("temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -1376,10 +1731,17 @@
             PeerId::new(second_signer.public_key().clone()),
         ];
         validator_set.sort();
+        let validator_count =
+            u32::try_from(validator_set.len()).expect("validator count fits u32");
+        let min_quorum = u32::try_from(
+            crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
+        )
+        .expect("validator quorum fits u32");
+        proposal.descriptor.validator_set_hash_version = VALIDATOR_SET_HASH_VERSION_V1;
         proposal.descriptor.validator_set = validator_set.clone();
         proposal.descriptor.validator_set_hash = HashOf::new(&validator_set);
-        proposal.descriptor.validator_count =
-            u32::try_from(validator_set.len()).expect("validator count");
+        proposal.descriptor.validator_count = validator_count;
+        proposal.descriptor.min_quorum = min_quorum;
         proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
         proposal.proposal_hash = proposal.computed_proposal_hash();
 
@@ -1401,10 +1763,28 @@
             )
             .expect("construct producer-authenticated payload")
         };
-        let first = build_payload(&first_signer);
-        let second = build_payload(&second_signer);
+        let producer = crate::lane_consensus::deterministic_lane_author(&validator_set, 1)
+            .expect("fixture has a deterministic lane author");
+        let producer_signer = [&first_signer, &second_signer]
+            .into_iter()
+            .find(|signer| signer.public_key() == producer.public_key())
+            .expect("fixture retains the deterministic lane-author key");
+        let first = build_payload(producer_signer);
+        let mut second = first.clone();
+        second.producer = validator_set
+            .iter()
+            .find(|validator| *validator != producer)
+            .expect("fixture contains a non-author committee member")
+            .clone();
         assert_eq!(first.payload_hash, second.payload_hash);
         assert_ne!(first, second);
+        assert_eq!(
+            second.validate(chain_id_hash, epoch),
+            Err(
+                crate::lane_consensus::LaneAutonomousArtifactError::ProducerNotDeterministicAuthor
+            ),
+            "another committee member must fail before its bytes reach Kura",
+        );
 
         let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
         install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
@@ -2569,254 +2949,4 @@
         }
     }
 
-    #[test]
-    fn lane_execution_evidence_overrides_batched_fsync_and_reissues_failed_barriers() {
-        let temp_dir = TempDir::new().expect("create temp dir");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        assert_eq!(
-            config.fsync_mode,
-            FsyncMode::Batched,
-            "fixture must exercise the shipped batched fsync mode"
-        );
-        let lane_config = two_lane_runtime_config();
-        let lane_id = LaneId::from(1);
-        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-        let lane_block_height = 1;
-        let block = dummy_block_with_lane_payload_ownership(
-            lane_id,
-            lane_entry.dataspace_id,
-            lane_block_height,
-        );
-        let ownership = block
-            .execution_context()
-            .expect("execution context")
-            .lane_payload_ownerships
-            .first()
-            .expect("lane ownership")
-            .clone();
-        let proposal = lane_block_proposal_from_ownership(&ownership);
-        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
-        kura.store_block(block)
-            .expect("store canonical lane payload source");
-        let recovered = kura
-            .recover_lane_block_payload(&proposal)
-            .expect("recover exact execution input");
-
-        for (label, inject_failure) in strict_indexed_sidecar_failure_modes() {
-            inject_failure();
-            assert!(
-                kura.persist_lane_block_execution_input(&recovered).is_err(),
-                "injected {label} execution-input barrier failure must be reported"
-            );
-        }
-        kura.persist_lane_block_execution_input(&recovered)
-            .expect("execution-input retry must reissue every strict barrier");
-        let input = kura
-            .read_lane_block_execution_input(lane_id, lane_block_height)
-            .expect("strict execution input");
-
-        let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-            b"strict lane execution preflight state",
-        )));
-        let results = vec![TransactionResult::new(TransactionResultInner::Ok(
-            DataTriggerSequence::new(),
-        ))];
-        for (label, inject_failure) in strict_indexed_sidecar_failure_modes() {
-            inject_failure();
-            assert!(
-                kura.persist_lane_block_execution_preflight(
-                    &input,
-                    7,
-                    state_hash.clone(),
-                    results.clone(),
-                )
-                .is_err(),
-                "injected {label} execution-preflight barrier failure must be reported"
-            );
-        }
-        kura.persist_lane_block_execution_preflight(&input, 7, state_hash, results.clone())
-            .expect("execution-preflight retry must reissue every strict barrier");
-        let preflight = kura
-            .read_lane_block_execution_preflight(lane_id, lane_block_height)
-            .expect("strict execution preflight");
-        assert_eq!(preflight.results, results);
-    }
-
-    #[test]
-    fn lane_block_execution_input_persists_recovered_payload_and_reloads() {
-        let temp_dir = TempDir::new().expect("create temp dir");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        let lane_config = two_lane_runtime_config();
-        let lane_id = LaneId::from(1);
-        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-        let lane_block_height = 1;
-        let block = dummy_block_with_lane_payload_ownership(
-            lane_id,
-            lane_entry.dataspace_id,
-            lane_block_height,
-        );
-        let ownership = block
-            .execution_context()
-            .expect("execution context")
-            .lane_payload_ownerships
-            .first()
-            .expect("lane ownership")
-            .clone();
-        let proposal = lane_block_proposal_from_ownership(&ownership);
-
-        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
-        kura.store_block(block)
-            .expect("store block with lane artifact");
-        let recovered = kura
-            .recover_lane_block_payload(&proposal)
-            .expect("recover executable lane payload");
-        kura.persist_lane_block_execution_input(&recovered)
-            .expect("persist lane execution input");
-        kura.persist_lane_block_execution_input(&recovered)
-            .expect("duplicate lane execution input persistence is idempotent");
-
-        let input = kura
-            .read_lane_block_execution_input(lane_id, lane_block_height)
-            .expect("lane execution input");
-        assert_eq!(input.format_label(), "lane.execution_input");
-        assert_eq!(input.proposal, proposal);
-        assert_eq!(input.artifact, recovered.artifact);
-        assert_eq!(
-            input.entrypoint_hashes,
-            proposal.descriptor.accepted_transaction_hashes
-        );
-        assert_eq!(input.entrypoints, recovered.entrypoints);
-        assert!(kura.lane_block_execution_input_available(&proposal));
-
-        let (data_path, index_path) =
-            Kura::lane_block_execution_input_paths_for_entry(lane_entry, temp_dir.path());
-        assert!(
-            data_path.is_file(),
-            "lane execution input data file missing"
-        );
-        assert!(
-            index_path.is_file(),
-            "lane execution input index file missing"
-        );
-
-        drop(kura);
-        let (reloaded, _) = Kura::new(&config, &lane_config).expect("reopen kura");
-        assert_eq!(
-            reloaded.read_lane_block_execution_input(lane_id, lane_block_height),
-            Some(input)
-        );
-        assert!(reloaded.lane_block_execution_input_available(&proposal));
-    }
-
-    #[test]
-    fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
-        let temp_dir = TempDir::new().expect("create temp dir");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        let lane_config = two_lane_runtime_config();
-        let lane_id = LaneId::from(1);
-        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-        let lane_block_height = 1;
-        let block = dummy_block_with_lane_payload_ownership(
-            lane_id,
-            lane_entry.dataspace_id,
-            lane_block_height,
-        );
-        let ownership = block
-            .execution_context()
-            .expect("execution context")
-            .lane_payload_ownerships
-            .first()
-            .expect("lane ownership")
-            .clone();
-        let proposal = lane_block_proposal_from_ownership(&ownership);
-
-        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
-        kura.store_block(block)
-            .expect("store block with lane artifact");
-        let recovered = kura
-            .recover_lane_block_payload(&proposal)
-            .expect("recover executable lane payload");
-        let (artifact_data_path, artifact_index_path) =
-            Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
-        std::fs::remove_file(&artifact_data_path).expect("remove lane artifact data sidecar");
-        std::fs::remove_file(&artifact_index_path).expect("remove lane artifact index sidecar");
-        assert!(
-            kura.read_lane_block_artifact(lane_id, lane_block_height)
-                .is_none(),
-            "test setup must remove the repairable lane artifact sidecar",
-        );
-
-        let worker_kura = Arc::clone(&kura);
-        let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
-        let worker = thread::spawn(move || {
-            let outcome = (|| -> std::result::Result<(), String> {
-                worker_kura
-                    .persist_lane_block_execution_input(&recovered)
-                    .map_err(|error| format!("persist execution input: {error:?}"))?;
-                let input = worker_kura
-                    .read_lane_block_execution_input_with_repair_policy(
-                        lane_id,
-                        lane_block_height,
-                        false,
-                    )
-                    .ok_or_else(|| "read execution input after persistence".to_owned())?;
-                let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                    b"missing lane artifact direct application state",
-                )));
-                let result =
-                    TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
-                worker_kura
-                    .persist_lane_block_execution_preflight(&input, 7, state_hash, vec![result])
-                    .map_err(|error| format!("persist execution preflight: {error:?}"))?;
-                let preflight = worker_kura
-                    .read_lane_block_execution_preflight_with_repair_policy(
-                        lane_id,
-                        lane_block_height,
-                        false,
-                    )
-                    .ok_or_else(|| "read execution preflight after persistence".to_owned())?;
-                worker_kura
-                    .persist_direct_lane_block_application_receipt(&input, &preflight)
-                    .map_err(|error| format!("persist direct receipt: {error:?}"))?;
-                Ok(())
-            })();
-            done_tx.send(outcome).expect("report sidecar outcome");
-        });
-        done_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("lane sidecar validation must not recursively lock prune_lock")
-            .unwrap_or_else(|error| panic!("lane sidecar validation failed: {error}"));
-        worker.join().expect("lane sidecar validation worker");
-
-        assert!(
-            kura.read_lane_block_artifact(lane_id, lane_block_height)
-                .is_none(),
-            "validation under prune_lock must not repair the missing lane artifact sidecar",
-        );
-        let receipt = kura
-            .read_active_lane_block_application_receipt_structural(
-                lane_id,
-                lane_block_height,
-                false,
-            )
-            .expect("read direct receipt without sidecar repair");
-        assert!(
-            kura.lane_block_application_receipt_matches_available_evidence(&receipt, false),
-            "execution input, preflight, and direct receipt must remain usable without repair",
-        );
-        assert!(
-            kura.read_lane_block_artifact(lane_id, lane_block_height)
-                .is_none(),
-            "nonrepair evidence validation must leave the missing lane artifact absent",
-        );
-        assert_eq!(
-            kura.read_lane_block_application_receipt(lane_id, lane_block_height),
-            Some(receipt),
-            "the public repair-enabled receipt reader must retain valid evidence",
-        );
-        assert!(
-            kura.read_lane_block_artifact(lane_id, lane_block_height)
-                .is_some(),
-            "the public repair-enabled reader must recover the missing lane artifact",
-        );
-    }
+    include!("07c_lane_execution_sidecar_tests.rs");

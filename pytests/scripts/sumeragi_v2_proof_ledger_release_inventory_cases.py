@@ -1,5 +1,9 @@
 # Executed lexically in sumeragi_v2_proof_ledger_test.py; do not collect directly.
 
+RELEASE_RECEIPT_COMPONENT_FILES = (
+    Path("scripts/write_sumeragi_v2_release_receipt_formal_artifacts.py"),
+)
+
 
 def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[Path, ...]:
     """Expand reviewed Rust parents to their exact include-component closure."""
@@ -13,6 +17,8 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
                 relative.as_posix(), ()
             )
         )
+        if relative == Path("scripts/write_sumeragi_v2_release_receipt.py"):
+            expanded.extend(RELEASE_RECEIPT_COMPONENT_FILES)
     return tuple(dict.fromkeys(expanded))
 
 
@@ -51,26 +57,26 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
             "45-mutation typed rollover contract fragment",
         ),
         (
-            "readonly expected_multilane_focus_test_count=305",
-            "readonly expected_multilane_focus_test_count=304",
-            "multilane G-UNIT source count must be sealed as 305",
+            "readonly expected_multilane_focus_test_count=390",
+            "readonly expected_multilane_focus_test_count=384",
+            "multilane G-UNIT source count must be sealed as 390",
         ),
         (
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 306 ]]; then""",
+                """'[:space:]')" != 391 ]]; then""",
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 305 ]]; then""",
-            "G-UNIT TSV guard must require one header plus exactly 305 focus rows",
+            """'[:space:]')" != 390 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 390 focus rows",
         ),
         (
-            "The canonical 305-row TSV is",
-            "The canonical 304-row TSV is",
-            "G-UNIT inventory comment must seal 305 rows",
+            "The canonical 390-row TSV is",
+            "The canonical 384-row TSV is",
+            "G-UNIT inventory comment must seal 390 rows",
         ),
         (
-            "including exact 305/305 G-UNIT,",
-            "including exact 304/305 G-UNIT,",
-            "terminal success text must seal exact 305/305 G-UNIT",
+            "including exact 390/390 G-UNIT,",
+            "including exact 389/390 G-UNIT,",
+            "terminal success text must seal exact 390/390 G-UNIT",
         ),
         (
             "  sumeragi::v2_core::refinement::tests::"
@@ -415,13 +421,18 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     assert module._production_liveness_release_inventory_errors(tmp_path) == []
 
     runner_path = (
-        tmp_path / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_runner.rs"
+        tmp_path
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "tests"
+        / "v2_runner_unsealed_01.rs"
     )
     source = runner_path.read_text(encoding="utf-8")
     exact_retry_split = (
-        "        let error = "
-        "apply_certified_merge_sidecar_closed_prefixes_with(&mut adapter, "
-        "|prefix| {\n"
+        "        let error = apply_certified_merge_sidecar_closed_prefixes_with"
+        "(&mut adapter, |prefix| {\n"
         "            calls = calls.saturating_add(1);\n"
         "            if calls == 2 {\n"
     )

@@ -628,10 +628,12 @@ seconds of positive issuance-clock skew. It is rejected at its exact expiry
 second. Nodes return HTTP `404` with
 `{"error": "stream token issuance is not enabled on this node"}` only when
 issuance is disabled in node TOML. Enabled production startup fails closed
-unless a runtime-injected HSM/KMS signer reports the configured non-secret
-`signer_handle` and exact Ed25519 `signer_public_key_hex`. No signing-seed file,
-key path, or environment enablement is accepted; signer credentials and private
-key material remain runtime-only.
+unless two runtime-injected HSM/KMS signer probes report the exact configured
+non-secret `signer_handle`, Ed25519 `signer_public_key_hex`, non-zero
+`signer_revision`, and non-zero `signer_policy_digest_hex`. Torii revalidates
+the same identity before and after every signature and discards output on
+provider drift. No signing-seed file, key path, or environment enablement is
+accepted; signer credentials and private key material remain runtime-only.
 
 Authenticated-credential issuance and per-token quota state are bounded and
 prune only expired or idle windows. A full state table never evicts an active

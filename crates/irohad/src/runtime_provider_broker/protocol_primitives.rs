@@ -94,6 +94,10 @@ pub(super) const OPERATION_MODERATION_CHECKPOINT_LOAD_V1: u16 = 104;
 pub(super) const OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1: u16 = 105;
 pub(super) const OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1: u16 = 106;
 pub(super) const OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1: u16 = 107;
+pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1: u16 = 108;
+pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1: u16 = 109;
+pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1: u16 = 110;
+pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1: u16 = 111;
 // A real payload byte avoids relying on zero-sized archive reconstruction;
 // the authenticated slot and operation provide the request-domain binding.
 pub(super) const CHECKPOINT_LOAD_REQUEST_VERSION_V1: u8 = 1;
@@ -275,6 +279,11 @@ pub(super) struct ProviderBindingWireV1 {
     pub(super) revision: Option<u64>,
     pub(super) policy_digest: Option<[u8; 32]>,
     pub(super) stream_token_signer_public_key: Option<[u8; 32]>,
+    pub(super) stream_token_gateway_admission_qualification:
+        Option<iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1>,
+    pub(super) stream_token_gateway_admission_max_pending: Option<u32>,
+    pub(super) stream_token_gateway_admission_max_tracked_tokens: Option<u32>,
+    pub(super) stream_token_gateway_admission_reconcile_max_items: Option<u32>,
     pub(super) appeal_finance_signer_binding: Option<AppealFinanceSignerBindingWireV1>,
     pub(super) appeal_finance_checkpoint_binding: Option<AppealFinanceCheckpointBindingWireV1>,
     pub(super) appeal_finance_checkpoint_max_bytes: Option<u64>,

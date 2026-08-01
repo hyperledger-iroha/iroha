@@ -3,8 +3,8 @@
 
 This checker is intentionally host-only.  It authenticates the exact native
 artifact exercised by a Node, Python, C/JNI, or C# test lane, calls that
-artifact's ABI probe, verifies the required SoraFS entrypoints, and binds the
-result to one clean Git revision.  Apple and Android release packages continue
+artifact's ABI probe, verifies the required SoraFS and C# privacy entrypoints,
+and binds the result to one clean Git revision. Apple and Android release packages continue
 to use ``check_mobile_sdk_artifacts.sh``, which additionally authenticates every
 cross-compiled slice and its transitive source seal.
 """
@@ -43,6 +43,11 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
         "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
+        "iroha_privacy_capabilities_v1",
+        "iroha_privacy_validate_capabilities_v1",
+        "iroha_privacy_exact12_fixture_bundle_v1",
+        "iroha_privacy_validate_exact12_fixture_bundle_v1",
+        "iroha_privacy_free_buffer",
     ),
     "node": (
         "connectNoritoBridgeAbiVersion",
