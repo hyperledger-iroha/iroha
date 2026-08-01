@@ -673,22 +673,6 @@ impl BlindIssuanceRequestTranscriptV1 {
     }
 }
 
-impl core::ops::Deref for PresentationTranscriptV1 {
-    type Target = ProofTranscriptCoreV1;
-
-    fn deref(&self) -> &Self::Target {
-        &self.core
-    }
-}
-
-impl core::ops::Deref for BlindIssuanceRequestTranscriptV1 {
-    type Target = ProofTranscriptCoreV1;
-
-    fn deref(&self) -> &Self::Target {
-        &self.core
-    }
-}
-
 impl ProofTranscriptCoreV1 {
     pub(crate) const fn matrix_seed(&self) -> MatrixSeedV1 {
         self.matrix_seed
@@ -1692,21 +1676,18 @@ mod tests {
     #[test]
     fn staged_transcript_is_framed_deterministic_and_fully_bound() {
         let transcript = presentation_transcript();
+        let core = transcript.proof_core();
         let mut first = [0_u8; 64];
         let mut second = [0_u8; 64];
-        transcript
-            .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut first)
+        core.derive_bytes(b"stage-a", &[b"ab", b"c"], &mut first)
             .expect("stage");
-        transcript
-            .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
+        core.derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
             .expect("stage");
         assert_eq!(first, second);
-        transcript
-            .derive_bytes(b"stage-a", &[b"a", b"bc"], &mut second)
+        core.derive_bytes(b"stage-a", &[b"a", b"bc"], &mut second)
             .expect("stage");
         assert_ne!(first, second);
-        transcript
-            .derive_bytes(b"stage-b", &[b"ab", b"c"], &mut second)
+        core.derive_bytes(b"stage-b", &[b"ab", b"c"], &mut second)
             .expect("stage");
         assert_ne!(first, second);
 
@@ -1716,6 +1697,7 @@ mod tests {
             PresentationTranscriptV1::new(changed_binding, presentation_seed(), [0x95; 32])
                 .expect("binding");
         changed
+            .proof_core()
             .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
             .expect("stage");
         assert_ne!(first, second);
@@ -1723,6 +1705,7 @@ mod tests {
         let changed = PresentationTranscriptV1::new(binding(), presentation_seed(), [0x94; 32])
             .expect("relation binding");
         changed
+            .proof_core()
             .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
             .expect("stage");
         assert_ne!(first, second);
@@ -1731,22 +1714,22 @@ mod tests {
     #[test]
     fn staged_uniform_and_ternary_expansion_is_canonical_and_random_access() {
         let transcript = presentation_transcript();
-        let first = transcript
+        let core = transcript.proof_core();
+        let first = core
             .derive_ternary_row(b"projection", &[b"commitment"], 17, 1_024)
             .expect("row");
-        let second = transcript
+        let second = core
             .derive_ternary_row(b"projection", &[b"commitment"], 17, 1_024)
             .expect("row");
         assert_eq!(first, second);
         assert!(first.iter().all(|value| (-1..=1).contains(value)));
         assert_ne!(
             first,
-            transcript
-                .derive_ternary_row(b"projection", &[b"commitment"], 18, 1_024)
+            core.derive_ternary_row(b"projection", &[b"commitment"], 18, 1_024)
                 .expect("row")
         );
 
-        let polynomials = transcript
+        let polynomials = core
             .derive_uniform_polynomials(b"weights", &[b"commitment"], 4)
             .expect("uniform polynomials");
         assert_eq!(polynomials.len(), 4);
@@ -1758,12 +1741,11 @@ mod tests {
         }));
         assert_eq!(
             polynomials,
-            transcript
-                .derive_uniform_polynomials(b"weights", &[b"commitment"], 4)
+            core.derive_uniform_polynomials(b"weights", &[b"commitment"], 4)
                 .expect("uniform polynomials")
         );
 
-        let scalars = transcript
+        let scalars = core
             .derive_uniform_scalars(b"weights", &[b"commitment"], 257)
             .expect("uniform scalars");
         assert_eq!(scalars.len(), 257);
@@ -1774,8 +1756,7 @@ mod tests {
         );
         assert_eq!(
             scalars,
-            transcript
-                .derive_uniform_scalars(b"weights", &[b"commitment"], 257)
+            core.derive_uniform_scalars(b"weights", &[b"commitment"], 257)
                 .expect("uniform scalars")
         );
         assert_ne!(scalars[0], polynomials[0].coefficients()[0]);
@@ -1798,19 +1779,25 @@ mod tests {
             })
         );
         assert_eq!(
-            presentation_transcript().derive_bytes(b"", &[], &mut [0_u8; 1]),
+            presentation_transcript()
+                .proof_core()
+                .derive_bytes(b"", &[], &mut [0_u8; 1]),
             Err(TranscriptErrorV1::EmptyStageTag)
         );
         assert_eq!(
-            presentation_transcript().derive_ternary_row(b"r", &[], 0, 0),
+            presentation_transcript()
+                .proof_core()
+                .derive_ternary_row(b"r", &[], 0, 0),
             Err(TranscriptErrorV1::EmptyProjectionRow)
         );
         assert_eq!(
-            presentation_transcript().derive_final_challenge(b""),
+            presentation_transcript()
+                .proof_core()
+                .derive_final_challenge(b""),
             Err(TranscriptErrorV1::EmptyPreChallengeCommitments)
         );
         assert_eq!(
-            presentation_transcript().derive_ternary_row(
+            presentation_transcript().proof_core().derive_ternary_row(
                 b"r",
                 &[],
                 0,
@@ -1821,21 +1808,25 @@ mod tests {
             })
         );
         assert_eq!(
-            presentation_transcript().derive_uniform_polynomials(
-                b"uniform-polynomials",
-                &[],
-                MAX_STAGED_UNIFORM_POLYNOMIALS_V1 + 1
-            ),
+            presentation_transcript()
+                .proof_core()
+                .derive_uniform_polynomials(
+                    b"uniform-polynomials",
+                    &[],
+                    MAX_STAGED_UNIFORM_POLYNOMIALS_V1 + 1,
+                ),
             Err(TranscriptErrorV1::FixedProfileCapacityExceeded {
                 field: "uniform_polynomials"
             })
         );
         assert_eq!(
-            presentation_transcript().derive_uniform_scalars(
-                b"uniform-scalars",
-                &[],
-                MAX_STAGED_UNIFORM_SCALARS_V1 + 1
-            ),
+            presentation_transcript()
+                .proof_core()
+                .derive_uniform_scalars(
+                    b"uniform-scalars",
+                    &[],
+                    MAX_STAGED_UNIFORM_SCALARS_V1 + 1,
+                ),
             Err(TranscriptErrorV1::FixedProfileCapacityExceeded {
                 field: "uniform_scalars"
             })

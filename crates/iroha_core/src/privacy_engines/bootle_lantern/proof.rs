@@ -1759,9 +1759,11 @@ mod tests {
         let pre_challenge = b"same canonical fixed-profile proof body";
         assert_ne!(
             presentation
+                .proof_core()
                 .derive_final_challenge(pre_challenge)
                 .expect("P2 challenge"),
             blind_issuance
+                .proof_core()
                 .derive_final_challenge(pre_challenge)
                 .expect("P1 challenge"),
             "P1 and P2 must not share a Fiat--Shamir challenge namespace"
@@ -1826,11 +1828,13 @@ mod tests {
             }))
         });
         let (projection_r, projection_r_prime) =
-            derive_projection_matrices(fixture.transcript, &t_b)
+            derive_projection_matrices(fixture.transcript.proof_core(), &t_b)
                 .expect("transcript-bound projection matrices");
-        let weights = derive_schwartz_weights(fixture.transcript, &t_b).expect("Schwartz weights");
-        let multipliers = derive_equation_multipliers(fixture.transcript, &t_b, &h, &z3, &z4)
-            .expect("ring equation multipliers");
+        let weights = derive_schwartz_weights(fixture.transcript.proof_core(), &t_b)
+            .expect("Schwartz weights");
+        let multipliers =
+            derive_equation_multipliers(fixture.transcript.proof_core(), &t_b, &h, &z3, &z4)
+                .expect("ring equation multipliers");
         QuadraticEquationV1::new(
             &fixture.relation,
             projection_r,
