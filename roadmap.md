@@ -88,7 +88,7 @@ Remaining work stays ordered and fail-closed:
   the fresh guarded k17 shape probe and bind its exact result; this probe and
   authentic generation have not passed yet.
 - Seal the final reviewed source closure over signed `optimizations` anchor
-  `0ecb714edf29e0ff7c5b4e7988ccbbe411b5d040`. Build and hash the candidate
+  `7d0d0d29544cbeaae114c1c098ee1e41187634e2`. Build and hash the candidate
   generator, runtime binaries, configuration, and reset tooling from that one
   provenance set; no earlier r5/r6 binary or artifact seal attests the k17
   layout.

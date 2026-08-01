@@ -33022,14 +33022,34 @@ impl State {
                             "pending queue-plan admission certificate is invalid: {error}"
                         ))
                     })?;
-                Ok((validated.registry_key, bytes))
+                Ok((validated.registry_key, validated.registry_value, bytes))
             })
             .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
-        ordered.sort_by(|left, right| left.0.cmp(&right.0));
-        if ordered.windows(2).any(|pair| pair[0].0 == pair[1].0) {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "pending queue-plan admissions contain duplicate source registry keys".to_owned(),
-            ));
+        ordered.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.cmp(&right.2))
+        });
+        let mut canonical = Vec::with_capacity(ordered.len());
+        for (registry_key, registry_value, bytes) in ordered {
+            if let Some((previous_key, previous_value, _)) = canonical.last() {
+                if previous_key == &registry_key {
+                    if previous_value != &registry_value {
+                        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                            "pending queue-plan admissions contain conflicting bindings for one source registry key"
+                                .to_owned(),
+                        ));
+                    }
+                    // Distinct authority response timing may produce multiple valid quorum
+                    // certificates for the same immutable binding.  Their signer subsets and
+                    // bytes can differ, but they are one semantic admission.  Sorting by the
+                    // complete tuple above makes the first certificate the deterministic
+                    // canonical representative on every peer.
+                    continue;
+                }
+            }
+            canonical.push((registry_key, registry_value, bytes));
         }
 
         let mut candidate = if let Some(candidate) = base {
@@ -33066,7 +33086,7 @@ impl State {
         let available = unsigned_limit.saturating_sub(base_len);
         let mut selected_raw_bytes = 0_usize;
         let mut selected_framed_bytes = 0_usize;
-        for (_, bytes) in ordered {
+        for (_, _, bytes) in canonical {
             let framed_estimate = bytes.len().saturating_add(16);
             if candidate.queue_plan_admissions.len()
                 == iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSIONS
@@ -121789,6 +121809,78 @@ seiyaku IdentitylessRawCallback {
             .expect("store two-lane merge fixture carrier parent");
         commit_block_metadata_to_state(&state, &parent);
         (state, validator_keypairs, commit_keypairs, parent)
+    }
+
+    #[test]
+    fn equivalent_queue_plan_quorums_collapse_to_one_deterministic_admission() {
+        let (state, validator_keypairs, _, parent) = configured_single_lane_merge_state();
+        let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ));
+        let (binding, first_certificate) = queue_plan_admission_certificate_for_state_test(
+            &state,
+            routing_plan,
+            &validator_keypairs,
+            1,
+            0x50,
+        );
+        let coordinator = &binding.admission_context.route_incarnations[0];
+        assert_eq!(coordinator.durability_threshold, 2);
+        let alternate_attestations = [2_usize, 3]
+            .into_iter()
+            .map(|index| {
+                let validator = &coordinator.validator_set[index];
+                let keypair = validator_keypairs
+                    .iter()
+                    .find(|keypair| keypair.public_key() == validator.public_key())
+                    .expect("fixture retains alternate quorum signer");
+                let validator_index = u16::try_from(index).expect("validator index fits u16");
+                let signing_bytes =
+                    crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v2(
+                        binding.canonical_hash(),
+                        validator_index,
+                    )
+                    .expect("alternate quorum signing bytes");
+                crate::torii_proxy::QueuePlanAdmissionAttestationV2 {
+                    version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+                    validator_index,
+                    signature: Signature::try_new(keypair.private_key(), &signing_bytes)
+                        .expect("alternate quorum signature"),
+                }
+            })
+            .collect();
+        let alternate_certificate =
+            norito::to_bytes(&crate::torii_proxy::QueuePlanAdmissionCertificateV2 {
+                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+                binding,
+                attestations: alternate_attestations,
+            })
+            .expect("alternate quorum certificate");
+        assert_ne!(first_certificate, alternate_certificate);
+
+        let expected = first_certificate.clone().min(alternate_certificate.clone());
+        let forward = state
+            .merge_candidate_with_queue_plan_admissions(
+                &parent.header(),
+                0,
+                None,
+                vec![first_certificate.clone(), alternate_certificate.clone()],
+            )
+            .expect("equivalent quorum certificates are idempotent")
+            .expect("QueuePlan controls produce a candidate");
+        let reverse = state
+            .merge_candidate_with_queue_plan_admissions(
+                &parent.header(),
+                0,
+                None,
+                vec![alternate_certificate, first_certificate],
+            )
+            .expect("input order does not affect equivalent quorum collapse")
+            .expect("QueuePlan controls produce a candidate");
+
+        assert_eq!(forward.queue_plan_admissions, vec![expected]);
+        assert_eq!(forward.canonical_bytes(), reverse.canonical_bytes());
     }
 
     #[test]

@@ -40,9 +40,9 @@ use iroha_data_model::{
     isi::{SetKeyValue, SetParameter},
     nexus::{LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1},
     parameter::Parameter,
-    prelude::{ChainId, DomainId},
+    prelude::ChainId,
     query::{QueryOutput, SignedQuery},
-    transaction::{SignedTransaction, TransactionBuilder},
+    transaction::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
 use iroha_primitives::json::Json;
 use iroha_telemetry::metrics::Status as TelemetryStatus;
@@ -713,6 +713,35 @@ fn unix_time_now() -> Duration {
         .unwrap_or(Duration::ZERO)
 }
 
+fn smoke_transaction_result_in_block(
+    block: &SignedBlock,
+    tx_hash: &HashOf<SignedTransaction>,
+) -> Option<ToriiResult<u64>> {
+    if !block.has_results() {
+        return None;
+    }
+    block
+        .entrypoint_results()
+        .find_map(|(_, entrypoint, result)| {
+            let is_match = match &entrypoint {
+                TransactionEntrypoint::External(transaction) => transaction.hash() == *tx_hash,
+                TransactionEntrypoint::SealedReveal(reveal) => {
+                    reveal.signed_transaction().hash() == *tx_hash
+                }
+                TransactionEntrypoint::SealedCommitment(_)
+                | TransactionEntrypoint::PrivateKaigi(_)
+                | TransactionEntrypoint::Time(_) => false,
+            };
+            is_match.then(|| match result.as_ref() {
+                Ok(_) => Ok(block.header().height().get()),
+                Err(reason) => Err(ToriiError::SmokeRejected {
+                    hash: tx_hash.to_string(),
+                    reason: format!("{reason:?}"),
+                }),
+            })
+        })
+}
+
 #[derive(Debug, Default)]
 struct ReadinessSmokeAttemptCursor {
     next_index: usize,
@@ -791,19 +820,18 @@ fn build_readiness_smoke_transaction_at(
         .parse::<ChainId>()
         .map_err(|_| ReadinessSmokeBuildError::InvalidChainId(chain_id.to_owned()))?;
     let now_ms = creation_time.as_millis();
-    let domain_id = DomainId::try_new("wonderland", "universal")
-        .map_err(|_| ReadinessSmokeBuildError::InvalidDomain("wonderland.universal".to_owned()))?;
     let key = "mochi_smoke"
         .parse()
         .expect("readiness smoke metadata key is valid");
     let value = Json::new(format!("{now_ms}:{attempt}"));
     let quantity = u32::try_from(attempt + 1).unwrap_or(u32::MAX);
+    let authority = signer.account_id().clone();
     let mut builder = TransactionBuilder::new(
         chain_id,
-        signer.account_id().clone(),
+        authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
-    .with_instructions([SetKeyValue::domain(domain_id, key, value)]);
+    .with_instructions([SetKeyValue::account(authority, key, value)]);
 
     if let Some(nonce) = NonZeroU32::new(quantity) {
         builder.set_nonce(nonce);
@@ -2853,8 +2881,10 @@ impl ToriiClient {
                     message = block_rx.recv() => {
                         match message {
                             Ok(BlockStreamEvent::Block { block, .. }) => {
-                                if block.external_transactions().any(|tx| tx.hash() == tx_hash) {
-                                    return Ok(block.header().height().get());
+                                if let Some(result) =
+                                    smoke_transaction_result_in_block(block.as_ref(), &tx_hash)
+                                {
+                                    return result;
                                 }
                             }
                             Ok(BlockStreamEvent::DecodeError { error }) => {
@@ -3848,8 +3878,10 @@ where
                 message = block_rx.recv() => {
                     match message {
                         Ok(BlockStreamEvent::Block { block, .. }) => {
-                            if block.external_transactions().any(|tx| tx.hash() == tx_hash) {
-                                return Ok(block.header().height().get());
+                            if let Some(result) =
+                                smoke_transaction_result_in_block(block.as_ref(), &tx_hash)
+                            {
+                                return result;
                             }
                         }
                         Ok(BlockStreamEvent::DecodeError { error }) => {
@@ -6480,6 +6512,31 @@ mod tests {
     }
 
     #[test]
+    fn readiness_smoke_mutates_only_its_signing_account_metadata() {
+        let signer = crate::compose::development_signing_authorities()
+            .first()
+            .expect("development signer available");
+        let plan = ReadinessSmokePlan::for_signer("mochi-smoke", signer)
+            .expect("build readiness smoke plan");
+        let iroha_data_model::transaction::Executable::Instructions(instructions) =
+            plan.transactions[0].instructions()
+        else {
+            panic!("readiness smoke must contain instructions");
+        };
+        assert_eq!(instructions.len(), 1);
+        let set_key_value = instructions[0]
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::SetKeyValueBox>()
+            .expect("readiness smoke instruction is SetKeyValue");
+        match set_key_value {
+            iroha_data_model::isi::SetKeyValueBox::Account(set) => {
+                assert_eq!(set.object(), signer.account_id());
+            }
+            other => panic!("readiness smoke must target its own account, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn generated_readiness_transactions_renew_for_the_full_retry_budget() {
         let signer = crate::compose::development_signing_authorities()
             .first()
@@ -6558,9 +6615,62 @@ mod tests {
         SignedBlock::genesis(vec![tx], PEER_KEYPAIR.private_key(), None, None)
     }
 
+    fn sample_block_with_result(
+        result: iroha_data_model::transaction::TransactionResultInner,
+    ) -> SignedBlock {
+        let mut block = sample_block();
+        let entrypoint_hashes = block
+            .external_entrypoints_cloned()
+            .map(|entrypoint| entrypoint.hash())
+            .collect::<Vec<_>>();
+        block
+            .set_transaction_results(Vec::new(), &entrypoint_hashes, vec![result])
+            .expect("attach aligned sample transaction result");
+        block
+    }
+
+    #[test]
+    fn committed_block_rejection_is_not_reported_as_smoke_success() {
+        use iroha_data_model::transaction::error::{
+            TransactionLimitError, TransactionRejectionReason,
+        };
+
+        let rejection = TransactionRejectionReason::LimitCheck(TransactionLimitError {
+            reason: "limit".to_owned(),
+        });
+        let expected_reason = format!("{rejection:?}");
+        let block = sample_block_with_result(Err(rejection));
+        let tx_hash = block
+            .transactions_vec()
+            .first()
+            .expect("sample block tx")
+            .hash();
+
+        match smoke_transaction_result_in_block(&block, &tx_hash) {
+            Some(Err(ToriiError::SmokeRejected { hash, reason })) => {
+                assert_eq!(hash, tx_hash.to_string());
+                assert_eq!(reason, expected_reason);
+            }
+            other => panic!("expected aligned block rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn block_hash_presence_without_aligned_result_is_not_smoke_success() {
+        let block = sample_block();
+        let tx_hash = block
+            .transactions_vec()
+            .first()
+            .expect("sample block tx")
+            .hash();
+        assert!(smoke_transaction_result_in_block(&block, &tx_hash).is_none());
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn submit_and_wait_for_commit_reports_block_height() {
-        let block = sample_block();
+        let block = sample_block_with_result(Ok(
+            iroha_data_model::transaction::DataTriggerSequence::default(),
+        ));
         let tx_hash = block
             .transactions_vec()
             .first()

@@ -265,6 +265,22 @@ def test_runner_does_not_use_the_retired_boolean_supervision_marker() -> None:
     assert "MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT" in source
 
 
+def test_runner_refuses_retired_rss_only_report_mode(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    report = tmp_path / "legacy-report.json"
+
+    assert MODULE.main(["--report", str(report), "--", "/usr/bin/true"]) == 2
+
+    captured = capsys.readouterr()
+    assert "--report mode is retired" in captured.err
+    assert "RSS-only" in captured.err
+    assert "--resource-report" in captured.err
+    assert not report.exists()
+    source = RUNNER_PATH.read_text(encoding="utf-8")
+    assert "run_guarded_command" not in source
+
+
 def test_runner_requires_prebuilt_generator_and_exact_subcommand(tmp_path: Path) -> None:
     report = tmp_path / "resource-report"
     assert MODULE.main(

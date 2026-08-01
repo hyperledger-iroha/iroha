@@ -444,7 +444,7 @@ os.write(fd, f'stage=residual-worker-{worker.pid}\\n'.encode())
             result.report["termination_reason"], "residual_owned_process_group"
         )
 
-    def test_runner_reports_missing_executable_without_traceback(self) -> None:
+    def test_runner_refuses_retired_generic_mode_without_traceback(self) -> None:
         runner = SCRIPTS / "run_kagemusha_v4_generation.py"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -467,7 +467,9 @@ os.write(fd, f'stage=residual-worker-{worker.pid}\\n'.encode())
                 errors="replace",
             )
         self.assertEqual(completed.returncode, 2)
-        self.assertIn("resource guard refused to start", completed.stderr)
+        self.assertIn("--report mode is retired", completed.stderr)
+        self.assertIn("RSS-only", completed.stderr)
+        self.assertIn("--resource-report", completed.stderr)
         self.assertNotIn("Traceback", completed.stderr)
 
     @unittest.skipUnless(
