@@ -7639,6 +7639,14 @@ impl Queue {
         if self.durability_transition_active(&tx.hash()) {
             return false;
         }
+        self.is_pending_after_durability_transition_check(tx, state_view)
+    }
+
+    fn is_pending_after_durability_transition_check(
+        &self,
+        tx: &CheckedTransaction<'static>,
+        state_view: &StateView,
+    ) -> bool {
         if tx.is_in_blockchain(state_view) {
             return false;
         }
@@ -13937,7 +13945,7 @@ impl Queue {
             let Some(tx) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) else {
                 continue;
             };
-            if !self.is_pending(tx.as_ref(), state_view) {
+            if !self.is_pending_after_durability_transition_check(tx.as_ref(), state_view) {
                 #[cfg(feature = "telemetry")]
                 {
                     self.tx_teu.remove(&hash);
