@@ -22,9 +22,7 @@ struct OuterRequest {
 fn bare_payload_with_flags<T: NoritoSerialize>(value: &T, flags: u8, flags_hint: u8) -> Vec<u8> {
     let _guard = DecodeFlagsGuard::enter_with_hint(flags, flags_hint);
     let mut payload = Vec::new();
-    value
-        .serialize(&mut payload)
-        .expect("serialize bare payload");
+    norito_core::serialize_to_buffer(value, &mut payload).expect("serialize bare payload");
     payload
 }
 
@@ -36,9 +34,7 @@ fn sequential_bare_payload_with_flags<T: NoritoSerialize>(
     let _guard = DecodeFlagsGuard::enter_with_hint(flags, flags_hint);
     let _sequential = norito_core::SequentialOverrideGuard::enter();
     let mut payload = Vec::new();
-    value
-        .serialize(&mut payload)
-        .expect("serialize bare payload");
+    norito_core::serialize_to_buffer(value, &mut payload).expect("serialize bare payload");
     payload
 }
 

@@ -1331,7 +1331,7 @@ impl RuntimeCandidateCausalOrigin {
         origin
     }
 
-    pub(crate) fn mint_fresh_root(
+    fn mint_fresh_root(
         tag: EventTag,
         class: CommandClass,
         kind: RuntimeFreshRootKind,

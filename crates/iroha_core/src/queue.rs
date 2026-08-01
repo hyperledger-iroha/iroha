@@ -2910,7 +2910,7 @@ impl Queue {
             .into_iter()
             .flat_map(|signed| signed.attachments().into_iter())
             .into_iter()
-            .flat_map(|list| list.0.iter())
+            .flat_map(|list| list.as_slice().iter())
             .filter_map(|attachment| attachment.lane_privacy.clone())
             .collect()
     }
@@ -16530,7 +16530,8 @@ pub mod tests {
                 }),
             }),
         };
-        let attachments = ProofAttachmentList(vec![proof_attachment]);
+        let attachments = ProofAttachmentList::try_from(vec![proof_attachment])
+            .expect("one attachment is a valid bounded proof list");
         let confidential_tx = accepted_tx_with_attachments(
             confidential_id,
             &confidential_keypair,

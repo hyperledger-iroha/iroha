@@ -1749,7 +1749,7 @@ impl From<PublicKeyFull> for PublicKeyCompact {
 
 #[cfg(not(feature = "ffi_import"))]
 impl norito::core::NoritoSerialize for PublicKeyCompact {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.validated_full()
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::serialize(
@@ -2178,7 +2178,7 @@ impl FromStr for PublicKey {
 
 #[cfg(not(feature = "ffi_import"))]
 impl norito::core::NoritoSerialize for PublicKey {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.validated_full()
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::serialize(
@@ -2819,7 +2819,7 @@ impl norito::json::JsonDeserialize for ExposedPrivateKey {
 }
 
 impl norito::core::NoritoSerialize for ExposedPrivateKey {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let normalized = self.normalize();
         norito::core::NoritoSerialize::serialize(&normalized, writer)
     }
@@ -4267,7 +4267,7 @@ mod tests {
                 .expect("public key");
 
         let mut buf = Vec::new();
-        norito::core::NoritoSerialize::serialize(&pk, &mut buf).expect("serialize public key");
+        norito::core::serialize_to_buffer(&pk, &mut buf).expect("serialize public key");
         let (decoded, used) = <PublicKey as norito::core::DecodeFromSlice>::decode_from_slice(&buf)
             .expect("decode public key slice");
         assert_eq!(used, buf.len());
@@ -4424,8 +4424,7 @@ mod tests {
                 .expect("public key");
         let compact = pk.0.clone();
         let mut payload = Vec::new();
-        <PublicKeyCompact as norito::core::NoritoSerialize>::serialize(&compact, &mut payload)
-            .expect("serialize compact");
+        norito::core::serialize_to_buffer(&compact, &mut payload).expect("serialize compact");
 
         let (decoded, used) = norito::core::decode_field_canonical::<PublicKeyCompact>(&payload)
             .expect("decode compact");
@@ -4473,11 +4472,8 @@ mod tests {
     fn public_key_compact_decode_from_slice_rejects_invalid_payload() {
         let compact = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
         let mut payload = Vec::new();
-        <ConstVec<u8> as norito::core::NoritoSerialize>::serialize(
-            &compact.algorithm_and_payload,
-            &mut payload,
-        )
-        .expect("serialize raw compact bytes");
+        norito::core::serialize_to_buffer(&compact.algorithm_and_payload, &mut payload)
+            .expect("serialize raw compact bytes");
         let err = <PublicKeyCompact as norito::core::DecodeFromSlice>::decode_from_slice(&payload)
             .expect_err("invalid compact payload");
         assert!(matches!(err, norito::core::Error::Message(_)));

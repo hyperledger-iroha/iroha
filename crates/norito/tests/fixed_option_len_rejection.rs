@@ -1,7 +1,7 @@
 //! Mismatched compact flags should reject fixed-width payloads.
 
 use norito::core::DecodeFlagsGuard;
-use norito::{NoritoSerialize, decode_from_bytes};
+use norito::decode_from_bytes;
 
 #[test]
 fn option_fixed_u64_rejected_under_compact_flag() {
@@ -11,7 +11,7 @@ fn option_fixed_u64_rejected_under_compact_flag() {
     let mut payload = Vec::new();
     {
         let _guard = DecodeFlagsGuard::enter(0);
-        value.serialize(&mut payload).expect("serialize option");
+        norito::core::serialize_to_buffer(&value, &mut payload).expect("serialize option");
     }
 
     // Frame a fixed-width payload but advertise compact lengths in the header.

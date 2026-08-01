@@ -1,5 +1,6 @@
 [package]
 name = "telemetry-schema-diff"
+autobins = false
 edition.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -11,6 +12,14 @@ homepage.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+
+[features]
+dev-tools = []
+
+[[bin]]
+name = "telemetry-schema-diff"
+path = "src/main.rs"
+required-features = ["dev-tools"]
 
 [dependencies]
 anyhow = "1.0.100"

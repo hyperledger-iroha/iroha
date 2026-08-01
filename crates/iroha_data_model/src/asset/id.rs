@@ -120,7 +120,7 @@ impl Hash for AssetDefinitionId {
 }
 
 impl NoritoSerialize for AssetDefinitionId {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <[u8; 16] as NoritoSerialize>::serialize(&self.aid_bytes, writer)
     }
 

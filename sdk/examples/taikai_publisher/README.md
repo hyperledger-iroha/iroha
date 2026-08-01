@@ -26,7 +26,7 @@ same assets to keep this directory verified during `cargo test`.
 Build the CLI once:
 
 ```bash
-cargo build -p sorafs_car --bin taikai_car
+cargo build -p sorafs_car --features cli,dev-tools --bin taikai_car
 ```
 
 ## Bundle the sample segment
@@ -139,7 +139,7 @@ consumes the bundled artefacts and emits Prometheus metrics used by
 `dashboards/grafana/taikai_viewer.json`:
 
 ```bash
-cargo build -p sorafs_orchestrator --bin taikai_viewer
+cargo build -p sorafs_orchestrator --features cli-orchestrator,dev-tools --bin taikai_viewer
 target/debug/taikai_viewer \
   --segment envelope=artifacts/sample_run/sample_segment_0001.norito,car=artifacts/sample_run/sample_segment_0001.car \
   --segment envelope=artifacts/sample_run/sample_segment_0001_720p.norito,car=artifacts/sample_run/sample_segment_0001_720p.car \

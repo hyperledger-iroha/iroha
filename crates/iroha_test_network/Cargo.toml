@@ -9,9 +9,9 @@ license.workspace = true
 
 [features]
 default = []
-# The only workspace edge allowed to expose core's deterministic release
-# evidence API. The daemon intentionally has no corresponding forwarding
-# feature.
+# Explicit release-runner edge for core's deterministic evidence API. The
+# integration-test package has a separate opt-in gate; the daemon intentionally
+# has no corresponding forwarding feature.
 privacy-release-evidence = ["iroha_core/privacy-release-evidence"]
 
 [[bin]]

@@ -55,15 +55,15 @@ Docs sync checks
   - Regenerate: `make docs-syscalls`
   - Check only: `bash scripts/check_syscalls_doc.sh`
 - Syscall ABI table (crates/ivm/docs/syscalls.md)
-  - Check only: `cargo run -p ivm --bin gen_syscalls_doc -- --check`
-  - Update generated section (and code docs table): `cargo run -p ivm --bin gen_syscalls_doc -- --write`
+  - Check only: `cargo run -p ivm --features dev-tools --bin gen_syscalls_doc -- --check`
+  - Update generated section (and code docs table): `cargo run -p ivm --features dev-tools --bin gen_syscalls_doc -- --write`
 - Pointer‑ABI tables (crates/ivm/docs/pointer_abi.md and ivm.md)
-  - Check only: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`
-  - Update sections: `cargo run -p ivm --bin gen_pointer_types_doc -- --write`
+  - Check only: `cargo run -p ivm --features dev-tools --bin gen_pointer_types_doc -- --check`
+  - Update sections: `cargo run -p ivm --features dev-tools --bin gen_pointer_types_doc -- --write`
 - IVM header policy, ABI hashes, and runtime hash samples
   (`specs/ivm_header*.md`, `specs/samples/runtime_abi_hash*.md`)
-  - Check only: `cargo run -p ivm --bin gen_header_doc -- --check` and `cargo run -p ivm --bin gen_abi_hash_doc -- --check`
-  - Update sections: `cargo run -p ivm --bin gen_header_doc -- --write` and `cargo run -p ivm --bin gen_abi_hash_doc -- --write`
+  - Check only: `cargo run -p ivm --features dev-tools --bin gen_header_doc -- --check` and `cargo run -p ivm --features dev-tools --bin gen_abi_hash_doc -- --check`
+  - Update sections: `cargo run -p ivm --features dev-tools --bin gen_header_doc -- --write` and `cargo run -p ivm --features dev-tools --bin gen_abi_hash_doc -- --write`
 
 CI
 - Pull-request CI discovers every tracked Kotodama source fence and documented

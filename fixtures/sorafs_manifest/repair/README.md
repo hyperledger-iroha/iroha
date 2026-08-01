@@ -14,5 +14,5 @@ SF-11 reference validator.
 Regenerate the complete fixture set with:
 
 ```sh
-cargo run --locked --offline -p sorafs_manifest --bin generate_por_fixtures -- --write
+cargo run --locked --offline -p sorafs_manifest --features dev-tools --bin generate_por_fixtures -- --write
 ```

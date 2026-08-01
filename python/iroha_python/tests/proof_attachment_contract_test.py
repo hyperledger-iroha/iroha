@@ -7,10 +7,7 @@ from typing import Any
 import pytest
 
 from iroha_python import Instruction
-
-
-PROOF_BOX_MAX_ENCODED_BYTES_V1 = 64 * 1024 * 1024
-PROOF_BOX_CANONICAL_FIELD_OVERHEAD_V1 = 32
+from iroha_python.crypto import _proof_box_max_proof_bytes_v1
 
 
 def iroha_hash_bytes(payload: bytes) -> bytes:
@@ -303,11 +300,7 @@ def test_proof_attachment_rejects_empty_proof() -> None:
 
 def test_proof_attachment_enforces_exact_encoded_proof_box_cap() -> None:
     backend = "a"
-    maximum = (
-        PROOF_BOX_MAX_ENCODED_BYTES_V1
-        - PROOF_BOX_CANONICAL_FIELD_OVERHEAD_V1
-        - len(backend)
-    )
+    maximum = _proof_box_max_proof_bytes_v1(backend)
     verify(attachment(backend=backend, proof_bytes=b"p" * maximum, vk_name="v"))
     with pytest.raises(ValueError, match=f"{maximum}-byte limit"):
         verify(attachment(backend=backend, proof_bytes=b"p" * (maximum + 1), vk_name="v"))

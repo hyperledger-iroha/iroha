@@ -516,9 +516,9 @@ enum CompoundPredicateWire {
 }
 
 impl<T> norito::core::NoritoSerialize for CompoundPredicate<T> {
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let wire = self.to_wire();
-        norito::core::NoritoSerialize::serialize(&wire, &mut writer)
+        norito::core::NoritoSerialize::serialize(&wire, writer)
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {

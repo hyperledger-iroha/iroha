@@ -2,8 +2,6 @@ import { Buffer } from "buffer";
 
 /** Maximum complete encoded ProofBox budget used by the Rust data model. */
 export const PROOF_BOX_MAX_ENCODED_BYTES = 64 * 1024 * 1024;
-/** Fixed ProofBox accounting overhead used by the cross-SDK contract. */
-export const PROOF_BOX_ENCODED_OVERHEAD_BYTES = 32;
 /** Maximum UTF-8 length of each portable verifier-key id component. */
 export const VERIFYING_KEY_ID_MAX_FIELD_BYTES = 256;
 /** Maximum lane-privacy Merkle path depth representable by the runtime. */
@@ -68,22 +66,65 @@ export function proofBoxEncodedLength(backend, proofLength) {
   if (!Number.isSafeInteger(proofLength) || proofLength < 0) {
     throw new TypeError("ProofBox proof length must be a non-negative safe integer");
   }
-  return (
-    PROOF_BOX_ENCODED_OVERHEAD_BYTES +
-    Buffer.byteLength(backend, "utf8") +
-    proofLength
+  const backendLength = Buffer.byteLength(backend, "utf8");
+  const backendValueLength = checkedProofBoxLengthSum(
+    compactLengthPrefixBytes(backendLength),
+    backendLength,
+  );
+  const proofValueLength = checkedProofBoxLengthSum(8, proofLength);
+  return checkedProofBoxLengthSum(
+    compactLengthPrefixBytes(backendValueLength),
+    backendValueLength,
+    compactLengthPrefixBytes(proofValueLength),
+    proofValueLength,
   );
 }
 
 /** Return the maximum proof payload allowed for a specific backend label. */
 export function proofBoxMaxProofBytes(backend) {
-  const fixedLength = proofBoxEncodedLength(backend, 0);
-  return Math.max(0, PROOF_BOX_MAX_ENCODED_BYTES - fixedLength);
+  if (proofBoxEncodedLength(backend, 0) > PROOF_BOX_MAX_ENCODED_BYTES) {
+    return 0;
+  }
+  let lower = 0;
+  let upper = PROOF_BOX_MAX_ENCODED_BYTES;
+  while (lower < upper) {
+    const candidate = lower + Math.ceil((upper - lower) / 2);
+    if (proofBoxEncodedLength(backend, candidate) <= PROOF_BOX_MAX_ENCODED_BYTES) {
+      lower = candidate;
+    } else {
+      upper = candidate - 1;
+    }
+  }
+  return lower;
 }
 
 /** Return whether the complete ProofBox fits the first-release budget. */
 export function proofBoxFitsEncodedBudget(backend, proofLength) {
   return proofBoxEncodedLength(backend, proofLength) <= PROOF_BOX_MAX_ENCODED_BYTES;
+}
+
+function compactLengthPrefixBytes(value) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError("Norito compact length must be a non-negative safe integer");
+  }
+  let remaining = value;
+  let bytes = 1;
+  while (remaining >= 0x80) {
+    remaining = Math.floor(remaining / 0x80);
+    bytes += 1;
+  }
+  return bytes;
+}
+
+function checkedProofBoxLengthSum(...values) {
+  let total = 0;
+  for (const value of values) {
+    if (!Number.isSafeInteger(value) || value < 0 || !Number.isSafeInteger(total + value)) {
+      throw new RangeError("encoded ProofBox length exceeds the safe integer range");
+    }
+    total += value;
+  }
+  return total;
 }
 
 /**

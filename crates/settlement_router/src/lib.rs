@@ -97,7 +97,7 @@ impl From<TimestampMs> for OffsetDateTime {
 }
 
 impl NoritoSerialize for TimestampMs {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.as_unix_millis().serialize(writer)
     }
 }
@@ -186,7 +186,7 @@ impl From<DurationSeconds> for Duration {
 }
 
 impl NoritoSerialize for DurationSeconds {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.0.whole_seconds().serialize(writer)
     }
 }

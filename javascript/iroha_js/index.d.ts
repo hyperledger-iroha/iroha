@@ -3947,8 +3947,8 @@ type NoritoRuntimeNamespaceExport =
 
 type CryptoRuntimeNamespaceExport =
     "CRYPTO_ALGORITHMS"
-  | "PRIVACY_CAPABILITY_VALIDATION_STATUS_V1"
-  | "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES"
+  | "PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1"
+  | "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES"
   | "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION"
   | "SM2_DEFAULT_DISTINGUISHED_ID"
   | "SM2_PRIVATE_KEY_LENGTH"
@@ -3975,7 +3975,7 @@ type CryptoRuntimeNamespaceExport =
   | "loadSm2KeyPair"
   | "normalizeCryptoAlgorithm"
   | "normalizeRecoveryPhrase"
-  | "privacyCapabilitiesV1"
+  | "privacyCompiledProfileCatalogV1"
   | "privateKeyMultihash"
   | "publicKeyFromPrivate"
   | "publicKeyMultihash"
@@ -11949,8 +11949,8 @@ export function deriveConfidentialNullifierV2(input: {
   rho?: ArrayBufferView | ArrayBuffer | Buffer;
 }): { nullifier: Buffer; nullifierHex: string };
 
-export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: number;
-export const PRIVACY_CAPABILITY_VALIDATION_STATUS_V1: Readonly<{
+export const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES: number;
+export const PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1: Readonly<{
   VALID: 0;
   NULL_POINTER: 1;
   EMPTY: 2;
@@ -11959,10 +11959,11 @@ export const PRIVACY_CAPABILITY_VALIDATION_STATUS_V1: Readonly<{
   SCHEMA_MISMATCH: 5;
   NON_CANONICAL: 6;
   MALFORMED_ARCHIVE: 7;
-  INVALID_SNAPSHOT: 8;
+  INVALID_CATALOG: 8;
 }>;
 export function isPrivacyNativeAvailable(): boolean;
-export function privacyCapabilitiesV1(): Buffer;
+/** Return this binary's local compiled-profile catalog; use Torii for live activation/readiness. */
+export function privacyCompiledProfileCatalogV1(): Buffer;
 
 export interface Sm2Fixture {
   distid: string;

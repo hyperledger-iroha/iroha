@@ -144,7 +144,7 @@ Run each command via `cargo run -p sorafs_car --bin sorafs_manifest_builder -- p
    governance log.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. Replace the previous envelope in `sorafs.discovery.admission.envelopes_dir`, commit the renewal Norito/JSON to the governance repository, and append the renewal hash + retention epoch to `specs/sorafs/migration_ledger.md`.
 4. Notify operators that the new envelope is live and monitor `torii_sorafs_admission_total{result="accepted",reason="stored"}` to confirm ingestion.
-5. Regenerate and commit the canonical fixtures via `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`; CI (`ci/check_sorafs_fixtures.sh`) validates the Norito outputs stay stable.
+5. Regenerate and commit the canonical fixtures via `cargo run -p sorafs_car --features cli,dev-tools --bin provider_admission_fixtures`; CI (`ci/check_sorafs_fixtures.sh`) validates the Norito outputs stay stable.
 
 #### Emergency revocation
 1. Identify the compromised envelope and issue a revocation:

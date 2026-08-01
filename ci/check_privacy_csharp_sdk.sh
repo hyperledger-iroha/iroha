@@ -17,6 +17,7 @@ fi
 
 for filter in \
   "FullyQualifiedName~PrivacyNativeTests" \
+  "FullyQualifiedName~PrivacyExact12FixtureCodecV1Tests" \
   "FullyQualifiedName~VerifyingKeyBackendTagTests"
 do
   "${DOTNET_BIN}" test \

@@ -728,6 +728,8 @@ fn privacy_public_json_rejects_aliases_case_whitespace_confusables_and_unknown_f
         "anonymous-pgc-k-out-of-n-v1 ",
         "anonymous\u{2010}pgc-k-out-of-n-v1",
         "anonym\u{043e}us-pgc-k-out-of-n-v1",
+        "sis-hints-anoncred-pq-v0",
+        "sis-with-hints",
         "iroha-bootle-genisis-ac-stark-v0",
         "unknown",
     ] {

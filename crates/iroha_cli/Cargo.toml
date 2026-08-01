@@ -1,5 +1,6 @@
 [package]
 name = "iroha_cli"
+autobins = false
 
 edition.workspace = true
 version.workspace = true
@@ -25,19 +26,15 @@ is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-ir
 maintenance = { status = "actively-developed" }
 
 [features]
-default = ["cli-i3"]
-cli-common = [
+default = ["cli"]
+cli = [
     "iroha_core/node",
     "iroha_crypto/consensus",
     "iroha_data_model/json",
     "ivm/runtime",
     "norito/node-codec",
 ]
-cli-i2 = ["cli-common"]
-cli-i3 = ["cli-common"]
-# Compatibility aliases for existing packaging scripts.
-build-i2 = ["cli-i2"]
-build-i3 = ["cli-i3"]
+dev-tools = ["cli"]
 offline-visual-codecs = ["dep:image"]
 # Experimental selector support. Forwarded to client/data-model crates when enabled.
 ids_projection = ["iroha/ids_projection", "iroha_data_model/ids_projection"]
@@ -46,24 +43,49 @@ cli_integration_harness = []
 bridge = []
 
 [[bin]]
-name = "iroha3"
-path = "src/bin/iroha3.rs"
-required-features = ["cli-i3"]
-
-[[bin]]
-name = "iroha2"
-path = "src/bin/iroha2.rs"
-required-features = ["cli-i2"]
-
-[[bin]]
 name = "iroha"
 path = "src/bin/iroha.rs"
-required-features = ["cli-i3"]
+required-features = ["cli"]
 
 [[bin]]
 name = "ivm_execution_keygen"
 path = "src/bin/ivm_execution_keygen.rs"
-required-features = ["cli-i3"]
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "account_literal_reencode"
+path = "src/bin/account_literal_reencode.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "direct_asset_transfer"
+path = "src/bin/direct_asset_transfer.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "gov_instruction"
+path = "src/bin/gov_instruction.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "ivm_contract_call"
+path = "src/bin/ivm_contract_call.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "ivm_contract_deploy"
+path = "src/bin/ivm_contract_deploy.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "split_contract_deploy"
+path = "src/bin/split_contract_deploy.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "taira_fee_sponsor_program"
+path = "src/bin/taira_fee_sponsor_program.rs"
+required-features = ["dev-tools"]
 
 [dependencies]
 iroha = { workspace = true }

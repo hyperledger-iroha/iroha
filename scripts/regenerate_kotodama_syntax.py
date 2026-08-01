@@ -1711,6 +1711,29 @@ def apply_outputs(root: Path, outputs: Mapping[Path, str], *, check: bool) -> in
     return changed
 
 
+class _UniquePathAction(argparse.Action):
+    """Reject repeated path options instead of silently taking the last."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: Path,
+        option_string: str | None = None,
+    ) -> None:
+        supplied_marker = f"_{self.dest}_supplied"
+        if getattr(namespace, supplied_marker, False):
+            parser.error(f"{option_string or self.dest} was supplied more than once")
+        setattr(namespace, supplied_marker, True)
+        setattr(namespace, self.dest, values)
+
+
+def _non_empty_path(value: str) -> Path:
+    if not value or value.startswith("-"):
+        raise argparse.ArgumentTypeError("path must be non-empty and must not be a flag")
+    return Path(value)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
@@ -1726,21 +1749,33 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--root",
-        type=Path,
+        type=_non_empty_path,
+        action=_UniquePathAction,
         default=REPOSITORY_ROOT,
         help="repository root (primarily for isolated tests)",
     )
     parser.add_argument(
         "--policy",
-        type=Path,
+        type=_non_empty_path,
+        action=_UniquePathAction,
         default=DEFAULT_POLICY,
         help="repository-relative canonical policy descriptor",
     )
     return parser
 
 
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse the fail-closed owner command line."""
+
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    parser = _parser()
+    if sum(argument in {"--check", "--write"} for argument in arguments) > 1:
+        parser.error("select --check or --write at most once")
+    return parser.parse_args(arguments)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    args = parse_args(argv)
     root = args.root.resolve()
     try:
         policy = load_policy(root, args.policy)

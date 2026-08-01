@@ -192,12 +192,12 @@ macro_rules! define_hash32_newtype {
         }
 
         impl norito::core::NoritoSerialize for $name {
-            fn serialize<W: std::io::Write>(
+            fn serialize(
                 &self,
-                mut writer: W,
+                writer: &mut norito::core::Encoder<'_>,
             ) -> Result<(), norito::core::Error> {
                 let wire = HashWire32::new(self.0);
-                <HashWire32 as norito::core::NoritoSerialize>::serialize(&wire, &mut writer)
+                <HashWire32 as norito::core::NoritoSerialize>::serialize(&wire, writer)
             }
 
             fn encoded_len_hint(&self) -> Option<usize> {
@@ -583,9 +583,9 @@ pub struct GovernanceParameters {
 pub struct ProposalId(pub [u8; 32]);
 
 impl norito::core::NoritoSerialize for ProposalId {
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let wire = HashWire32::new(self.0);
-        <HashWire32 as norito::core::NoritoSerialize>::serialize(&wire, &mut writer)
+        <HashWire32 as norito::core::NoritoSerialize>::serialize(&wire, writer)
     }
 }
 
@@ -1012,7 +1012,7 @@ mod tests {
         Blake2bVar,
         digest::{Update, VariableOutput},
     };
-    use norito::core::{DecodeFromSlice, NoritoSerialize};
+    use norito::core::DecodeFromSlice;
 
     use super::*;
     use crate::{AccountId, DomainId};
@@ -1064,7 +1064,7 @@ mod tests {
         non_canonical.extend_from_slice(&[0x11u8; 32]);
 
         let mut encoded = Vec::new();
-        NoritoSerialize::serialize(&non_canonical, &mut encoded).expect("encode vec");
+        norito::core::serialize_to_buffer(&non_canonical, &mut encoded).expect("encode vec");
         let result = <ContractCodeHash as DecodeFromSlice>::decode_from_slice(&encoded);
         assert!(result.is_err());
     }

@@ -95,7 +95,7 @@ fn stream_seq_iter_compact_len_roundtrip() {
     let payload = {
         let _guard = DecodeFlagsGuard::enter(flags);
         let mut payload = Vec::new();
-        values.serialize(&mut payload).expect("serialize");
+        norito_core::serialize_to_buffer(&values, &mut payload).expect("serialize");
         payload
     };
     let bytes =
@@ -120,7 +120,7 @@ fn stream_seq_iter_packed_struct_roundtrip() {
     let payload = {
         let _guard = DecodeFlagsGuard::enter(flags);
         let mut payload = Vec::new();
-        values.serialize(&mut payload).expect("serialize");
+        norito_core::serialize_to_buffer(&values, &mut payload).expect("serialize");
         payload
     };
     let bytes = norito_core::frame_bare_with_header_flags::<Vec<PackedRow>>(&payload, flags)
@@ -143,7 +143,7 @@ fn stream_map_compact_len_roundtrip() {
     let payload = {
         let _guard = DecodeFlagsGuard::enter(flags);
         let mut payload = Vec::new();
-        hm.serialize(&mut payload).expect("serialize");
+        norito_core::serialize_to_buffer(&hm, &mut payload).expect("serialize");
         payload
     };
     let bytes = norito_core::frame_bare_with_header_flags::<HashMap<String, u32>>(&payload, flags)
@@ -164,7 +164,7 @@ fn stream_map_compact_len_roundtrip() {
     let payload = {
         let _guard = DecodeFlagsGuard::enter(flags);
         let mut payload = Vec::new();
-        bm.serialize(&mut payload).expect("serialize");
+        norito_core::serialize_to_buffer(&bm, &mut payload).expect("serialize");
         payload
     };
     let bytes = norito_core::frame_bare_with_header_flags::<BTreeMap<u64, String>>(&payload, flags)
@@ -183,10 +183,10 @@ fn stream_map_packed_fixed_offsets_roundtrip() {
     let mut val_payloads = Vec::new();
     for (key, value) in entries.iter() {
         let mut key_buf = Vec::new();
-        key.serialize(&mut key_buf).expect("serialize key");
+        norito_core::serialize_to_buffer(key, &mut key_buf).expect("serialize key");
         key_payloads.push(key_buf);
         let mut val_buf = Vec::new();
-        value.serialize(&mut val_buf).expect("serialize value");
+        norito_core::serialize_to_buffer(value, &mut val_buf).expect("serialize value");
         val_payloads.push(val_buf);
     }
     let mut payload = Vec::new();

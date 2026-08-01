@@ -36,7 +36,7 @@ impl JsonDeserialize for InitMode {
 }
 
 impl NoritoSerialize for InitMode {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let text = self.to_string();
         <String as NoritoSerialize>::serialize(&text, writer)
     }
@@ -89,7 +89,7 @@ impl JsonDeserialize for FsyncMode {
 }
 
 impl NoritoSerialize for FsyncMode {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let text = self.to_string();
         <String as NoritoSerialize>::serialize(&text, writer)
     }

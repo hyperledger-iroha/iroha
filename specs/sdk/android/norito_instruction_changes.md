@@ -17,13 +17,16 @@ Use the checklist below whenever a Norito instruction or discriminant changes:
 
 1. Regenerate the manifest and fixture artefacts:
    ```bash
-   make android-fixtures
+   cargo run -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
    make android-codegen-docs
    ```
-   These targets call `scripts/export_norito_fixtures.rs`,
-   `tools/norito_codegen_exporter`, and `scripts/android_codegen_docs.py` to
-   refresh `instruction_manifest.json`, `builder_index.json`, and the generated
-   Markdown references.
+   The xtask command is the sole owner of `fixtures/norito_rpc`: it refreshes the
+   canonical corpus, the generated Java resource mirror, and the descriptor-only
+   Python and Swift mirrors in one publication. `make android-fixtures` is only a
+   convenience wrapper around that owner. The codegen-docs target uses
+   `tools/norito_codegen_exporter` and `scripts/android_codegen_docs.py` to refresh
+   `instruction_manifest.json`, `builder_index.json`, and the generated Markdown
+   references; it does not create a second fixture source.
 2. Run `scripts/check_android_fixtures.py --json-out \
    artifacts/android/parity/latest/summary.json` (or the Buildkite job linked in
    `specs/sdk/android/parity_dashboard_plan.md`) to capture the parity

@@ -69,6 +69,127 @@ def test_every_dispatch_identity_and_budget_is_required_and_validated() -> None:
     assert "WORKFLOW_SHA" in workflow
 
 
+def test_reconstructed_dpn_source_is_verified_before_any_build() -> None:
+    workflow = _workflow()
+    source_start = workflow.index(
+        "Authenticate and reconstruct the reviewed DPN source"
+    )
+    source_end = workflow.index("Allocate a canonical evidence root")
+    source_step = workflow[source_start:source_end]
+    reconstruct = (
+        'python3 -I -S "$release_root/iroha_source_bundle.py" reconstruct'
+    )
+    verify = 'python3 -I -S "$release_root/iroha_source_bundle.py" verify'
+    head_check = 'test "$(git rev-parse HEAD)" = "$TAIRA_INPUT_EXPECTED_COMMIT"'
+    assert source_step.count(reconstruct) == 1
+    assert source_step.count(verify) == 1
+    assert source_step.index(reconstruct) < source_step.index(verify)
+    assert source_step.index(verify) < source_step.rindex(head_check)
+    for argument in ('--repo "$GITHUB_WORKSPACE"', '--bundle-dir "$source_bundle"'):
+        assert source_step.count(argument) == 2
+
+
+def test_source_authorization_uses_only_protected_environment_policy() -> None:
+    workflow = _workflow()
+    assert "environment: taira-privacy-native-release" in workflow
+    protected = (
+        "TAIRA_PRIVACY_IROHA_SIGNER_PRINCIPAL",
+        "TAIRA_PRIVACY_IROHA_SIGNER_PUBLIC_KEY",
+        "TAIRA_PRIVACY_IROHA_SIGNER_FINGERPRINT",
+        "TAIRA_PRIVACY_DPN_SIGNER_PRINCIPAL",
+        "TAIRA_PRIVACY_DPN_SIGNER_PUBLIC_KEY",
+        "TAIRA_PRIVACY_DPN_SIGNER_FINGERPRINT",
+        "TAIRA_PRIVACY_RUST_SYSROOT_TREE_SHA256",
+    )
+    dispatch = workflow[
+        workflow.index("workflow_dispatch:") : workflow.index("concurrency:")
+    ]
+    for variable in protected:
+        assert f"${{{{ vars.{variable} }}}}" in workflow
+        assert variable not in dispatch
+    assert "TAIRA_APPROVED_IROHA_SIGNER_PUBLIC_KEY" in workflow
+    assert "TAIRA_APPROVED_DPN_SIGNER_PUBLIC_KEY" in workflow
+    assert "approved SSH public key blob is truncated" in workflow
+    assert 'namespaces="git"' in workflow
+
+
+def test_both_source_commits_are_ssh_authenticated_before_repo_code() -> None:
+    workflow = _workflow()
+    checkout = workflow.index("actions/checkout@")
+    source = workflow.index("Authenticate and reconstruct the reviewed DPN source")
+    reconstruct = workflow.index(
+        'python3 -I -S "$release_root/iroha_source_bundle.py" reconstruct'
+    )
+    first_repo_gate = (
+        workflow.index("scripts/check", checkout)
+        if "scripts/check" in workflow[checkout:]
+        else reconstruct
+    )
+    assert checkout < source < reconstruct
+    assert source < first_repo_gate or first_repo_gate == reconstruct
+    source_block = workflow[source:workflow.index("Allocate a canonical evidence root")]
+    assert source_block.count("verify_signed_commit \\") == 2
+    assert "verify-commit --raw" in source_block
+    assert "gpg.format=ssh" in source_block
+    assert "gpg.minTrustLevel=fully" in source_block
+    assert "GIT_CONFIG_NOSYSTEM=1" in source_block
+    assert "GIT_CONFIG_GLOBAL=/dev/null" in source_block
+    assert "GIT_NO_REPLACE_OBJECTS=1" in source_block
+    assert "--format=%G?%x00%GF%x00%GP%x00%GS%x00" in source_block
+    assert "SSH signature metadata is not the approved identity" in source_block
+    assert "-----BEGIN SSH SIGNATURE-----" in source_block
+
+
+def test_dpn_release_bytes_come_only_from_the_authenticated_git_object() -> None:
+    workflow = _workflow()
+    source = workflow[
+        workflow.index("Authenticate and reconstruct the reviewed DPN source") :
+        workflow.index("Allocate a canonical evidence root")
+    ]
+    assert "raw.githubusercontent.com" not in source
+    assert "curl " not in source
+    assert "https://github.com/soramitsu/dpn-api-rust.git" in source
+    fetch = source.index("fetch \\")
+    verify = source.rindex("verify_signed_commit \\")
+    extract = source.index('"ls-tree",')
+    reconstruct = source.index("iroha_source_bundle.py\" reconstruct")
+    assert fetch < verify < extract < reconstruct
+    for required in (
+        '"--full-tree"',
+        "rb\"(100644|100755) blob ([0-9a-f]{40})\\t\"",
+        '"cat-file", "-s"',
+        '"cat-file", "blob"',
+        "os.O_EXCL",
+        "os.O_NOFOLLOW",
+        "os.fsync(descriptor)",
+        "remote remove origin",
+    ):
+        assert required in source
+
+
+def test_rust_toolchain_is_content_authenticated_and_rechecked() -> None:
+    workflow = _workflow()
+    setup = workflow.index("actions-rust-lang/setup-rust-toolchain@")
+    authenticate = workflow.index("Authenticate the installed Rust toolchain tree")
+    first_cargo = workflow.index("cargo test", authenticate)
+    final_build = workflow.index("Verify feature separation and build fresh final binaries")
+    second_seal = workflow.index("rust-toolchain-tree-after-builds-v1.json")
+    assert setup < authenticate < first_cargo < final_build < second_seal
+    stable_hasher = (
+        '"$TAIRA_DPN_RELEASE_ROOT/authentication/hash_taira_rust_toolchain.py"'
+    )
+    assert workflow.count(stable_hasher) == 2
+    assert (
+        '"$TAIRA_INPUT_EXPECTED_COMMIT:scripts/hash_taira_rust_toolchain.py"'
+        in workflow
+    )
+    assert '"$observed_toolchain_sha" != \\' in workflow
+    assert '"$TAIRA_APPROVED_RUST_SYSROOT_TREE_SHA256"' in workflow
+    assert 'echo "RUSTC=$rust_sysroot/bin/rustc"' in workflow
+    assert 'echo "CARGO=$rust_sysroot/bin/cargo"' in workflow
+    assert 'test "$final_toolchain_sha" = "$TAIRA_RUST_TOOLCHAIN_TREE_SHA256"' in workflow
+
+
 def test_workflow_uses_only_commit_pinned_actions_and_read_permission() -> None:
     workflow = _workflow()
     uses = re.findall(r"(?m)^\s+-?\s*uses:\s*([^@\s]+)@([^\s]+)", workflow)
@@ -171,10 +292,42 @@ def test_capture_installs_and_pins_the_complete_x509_resource_certificate() -> N
         "--x509-resource-host-metadata",
         "--x509-resource-norito-out",
         "--x509-resource-json-out",
+        "--native-verifier",
+        "--native-verifier-sha256",
+        "--exact12-matrix",
         "--captured-x509-resource-norito",
         "--captured-x509-resource-json",
+        "--authenticated-iroha-source-commit",
+        "--authenticated-iroha-signer-principal",
+        "--authenticated-iroha-signer-fingerprint",
+        "--authenticated-iroha-allowed-signers-sha256",
+        "--authenticated-validator-source-commit",
+        "--authenticated-validator-signer-principal",
+        "--authenticated-validator-signer-fingerprint",
+        "--authenticated-validator-allowed-signers-sha256",
+        "--authenticated-validator-source-tree-sha256",
+        "--authenticated-bootstrap-source-tree-sha256",
+        "--authenticated-cargo-lock-sha256",
+        "--authenticated-rust-toolchain-tree-sha256",
     ):
         assert option in capture_block
+    assert 'TAIRA_BOOTSTRAP_RUNNER_SHA256=$bootstrap_runner_sha' in workflow
+    installer = capture_block.index(
+        "python3 -I -S scripts/install_taira_privacy_native_expectations.py"
+    )
+    installed_compare = capture_block.index(
+        'cmp "$captured_norito"'
+    )
+    validation_arguments = capture_block[installer:installed_compare]
+    assert '--native-verifier "$TAIRA_BOOTSTRAP_RUNNER"' in validation_arguments
+    assert (
+        '--native-verifier-sha256 "$TAIRA_BOOTSTRAP_RUNNER_SHA256"'
+        in validation_arguments
+    )
+    assert (
+        '--exact12-matrix "$GITHUB_WORKSPACE/fixtures/privacy/exact12_v1.tsv"'
+        in validation_arguments
+    )
     for fixture in (
         "fixtures/privacy/native_release_expectations_v1.norito",
         "fixtures/privacy/native_release_expectations_v1.json",
@@ -223,6 +376,49 @@ def test_final_evidence_is_reverified_from_copied_bundle_before_upload() -> None
     assert '"deployed": False' in workflow
 
 
+def test_packaged_archive_is_safelist_audited_before_hash_and_upload() -> None:
+    workflow = _workflow()
+    package_start = workflow.index("Package complete provenance")
+    package_end = workflow.index("Upload the non-publishing native evidence archive")
+    package = workflow[package_start:package_end]
+    tar_creation = '-czf "$bundle"'
+    audit = "python3 -I -S scripts/audit_taira_privacy_native_archive.py"
+    archive_hash = 'bundle_sha="$(sha256sum "$bundle"'
+    assert package.count(audit) == 1
+    assert package.index(tar_creation) < package.index(audit) < package.index(archive_hash)
+    assert '--archive "$bundle"' in package
+    assert '--staged-root "$TAIRA_EVIDENCE_ROOT"' in package
+
+
+def test_packaged_provenance_binds_source_and_toolchain_authentication() -> None:
+    workflow = _workflow()
+    package = workflow[
+        workflow.index("Package complete provenance") :
+        workflow.index("Upload the non-publishing native evidence archive")
+    ]
+    for evidence in (
+        "source-authentication.json",
+        "iroha-allowed-signers",
+        "iroha-commit.raw",
+        "iroha-signature-metadata.bin",
+        "iroha-verify-commit.log",
+        "dpn-allowed-signers",
+        "dpn-commit.raw",
+        "dpn-signature-metadata.bin",
+        "dpn-verify-commit.log",
+        "ssh-revocation",
+        "hash_taira_rust_toolchain.py",
+        "rust-toolchain-tree-v1.json",
+        "rust-toolchain-tree-after-builds-v1.json",
+    ):
+        assert evidence in workflow
+    assert '"authenticated_source_origins": authenticated_origins' in package
+    assert '"rust_toolchain_tree_sha256": required_sha(' in package
+    assert '"expectation_installation_manifest_sha256": digest(' in package
+    assert "authenticated source origins diverged before packaging" in package
+    assert "expectation installation diverged from authenticated origins" in package
+
+
 def test_capture_workflow_cannot_publish_or_deploy() -> None:
     workflow = _workflow().lower()
     for forbidden in (
@@ -233,11 +429,11 @@ def test_capture_workflow_cannot_publish_or_deploy() -> None:
         "kubectl ",
         "helm ",
         "terraform ",
-        "ssh ",
         "scp ",
         "rsync ",
     ):
         assert forbidden not in workflow
+    assert re.search(r"(?m)^\s+ssh(?:\s|$)", workflow) is None
     assert "actions/upload-artifact@" in workflow
     assert '"published": false' in workflow
     assert '"deployed": false' in workflow

@@ -44,30 +44,6 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
                 it.startsWith("halo2/pasta/")
             }
 
-        private val pendingCatalogBackendAliases = setOf(
-            "halo2ipaorchard", "orchard", "zcashorchard",
-            "groth16bls12377", "groth16bls12377decaf377", "bls12377",
-            "decaf377", "masp", "penumbra", "penumbramasp", "halo2ipapenumbra",
-            "halo2ipamasp", "fcmppluspluscurvetree", "fcmp", "monero",
-            "monerofcmp", "monerofcmpplusplus", "curvetree", "halo2ipamonero",
-            "halo2ipacurvetree", "latticepcssis", "latticepcszk", "jindo",
-            "jindolatticepcszk", "jindolatticepcszkv0", "jindolatticepcssis",
-            "starkfrimiden", "midenstark", "aztecplonkishprivatekernel",
-            "aztecprivatekernel", "pqmaspstarkfri", "pqmaspstark",
-            "starkfripqmaspstarkfri", "postquantummasp", "anonymouspgc",
-            "anonymouspgckoutofn", "anonymouspgckoutofnv1", "verange",
-            "verangetransparentrange", "verangetransparentrangev1", "zkat",
-            "zkatpolicyprivateauthenticator", "zkatpolicyprivateauthv1",
-            "recursiveanonymousadmission", "recursiveanonymousadmissionv0",
-            "zkamsrecursiveadmission", "zkamsrecursiveadmissionv0",
-            "vegaexistingcredentialzk", "vegaexistingcredentialzkv0",
-            "silentthresholdanoncred", "silentthresholdanoncredv0",
-            "silentthresholdanonymouscredential", "thresholdanonymouscredentials",
-            "zkx509", "zkvmx509identity", "zkx509onchainidentity",
-            "zkx509onchainidentityv0", "siswithhints", "sishints",
-            "sishintsanoncredpqv0", "latticeanonymouscredentials",
-        )
-
         private val productionClaimBackendFragments = listOf(
             "productionready", "productionhardened", "productionenabled",
             "productionapproved", "productioncertified", "productionclaim",
@@ -126,27 +102,19 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
             return raw
         }
 
-        /** Classifies a known catalog alias without enabling pending entries. */
+        /** Classifies only exact production labels; aliases are unsupported. */
         @JvmStatic
         fun fromCatalogLabel(raw: String?): VerifyingKeyBackendCatalogTag {
-            val label = raw?.trim()?.lowercase() ?: return VerifyingKeyBackendCatalogTag.UNSUPPORTED
+            val label = raw ?: return VerifyingKeyBackendCatalogTag.UNSUPPORTED
             if (label.isEmpty() || label.any { it.code > 0x7F }) {
                 return VerifyingKeyBackendCatalogTag.UNSUPPORTED
             }
-            val compact = compactAscii(label)
             return when {
-                pendingCatalogBackendAliases.contains(compact) ->
-                    VerifyingKeyBackendCatalogTag.PENDING
                 parseOrNull(label) != null || VERIFIER_BACKEND_REGISTRY_LABELS_V1.contains(label) ->
                     VerifyingKeyBackendCatalogTag.PRODUCTION
                 else -> VerifyingKeyBackendCatalogTag.UNSUPPORTED
             }
         }
-
-        /** Returns true only for a known, pending production catalog label. */
-        @JvmStatic
-        fun isPendingProductionBackendLabel(raw: String?): Boolean =
-            fromCatalogLabel(raw).isPendingProductionBackend
 
         /** Returns true only for an exact, portable production verifier label. */
         @JvmStatic
@@ -155,7 +123,6 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
             if (backend.isBlank() ||
                 backend.trim() != backend ||
                 !isPortableVerifierBackendLabel(backend) ||
-                isPendingProductionBackendLabel(backend) ||
                 isProductionClaimBackendLabel(backend) ||
                 isTrustedSetupBackendLabel(backend) ||
                 isDeveloperOnlyBackendLabel(backend)
@@ -264,8 +231,7 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
 }
 
 /** Human-facing verifier catalog classification separate from the wire enum. */
-enum class VerifyingKeyBackendCatalogTag(val isPendingProductionBackend: Boolean) {
-    PRODUCTION(false),
-    PENDING(true),
-    UNSUPPORTED(false),
+enum class VerifyingKeyBackendCatalogTag {
+    PRODUCTION,
+    UNSUPPORTED,
 }

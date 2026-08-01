@@ -1,8 +1,8 @@
 //! Generate or check header policy sections in `specs/ivm_header*.md`.
 //! Usage:
-//!   cargo run -p ivm --bin gen_header_doc -- --write
-//!   cargo run -p ivm --bin gen_header_doc -- --check
-//!   cargo run -p ivm --bin gen_header_doc -- --write --root /tmp/ivm-doc-stage
+//!   cargo run -p ivm --features dev-tools --bin gen_header_doc -- --write
+//!   cargo run -p ivm --features dev-tools --bin gen_header_doc -- --check
+//!   cargo run -p ivm --features dev-tools --bin gen_header_doc -- --write --root /tmp/ivm-doc-stage
 
 use std::path::{Path, PathBuf};
 
@@ -149,7 +149,8 @@ fn main() {
     let paths = header_doc_paths(&source_dir);
     let outputs = prepare_header_outputs(&paths, &expected_layout, &expected_policy)
         .unwrap_or_else(|error| panic!("render IVM header documents: {error}"));
-    let regenerate_command = "cargo run --locked -p ivm --bin gen_header_doc -- --write";
+    let regenerate_command =
+        "cargo run --locked -p ivm --features dev-tools --bin gen_header_doc -- --write";
     let updated = sync_generated_outputs(&outputs, options.mode, regenerate_command)
         .unwrap_or_else(|error| panic!("{error}"));
     for path in updated {

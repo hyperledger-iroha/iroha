@@ -3296,6 +3296,8 @@ pub mod domain {
             | AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanReplaceAccountController(_)
+            | AnyPermission::CanReadAllLedgerData(_)
+            | AnyPermission::CanReadAccountData(_)
             | AnyPermission::CanReadRestrictedDataspace(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanUnregisterTrigger(_)
@@ -3576,6 +3578,7 @@ pub mod account {
             AnyPermission::CanReplaceAccountController(permission) => {
                 permission.account == *account_id
             }
+            AnyPermission::CanReadAccountData(permission) => permission.account == *account_id,
             AnyPermission::CanMintAsset(permission) => permission.asset.account() == account_id,
             AnyPermission::CanBurnAsset(permission) => permission.asset.account() == account_id,
             AnyPermission::CanTransferAsset(permission) => permission.asset.account() == account_id,
@@ -3606,6 +3609,7 @@ pub mod account {
             | AnyPermission::CanResolveAccountAlias(_)
             | AnyPermission::CanDelegateAccountAliasResolution(_)
             | AnyPermission::CanManageAccountAlias(_)
+            | AnyPermission::CanReadAllLedgerData(_)
             | AnyPermission::CanReadRestrictedDataspace(_)
             | AnyPermission::CanManagePeers(_)
             | AnyPermission::CanManageLaneRelayEmergency(_)
@@ -3918,6 +3922,8 @@ pub mod asset_definition {
             | AnyPermission::CanResolveAccountAlias(_)
             | AnyPermission::CanDelegateAccountAliasResolution(_)
             | AnyPermission::CanManageAccountAlias(_)
+            | AnyPermission::CanReadAllLedgerData(_)
+            | AnyPermission::CanReadAccountData(_)
             | AnyPermission::CanReadRestrictedDataspace(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanUnregisterTrigger(_)
@@ -4329,15 +4335,6 @@ pub mod asset {
         if is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
-        match is_asset_definition_owner(
-            asset_id.definition(),
-            &executor.context().authority,
-            executor.host(),
-        ) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
-        }
         let can_transfer_assets_with_definition_token = CanTransferAssetWithDefinition {
             asset_definition: asset_id.definition().clone(),
         };
@@ -4681,6 +4678,39 @@ pub mod asset {
                 ),
                 "expected denial for non-owner, got {:?}",
                 executor.verdict()
+            );
+        }
+
+        #[test]
+        fn transfer_asset_quantity_source_owner_allows() {
+            let (mut executor, asset) = StubExecutor::new(2);
+            let destination = AccountId::new(fixture_key_pair(11).public_key().clone());
+            let instruction = Transfer::asset_quantity(asset, Quantity::one(), destination);
+
+            visit_transfer_asset_quantity(&mut executor, &instruction);
+
+            assert!(
+                executor.verdict().is_ok(),
+                "the source account owner must be allowed to transfer"
+            );
+        }
+
+        #[test]
+        fn transfer_asset_quantity_non_owner_without_exact_permission_is_denied() {
+            let (mut executor, asset) = StubExecutor::new(2);
+            executor.context_mut().authority =
+                AccountId::new(fixture_key_pair(12).public_key().clone());
+            let destination = AccountId::new(fixture_key_pair(13).public_key().clone());
+            let instruction = Transfer::asset_quantity(asset, Quantity::one(), destination);
+
+            visit_transfer_asset_quantity(&mut executor, &instruction);
+
+            assert!(
+                matches!(
+                    executor.verdict(),
+                    Err(ValidationFail::InstructionFailed(_) | ValidationFail::NotPermitted(_))
+                ),
+                "an unrelated authority must need an exact asset or definition permission"
             );
         }
     }
@@ -5422,6 +5452,8 @@ pub mod trigger {
             | AnyPermission::CanResolveAccountAlias(_)
             | AnyPermission::CanDelegateAccountAliasResolution(_)
             | AnyPermission::CanManageAccountAlias(_)
+            | AnyPermission::CanReadAllLedgerData(_)
+            | AnyPermission::CanReadAccountData(_)
             | AnyPermission::CanReadRestrictedDataspace(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)
             | AnyPermission::CanModifyAssetDefinitionMetadata(_)

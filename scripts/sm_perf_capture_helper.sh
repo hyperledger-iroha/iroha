@@ -159,14 +159,14 @@ EOF
 ${env_prefix:+${env_prefix} }cargo bench -p iroha_crypto --bench sm_perf --features "${features}" -- --noplot
 
 # 2) Record the medians into the architecture-specific baseline
-${env_prefix:+${env_prefix} }cargo run -p iroha_crypto --bin sm_perf_check --features "${features}" -- \
+${env_prefix:+${env_prefix} }cargo run -p iroha_crypto --bin sm_perf_check --features "dev-tools,${features}" -- \
   --criterion-dir target/criterion \
   --baseline crates/iroha_crypto/benches/sm_perf_baseline.json \
   --write-baseline "${baseline_path}" \
   --tolerance 0.25
 
 # Optional: compare against an existing scalar baseline once captured
-# ${env_prefix:+${env_prefix} }cargo run -p iroha_crypto --bin sm_perf_check --features "${features}" -- \\
+# ${env_prefix:+${env_prefix} }cargo run -p iroha_crypto --bin sm_perf_check --features "dev-tools,${features}" -- \\
 #   --criterion-dir target/criterion \\
 #   --baseline "${baseline_path}" \\
 #   --compare-baseline crates/iroha_crypto/benches/sm_perf_baseline_${host_arch}_${host_os_token}_scalar.json \\

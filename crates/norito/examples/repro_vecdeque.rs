@@ -1,4 +1,3 @@
-use norito::NoritoSerialize;
 fn main() {
     use std::collections::VecDeque;
     let mut dq = VecDeque::new();
@@ -70,7 +69,7 @@ fn main() {
         __flags
     );
     let mut w = Vec::new();
-    dq.serialize(&mut w).unwrap();
+    norito::core::serialize_to_buffer(&dq, &mut w).unwrap();
     println!(
         "manual bytes: {}",
         w.iter()

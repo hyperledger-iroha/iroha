@@ -2355,6 +2355,7 @@ struct InboundSourceByteBudget {
 }
 
 impl InboundSourceByteBudget {
+    #[cfg(test)]
     fn shared_only(shared: Arc<SharedByteBudget>) -> Self {
         let decode_scratch = SharedByteBudget::new(shared.class_max_bytes(false), 0)
             .expect("an existing source-byte budget has representable scratch geometry");
@@ -4129,7 +4130,6 @@ pub mod handles {
             Gossip,
             Chunk,
             GeneralControl,
-            GenesisControl,
         }
 
         impl<'a> norito::core::DecodeFromSlice<'a> for BudgetRouteMsg {
@@ -4143,18 +4143,7 @@ pub mod handles {
                 match self {
                     Self::Gossip => Topic::TxGossip,
                     Self::Chunk => Topic::ConsensusChunk,
-                    Self::GeneralControl | Self::GenesisControl => Topic::Control,
-                }
-            }
-
-            fn subscriber_route(&self) -> crate::network::message::SubscriberRoute {
-                match self {
-                    Self::GenesisControl => {
-                        crate::network::message::SubscriberRoute::GenesisBootstrap
-                    }
-                    Self::Gossip | Self::Chunk | Self::GeneralControl => {
-                        crate::network::message::SubscriberRoute::General
-                    }
+                    Self::GeneralControl => Topic::Control,
                 }
             }
 
@@ -4457,41 +4446,6 @@ pub mod handles {
                 .post(BudgetRouteMsg::Chunk)
                 .expect("semantic progress must use the disjoint peer reserve");
             assert_eq!(receivers.try_recv_any(), Ok(BudgetRouteMsg::Chunk));
-            drop(held);
-        }
-
-        #[test]
-        fn only_genesis_control_can_consume_the_peer_progress_reserve() {
-            let (mut handle, mut receivers) = test_peer_handle::<BudgetRouteMsg>(1);
-            let overhead = crate::frame_queue_charge(0).expect("test frame overhead");
-            let shared_charge = checked_data_message_wire_len(&BudgetRouteMsg::GeneralControl)
-                .expect("count general control frame")
-                .checked_add(overhead)
-                .expect("general control stream charge");
-            let genesis_charge = checked_data_message_wire_len(&BudgetRouteMsg::GenesisControl)
-                .expect("count genesis control frame")
-                .checked_add(overhead)
-                .expect("genesis control stream charge");
-            let shared = SharedByteBudget::new(shared_charge, 0).expect("test shared budget");
-            let held = shared
-                .try_reserve(shared_charge, false)
-                .expect("saturate shared high budget");
-            handle.high_post_byte_budget = OutboundHighByteBudget {
-                shared,
-                peer_reserve: Some(
-                    SharedByteBudget::new(genesis_charge, 0).expect("test progress reserve"),
-                ),
-            };
-
-            assert_eq!(
-                handle.post(BudgetRouteMsg::GeneralControl),
-                Err(PostError::Full),
-                "general control must remain on the saturated ordinary high owner"
-            );
-            handle
-                .post(BudgetRouteMsg::GenesisControl)
-                .expect("genesis control must use the route-qualified progress reserve");
-            assert_eq!(receivers.try_recv_any(), Ok(BudgetRouteMsg::GenesisControl));
             drop(held);
         }
     }
@@ -10802,7 +10756,7 @@ mod run {
             assert_eq!(budgets.retained_high_ordinary(), ordinary_max);
             handles[ORDINARY_PEERS]
                 .post(high_other.clone())
-                .expect("high block-sync/genesis work must use this peer's progress reserve");
+                .expect("high block-sync work must use this peer's progress reserve");
             assert_eq!(
                 handles[ORDINARY_PEERS].post(ordinary.clone()),
                 Err(handles::PostError::Full),
@@ -18485,6 +18439,7 @@ mod cryptographer {
         ///
         /// # Errors
         /// Forwards [`SymmetricEncryptor::decrypt_easy_into`] error
+        #[cfg(feature = "quic")]
         pub fn decrypt_into<'a>(
             &self,
             data: &[u8],

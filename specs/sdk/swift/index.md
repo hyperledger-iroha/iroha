@@ -819,16 +819,22 @@ points.
 
 ## Fixture Parity
 
-Swift reuses the canonical Android fixture corpus. Sync and verify before updating tests
-or dashboards:
+The authoritative transaction fixture corpus lives in `fixtures/norito_rpc/`.
+Swift's `IrohaSwift/Fixtures/` directory is a generated descriptor-only mirror:
+it contains `transaction_payloads.json` and
+`transaction_fixtures.manifest.json`, not copies of the canonical `.norito`
+payloads. Regenerate and verify before updating tests or dashboards:
 
 ```bash
-make swift-fixtures        # rsync from java/iroha_android/... into IrohaSwift/Fixtures
-make swift-fixtures-check  # confirm byte-identical parity
-make swift-ci              # run fixture parity + dashboard validation bundle
+cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
+python3 scripts/check_swift_fixtures.py
+make swift-ci
 ```
 
-CI pipelines run `ci/check_swift_fixtures.sh` to enforce parity automatically.
+The owner command refreshes the canonical corpus, Java's generated mirror, and
+the descriptor-only Python and Swift mirrors as one publication.
+`scripts/swift_fixture_regen.sh` is only a delegate. CI pipelines run
+`ci/check_swift_fixtures.sh` to enforce descriptor parity automatically.
 `make swift-ci` also validates the dashboard feeds; when running in CI ensure the
 Buildkite agents expose `ci/xcframework-smoke:<lane>:device_tag` metadata so the rendered
 summary identifies which simulator or StrongBox lane produced each result.
@@ -841,7 +847,7 @@ For cadence details and escalation procedures see:
   brief that maps scheduled/event-driven/fallback runs to metrics, dashboards,
   and status reporting obligations.
 - `specs/sdk/swift/fixture_regen_playbook.md` for the regeneration +
-  rollback steps, provenance manifest expectations, and evidence hand-off
+  rollback steps, owner-command evidence, and hand-off
   between rotation owners.
 
 ## Support & Operations

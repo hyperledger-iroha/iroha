@@ -18,7 +18,10 @@ use iroha_data_model::smart_contract::manifest::{
 };
 use norito::{
     Decode, Encode,
-    core::{Archived, DecodeFromSlice, Error as NoritoError, NoritoDeserialize, NoritoSerialize},
+    core::{
+        Archived, DecodeFromSlice, Error as NoritoError, NoritoDeserialize, NoritoSerialize,
+        serialize_to_buffer,
+    },
 };
 
 /// Domain separator for the canonical deployable contract artifact hash.
@@ -636,8 +639,8 @@ fn encode_embedded_state_field_payload(
     value: &EmbeddedStateFieldDescriptor,
 ) -> Result<Vec<u8>, NoritoError> {
     let mut payload = Vec::new();
-    value.name.serialize(&mut payload)?;
-    value.ty.serialize(&mut payload)?;
+    serialize_to_buffer(&value.name, &mut payload)?;
+    serialize_to_buffer(&value.ty, &mut payload)?;
     Ok(payload)
 }
 
@@ -738,72 +741,71 @@ fn encode_embedded_state_type_payload(value: &EmbeddedStateType) -> Result<Vec<u
                 let mut payload = Vec::new();
                 match value {
                     EmbeddedStateType::Int => {
-                        EMBEDDED_STATE_TYPE_TAG_INT.serialize(&mut payload)?
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_INT, &mut payload)?
                     }
                     EmbeddedStateType::Decimal => {
-                        EMBEDDED_STATE_TYPE_TAG_DECIMAL.serialize(&mut payload)?
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_DECIMAL, &mut payload)?
                     }
                     EmbeddedStateType::Quantity => {
-                        EMBEDDED_STATE_TYPE_TAG_QUANTITY.serialize(&mut payload)?
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_QUANTITY, &mut payload)?
                     }
                     EmbeddedStateType::Bool => {
-                        EMBEDDED_STATE_TYPE_TAG_BOOL.serialize(&mut payload)?
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_BOOL, &mut payload)?
                     }
                     EmbeddedStateType::String => {
-                        EMBEDDED_STATE_TYPE_TAG_STRING.serialize(&mut payload)?
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_STRING, &mut payload)?
                     }
                     EmbeddedStateType::Bytes => {
-                        EMBEDDED_STATE_TYPE_TAG_BYTES.serialize(&mut payload)?
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_BYTES, &mut payload)?
                     }
                     EmbeddedStateType::DataSpaceId => {
-                        EMBEDDED_STATE_TYPE_TAG_DATASPACE_ID.serialize(&mut payload)?
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_DATASPACE_ID, &mut payload)?
                     }
                     EmbeddedStateType::AccountId => {
-                        EMBEDDED_STATE_TYPE_TAG_ACCOUNT_ID.serialize(&mut payload)?
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_ACCOUNT_ID, &mut payload)?
                     }
-                    EmbeddedStateType::AssetDefinitionId => {
-                        EMBEDDED_STATE_TYPE_TAG_ASSET_DEFINITION_ID.serialize(&mut payload)?
-                    }
+                    EmbeddedStateType::AssetDefinitionId => serialize_to_buffer(
+                        &EMBEDDED_STATE_TYPE_TAG_ASSET_DEFINITION_ID,
+                        &mut payload,
+                    )?,
                     EmbeddedStateType::AssetId => {
-                        EMBEDDED_STATE_TYPE_TAG_ASSET_ID.serialize(&mut payload)?
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_ASSET_ID, &mut payload)?
                     }
                     EmbeddedStateType::NftId => {
-                        EMBEDDED_STATE_TYPE_TAG_NFT_ID.serialize(&mut payload)?
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_NFT_ID, &mut payload)?
                     }
                     EmbeddedStateType::DomainId => {
-                        EMBEDDED_STATE_TYPE_TAG_DOMAIN_ID.serialize(&mut payload)?
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_DOMAIN_ID, &mut payload)?
                     }
                     EmbeddedStateType::Name => {
-                        EMBEDDED_STATE_TYPE_TAG_NAME.serialize(&mut payload)?
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_NAME, &mut payload)?
                     }
                     EmbeddedStateType::Json => {
-                        EMBEDDED_STATE_TYPE_TAG_JSON.serialize(&mut payload)?
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_JSON, &mut payload)?
                     }
                     EmbeddedStateType::Tuple(_) => {
-                        EMBEDDED_STATE_TYPE_TAG_TUPLE.serialize(&mut payload)?;
-                        child.by_ref().collect::<Vec<_>>().serialize(&mut payload)?;
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_TUPLE, &mut payload)?;
+                        serialize_to_buffer(&child.by_ref().collect::<Vec<_>>(), &mut payload)?;
                     }
                     EmbeddedStateType::Struct { name, fields } => {
-                        EMBEDDED_STATE_TYPE_TAG_STRUCT.serialize(&mut payload)?;
-                        name.serialize(&mut payload)?;
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_STRUCT, &mut payload)?;
+                        serialize_to_buffer(name, &mut payload)?;
                         let mut encoded_fields = Vec::with_capacity(fields.len());
                         for field in fields {
                             let mut encoded_field = Vec::new();
-                            field.name.serialize(&mut encoded_field)?;
-                            child
-                                .next()
-                                .ok_or_else(|| {
-                                    NoritoError::Message(
-                                        "missing iterative embedded state field value".to_owned(),
-                                    )
-                                })?
-                                .serialize(&mut encoded_field)?;
+                            serialize_to_buffer(&field.name, &mut encoded_field)?;
+                            let encoded_child = child.next().ok_or_else(|| {
+                                NoritoError::Message(
+                                    "missing iterative embedded state field value".to_owned(),
+                                )
+                            })?;
+                            serialize_to_buffer(&encoded_child, &mut encoded_field)?;
                             encoded_fields.push(encoded_field);
                         }
-                        encoded_fields.serialize(&mut payload)?;
+                        serialize_to_buffer(&encoded_fields, &mut payload)?;
                     }
                     EmbeddedStateType::StateMap { .. } => {
-                        EMBEDDED_STATE_TYPE_TAG_STATE_MAP.serialize(&mut payload)?;
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_STATE_MAP, &mut payload)?;
                         let key = child.next().ok_or_else(|| {
                             NoritoError::Message(
                                 "missing iterative embedded state map key".to_owned(),
@@ -818,7 +820,7 @@ fn encode_embedded_state_type_payload(value: &EmbeddedStateType) -> Result<Vec<u
                         encode_embedded_state_owned_child(&value, &mut payload)?;
                     }
                     EmbeddedStateType::Option(_) => {
-                        EMBEDDED_STATE_TYPE_TAG_OPTION.serialize(&mut payload)?;
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_OPTION, &mut payload)?;
                         let value = child.next().ok_or_else(|| {
                             NoritoError::Message(
                                 "missing iterative embedded state option value".to_owned(),
@@ -827,7 +829,7 @@ fn encode_embedded_state_type_payload(value: &EmbeddedStateType) -> Result<Vec<u
                         encode_embedded_state_owned_child(&value, &mut payload)?;
                     }
                     EmbeddedStateType::Result { .. } => {
-                        EMBEDDED_STATE_TYPE_TAG_RESULT.serialize(&mut payload)?;
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_RESULT, &mut payload)?;
                         let ok = child.next().ok_or_else(|| {
                             NoritoError::Message(
                                 "missing iterative embedded state result ok value".to_owned(),
@@ -842,14 +844,14 @@ fn encode_embedded_state_type_payload(value: &EmbeddedStateType) -> Result<Vec<u
                         encode_embedded_state_owned_child(&err, &mut payload)?;
                     }
                     EmbeddedStateType::List { capacity, .. } => {
-                        EMBEDDED_STATE_TYPE_TAG_LIST.serialize(&mut payload)?;
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_LIST, &mut payload)?;
                         let element = child.next().ok_or_else(|| {
                             NoritoError::Message(
                                 "missing iterative embedded state list element".to_owned(),
                             )
                         })?;
                         encode_embedded_state_owned_child(&element, &mut payload)?;
-                        capacity.serialize(&mut payload)?;
+                        serialize_to_buffer(capacity, &mut payload)?;
                     }
                 }
                 if child.next().is_some() {
@@ -1190,9 +1192,9 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
 }
 
 impl NoritoSerialize for EmbeddedStateFieldDescriptor {
-    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), NoritoError> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         let encoded = encode_embedded_state_field_payload(self)?;
-        encoded.serialize(&mut writer)
+        encoded.serialize(writer)
     }
 }
 
@@ -1220,9 +1222,9 @@ impl NoritoSerialize for EmbeddedStateType {
         norito::core::schema_hash_for_name(EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1)
     }
 
-    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), NoritoError> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         let encoded = encode_embedded_state_type_payload(self)?;
-        encoded.serialize(&mut writer)
+        encoded.serialize(writer)
     }
 }
 
@@ -2249,8 +2251,7 @@ mod tests {
                 let child_wrappers = MAX_EMBEDDED_STATE_TYPE_DEPTH_V1 - 2;
                 let children = vec![raw_bool_option_payload(child_wrappers), vec![u8::MAX]];
                 let mut malformed_tuple = vec![EMBEDDED_STATE_TYPE_TAG_TUPLE];
-                children
-                    .serialize(&mut malformed_tuple)
+                serialize_to_buffer(&children, &mut malformed_tuple)
                     .expect("serialize tuple with malformed second child");
 
                 let result = decode_embedded_state_type_payload(&malformed_tuple);
@@ -2297,8 +2298,7 @@ mod tests {
         let mut forbidden_list = vec![EMBEDDED_STATE_TYPE_TAG_LIST];
         encode_embedded_state_owned_child(&encoded_map, &mut forbidden_list)
             .expect("embed StateMap payload without invoking List validation");
-        1_u8.serialize(&mut forbidden_list)
-            .expect("serialize List capacity");
+        serialize_to_buffer(&1_u8, &mut forbidden_list).expect("serialize List capacity");
         let error = decode_embedded_state_type_payload(&forbidden_list)
             .expect_err("decoded List element cannot hide a StateMap resource handle");
         assert!(error.to_string().contains("resource handles"));

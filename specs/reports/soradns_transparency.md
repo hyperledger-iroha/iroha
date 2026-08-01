@@ -32,13 +32,13 @@ Run the tailer directly from the workspace using:
   JSONLines to `artifacts/soradns/transparency.jsonl`, writing Prometheus
   metrics to `artifacts/soradns/transparency.prom`, and optionally pushing
   metrics to a configured Pushgateway.
-- The underlying CLI (`cargo run -p soradns-resolver --bin soradns_transparency_tail`)
+- The underlying CLI (`cargo run -p soradns-resolver --features dev-tools --bin soradns_transparency_tail`)
   supports both JSONL and TSV formats, STDIN/STDOUT streaming, and `--metrics-output`
   for direct Prometheus text generation (set to `-` to emit metrics to stdout).
 
 ## Signed Tree Head Report CLI
 
-- `cargo run -p soradns-resolver --bin soradns_transparency_report -- --log /var/log/soradns/resolver.transparency.log --output artifacts/soradns/transparency_report.md --sth-output artifacts/soradns/signed_tree_heads.json`
+- `cargo run -p soradns-resolver --features dev-tools --bin soradns_transparency_report -- --log /var/log/soradns/resolver.transparency.log --output artifacts/soradns/transparency_report.md --sth-output artifacts/soradns/signed_tree_heads.json`
   renders a Markdown summary plus the canonical Signed Tree Head manifest. The report captures
   bundle/resolver counters, proof-age rollups, CID drift totals, and the most recent events so the
   weekly freeze/advisory notes can be produced without hand-editing spreadsheets.

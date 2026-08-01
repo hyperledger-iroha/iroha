@@ -71,30 +71,6 @@ public enum VerifyingKeyBackendTag {
           "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
           "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4");
 
-  private static final Set<String> PENDING_CATALOG_BACKEND_ALIASES =
-      immutableSet(
-          "halo2ipaorchard", "orchard", "zcashorchard",
-          "groth16bls12377", "groth16bls12377decaf377", "bls12377",
-          "decaf377", "masp", "penumbra", "penumbramasp", "halo2ipapenumbra",
-          "halo2ipamasp", "fcmppluspluscurvetree", "fcmp", "monero",
-          "monerofcmp", "monerofcmpplusplus", "curvetree", "halo2ipamonero",
-          "halo2ipacurvetree", "latticepcssis", "latticepcszk", "jindo",
-          "jindolatticepcszk", "jindolatticepcszkv0", "jindolatticepcssis",
-          "starkfrimiden", "midenstark", "aztecplonkishprivatekernel",
-          "aztecprivatekernel", "pqmaspstarkfri", "pqmaspstark",
-          "starkfripqmaspstarkfri", "postquantummasp", "anonymouspgc",
-          "anonymouspgckoutofn", "anonymouspgckoutofnv1", "verange",
-          "verangetransparentrange", "verangetransparentrangev1", "zkat",
-          "zkatpolicyprivateauthenticator", "zkatpolicyprivateauthv1",
-          "recursiveanonymousadmission", "recursiveanonymousadmissionv0",
-          "zkamsrecursiveadmission", "zkamsrecursiveadmissionv0",
-          "vegaexistingcredentialzk", "vegaexistingcredentialzkv0",
-          "silentthresholdanoncred", "silentthresholdanoncredv0",
-          "silentthresholdanonymouscredential", "thresholdanonymouscredentials",
-          "zkx509", "zkvmx509identity", "zkx509onchainidentity",
-          "zkx509onchainidentityv0", "siswithhints", "sishints",
-          "sishintsanoncredpqv0", "latticeanonymouscredentials");
-
   private static final Set<String> TRUSTED_SETUP_BACKEND_SEGMENTS =
       immutableSet(
           "groth16", "kzg", "bn254", "bn256", "bls12", "srs", "crs",
@@ -147,32 +123,15 @@ public enum VerifyingKeyBackendTag {
 
   /** Human-facing catalog classification separate from the wire enum. */
   public enum CatalogBackendTag {
-    PRODUCTION(false),
-    PENDING(true),
-    UNSUPPORTED(false);
-
-    private final boolean pendingProductionBackend;
-
-    CatalogBackendTag(final boolean pendingProductionBackend) {
-      this.pendingProductionBackend = pendingProductionBackend;
-    }
-
-    /** Returns true only for a cataloged backend that remains fail-closed. */
-    public boolean isPendingProductionBackend() {
-      return pendingProductionBackend;
-    }
+    PRODUCTION,
+    UNSUPPORTED
   }
 
-  /** Classifies one catalog label without enabling pending entries. */
+  /** Classifies only exact production labels; aliases are unsupported. */
   public static CatalogBackendTag fromCatalogLabel(final String raw) {
-    final String label =
-        raw == null ? "" : trimWhitespace(raw).toLowerCase(Locale.ROOT);
+    final String label = raw == null ? "" : raw;
     if (label.isEmpty() || hasNonAscii(label)) {
       return CatalogBackendTag.UNSUPPORTED;
-    }
-    final String compact = compactAscii(label);
-    if (PENDING_CATALOG_BACKEND_ALIASES.contains(compact)) {
-      return CatalogBackendTag.PENDING;
     }
     if (VERIFIER_BACKEND_REGISTRY_LABELS_V1.contains(label)
         || HALO2_IPA_PASTA.noritoValue.equals(label)
@@ -180,11 +139,6 @@ public enum VerifyingKeyBackendTag {
       return CatalogBackendTag.PRODUCTION;
     }
     return CatalogBackendTag.UNSUPPORTED;
-  }
-
-  /** Returns true only for a known pending catalog label. */
-  public static boolean isPendingProductionBackendLabel(final String raw) {
-    return fromCatalogLabel(raw).isPendingProductionBackend();
   }
 
   /** Returns true only for an exact, portable production verifier label. */
@@ -196,7 +150,6 @@ public enum VerifyingKeyBackendTag {
     if (trimWhitespace(backend).isEmpty()
         || !trimWhitespace(backend).equals(backend)
         || !isPortableVerifierBackendLabel(backend)
-        || isPendingProductionBackendLabel(backend)
         || isProductionClaimBackendLabel(backend)
         || isTrustedSetupBackendLabel(backend)
         || isDeveloperOnlyBackendLabel(backend)) {

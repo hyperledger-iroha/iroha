@@ -86,7 +86,7 @@ For CI or governance packets that need a single summary of the trustless checks,
 run the dedicated verifier CLI:
 
 ```bash
-cargo run -p sorafs_car --bin soranet_trustless_verifier --features cli --locked -- \
+cargo run -p sorafs_car --features cli,dev-tools --bin soranet_trustless_verifier --locked -- \
   --manifest fixtures/sorafs_gateway/1.0.0/manifest_v1.to \
   --car fixtures/sorafs_gateway/1.0.0/gateway.car \
   --json-out artifacts/sorafs_gateway/trustless_summary.json

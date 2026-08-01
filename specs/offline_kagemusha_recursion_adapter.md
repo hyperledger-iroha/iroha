@@ -430,7 +430,7 @@ release evidence:
 
 ```text
 cargo build --release -p iroha_core \
-  --features kagemusha-generation-memory-lab \
+  --features kagemusha-generation-memory-lab,dev-tools \
   --bin kagemusha_recursive_spend_v4_memory_benchmark --jobs 1
 
 python3 scripts/run_kagemusha_v4_generation_benchmark.py \

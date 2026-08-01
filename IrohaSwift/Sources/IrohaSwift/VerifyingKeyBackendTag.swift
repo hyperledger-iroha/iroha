@@ -34,12 +34,6 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         }
     }
 
-    /// Returns whether a catalog label is known but still blocked from
-    /// production verifier admission.
-    public static func isPendingProductionBackendLabel(_ raw: String) -> Bool {
-        VerifierBackendCatalogTag(catalogLabel: raw).isPendingProductionBackend
-    }
-
     /// Returns true only for an exact, portable production verifier label.
     public static func isProductionVerifyBackendLabel(_ raw: String?) -> Bool {
         guard let raw else {
@@ -49,7 +43,6 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         if backend.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || backend.trimmingCharacters(in: .whitespacesAndNewlines) != backend
             || !isPortableVerifierBackendLabel(backend)
-            || isPendingProductionBackendLabel(backend)
             || isProductionClaimBackendLabel(backend)
             || isTrustedSetupBackendLabel(backend)
             || isDeveloperOnlyBackendLabel(backend)
@@ -220,58 +213,19 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
 /// deliberately separate from the two-case Norito engine enum.
 public enum VerifierBackendCatalogTag: Sendable, Equatable {
     case production
-    case pending
     case unsupported
 
-    /// Classify an exact known catalog label without enabling pending entries.
+    /// Classify an exact production label. Protocol names, historical names,
+    /// and aliases are unsupported rather than being normalized or staged.
     public init(catalogLabel raw: String) {
-        let label = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !label.isEmpty,
-              !label.unicodeScalars.contains(where: { $0.value > 127 })
-        else {
-            self = .unsupported
-            return
-        }
-        let compact = String(label.filter { $0.isASCII && ($0.isLetter || $0.isNumber) })
-        if Self.pendingCompactLabels.contains(compact) {
-            self = .pending
-        } else if VerifyingKeyBackendTag(canonicalLabel: label) != nil
-            || Self.productionLabels.contains(label)
+        if VerifyingKeyBackendTag(canonicalLabel: raw) != nil
+            || Self.productionLabels.contains(raw)
         {
             self = .production
         } else {
             self = .unsupported
         }
     }
-
-    /// Returns true only for a known catalog entry that is still fail-closed.
-    public var isPendingProductionBackend: Bool {
-        self == .pending
-    }
-
-    private static let pendingCompactLabels: Set<String> = [
-        "halo2ipaorchard", "orchard", "zcashorchard",
-        "groth16bls12377", "groth16bls12377decaf377", "bls12377",
-        "decaf377", "masp", "penumbra", "penumbramasp", "halo2ipapenumbra",
-        "halo2ipamasp", "fcmppluspluscurvetree", "fcmp", "monero",
-        "monerofcmp", "monerofcmpplusplus", "curvetree", "halo2ipamonero",
-        "halo2ipacurvetree", "latticepcssis", "latticepcszk", "jindo",
-        "jindolatticepcszk", "jindolatticepcszkv0", "jindolatticepcssis",
-        "starkfrimiden", "midenstark", "aztecplonkishprivatekernel",
-        "aztecprivatekernel", "pqmaspstarkfri", "pqmaspstark",
-        "starkfripqmaspstarkfri", "postquantummasp", "anonymouspgc",
-        "anonymouspgckoutofn", "anonymouspgckoutofnv1", "verange",
-        "verangetransparentrange", "verangetransparentrangev1", "zkat",
-        "zkatpolicyprivateauthenticator", "zkatpolicyprivateauthv1",
-        "recursiveanonymousadmission", "recursiveanonymousadmissionv0",
-        "zkamsrecursiveadmission", "zkamsrecursiveadmissionv0",
-        "vegaexistingcredentialzk", "vegaexistingcredentialzkv0",
-        "silentthresholdanoncred", "silentthresholdanoncredv0",
-        "silentthresholdanonymouscredential", "thresholdanonymouscredentials",
-        "zkx509", "zkvmx509identity", "zkx509onchainidentity",
-        "zkx509onchainidentityv0", "siswithhints", "sishints",
-        "sishintsanoncredpqv0", "latticeanonymouscredentials"
-    ]
 
     private static let productionLabels: Set<String> = [
         "halo2/ipa",

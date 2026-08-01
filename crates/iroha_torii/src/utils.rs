@@ -486,6 +486,53 @@ pub(crate) enum TypedRequestContentFormat {
     Norito,
 }
 
+/// Classify one stored first-release typed media value using the same strict
+/// grammar as HTTP request admission.
+///
+/// JSON permits no parameter or exactly `charset=utf-8`; native Norito is
+/// parameter-free. Empty, malformed, duplicate, quality-weighted, and
+/// structured-suffix values fail closed.
+pub(crate) fn strict_typed_content_format(raw: &str) -> Option<TypedRequestContentFormat> {
+    let declared = trim_optional_whitespace(raw);
+    if declared.is_empty() {
+        return None;
+    }
+    let media_type = parse_media_type(declared).ok()?;
+    if !media_type.has_concrete_type() || media_type.type_name != "application" {
+        return None;
+    }
+    if media_type.subtype == "json"
+        && match media_type.parameters.as_slice() {
+            [] => true,
+            [parameter] => {
+                parameter.name == "charset" && parameter.value.eq_ignore_ascii_case("utf-8")
+            }
+            _ => false,
+        }
+    {
+        return Some(TypedRequestContentFormat::Json);
+    }
+    if media_type.subtype == "x-norito" && media_type.parameters.is_empty() {
+        return Some(TypedRequestContentFormat::Norito);
+    }
+    None
+}
+
+/// Return whether `raw` is exactly one parameter-free concrete media type.
+pub(crate) fn is_parameter_free_media_type(
+    raw: &str,
+    expected_type: &str,
+    expected_subtype: &str,
+) -> bool {
+    let declared = trim_optional_whitespace(raw);
+    parse_media_type(declared).is_ok_and(|media_type| {
+        media_type.has_concrete_type()
+            && media_type.type_name == expected_type
+            && media_type.subtype == expected_subtype
+            && media_type.parameters.is_empty()
+    })
+}
+
 fn typed_request_media_rejection(
     status: StatusCode,
     code: &'static str,

@@ -287,6 +287,18 @@ impl FcmpProverInputV1 {
             key_image.compress().to_bytes(),
         )
     }
+
+    /// Borrow the complete canonical origin set used by a non-shipping release
+    /// fixture.
+    ///
+    /// This is intentionally crate-private and feature-gated: production
+    /// wallets retain their own output set, while the release network builder
+    /// needs the public tuples to construct the exact authoritative bootstrap
+    /// without exposing any spend witness.
+    #[cfg(feature = "privacy-release-evidence")]
+    pub(crate) fn release_origin_outputs_v1(&self) -> &[FcmpOutputTupleV1] {
+        &self.leaves
+    }
 }
 
 /// Complete result of native FCMP++ proving.

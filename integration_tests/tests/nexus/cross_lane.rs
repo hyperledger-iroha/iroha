@@ -124,7 +124,8 @@ fn lane_privacy_proof_attachment_roundtrips() -> Result<()> {
         VerifyingKeyId::new("lane/privacy", "lane_privacy_vk"),
     );
     attachment.lane_privacy = Some(privacy);
-    let list = ProofAttachmentList(vec![attachment]);
+    let list = ProofAttachmentList::try_from(vec![attachment])
+        .expect("one attachment is a valid bounded proof list");
 
     let norito_bytes = norito::to_bytes(&list)?;
     let archived = norito::from_bytes::<ProofAttachmentList>(&norito_bytes)?;

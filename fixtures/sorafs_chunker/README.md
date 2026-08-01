@@ -16,7 +16,7 @@ cross-language implementations (Rust/Go/TypeScript) and integration pipelines.
 Regenerate the artifacts with:
 
 ```
-cargo run -p sorafs_chunker --bin export_vectors
+cargo run -p sorafs_chunker --features dev-tools --bin export_vectors
 ```
 
 Local runs typically pass `--allow-unsigned`; the canonical signature set comes

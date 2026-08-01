@@ -23,6 +23,15 @@ pub const ZK_AMS_MAX_RING_SIZE_V1: u32 = 64;
 pub const IROHA_JINDO_MAX_POLYNOMIALS_V1: u32 = 4;
 /// Exact canonical byte width of one Jindo coefficient-field element.
 pub const IROHA_JINDO_FIELD_ELEMENT_BYTES_V1: usize = 32;
+/// Canonical little-endian modulus of the first-release Jindo coefficient field.
+///
+/// The field is `F_p` for `p = 60272^16 + 1`. Keeping the wire-order modulus
+/// beside the public field-element width gives data-model validation and the
+/// native arithmetic engine one authoritative boundary constant.
+pub const IROHA_JINDO_FIELD_MODULUS_LE_V1: [u8; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1] = [
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x81, 0x32, 0x37, 0x8c, 0xdc, 0x30, 0x96, 0x8e,
+    0x55, 0x65, 0xfb, 0xe6, 0xd9, 0x43, 0x56, 0xd6, 0xc2, 0xaf, 0x62, 0x6b, 0x99, 0x45, 0x0d, 0x43,
+];
 /// Exact fixed-profile Jindo outer-commitment rank.
 pub const IROHA_JINDO_OUTER_COMMITMENT_RANK_V1: usize = 13;
 /// Exact fixed-profile Jindo application-ring degree.
@@ -1298,7 +1307,7 @@ pub struct PrivacyZkAmsBatchAdmissionV1 {
 
 /// ZK-AMS Phase-V anonymous account-provisioning public input.
 ///
-/// The native suite verifies MLSAGS over Ristretto255 with a SHA3-512
+/// The native suite verifies one LSAG over Ristretto255 with a SHA3-512
 /// transcript and hash-to-group operation. Every ring key must be present in
 /// the referenced admitted-identity registry. The account id is the signed
 /// message binding, and the key image is the one-time replay nullifier.
@@ -1315,9 +1324,9 @@ pub struct PrivacyZkAmsProvisionAccountV1 {
     pub account_registry_root_epoch: u64,
     /// Strictly increasing canonical ring of admitted seed public keys.
     pub admitted_seed_key_ring: Vec<PrivacyZkAmsSeedPublicKeyV1>,
-    /// Fresh Iroha account/address bound by the MLSAGS signature.
+    /// Fresh Iroha account/address bound by the LSAG signature.
     pub account_id: AccountId,
-    /// Deterministic MLSAGS key image recorded as the provisioning nullifier.
+    /// Deterministic LSAG key image recorded as the provisioning nullifier.
     pub key_image: PrivacyZkAmsKeyImageV1,
 }
 
@@ -1452,7 +1461,13 @@ pub enum PrivacyVegaIssuerRecordLifecycleV1 {
 ///
 /// Revisions form a bounded append-only self-digested lineage. A proof
 /// statement must bind the exact current active revision, including its P-256
-/// key, so a submitter cannot manufacture a self-issued credential.
+/// key, so a submitter cannot manufacture a self-issued credential. Consensus
+/// permanently assigns every issuer P-256 key to one issuer lineage: a key
+/// retired or revoked in one lineage cannot be re-registered under another
+/// issuer identity to relabel old credentials, and a key rotated out of a
+/// lineage cannot later be reactivated inside that lineage. A terminal
+/// revocation retains its immediately preceding key only to preserve the
+/// immutable audit trail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1951,7 +1966,7 @@ impl norito::core::NoritoSerialize for PrivacyX509KeyUsageRequirementV1 {
         <bool as norito::core::NoritoSerialize>::schema_hash()
     }
 
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(&self.0, writer)
     }
 

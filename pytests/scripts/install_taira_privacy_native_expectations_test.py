@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 import hashlib
 import json
@@ -50,11 +51,30 @@ ALL_TARGETS = (
 )
 HASH_FRAME_DOMAIN = b"iroha.zk-x509.sha256.frame.v1"
 RESOURCE_DOMAIN = b"iroha.zk-x509.native-resource-certificate.payload.v1"
+AUTH_IROHA_COMMIT = "1" * 40
+AUTH_IROHA_PRINCIPAL = "taira-privacy-iroha"
+AUTH_IROHA_FINGERPRINT = (
+    "SHA256:" + base64.b64encode(bytes([0x42]) * 32).decode().rstrip("=")
+)
+AUTH_IROHA_POLICY_SHA256 = "2" * 64
+AUTH_VALIDATOR_COMMIT = "3" * 40
+AUTH_VALIDATOR_PRINCIPAL = "taira-privacy-validator"
+AUTH_VALIDATOR_FINGERPRINT = (
+    "SHA256:" + base64.b64encode(bytes([0x43]) * 32).decode().rstrip("=")
+)
+AUTH_VALIDATOR_POLICY_SHA256 = "4" * 64
+AUTH_VALIDATOR_SOURCE_TREE_SHA256 = "5" * 64
+AUTH_BOOTSTRAP_SOURCE_TREE_SHA256 = "6" * 64
+AUTH_CARGO_LOCK_SHA256 = hashlib.sha256(b"reviewed-lock-bytes\n").hexdigest()
+AUTH_RUST_TOOLCHAIN_TREE_SHA256 = "7" * 64
 
 
 @dataclass
 class Fixture:
     repository: Path
+    native_verifier: Path
+    native_verifier_sha256: str
+    exact12_matrix: Path
     expectations_norito: Path
     expectations_json: Path
     resource_norito: Path
@@ -290,9 +310,32 @@ def _fixture(tmp_path: Path) -> Fixture:
     readiness.parent.mkdir(parents=True, exist_ok=True)
     readiness.write_text(_readiness_source(), encoding="utf-8")
     (repository / "fixtures/privacy").mkdir(parents=True)
+    exact12_matrix = repository / "fixtures/privacy/exact12_v1.tsv"
+    exact12_matrix.write_bytes(b"compiled-exact12-test-double\n")
     (repository / "Cargo.lock").write_bytes(b"reviewed-lock-bytes\n")
     capture = (tmp_path / "capture").resolve()
     capture.mkdir()
+    # This isolates installer transaction tests behind a verifier test double.
+    # The Rust runner tests own typed Norito acceptance and explicitly reject
+    # these sentinel NRT bytes through the production capture loaders.
+    native_verifier = capture / "taira-privacy-release-runner"
+    native_verifier.write_text(
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "[ \"$#\" -eq 11 ]\n"
+        "[ \"$1\" = validate-captured-fixtures ]\n"
+        "shift\n"
+        "for expected in --exact12-matrix --expectations-norito "
+        "--expectations-json --x509-resource-norito --x509-resource-json; do\n"
+        "  [ \"$1\" = \"$expected\" ]\n"
+        "  [ -n \"$2\" ]\n"
+        "  shift 2\n"
+        "done\n"
+        "[ \"$#\" -eq 0 ]\n",
+        encoding="utf-8",
+    )
+    native_verifier.chmod(0o500)
+    native_verifier_sha256 = hashlib.sha256(native_verifier.read_bytes()).hexdigest()
     expectations_norito = capture / "expectations.norito"
     expectations_json = capture / "expectations.json"
     resource_norito = capture / "resource.norito"
@@ -308,6 +351,9 @@ def _fixture(tmp_path: Path) -> Fixture:
     )
     return Fixture(
         repository,
+        native_verifier,
+        native_verifier_sha256,
+        exact12_matrix,
         expectations_norito,
         expectations_json,
         resource_norito,
@@ -316,13 +362,38 @@ def _fixture(tmp_path: Path) -> Fixture:
     )
 
 
-def _run(fixture: Fixture, **overrides: Path) -> subprocess.CompletedProcess[str]:
-    values = {
+def _run(
+    fixture: Fixture, **overrides: Path | str
+) -> subprocess.CompletedProcess[str]:
+    values: dict[str, Path | str] = {
+        "native_verifier": fixture.native_verifier,
+        "native_verifier_sha256": fixture.native_verifier_sha256,
+        "exact12_matrix": fixture.exact12_matrix,
         "expectations_norito": fixture.expectations_norito,
         "expectations_json": fixture.expectations_json,
         "resource_norito": fixture.resource_norito,
         "resource_json": fixture.resource_json,
         "manifest": fixture.manifest,
+        "authenticated_iroha_source_commit": AUTH_IROHA_COMMIT,
+        "authenticated_iroha_signer_principal": AUTH_IROHA_PRINCIPAL,
+        "authenticated_iroha_signer_fingerprint": AUTH_IROHA_FINGERPRINT,
+        "authenticated_iroha_allowed_signers_sha256": AUTH_IROHA_POLICY_SHA256,
+        "authenticated_validator_source_commit": AUTH_VALIDATOR_COMMIT,
+        "authenticated_validator_signer_principal": AUTH_VALIDATOR_PRINCIPAL,
+        "authenticated_validator_signer_fingerprint": AUTH_VALIDATOR_FINGERPRINT,
+        "authenticated_validator_allowed_signers_sha256": (
+            AUTH_VALIDATOR_POLICY_SHA256
+        ),
+        "authenticated_validator_source_tree_sha256": (
+            AUTH_VALIDATOR_SOURCE_TREE_SHA256
+        ),
+        "authenticated_bootstrap_source_tree_sha256": (
+            AUTH_BOOTSTRAP_SOURCE_TREE_SHA256
+        ),
+        "authenticated_cargo_lock_sha256": AUTH_CARGO_LOCK_SHA256,
+        "authenticated_rust_toolchain_tree_sha256": (
+            AUTH_RUST_TOOLCHAIN_TREE_SHA256
+        ),
     }
     values.update(overrides)
     return subprocess.run(
@@ -333,6 +404,12 @@ def _run(fixture: Fixture, **overrides: Path) -> subprocess.CompletedProcess[str
             str(INSTALLER),
             "--repo",
             str(fixture.repository),
+            "--native-verifier",
+            str(values["native_verifier"]),
+            "--native-verifier-sha256",
+            str(values["native_verifier_sha256"]),
+            "--exact12-matrix",
+            str(values["exact12_matrix"]),
             "--captured-norito",
             str(values["expectations_norito"]),
             "--captured-json",
@@ -343,6 +420,30 @@ def _run(fixture: Fixture, **overrides: Path) -> subprocess.CompletedProcess[str
             str(values["resource_json"]),
             "--manifest-out",
             str(values["manifest"]),
+            "--authenticated-iroha-source-commit",
+            str(values["authenticated_iroha_source_commit"]),
+            "--authenticated-iroha-signer-principal",
+            str(values["authenticated_iroha_signer_principal"]),
+            "--authenticated-iroha-signer-fingerprint",
+            str(values["authenticated_iroha_signer_fingerprint"]),
+            "--authenticated-iroha-allowed-signers-sha256",
+            str(values["authenticated_iroha_allowed_signers_sha256"]),
+            "--authenticated-validator-source-commit",
+            str(values["authenticated_validator_source_commit"]),
+            "--authenticated-validator-signer-principal",
+            str(values["authenticated_validator_signer_principal"]),
+            "--authenticated-validator-signer-fingerprint",
+            str(values["authenticated_validator_signer_fingerprint"]),
+            "--authenticated-validator-allowed-signers-sha256",
+            str(values["authenticated_validator_allowed_signers_sha256"]),
+            "--authenticated-validator-source-tree-sha256",
+            str(values["authenticated_validator_source_tree_sha256"]),
+            "--authenticated-bootstrap-source-tree-sha256",
+            str(values["authenticated_bootstrap_source_tree_sha256"]),
+            "--authenticated-cargo-lock-sha256",
+            str(values["authenticated_cargo_lock_sha256"]),
+            "--authenticated-rust-toolchain-tree-sha256",
+            str(values["authenticated_rust_toolchain_tree_sha256"]),
         ],
         check=False,
         capture_output=True,
@@ -350,10 +451,136 @@ def _run(fixture: Fixture, **overrides: Path) -> subprocess.CompletedProcess[str
     )
 
 
+def _crash_install(fixture: Fixture, phase: str) -> subprocess.CompletedProcess[str]:
+    driver = r'''
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+module_path, phase = sys.argv[1:3]
+arguments = sys.argv[3:]
+spec = importlib.util.spec_from_file_location("taira_installer_under_test", module_path)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+def failpoint(observed):
+    if phase == "race_fixture_0" and observed == "fixture_0_temporary_durable":
+        target = (
+            Path(arguments[0])
+            / "fixtures/privacy/native_release_expectations_v1.norito"
+        )
+        target.write_bytes(b"concurrent-substitution-must-survive")
+        target.chmod(0o600)
+        return
+    if observed == phase:
+        os._exit(91)
+
+module.install(
+    repository=Path(arguments[0]),
+    native_verifier=Path(arguments[1]),
+    native_verifier_sha256=arguments[2],
+    exact12_matrix=Path(arguments[3]),
+    captured_expectations_norito=Path(arguments[4]),
+    captured_expectations_json=Path(arguments[5]),
+    captured_resource_norito=Path(arguments[6]),
+    captured_resource_json=Path(arguments[7]),
+    manifest_path=Path(arguments[8]),
+    authenticated_iroha_source_commit=arguments[9],
+    authenticated_iroha_signer_principal=arguments[10],
+    authenticated_iroha_signer_fingerprint=arguments[11],
+    authenticated_iroha_allowed_signers_sha256=arguments[12],
+    authenticated_validator_source_commit=arguments[13],
+    authenticated_validator_signer_principal=arguments[14],
+    authenticated_validator_signer_fingerprint=arguments[15],
+    authenticated_validator_allowed_signers_sha256=arguments[16],
+    authenticated_validator_source_tree_sha256=arguments[17],
+    authenticated_bootstrap_source_tree_sha256=arguments[18],
+    authenticated_cargo_lock_sha256=arguments[19],
+    authenticated_rust_toolchain_tree_sha256=arguments[20],
+    _failpoint=failpoint,
+)
+raise SystemExit("requested failpoint was not reached")
+'''
+    return subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            driver,
+            str(INSTALLER),
+            phase,
+            str(fixture.repository),
+            str(fixture.native_verifier),
+            fixture.native_verifier_sha256,
+            str(fixture.exact12_matrix),
+            str(fixture.expectations_norito),
+            str(fixture.expectations_json),
+            str(fixture.resource_norito),
+            str(fixture.resource_json),
+            str(fixture.manifest),
+            AUTH_IROHA_COMMIT,
+            AUTH_IROHA_PRINCIPAL,
+            AUTH_IROHA_FINGERPRINT,
+            AUTH_IROHA_POLICY_SHA256,
+            AUTH_VALIDATOR_COMMIT,
+            AUTH_VALIDATOR_PRINCIPAL,
+            AUTH_VALIDATOR_FINGERPRINT,
+            AUTH_VALIDATOR_POLICY_SHA256,
+            AUTH_VALIDATOR_SOURCE_TREE_SHA256,
+            AUTH_BOOTSTRAP_SOURCE_TREE_SHA256,
+            AUTH_CARGO_LOCK_SHA256,
+            AUTH_RUST_TOOLCHAIN_TREE_SHA256,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _rejecting_verifier(fixture: Fixture) -> tuple[Path, str]:
+    verifier = fixture.native_verifier.parent / "recovery-rejecting-verifier"
+    verifier.write_text("#!/bin/sh\nexit 29\n", encoding="utf-8")
+    verifier.chmod(0o500)
+    return verifier, hashlib.sha256(verifier.read_bytes()).hexdigest()
+
+
+def _recover_then_reject_reinstall(fixture: Fixture) -> subprocess.CompletedProcess[str]:
+    verifier, verifier_sha256 = _rejecting_verifier(fixture)
+    return _run(
+        fixture,
+        native_verifier=verifier,
+        native_verifier_sha256=verifier_sha256,
+    )
+
+
+def _transaction_debris(fixture: Fixture) -> tuple[Path, ...]:
+    mutation_paths = (
+        fixture.repository / PROFILE_RELATIVE,
+        fixture.repository / READINESS_RELATIVE,
+        *(fixture.repository / target for target in ALL_TARGETS),
+        fixture.manifest,
+    )
+    return (
+        fixture.repository / ".taira-privacy-native-install-v1",
+        fixture.repository / ".taira-privacy-native-install-cleanup-v1",
+        *(
+            path.with_name(f".{path.name}.taira-privacy-native-install-v1.tmp")
+            for path in mutation_paths
+        ),
+    )
+
+
 def _assert_unmodified(fixture: Fixture, profile: bytes, readiness: bytes) -> None:
     assert (fixture.repository / PROFILE_RELATIVE).read_bytes() == profile
     assert (fixture.repository / READINESS_RELATIVE).read_bytes() == readiness
     assert not any((fixture.repository / target).exists() for target in ALL_TARGETS)
+
+
+def _assert_no_transaction_debris(fixture: Fixture) -> None:
+    assert not any(os.path.lexists(path) for path in _transaction_debris(fixture))
 
 
 def test_installs_all_exact_fixtures_and_source_pins(tmp_path: Path) -> None:
@@ -382,6 +609,518 @@ def test_installs_all_exact_fixtures_and_source_pins(tmp_path: Path) -> None:
         == bytes(resource["certificate_sha256"]).hex()
     )
     assert manifest["x509_resource_certificate"]["kat_proof_bytes"] == 8_000_000
+    assert manifest["native_capture_validation"] == {
+        "mode": "validate-captured-fixtures",
+        "verifier_sha256": fixture.native_verifier_sha256,
+        "exact12_path": "fixtures/privacy/exact12_v1.tsv",
+        "exact12_sha256": hashlib.sha256(
+            fixture.exact12_matrix.read_bytes()
+        ).hexdigest(),
+    }
+    assert manifest["installation_transaction"] == {
+        "schema_version": 1,
+        "commit_marker": "manifest-created-last",
+    }
+    assert manifest["authenticated_origins"] == {
+        "iroha_source": {
+            "commit": AUTH_IROHA_COMMIT,
+            "signature_format": "ssh",
+            "signer_principal": AUTH_IROHA_PRINCIPAL,
+            "signer_fingerprint": AUTH_IROHA_FINGERPRINT,
+            "allowed_signers_sha256": AUTH_IROHA_POLICY_SHA256,
+        },
+        "validator_source": {
+            "commit": AUTH_VALIDATOR_COMMIT,
+            "signature_format": "ssh",
+            "signer_principal": AUTH_VALIDATOR_PRINCIPAL,
+            "signer_fingerprint": AUTH_VALIDATOR_FINGERPRINT,
+            "allowed_signers_sha256": AUTH_VALIDATOR_POLICY_SHA256,
+            "source_tree_sha256": AUTH_VALIDATOR_SOURCE_TREE_SHA256,
+        },
+        "build_inputs": {
+            "bootstrap_source_tree_sha256": AUTH_BOOTSTRAP_SOURCE_TREE_SHA256,
+            "cargo_lock_sha256": AUTH_CARGO_LOCK_SHA256,
+        },
+        "rust_toolchain": {
+            "release": "1.93.1",
+            "host": "aarch64-unknown-linux-gnu",
+            "compiler_commit": "01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf",
+            "tree_sha256": AUTH_RUST_TOOLCHAIN_TREE_SHA256,
+        },
+    }
+    _assert_no_transaction_debris(fixture)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "diagnostic"),
+    [
+        (
+            "authenticated_iroha_source_commit",
+            "0" * 40,
+            "Iroha source commit must be one nonzero lowercase full Git commit",
+        ),
+        (
+            "authenticated_validator_source_commit",
+            "A" * 40,
+            "validator source commit must be one nonzero lowercase full Git commit",
+        ),
+        (
+            "authenticated_iroha_signer_principal",
+            "operator-",
+            "Iroha signer principal must be one bounded canonical ASCII",
+        ),
+        (
+            "authenticated_validator_signer_principal",
+            "operator,backup",
+            "validator signer principal must be one bounded canonical ASCII",
+        ),
+        (
+            "authenticated_iroha_signer_principal",
+            "operator\N{SNOWMAN}",
+            "Iroha signer principal must be one bounded canonical ASCII",
+        ),
+        (
+            "authenticated_iroha_signer_fingerprint",
+            "SHA256:" + "A" * 43,
+            "nonzero canonical OpenSSH SHA256 fingerprint",
+        ),
+        (
+            "authenticated_validator_signer_fingerprint",
+            "SHA256:" + "C" * 42 + "=",
+            "must be one OpenSSH SHA256 fingerprint",
+        ),
+        (
+            "authenticated_iroha_allowed_signers_sha256",
+            "0" * 64,
+            "Iroha allowed-signers SHA-256 must be one nonzero lowercase",
+        ),
+        (
+            "authenticated_validator_allowed_signers_sha256",
+            "F" * 64,
+            "validator allowed-signers SHA-256 must be one nonzero lowercase",
+        ),
+        (
+            "authenticated_validator_source_tree_sha256",
+            "0" * 64,
+            "validator source-tree SHA-256 must be one nonzero lowercase",
+        ),
+        (
+            "authenticated_bootstrap_source_tree_sha256",
+            "short",
+            "bootstrap source-tree SHA-256 must be one nonzero lowercase",
+        ),
+        (
+            "authenticated_rust_toolchain_tree_sha256",
+            "0" * 64,
+            "Rust toolchain tree SHA-256 must be one nonzero lowercase",
+        ),
+    ],
+)
+def test_rejects_noncanonical_authenticated_origins_before_mutation(
+    tmp_path: Path, field: str, value: str, diagnostic: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    profile = (fixture.repository / PROFILE_RELATIVE).read_bytes()
+    readiness = (fixture.repository / READINESS_RELATIVE).read_bytes()
+
+    result = _run(fixture, **{field: value})
+
+    assert result.returncode != 0
+    assert diagnostic in result.stderr
+    _assert_unmodified(fixture, profile, readiness)
+    assert not fixture.manifest.exists()
+    _assert_no_transaction_debris(fixture)
+
+
+def test_rejects_authenticated_cargo_lock_digest_mismatch_before_mutation(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    profile = (fixture.repository / PROFILE_RELATIVE).read_bytes()
+    readiness = (fixture.repository / READINESS_RELATIVE).read_bytes()
+
+    result = _run(fixture, authenticated_cargo_lock_sha256="8" * 64)
+
+    assert result.returncode != 0
+    assert "Cargo.lock does not match its authenticated origin digest" in result.stderr
+    _assert_unmodified(fixture, profile, readiness)
+    assert not fixture.manifest.exists()
+    _assert_no_transaction_debris(fixture)
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "journal_ready",
+        "fixture_0_temporary_durable",
+        "fixture_0_published",
+        "fixture_0_installed",
+        "fixture_3_temporary_durable",
+        "fixture_3_published",
+        "fixture_3_installed",
+        "profile_temporary_durable",
+        "profile_installed",
+        "readiness_temporary_durable",
+        "readiness_installed",
+        "manifest_temporary_durable",
+    ],
+)
+def test_precommit_crash_is_durably_rolled_back_before_reinstall(
+    tmp_path: Path, phase: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    profile = (fixture.repository / PROFILE_RELATIVE).read_bytes()
+    readiness = (fixture.repository / READINESS_RELATIVE).read_bytes()
+
+    crashed = _crash_install(fixture, phase)
+
+    assert crashed.returncode == 91, (crashed.stdout, crashed.stderr)
+    assert (fixture.repository / ".taira-privacy-native-install-v1").is_dir()
+    recovery = _recover_then_reject_reinstall(fixture)
+    assert recovery.returncode != 0
+    assert "native typed capture validation failed with code 29" in recovery.stderr
+    _assert_unmodified(fixture, profile, readiness)
+    assert not fixture.manifest.exists()
+    _assert_no_transaction_debris(fixture)
+
+
+@pytest.mark.parametrize(
+    "phase", ["manifest_published", "manifest_committed", "before_transaction_cleanup"]
+)
+def test_postcommit_crash_recovers_as_one_complete_installation(
+    tmp_path: Path, phase: str
+) -> None:
+    fixture = _fixture(tmp_path)
+
+    crashed = _crash_install(fixture, phase)
+
+    assert crashed.returncode == 91, (crashed.stdout, crashed.stderr)
+    installed = {
+        path: path.read_bytes()
+        for path in (
+            fixture.repository / PROFILE_RELATIVE,
+            fixture.repository / READINESS_RELATIVE,
+            *(fixture.repository / target for target in ALL_TARGETS),
+            fixture.manifest,
+        )
+    }
+    recovered = _run(fixture)
+    assert recovered.returncode != 0
+    assert "one-shot installation target already exists" in recovered.stderr
+    assert {path: path.read_bytes() for path in installed} == installed
+    _assert_no_transaction_debris(fixture)
+
+
+def test_atomic_publish_never_overwrites_a_concurrent_target(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    profile = (fixture.repository / PROFILE_RELATIVE).read_bytes()
+    readiness = (fixture.repository / READINESS_RELATIVE).read_bytes()
+
+    raced = _crash_install(fixture, "race_fixture_0")
+
+    target = fixture.repository / ALL_TARGETS[0]
+    assert raced.returncode != 0
+    assert "differs from the uncommitted transaction" in raced.stderr
+    assert target.read_bytes() == b"concurrent-substitution-must-survive"
+    assert (fixture.repository / PROFILE_RELATIVE).read_bytes() == profile
+    assert (fixture.repository / READINESS_RELATIVE).read_bytes() == readiness
+    transaction = fixture.repository / ".taira-privacy-native-install-v1"
+    assert transaction.is_dir()
+    assert not os.path.lexists(
+        target.with_name(f".{target.name}.taira-privacy-native-install-v1.tmp")
+    )
+
+
+def test_recovery_preserves_a_substituted_transaction_temporary(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    assert _crash_install(fixture, "fixture_0_temporary_durable").returncode == 91
+    target = fixture.repository / ALL_TARGETS[0]
+    temporary = target.with_name(
+        f".{target.name}.taira-privacy-native-install-v1.tmp"
+    )
+    temporary.chmod(0o600)
+    temporary.write_bytes(b"attacker-substituted-transaction-temporary")
+
+    recovered = _run(fixture)
+
+    assert recovered.returncode != 0
+    assert "temporary differs from transaction state" in recovered.stderr
+    assert temporary.read_bytes() == b"attacker-substituted-transaction-temporary"
+    assert not target.exists()
+
+
+def test_recovery_rejects_an_extra_link_to_a_published_transaction_inode(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    assert _crash_install(fixture, "fixture_0_published").returncode == 91
+    target = fixture.repository / ALL_TARGETS[0]
+    temporary = target.with_name(
+        f".{target.name}.taira-privacy-native-install-v1.tmp"
+    )
+    unexpected_link = fixture.manifest.parent / "unexpected-transaction-hardlink"
+    os.link(temporary, unexpected_link)
+
+    recovered = _run(fixture)
+
+    assert recovered.returncode != 0
+    assert "published temporary has an unexpected link count" in recovered.stderr
+    assert target.stat().st_ino == temporary.stat().st_ino
+    assert target.stat().st_ino == unexpected_link.stat().st_ino
+    assert target.stat().st_nlink == 3
+
+
+@pytest.mark.parametrize(
+    "recovery_phase",
+    ["recovery_profile_source_restored", "recovery_fixture_2_removed"],
+)
+def test_recovery_itself_is_idempotent_after_a_second_crash(
+    tmp_path: Path, recovery_phase: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    profile = (fixture.repository / PROFILE_RELATIVE).read_bytes()
+    readiness = (fixture.repository / READINESS_RELATIVE).read_bytes()
+    assert _crash_install(fixture, "readiness_installed").returncode == 91
+
+    recovery_crashed = _crash_install(fixture, recovery_phase)
+
+    assert recovery_crashed.returncode == 91
+    final_recovery = _recover_then_reject_reinstall(fixture)
+    assert final_recovery.returncode != 0
+    _assert_unmodified(fixture, profile, readiness)
+    assert not fixture.manifest.exists()
+    _assert_no_transaction_debris(fixture)
+
+
+def test_restart_can_recover_a_journal_bound_to_the_original_manifest_path(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    profile = (fixture.repository / PROFILE_RELATIVE).read_bytes()
+    readiness = (fixture.repository / READINESS_RELATIVE).read_bytes()
+    original_manifest = fixture.manifest
+    restarted_manifest = original_manifest.with_name("restarted-installation.json")
+    assert _crash_install(fixture, "readiness_installed").returncode == 91
+    verifier, verifier_sha256 = _rejecting_verifier(fixture)
+
+    recovered = _run(
+        fixture,
+        native_verifier=verifier,
+        native_verifier_sha256=verifier_sha256,
+        manifest=restarted_manifest,
+    )
+
+    assert recovered.returncode != 0
+    assert "native typed capture validation failed with code 29" in recovered.stderr
+    _assert_unmodified(fixture, profile, readiness)
+    assert not original_manifest.exists()
+    assert not restarted_manifest.exists()
+    assert not os.path.lexists(
+        restarted_manifest.with_name(
+            f".{restarted_manifest.name}.taira-privacy-native-install-v1.tmp"
+        )
+    )
+    _assert_no_transaction_debris(fixture)
+
+
+def test_recovery_rejects_tampered_authenticated_journal_state(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    profile = (fixture.repository / PROFILE_RELATIVE).read_bytes()
+    readiness = (fixture.repository / READINESS_RELATIVE).read_bytes()
+    assert _crash_install(fixture, "journal_ready").returncode == 91
+    state = (
+        fixture.repository
+        / ".taira-privacy-native-install-v1"
+        / "state-v1.json"
+    )
+    encoded = bytearray(state.read_bytes())
+    encoded[-2] ^= 1
+    state.write_bytes(encoded)
+
+    recovered = _run(fixture)
+
+    assert recovered.returncode != 0
+    assert "ready marker does not authenticate its state" in recovered.stderr
+    _assert_unmodified(fixture, profile, readiness)
+    assert not fixture.manifest.exists()
+
+
+def test_recovery_never_deletes_a_substituted_uncommitted_target(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    profile = (fixture.repository / PROFILE_RELATIVE).read_bytes()
+    readiness = (fixture.repository / READINESS_RELATIVE).read_bytes()
+    assert _crash_install(fixture, "fixture_0_installed").returncode == 91
+    target = fixture.repository / ALL_TARGETS[0]
+    target.chmod(0o600)
+    target.write_bytes(b"attacker-substituted-target")
+
+    recovered = _run(fixture)
+
+    assert recovered.returncode != 0
+    assert "differs from the uncommitted transaction" in recovered.stderr
+    assert target.read_bytes() == b"attacker-substituted-target"
+    assert (fixture.repository / PROFILE_RELATIVE).read_bytes() == profile
+    assert (fixture.repository / READINESS_RELATIVE).read_bytes() == readiness
+
+
+def test_recovery_rejects_a_tampered_postcommit_manifest(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    assert _crash_install(fixture, "manifest_committed").returncode == 91
+    fixture.manifest.write_bytes(b"tampered-commit-marker\n")
+
+    recovered = _run(fixture)
+
+    assert recovered.returncode != 0
+    assert "commit marker differs from transaction state" in recovered.stderr
+    assert fixture.manifest.read_bytes() == b"tampered-commit-marker\n"
+
+
+def test_incomplete_premutation_journal_is_safely_discarded(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    transaction = fixture.repository / ".taira-privacy-native-install-v1"
+    transaction.mkdir(mode=0o700)
+    (transaction / "profile.original").write_bytes(b"partial-journal-write")
+
+    result = _run(fixture)
+
+    assert result.returncode == 0, result.stderr
+    _assert_no_transaction_debris(fixture)
+
+
+def test_incomplete_journal_with_unknown_entry_fails_closed(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    transaction = fixture.repository / ".taira-privacy-native-install-v1"
+    transaction.mkdir(mode=0o700)
+    (transaction / "attacker-controlled").write_bytes(b"do not delete")
+    profile = (fixture.repository / PROFILE_RELATIVE).read_bytes()
+    readiness = (fixture.repository / READINESS_RELATIVE).read_bytes()
+
+    result = _run(fixture)
+
+    assert result.returncode != 0
+    assert "contains unexpected entries" in result.stderr
+    assert (transaction / "attacker-controlled").read_bytes() == b"do not delete"
+    _assert_unmodified(fixture, profile, readiness)
+
+
+def test_native_typed_validation_failure_precedes_every_install_mutation(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    verifier = fixture.native_verifier.parent / "rejecting-native-verifier"
+    targets = " ".join(
+        f"'{fixture.repository / target}'" for target in ALL_TARGETS
+    )
+    verifier.write_text(
+        "#!/bin/sh\n"
+        "set -eu\n"
+        f"for target in {targets}; do [ ! -e \"$target\" ]; done\n"
+        f"grep -q '\\[0; 32\\]' '{fixture.repository / PROFILE_RELATIVE}'\n"
+        f"grep -q '\\[0; 32\\]' '{fixture.repository / READINESS_RELATIVE}'\n"
+        "echo 'fake NRT rejected by native typed decoder' >&2\n"
+        "exit 23\n",
+        encoding="utf-8",
+    )
+    verifier.chmod(0o500)
+    verifier_sha256 = hashlib.sha256(verifier.read_bytes()).hexdigest()
+    profile = (fixture.repository / PROFILE_RELATIVE).read_bytes()
+    readiness = (fixture.repository / READINESS_RELATIVE).read_bytes()
+
+    result = _run(
+        fixture,
+        native_verifier=verifier,
+        native_verifier_sha256=verifier_sha256,
+    )
+
+    assert result.returncode != 0
+    assert "native typed capture validation failed with code 23" in result.stderr
+    assert "fake NRT rejected by native typed decoder" in result.stderr
+    _assert_unmodified(fixture, profile, readiness)
+
+
+def test_rejects_unattested_native_verifier_before_execution(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    profile = (fixture.repository / PROFILE_RELATIVE).read_bytes()
+    readiness = (fixture.repository / READINESS_RELATIVE).read_bytes()
+
+    result = _run(fixture, native_verifier_sha256="11" * 32)
+
+    assert result.returncode != 0
+    assert "does not match its attested SHA-256" in result.stderr
+    _assert_unmodified(fixture, profile, readiness)
+
+
+def test_rejects_nonexecutable_native_verifier(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.native_verifier.chmod(0o400)
+    profile = (fixture.repository / PROFILE_RELATIVE).read_bytes()
+    readiness = (fixture.repository / READINESS_RELATIVE).read_bytes()
+
+    result = _run(fixture)
+
+    assert result.returncode != 0
+    assert "singly linked executable file" in result.stderr
+    _assert_unmodified(fixture, profile, readiness)
+
+
+def test_rejects_multiply_linked_native_verifier(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    os.link(
+        fixture.native_verifier,
+        fixture.native_verifier.parent / "native-verifier-hardlink",
+    )
+    profile = (fixture.repository / PROFILE_RELATIVE).read_bytes()
+    readiness = (fixture.repository / READINESS_RELATIVE).read_bytes()
+
+    result = _run(fixture)
+
+    assert result.returncode != 0
+    assert "singly linked executable file" in result.stderr
+    _assert_unmodified(fixture, profile, readiness)
+
+
+def test_rejects_noncanonical_exact12_path(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    alternate = fixture.repository / "fixtures/privacy/alternate-exact12.tsv"
+    alternate.write_bytes(fixture.exact12_matrix.read_bytes())
+    profile = (fixture.repository / PROFILE_RELATIVE).read_bytes()
+    readiness = (fixture.repository / READINESS_RELATIVE).read_bytes()
+
+    result = _run(fixture, exact12_matrix=alternate)
+
+    assert result.returncode != 0
+    assert "canonical first-release repository fixture" in result.stderr
+    _assert_unmodified(fixture, profile, readiness)
+
+
+def test_rejects_capture_changed_by_native_validation(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    verifier = fixture.native_verifier.parent / "mutating-native-verifier"
+    verifier.write_text(
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "[ \"$1\" = validate-captured-fixtures ]\n"
+        "printf x >> \"$5\"\n",
+        encoding="utf-8",
+    )
+    verifier.chmod(0o500)
+    verifier_sha256 = hashlib.sha256(verifier.read_bytes()).hexdigest()
+    profile = (fixture.repository / PROFILE_RELATIVE).read_bytes()
+    readiness = (fixture.repository / READINESS_RELATIVE).read_bytes()
+
+    result = _run(
+        fixture,
+        native_verifier=verifier,
+        native_verifier_sha256=verifier_sha256,
+    )
+
+    assert result.returncode != 0
+    assert "captured fixture bytes changed during native validation" in result.stderr
+    _assert_unmodified(fixture, profile, readiness)
 
 
 @pytest.mark.parametrize(
@@ -703,9 +1442,7 @@ def test_rejects_symlinked_fixture_parent_without_mutation(tmp_path: Path) -> No
     result = _run(fixture)
 
     assert result.returncode != 0
-    assert (
-        "privacy fixture parent must use its canonical physical path" in result.stderr
-    )
+    assert "must be the canonical first-release repository fixture" in result.stderr
     assert (fixture.repository / PROFILE_RELATIVE).read_bytes() == profile
     assert (fixture.repository / READINESS_RELATIVE).read_bytes() == readiness
 

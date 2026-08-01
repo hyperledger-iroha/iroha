@@ -196,7 +196,7 @@ class VerifyingKeyBackendTagTest {
     }
 
     @Test
-    fun `pending production catalog labels remain fail closed`() {
+    fun `protocol and retired catalog aliases are unsupported`() {
         for (label in listOf(
             "halo2-ipa-orchard",
             "groth16-bls12-377",
@@ -214,14 +214,32 @@ class VerifyingKeyBackendTagTest {
             "zk-x509",
             "sis-with-hints",
         )) {
-            assertTrue(VerifyingKeyBackendTag.fromCatalogLabel(label).isPendingProductionBackend)
-            assertTrue(VerifyingKeyBackendTag.isPendingProductionBackendLabel(label))
+            assertEquals(
+                VerifyingKeyBackendCatalogTag.UNSUPPORTED,
+                VerifyingKeyBackendTag.fromCatalogLabel(label),
+            )
             assertFalse(VerifyingKeyBackendTag.isProductionVerifyBackendLabel(label))
         }
     }
 
     @Test
-    fun `adversarial pending aliases stay unsupported and noncanonical`() {
+    fun `catalog classifier accepts only exact production labels`() {
+        for (label in listOf("halo2-ipa-pasta", "stark", "halo2/ipa", "stark/fri")) {
+            assertEquals(
+                VerifyingKeyBackendCatalogTag.PRODUCTION,
+                VerifyingKeyBackendTag.fromCatalogLabel(label),
+            )
+        }
+        for (label in listOf("HALO2/IPA", " halo2/ipa", "halo2/ipa ", "Stark")) {
+            assertEquals(
+                VerifyingKeyBackendCatalogTag.UNSUPPORTED,
+                VerifyingKeyBackendTag.fromCatalogLabel(label),
+            )
+        }
+    }
+
+    @Test
+    fun `adversarial alias splices stay unsupported and noncanonical`() {
         for (label in listOf(
             "halo2/ipa/orchard/dev-fixture",
             "stark/fri/miden/claimed-production",
@@ -230,8 +248,10 @@ class VerifyingKeyBackendTagTest {
             "groth16/bls12-377/../../prod",
             "post-quantum-masp/audit-claimed",
         )) {
-            assertFalse(VerifyingKeyBackendTag.fromCatalogLabel(label).isPendingProductionBackend)
-            assertFalse(VerifyingKeyBackendTag.isPendingProductionBackendLabel(label))
+            assertEquals(
+                VerifyingKeyBackendCatalogTag.UNSUPPORTED,
+                VerifyingKeyBackendTag.fromCatalogLabel(label),
+            )
             assertFailsWith<IllegalArgumentException>(label) {
                 VerifyingKeyBackendTag.parse(label)
             }

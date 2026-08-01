@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.tx;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +28,13 @@ public final class TransactionPayloadFixturesTests {
     payload.put("authority", SAMPLE_AUTHORITY);
     payload.put("creation_time_ms", 1_735_000_000_000L);
     payload.put("time_to_live_ms", 100_000L);
+    payload.put("nonce", null);
+    final Map<String, Object> feePaymentValue = new LinkedHashMap<>();
+    feePaymentValue.put("charge_limits", Collections.emptyList());
+    final Map<String, Object> feePayment = new LinkedHashMap<>();
+    feePayment.put("payer", "authority");
+    feePayment.put("value", feePaymentValue);
+    payload.put("fee_payment", feePayment);
     payload.put("executable", executable);
     payload.put("metadata", new LinkedHashMap<>());
 
@@ -36,6 +44,13 @@ public final class TransactionPayloadFixturesTests {
     fixture.put("authority", SAMPLE_AUTHORITY);
     fixture.put("creation_time_ms", 1_735_000_000_000L);
     fixture.put("time_to_live_ms", 100_000L);
+    fixture.put("nonce", null);
+    fixture.put("payload_base64", "AA==");
+    fixture.put("signed_base64", "AQ==");
+    fixture.put(
+        "payload_hash", "0000000000000000000000000000000000000000000000000000000000000000");
+    fixture.put(
+        "signed_hash", "1111111111111111111111111111111111111111111111111111111111111111");
     fixture.put("payload", payload);
 
     final TransactionPayloadFixtures.Fixture parsed =

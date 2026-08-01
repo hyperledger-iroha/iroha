@@ -436,7 +436,7 @@ def parse_args(argv: Sequence[str]) -> GeneratorOptions:
             if output is not None or index + 1 >= len(arguments):
                 raise ValueError(USAGE)
             value = arguments[index + 1]
-            if not value or value.startswith("--"):
+            if not value or value.startswith("-"):
                 raise ValueError(USAGE)
             output = Path(value)
             index += 2

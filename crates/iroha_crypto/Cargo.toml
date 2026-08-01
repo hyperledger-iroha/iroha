@@ -1,5 +1,6 @@
 [package]
 name = "iroha_crypto"
+autobins = false
 autotests = false
 
 edition.workspace = true
@@ -13,6 +14,7 @@ workspace = true
 
 [features]
 default = ["application"]
+dev-tools = []
 # General application surface. Consensus-only consumers should use
 # `consensus` so they do not pull PQC and batch-verification helpers.
 application = ["std", "rand", "json", "ecc-batch", "bfv-accel", "pqc"]
@@ -157,22 +159,27 @@ tempfile = "3.23.0"
 [[bin]]
 name = "bls-variant-detect"
 path = "src/bin/bls_variant_detect.rs"
-required-features = ["bls", "bls-backend-blstrs"]
+required-features = ["dev-tools", "bls", "bls-backend-blstrs"]
 
 [[bin]]
 name = "bls_check"
 path = "src/bin/bls_check.rs"
-required-features = ["bls"]
+required-features = ["dev-tools", "bls"]
 
 [[bin]]
 name = "gost_perf_check"
 path = "src/bin/gost_perf_check.rs"
-required-features = ["gost"]
+required-features = ["dev-tools", "gost"]
 
 [[bin]]
 name = "sm_perf_check"
 path = "src/bin/sm_perf_check.rs"
-required-features = ["sm"]
+required-features = ["dev-tools", "sm"]
+
+[[bin]]
+name = "soranet_handshake_check"
+path = "src/bin/soranet_handshake_check.rs"
+required-features = ["dev-tools"]
 [[bench]]
 name = "gost_sign"
 harness = false

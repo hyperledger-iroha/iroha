@@ -549,7 +549,7 @@ Determinism
   `min(payload / delivery_budget, 0.1 MiB/s)`, background-post queue depth must
   stay ≤ 32, and P2P queue drops must stay at 0. Violations fail the tests and
   should alert operators in production runs.
-- Use `cargo run -p build-support --bin sumeragi_da_report` against the latest
+- Use `cargo run -p build-support --features dev-tools --bin sumeragi_da_report` against the latest
   `.summary.json` artifacts to capture measured numbers. The generated Markdown
   now includes `BG queue max` and `P2P drops max` columns mirroring the budgets.
 - The generated summary under ``specs/generated/sumeragi_da_report.md`` is

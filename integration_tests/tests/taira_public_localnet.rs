@@ -3732,7 +3732,7 @@ fn sample_simulation_summary() -> SimulationSummary {
         build_profile: "release".to_owned(),
         cargo_net_offline: true,
         localnet_artifact_path: "/tmp/taira-localnet".to_owned(),
-        daemon_binary_path: "/tmp/iroha3d".to_owned(),
+        daemon_binary_path: "/tmp/irohad".to_owned(),
         daemon_binary_blake2b_256: "b".repeat(64),
         kagami_binary_path: "/tmp/kagami".to_owned(),
         kagami_binary_blake2b_256: "c".repeat(64),

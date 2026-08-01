@@ -3358,7 +3358,7 @@ struct KagemushaReceiverAcknowledgementDigestPreimageV2 {
 }
 
 impl norito::NoritoSerialize for KagemushaDevicePublicKeyV2 {
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         self.validate()
             .map_err(|error| norito::Error::Message(error.to_string()))?;
         writer.write_all(&self.0)?;
@@ -3403,7 +3403,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for KagemushaDevicePublicKeyV2 {
 }
 
 impl norito::NoritoSerialize for KagemushaDeviceSignatureV2 {
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         self.validate()
             .map_err(|error| norito::Error::Message(error.to_string()))?;
         writer.write_all(&self.0)?;

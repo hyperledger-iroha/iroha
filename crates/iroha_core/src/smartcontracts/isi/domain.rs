@@ -894,6 +894,11 @@ pub mod isi {
             return account_subject_matches(&permission.account, account_id);
         }
         if let Ok(permission) =
+            iroha_executor_data_model::permission::query::CanReadAccountData::try_from(permission)
+        {
+            return account_subject_matches(&permission.account, account_id);
+        }
+        if let Ok(permission) =
             iroha_executor_data_model::permission::trigger::CanRegisterTrigger::try_from(permission)
         {
             return account_subject_matches(&permission.authority, account_id);
@@ -8194,7 +8199,7 @@ mod tests {
     }
 
     #[test]
-    fn unregister_account_removes_associated_permissions_from_accounts_and_roles() {
+    fn unregister_account_removes_account_read_permissions_from_accounts_and_roles() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
@@ -8218,16 +8223,16 @@ mod tests {
             .expect("register holder account");
 
         let permission: Permission =
-            iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+            iroha_executor_data_model::permission::query::CanReadAccountData {
                 account: account_id.clone(),
             }
             .into();
         assert!(
-            iroha_executor_data_model::permission::account::CanModifyAccountMetadata::try_from(
+            iroha_executor_data_model::permission::query::CanReadAccountData::try_from(
                 &permission
             )
             .is_ok(),
-            "permission should decode as CanModifyAccountMetadata"
+            "permission should decode as CanReadAccountData"
         );
         Grant::account_permission(permission.clone(), holder_id.clone())
             .execute(&authority, &mut tx)

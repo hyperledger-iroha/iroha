@@ -13,7 +13,7 @@ the DG-5 roadmap item.
    critical alerts. When either fires, capture the Alertmanager entry and add
    it to the incident ticket.
 2. **Transparency report review** – run the weekly report CLI with
-   `cargo run -p soradns-resolver --bin soradns_transparency_report -- \
+   `cargo run -p soradns-resolver --features dev-tools --bin soradns_transparency_report -- \
    --log /var/log/soradns/resolver.transparency.log \
    --output artifacts/soradns/transparency_report.md \
    --sth-output artifacts/soradns/signed_tree_heads.json \

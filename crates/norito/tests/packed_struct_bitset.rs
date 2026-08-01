@@ -13,7 +13,7 @@ use norito::{
 fn encode_bare_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
     let _guard = DecodeFlagsGuard::enter(flags);
     let mut payload = Vec::new();
-    value.serialize(&mut payload).expect("serialize");
+    norito::core::serialize_to_buffer(value, &mut payload).expect("serialize");
     payload
 }
 

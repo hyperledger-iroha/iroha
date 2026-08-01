@@ -12,7 +12,7 @@
 .PHONY: python-checks
 .PHONY: python-release-smoke
 .PHONY: python-fixtures python-fixtures-check
-.PHONY: build build-i2
+.PHONY: build
 .PHONY: kotodama-goldens kotodama-goldens-check
 
 KOTO?=koto
@@ -35,7 +35,7 @@ SWIFT_CI_FEED?=dashboards/data/mobile_ci.sample.json
 SWIFT_PIPELINE_METADATA_FEED?=dashboards/data/mobile_pipeline_metadata.sample.json
 
 build:
-	@bash scripts/build_line.sh --i3
+	@bash scripts/build_line.sh
 
 dev-workflow:
 	@bash scripts/dev_workflow.sh
@@ -105,9 +105,6 @@ monitor-screenshots:
 
 check-proc-macro-ui:
 	@bash ci/check_proc_macro_ui.sh
-
-build-i2:
-	@bash scripts/build_line.sh --i2
 
 kotodama-goldens:
 	@python3 scripts/regenerate_kotodama_goldens.py --write
@@ -298,7 +295,7 @@ kotlin-reflection-guard:
 	@bash scripts/check_kotlin_no_reflection.sh
 
 android-codegen-docs:
-	@cargo run --locked -p norito_codegen_exporter -- --out target-codex/android_codegen
+	@cargo run --locked -p norito_codegen_exporter --features dev-tools -- --out target-codex/android_codegen
 	@python3 scripts/android_codegen_docs.py \
 		--manifest target-codex/android_codegen/instruction_manifest.json \
 		--builders target-codex/android_codegen/builder_index.json \

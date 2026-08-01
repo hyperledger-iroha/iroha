@@ -1,5 +1,6 @@
 [package]
 name = "sorafs_manifest"
+autobins = false
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
@@ -7,7 +8,37 @@ description = "Norito-encoded manifest types for SoraFS artifacts."
 
 [features]
 default = ["pqc"]
+dev-tools = []
 pqc = ["iroha_crypto/pqc", "soranet_pq/pqc"]
+
+[[bin]]
+name = "sorafs-validate"
+path = "src/bin/sorafs-validate.rs"
+
+[[bin]]
+name = "generate_hedging_fixtures"
+path = "src/bin/generate_hedging_fixtures.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "generate_orderbook_fixtures"
+path = "src/bin/generate_orderbook_fixtures.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "generate_pdp_fixtures"
+path = "src/bin/generate_pdp_fixtures.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "generate_por_fixtures"
+path = "src/bin/generate_por_fixtures.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "generate_replication_order_fixture"
+path = "src/bin/generate_replication_order_fixture.rs"
+required-features = ["dev-tools"]
 
 [dependencies]
 blake3 = "1.8.2"

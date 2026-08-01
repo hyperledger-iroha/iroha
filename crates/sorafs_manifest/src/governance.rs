@@ -2882,7 +2882,10 @@ mod borrowed_norito {
             T::schema_hash()
         }
 
-        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
             self.0.serialize(writer)
         }
 
@@ -2903,9 +2906,12 @@ mod borrowed_norito {
             <std::vec::Vec<u8>>::schema_hash()
         }
 
-        fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::core::Error> {
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
             norito::core::write_seq_len(
-                &mut writer,
+                writer,
                 u64::try_from(self.0.len()).map_err(|_| norito::core::Error::LengthMismatch)?,
             )?;
             writer.write_all(self.0)?;
@@ -2931,13 +2937,16 @@ mod borrowed_norito {
             <std::option::Option<std::vec::Vec<u8>>>::schema_hash()
         }
 
-        fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::core::Error> {
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
             match self.0 {
                 Some(bytes) => {
                     writer.write_all(&[1])?;
                     let value = Vec(bytes);
                     let mut temporary = norito::core::DeriveSmallBuf::new();
-                    norito::core::write_len_prefixed_exact(&mut writer, &value, &mut temporary)?;
+                    norito::core::write_len_prefixed_exact(writer, &value, &mut temporary)?;
                 }
                 None => writer.write_all(&[0])?,
             }
@@ -2987,7 +2996,7 @@ impl norito::core::NoritoSerialize for GovernanceLogNodeCidPayloadViewV1<'_> {
         GovernanceLogNodeCidPayloadV1::schema_hash()
     }
 
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
 
@@ -3027,7 +3036,7 @@ impl norito::core::NoritoSerialize for GovernanceDagBlockCidPayloadViewV1<'_> {
         GovernanceDagBlockCidPayloadV1::schema_hash()
     }
 
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
 
@@ -3085,7 +3094,7 @@ impl norito::core::NoritoSerialize for GovernanceDagBlockSignaturePayloadViewV1<
         GovernanceDagBlockSignaturePayloadV1::schema_hash()
     }
 
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
 
@@ -3378,7 +3387,7 @@ impl norito::core::NoritoSerialize for GovernanceDagHeadSignaturePayloadViewV1<'
         GovernanceDagHeadSignaturePayloadV1::schema_hash()
     }
 
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
 
@@ -3579,7 +3588,7 @@ impl norito::core::NoritoSerialize for GovernanceLogSignaturePayloadViewV1<'_> {
         GovernanceLogSignaturePayloadV1::schema_hash()
     }
 
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
 
@@ -5162,9 +5171,7 @@ mod tests {
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
         let mut bytes = Vec::new();
-        value
-            .serialize(&mut bytes)
-            .expect("serialize explicit layout");
+        norito::core::serialize_to_buffer(value, &mut bytes).expect("serialize explicit layout");
         bytes
     }
 
@@ -5945,11 +5952,11 @@ mod tests {
         struct InexactSigningPayload;
 
         impl norito::NoritoSerialize for InexactSigningPayload {
-            fn serialize<W: std::io::Write>(
+            fn serialize(
                 &self,
-                mut writer: W,
+                writer: &mut norito::core::Encoder<'_>,
             ) -> Result<(), norito::core::Error> {
-                std::io::Write::write_all(&mut writer, &[0x01])?;
+                writer.write_all(&[0x01])?;
                 Ok(())
             }
         }
@@ -5968,7 +5975,10 @@ mod tests {
         struct OversizedSigningPayload;
 
         impl norito::NoritoSerialize for OversizedSigningPayload {
-            fn serialize<W: std::io::Write>(&self, _writer: W) -> Result<(), norito::core::Error> {
+            fn serialize(
+                &self,
+                _writer: &mut norito::core::Encoder<'_>,
+            ) -> Result<(), norito::core::Error> {
                 panic!("oversized payload must be rejected before serialization")
             }
 

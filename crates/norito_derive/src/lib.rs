@@ -1269,18 +1269,18 @@ fn derive_struct_serialize(
                 if attrs.flatten {
                     Some(quote! {
                         let _flatten_guard = norito::core::SequentialOverrideGuard::enter();
-                        norito::core::NoritoSerialize::serialize(&self.#name, &mut writer)?;
+                        norito::core::NoritoSerialize::serialize(&self.#name, writer)?;
                     })
                 } else if is_u8_arr {
                     Some(quote! {
                         let __len_bytes = core::mem::size_of_val(&self.#name);
-                        norito::core::write_len(&mut writer, __len_bytes as u64)?;
+                        norito::core::write_len(writer, __len_bytes as u64)?;
                         writer.write_all(&self.#name)?;
                     })
                 } else {
                     Some(quote! {
                         norito::core::write_len_prefixed(
-                            &mut writer,
+                            writer,
                             &self.#name,
                             &mut __norito_tmp,
                         )?;
@@ -1304,13 +1304,13 @@ fn derive_struct_serialize(
                 if is_u8_arr {
                     Some(quote! {
                         let __len_bytes = core::mem::size_of_val(&self.#idx);
-                        norito::core::write_len(&mut writer, __len_bytes as u64)?;
+                        norito::core::write_len(writer, __len_bytes as u64)?;
                         writer.write_all(&self.#idx)?;
                     })
                 } else {
                     Some(quote! {
                         norito::core::write_len_prefixed(
-                            &mut writer,
+                            writer,
                             &self.#idx,
                             &mut __norito_tmp,
                         )?;
@@ -1348,11 +1348,11 @@ fn derive_struct_serialize(
                     // NOT add an extra prefix here; the decoder expects the field's own
                     // header at the start of the field data.
                     packed_field_ser_calls.push(quote! {
-                        norito::core::NoritoSerialize::serialize(&self.#name, &mut writer)?;
+                        norito::core::NoritoSerialize::serialize(&self.#name, writer)?;
                     });
                     packed_field_stage_stmts.push(quote! {
                         let mut __b: ::std::vec::Vec<u8> = ::std::vec::Vec::new();
-                        norito::core::NoritoSerialize::serialize(&self.#name, &mut __b)?;
+                        norito::core::serialize_to_buffer(&self.#name, &mut __b)?;
                         #[cfg(debug_assertions)]
                         if norito::debug_trace_enabled() {
                             eprintln!(
@@ -1368,10 +1368,12 @@ fn derive_struct_serialize(
                 } else {
                     // Signature-like proofs and other variable-length fields share the staging path to
                     // compute accurate offsets before writing the packed payload.
-                    packed_field_ser_calls.push(quote! { norito::core::NoritoSerialize::serialize(&self.#name, &mut writer)?; });
+                    packed_field_ser_calls.push(
+                        quote! { norito::core::NoritoSerialize::serialize(&self.#name, writer)?; },
+                    );
                     packed_field_stage_stmts.push(quote! {
                         let mut __b: ::std::vec::Vec<u8> = ::std::vec::Vec::new();
-                        norito::core::NoritoSerialize::serialize(&self.#name, &mut __b)?;
+                        norito::core::serialize_to_buffer(&self.#name, &mut __b)?;
                         #[cfg(debug_assertions)]
                         if norito::debug_trace_enabled() {
                             eprintln!(
@@ -1407,11 +1409,11 @@ fn derive_struct_serialize(
                     // Do not add an extra prefix for self-delimiting fields; write only the
                     // field's serialized bytes.
                     packed_field_ser_calls.push(quote! {
-                        norito::core::NoritoSerialize::serialize(&self.#idx, &mut writer)?;
+                        norito::core::NoritoSerialize::serialize(&self.#idx, writer)?;
                     });
                     packed_field_stage_stmts.push(quote! {
                         let mut __b: ::std::vec::Vec<u8> = ::std::vec::Vec::new();
-                        norito::core::NoritoSerialize::serialize(&self.#idx, &mut __b)?;
+                        norito::core::serialize_to_buffer(&self.#idx, &mut __b)?;
                         #[cfg(debug_assertions)]
                         if norito::debug_trace_enabled() {
                             eprintln!(
@@ -1425,10 +1427,12 @@ fn derive_struct_serialize(
                         __field_bufs.push(__b);
                     });
                 } else {
-                    packed_field_ser_calls.push(quote! { norito::core::NoritoSerialize::serialize(&self.#idx, &mut writer)?; });
+                    packed_field_ser_calls.push(
+                        quote! { norito::core::NoritoSerialize::serialize(&self.#idx, writer)?; },
+                    );
                     packed_field_stage_stmts.push(quote! {
                         let mut __b: ::std::vec::Vec<u8> = ::std::vec::Vec::new();
-                        norito::core::NoritoSerialize::serialize(&self.#idx, &mut __b)?;
+                        norito::core::serialize_to_buffer(&self.#idx, &mut __b)?;
                         #[cfg(debug_assertions)]
                         if norito::debug_trace_enabled() {
                             eprintln!(
@@ -1852,19 +1856,17 @@ fn derive_struct_serialize(
             fn schema_hash() -> [u8; 16] {
                 #schema_hash_body
             }
-            #[inline]
             fn encoded_len_hint(&self) -> Option<usize> {
                 let mut __sum: usize = 0;
                 #len_hint_body
                 Some(__sum)
             }
-            #[inline]
             fn encoded_len_exact(&self) -> Option<usize> {
                 let mut __sum: usize = 0;
                 #len_exact_body
                 Some(__sum)
             }
-            fn serialize<W: std::io::Write>(&self, mut writer: W) -> ::core::result::Result<(), norito::core::Error> {
+            fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> ::core::result::Result<(), norito::core::Error> {
                 use norito::core::WriteBytesExt;
                 if !#has_flatten_fields && norito::core::use_packed_struct() {
                     if #field_bitset_enabled_encode {
@@ -3069,7 +3071,7 @@ fn derive_enum_serialize(
             Fields::Unit => {
                 arms.push(quote! {
                     Self::#v_ident => {
-                        norito::core::NoritoSerialize::serialize(&(#disc as u32), &mut writer)?;
+                        norito::core::NoritoSerialize::serialize(&(#disc as u32), writer)?;
                     }
                 });
                 hint_arms.push(quote! { Self::#v_ident => Some(4) });
@@ -3099,17 +3101,17 @@ fn derive_enum_serialize(
                                         writer.write_all(&#b[..])?;
                                     } else {
                                         let __len_bytes = core::mem::size_of_val(#b);
-                                        norito::core::write_len(&mut writer, __len_bytes as u64)?;
+                                        norito::core::write_len(writer, __len_bytes as u64)?;
                                         writer.write_all(&#b[..])?;
                                     }
                                 }
                             } else {
                                 quote! {
                                     if __norito_packed {
-                                        norito::core::NoritoSerialize::serialize(#b, &mut writer)?;
+                                        norito::core::NoritoSerialize::serialize(#b, writer)?;
                                     } else {
                                         norito::core::write_len_prefixed(
-                                            &mut writer,
+                                            writer,
                                             #b,
                                             &mut __norito_tmp,
                                         )?;
@@ -3120,7 +3122,7 @@ fn derive_enum_serialize(
                             quote! {
                                 // Non self-delimiting, non-fixed types keep outer length framing even in packed builds
                                 norito::core::write_len_prefixed(
-                                    &mut writer,
+                                    writer,
                                     #b,
                                     &mut __norito_tmp,
                                 )?;
@@ -3145,10 +3147,10 @@ fn derive_enum_serialize(
                             let ser = if is_sd || is_fixed {
                                 quote! {
                                     if __norito_packed {
-                                        norito::core::NoritoSerialize::serialize(#b, &mut writer)?;
+                                        norito::core::NoritoSerialize::serialize(#b, writer)?;
                                     } else {
                                         norito::core::write_len_prefixed(
-                                            &mut writer,
+                                            writer,
                                             #b,
                                             &mut __norito_tmp,
                                         )?;
@@ -3157,7 +3159,7 @@ fn derive_enum_serialize(
                             } else {
                                 quote! {
                                     norito::core::write_len_prefixed(
-                                        &mut writer,
+                                        writer,
                                         #b,
                                         &mut __norito_tmp,
                                     )?;
@@ -3168,7 +3170,7 @@ fn derive_enum_serialize(
                 arms.push(quote! {
                     Self::#v_ident(#(#bindings),*) => {
                         let __norito_packed = norito::core::use_packed_struct();
-                        norito::core::NoritoSerialize::serialize(&(#disc as u32), &mut writer)?;
+                        norito::core::NoritoSerialize::serialize(&(#disc as u32), writer)?;
                         let mut __norito_tmp: norito::core::DeriveSmallBuf = norito::core::DeriveSmallBuf::new();
                         #(#serialize_calls)*
                     }
@@ -3237,17 +3239,17 @@ fn derive_enum_serialize(
                                     writer.write_all(&#name[..])?;
                                 } else {
                                     let __len_bytes = core::mem::size_of_val(#name);
-                                    norito::core::write_len(&mut writer, __len_bytes as u64)?;
+                                    norito::core::write_len(writer, __len_bytes as u64)?;
                                     writer.write_all(&#name[..])?;
                                 }
                             }
                         } else {
                             quote! {
                                 if __norito_packed {
-                                    norito::core::NoritoSerialize::serialize(#name, &mut writer)?;
+                                    norito::core::NoritoSerialize::serialize(#name, writer)?;
                                 } else {
                                     norito::core::write_len_prefixed(
-                                        &mut writer,
+                                        writer,
                                         #name,
                                         &mut __norito_tmp,
                                     )?;
@@ -3259,7 +3261,7 @@ fn derive_enum_serialize(
                         // for named enum fields (both in packed and non-packed modes).
                         quote! {
                             norito::core::write_len_prefixed(
-                                &mut writer,
+                                writer,
                                 #name,
                                 &mut __norito_tmp,
                             )?;
@@ -3270,7 +3272,7 @@ fn derive_enum_serialize(
                 arms.push(quote! {
                     Self::#v_ident { #(#names),* } => {
                         let __norito_packed = norito::core::use_packed_struct();
-                        norito::core::NoritoSerialize::serialize(&(#disc as u32), &mut writer)?;
+                        norito::core::NoritoSerialize::serialize(&(#disc as u32), writer)?;
                         let mut __norito_tmp: norito::core::DeriveSmallBuf = norito::core::DeriveSmallBuf::new();
                         #(#serialize_calls)*
                     }
@@ -3358,15 +3360,13 @@ fn derive_enum_serialize(
             fn schema_hash() -> [u8; 16] {
                 #schema_hash_body
             }
-            #[inline]
             fn encoded_len_hint(&self) -> Option<usize> {
                 match self { #( #hint_arms ),* }
             }
-            #[inline]
             fn encoded_len_exact(&self) -> Option<usize> {
                 match self { #( #exact_arms ),* }
             }
-            fn serialize<W: std::io::Write>(&self, mut writer: W) -> ::core::result::Result<(), norito::core::Error> {
+            fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> ::core::result::Result<(), norito::core::Error> {
                 use norito::core::WriteBytesExt;
                 match self {
                     #(#arms),*

@@ -50,8 +50,8 @@ pub(super) fn require_capture_open_v1() -> Result<(), DynError> {
     Err("native release capture is disabled after any capture-owned source pin is populated".into())
 }
 
-/// Securely load, cross-codec validate, and compiled-pin the expectation pair.
-pub(super) fn load_pinned_pair_v1(
+/// Securely load and cross-codec validate a newly captured expectation pair.
+pub(super) fn load_capture_pair_v1(
     norito_path: &Path,
     json_path: &Path,
 ) -> Result<(PrivacyReleaseExpectationsV1, SecureInputV1, SecureInputV1), DynError> {
@@ -61,6 +61,9 @@ pub(super) fn load_pinned_pair_v1(
         "expectations Norito",
     )?;
     let json = secure_read(json_path, MAX_EXPECTATIONS_JSON_BYTES, "expectations JSON")?;
+    if norito.identity == json.identity {
+        return Err("expectations Norito and JSON projections alias one inode".into());
+    }
     let expectations: PrivacyReleaseExpectationsV1 = decode_canonical_norito(
         &norito.bytes,
         MAX_EXPECTATIONS_NORITO_BYTES,
@@ -72,10 +75,43 @@ pub(super) fn load_pinned_pair_v1(
         return Err("expectations JSON is not typed-equal to authoritative Norito".into());
     }
     validate_expectations(&expectations)?;
+    Ok((expectations, norito, json))
+}
+
+/// Securely load, cross-codec validate, and compiled-pin the expectation pair.
+pub(super) fn load_pinned_pair_v1(
+    norito_path: &Path,
+    json_path: &Path,
+) -> Result<(PrivacyReleaseExpectationsV1, SecureInputV1, SecureInputV1), DynError> {
+    let (expectations, norito, json) = load_capture_pair_v1(norito_path, json_path)?;
     if !privacy_release_expectation_fixture_matches_v1(norito.sha256, json.sha256) {
         return Err(
             "native expectation pair does not match both compiled release fixture pins".into(),
         );
     }
     Ok((expectations, norito, json))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_loader_rejects_fake_nrt_bytes() {
+        let directory = tempfile::tempdir().expect("temporary expectation fixture directory");
+        let physical_directory = directory
+            .path()
+            .canonicalize()
+            .expect("physical expectation fixture directory");
+        let norito_path = physical_directory.join("expectations.norito");
+        let json_path = physical_directory.join("expectations.json");
+        fs::write(&norito_path, b"NRT0\0not-canonical-norito")
+            .expect("write fake expectation Norito");
+        fs::write(&json_path, b"{}\n").expect("write expectation JSON");
+
+        let error = load_capture_pair_v1(&norito_path, &json_path)
+            .err()
+            .expect("fake expectation Norito must reject");
+        assert!(error.to_string().contains("bounded canonical Norito"));
+    }
 }

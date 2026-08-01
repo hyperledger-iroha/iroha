@@ -156,9 +156,12 @@ public final class PrivacyExact12FixtureCodecV1 {
    */
   public static PrivacyExact12FixtureBundleV1 requireCanonicalArchive(
       final byte[] candidate, final byte[] expectedCanonicalArchive) {
-    decodeCanonical(expectedCanonicalArchive);
-    final PrivacyExact12FixtureBundleV1 decoded = decodeCanonical(candidate);
-    if (!Arrays.equals(candidate, expectedCanonicalArchive)) {
+    final byte[] candidateSnapshot = Objects.requireNonNull(candidate, "candidate").clone();
+    final byte[] expectedSnapshot =
+        Objects.requireNonNull(expectedCanonicalArchive, "expectedCanonicalArchive").clone();
+    decodeCanonical(expectedSnapshot);
+    final PrivacyExact12FixtureBundleV1 decoded = decodeCanonical(candidateSnapshot);
+    if (!Arrays.equals(candidateSnapshot, expectedSnapshot)) {
       throw new IllegalArgumentException(
           "exact-12 fixture differs from the supplied canonical archive");
     }

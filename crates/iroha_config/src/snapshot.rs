@@ -38,7 +38,7 @@ impl JsonDeserialize for Mode {
 }
 
 impl NoritoSerialize for Mode {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let text = self.to_string();
         <String as NoritoSerialize>::serialize(&text, writer)
     }

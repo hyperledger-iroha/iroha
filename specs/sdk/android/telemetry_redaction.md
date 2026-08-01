@@ -229,7 +229,7 @@ Validation checklist:
 
 Android and Rust exporters now share the `tools/telemetry-schema-diff` utility,
 which consumes the `configs/android_telemetry.json` manifest and the Rust
-schema registry. CI invokes `cargo run -p telemetry-schema-diff -- \
+schema registry. CI invokes `cargo run -p telemetry-schema-diff --features dev-tools -- \
     --android-config configs/android_telemetry.json \
     --rust-config configs/rust_telemetry.json` for direct runs, or the wrapper
 `scripts/telemetry/run_schema_diff.sh --android-config configs/android_telemetry.json \

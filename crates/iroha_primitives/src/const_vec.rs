@@ -208,7 +208,7 @@ where
 }
 
 impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
-    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let slice: &[T] = &self.0;
         #[cfg(debug_assertions)]
         let trace_enabled = norito::debug_trace_enabled();
@@ -226,11 +226,11 @@ impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
         }
 
         let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-        ncore::write_seq_len(&mut writer, slice.len() as u64)?;
+        ncore::write_seq_len(writer, slice.len() as u64)?;
         if ncore::packed_seq_enabled_for_flags(flags) {
-            Self::serialize_packed(slice, &mut writer, trace_enabled)
+            Self::serialize_packed(slice, writer, trace_enabled)
         } else {
-            Self::serialize_unpacked(slice, &mut writer, flags)
+            Self::serialize_unpacked(slice, writer, flags)
         }
     }
 
@@ -312,7 +312,7 @@ impl<T: NoritoSerialize> ConstVec<T> {
         }
         for item in slice {
             elem_buf.clear();
-            item.serialize(&mut elem_buf)?;
+            ncore::serialize_to_buffer(item, &mut elem_buf)?;
             ncore::write_len_with_flags(writer, elem_buf.len() as u64, flags)?;
             writer.write_all(&elem_buf)?;
         }
@@ -357,7 +357,7 @@ impl<T: NoritoSerialize> ConstVec<T> {
             #[cfg(not(debug_assertions))]
             let _ = idx;
             let elem_start = packed.len();
-            item.serialize(&mut packed)?;
+            ncore::serialize_to_buffer(item, &mut packed)?;
             let elem_len = packed
                 .len()
                 .checked_sub(elem_start)
@@ -1277,13 +1277,13 @@ mod tests {
     struct InexactBytes(Vec<u8>);
 
     impl norito::NoritoSerialize for InexactBytes {
-        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             self.0.serialize(writer)
         }
 
         fn encoded_len_hint(&self) -> Option<usize> {
             let mut bytes = Vec::new();
-            self.serialize(&mut bytes).ok()?;
+            ncore::serialize_to_buffer(self, &mut bytes).ok()?;
             Some(bytes.len())
         }
 
@@ -1296,7 +1296,7 @@ mod tests {
     struct InexactByte(u8);
 
     impl norito::NoritoSerialize for InexactByte {
-        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             self.0.serialize(writer)
         }
 
@@ -1518,7 +1518,7 @@ mod tests {
         let mut payload = Vec::new();
         {
             let _guard = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
-            NoritoSerialize::serialize(&value, &mut payload).expect("serialize const vec");
+            ncore::serialize_to_buffer(&value, &mut payload).expect("serialize const vec");
         }
 
         let archived =
@@ -1538,7 +1538,7 @@ mod tests {
         let value = ConstVec::from(bytes.clone());
         let mut encoded = Vec::new();
 
-        NoritoSerialize::serialize(&value, &mut encoded).expect("serialize legacy const vec");
+        ncore::serialize_to_buffer(&value, &mut encoded).expect("serialize legacy const vec");
 
         let mut expected = Vec::new();
         expected.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
@@ -1573,7 +1573,7 @@ mod tests {
         let const_bytes = const_vec.encode();
 
         let mut vec_bytes = Vec::new();
-        NoritoSerialize::serialize(&items, &mut vec_bytes).expect("serialize Vec<Vec<u8>>");
+        ncore::serialize_to_buffer(&items, &mut vec_bytes).expect("serialize Vec<Vec<u8>>");
 
         assert_eq!(
             const_bytes, vec_bytes,
@@ -1591,7 +1591,7 @@ mod tests {
         let mut packed = Vec::new();
         {
             let _guard = ncore::DecodeFlagsGuard::enter(flags);
-            NoritoSerialize::serialize(&value, &mut packed).expect("serialize packed const vec");
+            ncore::serialize_to_buffer(&value, &mut packed).expect("serialize packed const vec");
         }
         ncore::reset_decode_state();
 
@@ -1655,7 +1655,7 @@ mod tests {
         let value = ConstVec::from(vec![InexactByte(1), InexactByte(2), InexactByte(3)]);
         let mut bytes = Vec::new();
 
-        NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+        ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
 
         assert_eq!(value.encoded_len_exact(), None);
         assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
@@ -1668,7 +1668,7 @@ mod tests {
         let value = ConstVec::from(vec![InexactByte(1), InexactByte(2), InexactByte(3)]);
         let mut bytes = Vec::new();
 
-        NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+        ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
 
         assert_eq!(value.encoded_len_exact(), None);
         assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
@@ -1681,7 +1681,7 @@ mod tests {
         {
             let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
             let _guard = ncore::DecodeFlagsGuard::enter(flags);
-            NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+            ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
             assert_eq!(
                 value.encoded_len_exact(),
                 Some(bytes.len()),
@@ -1696,7 +1696,7 @@ mod tests {
         let _guard = ncore::DecodeFlagsGuard::enter(flags);
         let value = ConstVec::from(vec![1_u8, 2_u8]);
         let mut bytes = Vec::new();
-        NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+        ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
         assert_eq!(value.encoded_len_exact(), Some(bytes.len()));
         assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
         assert_eq!(bytes.len(), 12);
@@ -1724,7 +1724,7 @@ mod tests {
         let mut bytes = Vec::new();
         {
             let _guard = ncore::DecodeFlagsGuard::enter(0);
-            NoritoSerialize::serialize(&value, &mut bytes).expect("serialize compat const vec");
+            ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize compat const vec");
             assert_eq!(
                 value.encoded_len_exact(),
                 Some(bytes.len()),
@@ -1739,7 +1739,7 @@ mod tests {
         let value = ConstVec::from(vec![0x0102_u16, 0x0304]);
         let mut bytes = Vec::new();
 
-        NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+        ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
 
         assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
         assert_eq!(value.encoded_len_exact(), Some(bytes.len()));
@@ -1751,7 +1751,7 @@ mod tests {
         let _guard = ncore::DecodeFlagsGuard::enter(flags);
         let value = ConstVec::from(vec![1_u8, 2_u8, 3_u8]);
         let mut bytes = Vec::new();
-        NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+        ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
         let len = reencode_and_verify(value.as_ref(), &bytes).expect("reencode const vec");
         assert_eq!(len, bytes.len());
     }
@@ -1763,7 +1763,7 @@ mod tests {
         let value = ConstVec::from(vec![InexactByte(4), InexactByte(5)]);
         let mut bytes = Vec::new();
 
-        NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+        ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
 
         assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
         assert_eq!(value.encoded_len_exact(), None);
@@ -1775,7 +1775,7 @@ mod tests {
         let _guard = ncore::DecodeFlagsGuard::enter(flags);
         let value = ConstVec::from(vec![vec![1_u8, 2], vec![3_u8, 4, 5]]);
         let mut bytes = Vec::new();
-        NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+        ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
         let len = reencode_and_verify(value.as_ref(), &bytes).expect("reencode const vec");
         assert_eq!(len, bytes.len());
     }
@@ -1785,7 +1785,7 @@ mod tests {
         let _guard = ncore::DecodeFlagsGuard::enter(0);
         let value = ConstVec::from(vec![vec![1_u8, 2, 3], vec![4_u8, 5]]);
         let mut bytes = Vec::new();
-        NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+        ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize const vec");
         bytes[8..16].copy_from_slice(&99_u64.to_le_bytes());
 
         let len = reencode_and_verify(value.as_ref(), &bytes)
@@ -1847,8 +1847,7 @@ mod tests {
         bytes.extend_from_slice(&(elements.len() as u64).to_le_bytes());
         for element in elements {
             let mut element_bytes = Vec::new();
-            element
-                .serialize(&mut element_bytes)
+            ncore::serialize_to_buffer(element, &mut element_bytes)
                 .expect("serialize manual unpacked element");
             bytes.extend_from_slice(&(element_bytes.len() as u64).to_le_bytes());
             bytes.extend_from_slice(&element_bytes);

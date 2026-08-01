@@ -74,26 +74,25 @@ impl SoraHfResourceProfileV1 {
     /// inconsistent with the canonical model size.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         if self.required_model_bytes == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf resource profile",
-                field: "required_model_bytes",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf resource profile",
+                "required_model_bytes",
+                "must be greater than zero",
+            ));
         }
         if self.disk_cache_bytes_floor < self.required_model_bytes {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf resource profile",
-                field: "disk_cache_bytes_floor",
-                reason: "must be greater than or equal to required_model_bytes".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf resource profile",
+                "disk_cache_bytes_floor",
+                "must be greater than or equal to required_model_bytes",
+            ));
         }
         if self.ram_bytes_floor == 0 && self.vram_bytes_floor == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf resource profile",
-                field: "ram_bytes_floor",
-                reason: "either ram_bytes_floor or vram_bytes_floor must be greater than zero"
-                    .to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf resource profile",
+                "ram_bytes_floor",
+                "either ram_bytes_floor or vram_bytes_floor must be greater than zero",
+            ));
         }
         Ok(())
     }
@@ -139,11 +138,11 @@ pub fn hf_shared_lease_max_compute_reservation_fee_v1(
 ) -> Result<Quantity, SoracloudManifestError> {
     resource_profile.validate()?;
     if lease_term_ms == 0 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "sora hf shared lease compute reservation cap",
-            field: "lease_term_ms",
-            reason: "must be greater than zero".to_string(),
-        });
+        return Err(invalid_field(
+            "sora hf shared lease compute reservation cap",
+            "lease_term_ms",
+            "must be greater than zero",
+        ));
     }
     let nanos: u128 = match resource_profile.size_bucket() {
         SoraHfModelSizeBucketV1::Small => 7_500,
@@ -195,32 +194,29 @@ impl SoraModelHostCapabilityRecordV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when any required field is empty or invalid.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora model host capability record",
-                expected: SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
-        if self.peer_id.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora model host capability record",
-                field: "peer_id",
-            });
-        }
+        validate_schema_version(
+            "sora model host capability record",
+            self.schema_version,
+            SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
+        )?;
+        validate_nonblank_field(
+            "sora model host capability record",
+            "peer_id",
+            &self.peer_id,
+        )?;
         if self.supported_backends.is_empty() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model host capability record",
-                field: "supported_backends",
-                reason: "must not be empty".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model host capability record",
+                "supported_backends",
+                "must not be empty",
+            ));
         }
         if self.supported_formats.is_empty() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model host capability record",
-                field: "supported_formats",
-                reason: "must not be empty".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model host capability record",
+                "supported_formats",
+                "must not be empty",
+            ));
         }
         for (field, value) in [
             ("max_model_bytes", self.max_model_bytes),
@@ -228,40 +224,38 @@ impl SoraModelHostCapabilityRecordV1 {
             ("max_ram_bytes", self.max_ram_bytes),
         ] {
             if value == 0 {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora model host capability record",
+                return Err(invalid_field(
+                    "sora model host capability record",
                     field,
-                    reason: "must be greater than zero".to_string(),
-                });
+                    "must be greater than zero",
+                ));
             }
         }
         if self.max_concurrent_resident_models == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model host capability record",
-                field: "max_concurrent_resident_models",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model host capability record",
+                "max_concurrent_resident_models",
+                "must be greater than zero",
+            ));
         }
-        if self.host_class.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora model host capability record",
-                field: "host_class",
-            });
-        }
+        validate_nonblank_field(
+            "sora model host capability record",
+            "host_class",
+            &self.host_class,
+        )?;
         if self.advertised_at_ms == 0 || self.heartbeat_expires_at_ms == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model host capability record",
-                field: "advertised_at_ms",
-                reason: "advertised_at_ms and heartbeat_expires_at_ms must be greater than zero"
-                    .to_string(),
-            });
+            return Err(invalid_field(
+                "sora model host capability record",
+                "advertised_at_ms",
+                "advertised_at_ms and heartbeat_expires_at_ms must be greater than zero",
+            ));
         }
         if self.heartbeat_expires_at_ms <= self.advertised_at_ms {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model host capability record",
-                field: "heartbeat_expires_at_ms",
-                reason: "must be greater than advertised_at_ms".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model host capability record",
+                "heartbeat_expires_at_ms",
+                "must be greater than advertised_at_ms",
+            ));
         }
         Ok(())
     }
@@ -320,32 +314,29 @@ impl SoraInrouHostCapabilityRecordV1 {
     /// Returns [`SoracloudManifestError`] when required fields are empty or capacity
     /// invariants are inconsistent.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora inrou host capability record",
-                expected: SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
-        if self.peer_id.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora inrou host capability record",
-                field: "peer_id",
-            });
-        }
+        validate_schema_version(
+            "sora inrou host capability record",
+            self.schema_version,
+            SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+        )?;
+        validate_nonblank_field(
+            "sora inrou host capability record",
+            "peer_id",
+            &self.peer_id,
+        )?;
         if self.supported_backends.is_empty() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora inrou host capability record",
-                field: "supported_backends",
-                reason: "must not be empty".to_string(),
-            });
+            return Err(invalid_field(
+                "sora inrou host capability record",
+                "supported_backends",
+                "must not be empty",
+            ));
         }
         if self.supported_guest_isas.is_empty() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora inrou host capability record",
-                field: "supported_guest_isas",
-                reason: "must not be empty".to_string(),
-            });
+            return Err(invalid_field(
+                "sora inrou host capability record",
+                "supported_guest_isas",
+                "must not be empty",
+            ));
         }
         for tag in &self.geography_tags {
             validate_distribution_geography_tag(
@@ -355,26 +346,25 @@ impl SoraInrouHostCapabilityRecordV1 {
             )?;
         }
         if self.observed_latency_ms == Some(0) {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora inrou host capability record",
-                field: "observed_latency_ms",
-                reason: "must be greater than zero when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora inrou host capability record",
+                "observed_latency_ms",
+                "must be greater than zero when provided",
+            ));
         }
         if self.advertised_at_ms == 0 || self.heartbeat_expires_at_ms == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora inrou host capability record",
-                field: "advertised_at_ms",
-                reason: "advertised_at_ms and heartbeat_expires_at_ms must be greater than zero"
-                    .to_string(),
-            });
+            return Err(invalid_field(
+                "sora inrou host capability record",
+                "advertised_at_ms",
+                "advertised_at_ms and heartbeat_expires_at_ms must be greater than zero",
+            ));
         }
         if self.heartbeat_expires_at_ms <= self.advertised_at_ms {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora inrou host capability record",
-                field: "heartbeat_expires_at_ms",
-                reason: "must be greater than advertised_at_ms".to_string(),
-            });
+            return Err(invalid_field(
+                "sora inrou host capability record",
+                "heartbeat_expires_at_ms",
+                "must be greater than advertised_at_ms",
+            ));
         }
         let capacities_are_zero = self.max_hosted_replica_capacity == 0
             && self.max_cpu_millis == 0
@@ -382,13 +372,11 @@ impl SoraInrouHostCapabilityRecordV1 {
             && self.max_storage_bytes == 0;
         if self.proxy_only {
             if !capacities_are_zero {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora inrou host capability record",
-                    field: "proxy_only",
-                    reason:
-                        "proxy_only adverts must publish zero replica, CPU, memory, and storage capacity"
-                            .to_string(),
-                });
+                return Err(invalid_field(
+                    "sora inrou host capability record",
+                    "proxy_only",
+                    "proxy_only adverts must publish zero replica, CPU, memory, and storage capacity",
+                ));
             }
         } else {
             for (field, value) in [
@@ -401,11 +389,11 @@ impl SoraInrouHostCapabilityRecordV1 {
                 ("max_storage_bytes", self.max_storage_bytes),
             ] {
                 if value == 0 {
-                    return Err(SoracloudManifestError::InvalidField {
-                        manifest: "sora inrou host capability record",
+                    return Err(invalid_field(
+                        "sora inrou host capability record",
                         field,
-                        reason: "must be greater than zero".to_string(),
-                    });
+                        "must be greater than zero",
+                    ));
                 }
             }
         }
@@ -457,18 +445,13 @@ impl SoraInrouReplicaPlacementV1 {
     /// Returns [`SoracloudManifestError`] when required routing metadata is empty.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         if self.replica_slot == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora inrou replica placement",
-                field: "replica_slot",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora inrou replica placement",
+                "replica_slot",
+                "must be greater than zero",
+            ));
         }
-        if self.peer_id.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora inrou replica placement",
-                field: "peer_id",
-            });
-        }
+        validate_nonblank_field("sora inrou replica placement", "peer_id", &self.peer_id)?;
         if let Some(tag) = self.selected_geography_tag.as_ref() {
             validate_distribution_geography_tag(
                 "sora inrou replica placement",
@@ -477,11 +460,11 @@ impl SoraInrouReplicaPlacementV1 {
             )?;
         }
         if self.selection_latency_ms == Some(0) {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora inrou replica placement",
-                field: "selection_latency_ms",
-                reason: "must be greater than zero when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora inrou replica placement",
+                "selection_latency_ms",
+                "must be greater than zero when provided",
+            ));
         }
         Ok(())
     }
@@ -521,32 +504,29 @@ impl SoraInrouServicePlacementRecordV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or slot
     /// assignments are malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora inrou service placement record",
-                expected: SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
-        if self.service_version.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora inrou service placement record",
-                field: "service_version",
-            });
-        }
+        validate_schema_version(
+            "sora inrou service placement record",
+            self.schema_version,
+            SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
+        )?;
+        validate_nonblank_field(
+            "sora inrou service placement record",
+            "service_version",
+            &self.service_version,
+        )?;
         if self.desired_replica_count == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora inrou service placement record",
-                field: "desired_replica_count",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora inrou service placement record",
+                "desired_replica_count",
+                "must be greater than zero",
+            ));
         }
         if self.reconciled_at_ms == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora inrou service placement record",
-                field: "reconciled_at_ms",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora inrou service placement record",
+                "reconciled_at_ms",
+                "must be greater than zero",
+            ));
         }
         let mut seen_slots = BTreeSet::new();
         for placement in &self.placements {
@@ -652,18 +632,16 @@ impl SoraHfPlacementHostAssignmentV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the routing metadata is empty.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.peer_id.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora hf placement host assignment",
-                field: "peer_id",
-            });
-        }
-        if self.host_class.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora hf placement host assignment",
-                field: "host_class",
-            });
-        }
+        validate_nonblank_field(
+            "sora hf placement host assignment",
+            "peer_id",
+            &self.peer_id,
+        )?;
+        validate_nonblank_field(
+            "sora hf placement host assignment",
+            "host_class",
+            &self.host_class,
+        )?;
         Ok(())
     }
 }
@@ -711,13 +689,11 @@ impl SoraHfPlacementRecordV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or assignments are invalid.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_HF_PLACEMENT_RECORD_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora hf placement record",
-                expected: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora hf placement record",
+            self.schema_version,
+            SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+        )?;
         for (field, digest) in [
             ("placement_id", self.placement_id),
             ("source_id", self.source_id),
@@ -728,18 +704,18 @@ impl SoraHfPlacementRecordV1 {
         }
         self.resource_profile.validate()?;
         if self.adaptive_target_host_count == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf placement record",
-                field: "adaptive_target_host_count",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf placement record",
+                "adaptive_target_host_count",
+                "must be greater than zero",
+            ));
         }
         if self.last_rebalance_at_ms == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf placement record",
-                field: "last_rebalance_at_ms",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf placement record",
+                "last_rebalance_at_ms",
+                "must be greater than zero",
+            ));
         }
         let mut seen = BTreeSet::new();
         let mut primary_count = 0_u8;
@@ -760,22 +736,22 @@ impl SoraHfPlacementRecordV1 {
             }
         }
         if !self.assigned_hosts.is_empty() && primary_count != 1 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf placement record",
-                field: "assigned_hosts",
-                reason: "non-empty placements must contain exactly one primary".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf placement record",
+                "assigned_hosts",
+                "non-empty placements must contain exactly one primary",
+            ));
         }
         if self
             .last_error
             .as_ref()
             .is_some_and(|error| error.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf placement record",
-                field: "last_error",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf placement record",
+                "last_error",
+                "must not be empty when provided",
+            ));
         }
         Ok(())
     }
@@ -865,13 +841,11 @@ impl SoraModelHostViolationEvidenceRecordV1 {
     /// strike/penalty fields are inconsistent.
     #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora model host violation evidence record",
-                expected: SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora model host violation evidence record",
+            self.schema_version,
+            SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1,
+        )?;
         validate_soracloud_digest_hash(
             "sora model host violation evidence record",
             "evidence_id",
@@ -892,18 +866,18 @@ impl SoraModelHostViolationEvidenceRecordV1 {
             }
         }
         if self.sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model host violation evidence record",
-                field: "sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model host violation evidence record",
+                "sequence",
+                "must be greater than zero",
+            ));
         }
         if self.observed_at_ms == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model host violation evidence record",
-                field: "observed_at_ms",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model host violation evidence record",
+                "observed_at_ms",
+                "must be greater than zero",
+            ));
         }
         if matches!(
             self.kind,
@@ -911,20 +885,18 @@ impl SoraModelHostViolationEvidenceRecordV1 {
                 | SoraModelHostViolationKindV1::AssignedHeartbeatMiss
         ) {
             if self.placement_id.is_none() || self.pool_id.is_none() || self.source_id.is_none() {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora model host violation evidence record",
-                    field: "placement_id",
-                    reason: "placement-scoped violations must include placement_id, pool_id, and source_id"
-                        .to_string(),
-                });
+                return Err(invalid_field(
+                    "sora model host violation evidence record",
+                    "placement_id",
+                    "placement-scoped violations must include placement_id, pool_id, and source_id",
+                ));
             }
             if self.window_started_at_ms.is_none() {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora model host violation evidence record",
-                    field: "window_started_at_ms",
-                    reason: "placement-scoped violations must include the reservation-window start"
-                        .to_string(),
-                });
+                return Err(invalid_field(
+                    "sora model host violation evidence record",
+                    "window_started_at_ms",
+                    "placement-scoped violations must include the reservation-window start",
+                ));
             }
         }
         if self
@@ -932,43 +904,42 @@ impl SoraModelHostViolationEvidenceRecordV1 {
             .as_ref()
             .is_some_and(|detail| detail.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model host violation evidence record",
-                field: "detail",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model host violation evidence record",
+                "detail",
+                "must not be empty when provided",
+            ));
         }
         if self.penalty_applied && self.slash_id.is_none() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model host violation evidence record",
-                field: "slash_id",
-                reason: "must be present when penalty_applied is true".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model host violation evidence record",
+                "slash_id",
+                "must be present when penalty_applied is true",
+            ));
         }
         if !self.penalty_applied && self.slash_id.is_some() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model host violation evidence record",
-                field: "slash_id",
-                reason: "must be absent when penalty_applied is false".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model host violation evidence record",
+                "slash_id",
+                "must be absent when penalty_applied is false",
+            ));
         }
         if self.kind != SoraModelHostViolationKindV1::AssignedHeartbeatMiss && self.strike_count > 1
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model host violation evidence record",
-                field: "strike_count",
-                reason: "only assigned heartbeat misses may accumulate multiple strikes"
-                    .to_string(),
-            });
+            return Err(invalid_field(
+                "sora model host violation evidence record",
+                "strike_count",
+                "only assigned heartbeat misses may accumulate multiple strikes",
+            ));
         }
         if self.kind == SoraModelHostViolationKindV1::AssignedHeartbeatMiss
             && self.strike_count == 0
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model host violation evidence record",
-                field: "strike_count",
-                reason: "assigned heartbeat misses must record a strike count".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model host violation evidence record",
+                "strike_count",
+                "assigned heartbeat misses must record a strike count",
+            ));
         }
         Ok(())
     }
@@ -1034,13 +1005,11 @@ impl SoraHfSourceRecordV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// required identifiers are empty.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_HF_SOURCE_RECORD_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora hf source record",
-                expected: SORA_HF_SOURCE_RECORD_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora hf source record",
+            self.schema_version,
+            SORA_HF_SOURCE_RECORD_VERSION_V1,
+        )?;
         validate_soracloud_digest_hash("sora hf source record", "source_id", self.source_id)?;
         validate_soracloud_digest_hash(
             "sora hf source record",
@@ -1053,40 +1022,35 @@ impl SoraHfSourceRecordV1 {
             ("model_name", self.model_name.as_str()),
             ("adapter_id", self.adapter_id.as_str()),
         ] {
-            if value.trim().is_empty() {
-                return Err(SoracloudManifestError::EmptyField {
-                    manifest: "sora hf source record",
-                    field,
-                });
-            }
+            validate_nonblank_field("sora hf source record", field, value)?;
         }
         if let Some(resource_profile) = &self.resource_profile {
             resource_profile.validate()?;
         }
         if self.created_at_ms == 0 || self.updated_at_ms == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf source record",
-                field: "created_at_ms",
-                reason: "created_at_ms and updated_at_ms must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf source record",
+                "created_at_ms",
+                "created_at_ms and updated_at_ms must be greater than zero",
+            ));
         }
         if self.updated_at_ms < self.created_at_ms {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf source record",
-                field: "updated_at_ms",
-                reason: "must be >= created_at_ms".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf source record",
+                "updated_at_ms",
+                "must be >= created_at_ms",
+            ));
         }
         if self
             .last_error
             .as_ref()
             .is_some_and(|error| error.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf source record",
-                field: "last_error",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf source record",
+                "last_error",
+                "must not be empty when provided",
+            ));
         }
         Ok(())
     }
@@ -1184,57 +1148,57 @@ impl SoraHfSharedLeaseQueuedWindowV1 {
     /// Returns [`SoracloudManifestError`] when timestamps, prices, or names are invalid.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         if self.model_name.trim().is_empty() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease queued window",
-                field: "model_name",
-                reason: "must not be empty".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease queued window",
+                "model_name",
+                "must not be empty",
+            ));
         }
         if self.base_fee.is_zero() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease queued window",
-                field: "base_fee",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease queued window",
+                "base_fee",
+                "must be greater than zero",
+            ));
         }
         if self.compute_reservation_fee.is_zero() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease queued window",
-                field: "compute_reservation_fee",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease queued window",
+                "compute_reservation_fee",
+                "must be greater than zero",
+            ));
         }
         self.planned_placement.validate()?;
         if self.planned_placement.total_reservation_fee != self.compute_reservation_fee {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease queued window",
-                field: "planned_placement.total_reservation_fee",
-                reason: "must match compute_reservation_fee".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease queued window",
+                "planned_placement.total_reservation_fee",
+                "must match compute_reservation_fee",
+            ));
         }
         if self.sponsored_at_ms == 0
             || self.window_started_at_ms == 0
             || self.window_expires_at_ms == 0
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease queued window",
-                field: "sponsored_at_ms",
-                reason: "queued-window timestamps must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease queued window",
+                "sponsored_at_ms",
+                "queued-window timestamps must be greater than zero",
+            ));
         }
         if self.window_started_at_ms < self.sponsored_at_ms {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease queued window",
-                field: "window_started_at_ms",
-                reason: "must be greater than or equal to sponsored_at_ms".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease queued window",
+                "window_started_at_ms",
+                "must be greater than or equal to sponsored_at_ms",
+            ));
         }
         if self.window_expires_at_ms <= self.window_started_at_ms {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease queued window",
-                field: "window_expires_at_ms",
-                reason: "must be greater than window_started_at_ms".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease queued window",
+                "window_expires_at_ms",
+                "must be greater than window_started_at_ms",
+            ));
         }
         Ok(())
     }
@@ -1281,69 +1245,67 @@ impl SoraHfSharedLeasePoolV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// time/price fields are invalid.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_HF_SHARED_LEASE_POOL_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora hf shared lease pool",
-                expected: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora hf shared lease pool",
+            self.schema_version,
+            SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+        )?;
         validate_soracloud_digest_hash("sora hf shared lease pool", "pool_id", self.pool_id)?;
         validate_soracloud_digest_hash("sora hf shared lease pool", "source_id", self.source_id)?;
         if self.base_fee.is_zero() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease pool",
-                field: "base_fee",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease pool",
+                "base_fee",
+                "must be greater than zero",
+            ));
         }
         if self.lease_term_ms == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease pool",
-                field: "lease_term_ms",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease pool",
+                "lease_term_ms",
+                "must be greater than zero",
+            ));
         }
         if self.window_started_at_ms == 0 || self.window_expires_at_ms == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease pool",
-                field: "window_started_at_ms",
-                reason: "window timestamps must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease pool",
+                "window_started_at_ms",
+                "window timestamps must be greater than zero",
+            ));
         }
         if self.window_expires_at_ms <= self.window_started_at_ms {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease pool",
-                field: "window_expires_at_ms",
-                reason: "must be greater than window_started_at_ms".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease pool",
+                "window_expires_at_ms",
+                "must be greater than window_started_at_ms",
+            ));
         }
         if let Some(next_window) = &self.queued_next_window {
             next_window.validate()?;
             if self.status != SoraHfSharedLeaseStatusV1::Active {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora hf shared lease pool",
-                    field: "queued_next_window",
-                    reason: "may only be set while the current window is active".to_string(),
-                });
+                return Err(invalid_field(
+                    "sora hf shared lease pool",
+                    "queued_next_window",
+                    "may only be set while the current window is active",
+                ));
             }
             if next_window.window_started_at_ms != self.window_expires_at_ms {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora hf shared lease pool",
-                    field: "queued_next_window.window_started_at_ms",
-                    reason: "must match window_expires_at_ms".to_string(),
-                });
+                return Err(invalid_field(
+                    "sora hf shared lease pool",
+                    "queued_next_window.window_started_at_ms",
+                    "must match window_expires_at_ms",
+                ));
             }
             if next_window.window_expires_at_ms
                 != next_window
                     .window_started_at_ms
                     .saturating_add(self.lease_term_ms)
             {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora hf shared lease pool",
-                    field: "queued_next_window.window_expires_at_ms",
-                    reason: "must equal queued window_started_at_ms + lease_term_ms".to_string(),
-                });
+                return Err(invalid_field(
+                    "sora hf shared lease pool",
+                    "queued_next_window.window_expires_at_ms",
+                    "must equal queued window_started_at_ms + lease_term_ms",
+                ));
             }
         }
         Ok(())
@@ -1401,45 +1363,43 @@ impl SoraHfSharedLeaseMemberV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// bindings contain invalid names.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora hf shared lease member",
-                expected: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora hf shared lease member",
+            self.schema_version,
+            SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+        )?;
         validate_soracloud_digest_hash("sora hf shared lease member", "pool_id", self.pool_id)?;
         validate_soracloud_digest_hash("sora hf shared lease member", "source_id", self.source_id)?;
         if self.joined_at_ms == 0 || self.updated_at_ms == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease member",
-                field: "joined_at_ms",
-                reason: "joined_at_ms and updated_at_ms must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease member",
+                "joined_at_ms",
+                "joined_at_ms and updated_at_ms must be greater than zero",
+            ));
         }
         if self.updated_at_ms < self.joined_at_ms {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease member",
-                field: "updated_at_ms",
-                reason: "must be >= joined_at_ms".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease member",
+                "updated_at_ms",
+                "must be >= joined_at_ms",
+            ));
         }
         for service_name in &self.service_bindings {
             if service_name.trim().is_empty() {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora hf shared lease member",
-                    field: "service_bindings",
-                    reason: "service bindings must not contain empty names".to_string(),
-                });
+                return Err(invalid_field(
+                    "sora hf shared lease member",
+                    "service_bindings",
+                    "service bindings must not contain empty names",
+                ));
             }
         }
         for apartment_name in &self.apartment_bindings {
             if apartment_name.trim().is_empty() {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora hf shared lease member",
-                    field: "apartment_bindings",
-                    reason: "apartment bindings must not contain empty names".to_string(),
-                });
+                return Err(invalid_field(
+                    "sora hf shared lease member",
+                    "apartment_bindings",
+                    "apartment bindings must not contain empty names",
+                ));
             }
         }
         Ok(())
@@ -1490,13 +1450,11 @@ impl SoraHfSharedLeaseAuditEventV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// optional bindings contain empty names.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora hf shared lease audit event",
-                expected: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora hf shared lease audit event",
+            self.schema_version,
+            SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
+        )?;
         validate_soracloud_digest_hash(
             "sora hf shared lease audit event",
             "pool_id",
@@ -1508,41 +1466,40 @@ impl SoraHfSharedLeaseAuditEventV1 {
             self.source_id,
         )?;
         if self.sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease audit event",
-                field: "sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease audit event",
+                "sequence",
+                "must be greater than zero",
+            ));
         }
         if self.occurred_at_ms == 0 || self.lease_expires_at_ms == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease audit event",
-                field: "occurred_at_ms",
-                reason: "occurred_at_ms and lease_expires_at_ms must be greater than zero"
-                    .to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease audit event",
+                "occurred_at_ms",
+                "occurred_at_ms and lease_expires_at_ms must be greater than zero",
+            ));
         }
         if self
             .service_name
             .as_ref()
             .is_some_and(|service_name| service_name.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease audit event",
-                field: "service_name",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease audit event",
+                "service_name",
+                "must not be empty when provided",
+            ));
         }
         if self
             .apartment_name
             .as_ref()
             .is_some_and(|apartment_name| apartment_name.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora hf shared lease audit event",
-                field: "apartment_name",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora hf shared lease audit event",
+                "apartment_name",
+                "must not be empty when provided",
+            ));
         }
         Ok(())
     }
@@ -1583,42 +1540,35 @@ impl SoraModelArtifactAuditEventV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// required identifiers are empty.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora model artifact audit event",
-                expected: SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora model artifact audit event",
+            self.schema_version,
+            SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1,
+        )?;
         if self.sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model artifact audit event",
-                field: "sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model artifact audit event",
+                "sequence",
+                "must be greater than zero",
+            ));
         }
         for (field, value) in [
             ("service_version", self.service_version.as_str()),
             ("model_name", self.model_name.as_str()),
             ("training_job_id", self.training_job_id.as_str()),
         ] {
-            if value.trim().is_empty() {
-                return Err(SoracloudManifestError::EmptyField {
-                    manifest: "sora model artifact audit event",
-                    field,
-                });
-            }
+            validate_nonblank_field("sora model artifact audit event", field, value)?;
         }
         if self
             .consumed_by_version
             .as_ref()
             .is_some_and(|version| version.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model artifact audit event",
-                field: "consumed_by_version",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model artifact audit event",
+                "consumed_by_version",
+                "must not be empty when provided",
+            ));
         }
         Ok(())
     }
@@ -1865,13 +1815,11 @@ impl SoraAgentApartmentRecordV1 {
     }
 
     fn validate_required_fields(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_AGENT_APARTMENT_RECORD_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora agent apartment record",
-                expected: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora agent apartment record",
+            self.schema_version,
+            SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
+        )?;
         self.manifest.validate()?;
         validate_soracloud_digest_hash(
             "sora agent apartment record",
@@ -1879,11 +1827,11 @@ impl SoraAgentApartmentRecordV1 {
             self.manifest_hash,
         )?;
         if self.manifest_hash != self.manifest.manifest_hash() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment record",
-                field: "manifest_hash",
-                reason: "must match the canonical apartment manifest hash".to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment record",
+                "manifest_hash",
+                "must match the canonical apartment manifest hash",
+            ));
         }
         for (field, value) in [
             ("process_generation", self.process_generation),
@@ -1895,26 +1843,26 @@ impl SoraAgentApartmentRecordV1 {
             ("last_active_sequence", self.last_active_sequence),
         ] {
             if value == 0 {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora agent apartment record",
+                return Err(invalid_field(
+                    "sora agent apartment record",
                     field,
-                    reason: "must be greater than zero".to_string(),
-                });
+                    "must be greater than zero",
+                ));
             }
         }
         if self.lease_expires_sequence <= self.lease_started_sequence {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment record",
-                field: "lease_expires_sequence",
-                reason: "must be greater than lease_started_sequence".to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment record",
+                "lease_expires_sequence",
+                "must be greater than lease_started_sequence",
+            ));
         }
         if self.last_renewed_sequence < self.lease_started_sequence {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment record",
-                field: "last_renewed_sequence",
-                reason: "must be >= lease_started_sequence".to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment record",
+                "last_renewed_sequence",
+                "must be >= lease_started_sequence",
+            ));
         }
         Ok(())
     }
@@ -1925,47 +1873,46 @@ impl SoraAgentApartmentRecordV1 {
             .as_ref()
             .is_some_and(|reason| reason.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment record",
-                field: "last_restart_reason",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment record",
+                "last_restart_reason",
+                "must not be empty when provided",
+            ));
         }
         if self.last_restart_sequence.is_some() != self.last_restart_reason.is_some() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment record",
-                field: "last_restart",
-                reason: "last_restart_sequence and last_restart_reason must be populated together"
-                    .to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment record",
+                "last_restart",
+                "last_restart_sequence and last_restart_reason must be populated together",
+            ));
         }
         if self
             .last_checkpoint_sequence
             .is_some_and(|sequence| sequence == 0)
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment record",
-                field: "last_checkpoint_sequence",
-                reason: "must be greater than zero when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment record",
+                "last_checkpoint_sequence",
+                "must be greater than zero when provided",
+            ));
         }
         Ok(())
     }
 
     fn validate_budget_fields(&self) -> Result<(), SoracloudManifestError> {
         if self.autonomy_budget_ceiling_units == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment record",
-                field: "autonomy_budget_ceiling_units",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment record",
+                "autonomy_budget_ceiling_units",
+                "must be greater than zero",
+            ));
         }
         if self.autonomy_budget_remaining_units > self.autonomy_budget_ceiling_units {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment record",
-                field: "autonomy_budget_remaining_units",
-                reason: "must not exceed autonomy_budget_ceiling_units".to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment record",
+                "autonomy_budget_remaining_units",
+                "must not exceed autonomy_budget_ceiling_units",
+            ));
         }
         Ok(())
     }
@@ -1973,11 +1920,11 @@ impl SoraAgentApartmentRecordV1 {
     fn validate_collection_fields(&self) -> Result<(), SoracloudManifestError> {
         for revoked in &self.revoked_policy_capabilities {
             if revoked.trim().is_empty() {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora agent apartment record",
-                    field: "revoked_policy_capabilities",
-                    reason: "entries must not be empty".to_string(),
-                });
+                return Err(invalid_field(
+                    "sora agent apartment record",
+                    "revoked_policy_capabilities",
+                    "entries must not be empty",
+                ));
             }
         }
         for (request_id, request) in &self.pending_wallet_requests {
@@ -2007,11 +1954,11 @@ impl SoraAgentApartmentRecordV1 {
             || request.asset_definition.trim().is_empty()
             || request.created_sequence == 0
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment record",
-                field: "pending_wallet_requests",
-                reason: "wallet request entries must use non-empty matching request ids and valid metadata".to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment record",
+                "pending_wallet_requests",
+                "wallet request entries must use non-empty matching request ids and valid metadata",
+            ));
         }
         Ok(())
     }
@@ -2021,12 +1968,11 @@ impl SoraAgentApartmentRecordV1 {
         entry: &SoraAgentWalletDailySpendEntryV1,
     ) -> Result<(), SoracloudManifestError> {
         if entry.asset_definition.trim().is_empty() || key.trim().is_empty() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment record",
-                field: "wallet_daily_spend",
-                reason: "wallet daily spend entries must use non-empty keys and asset definitions"
-                    .to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment record",
+                "wallet_daily_spend",
+                "wallet daily spend entries must use non-empty keys and asset definitions",
+            ));
         }
         Ok(())
     }
@@ -2040,24 +1986,22 @@ impl SoraAgentApartmentRecordV1 {
             message.payload_hash,
         )?;
         if message.payload_hash != Hash::new(message.payload.as_bytes()) {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment record",
-                field: "mailbox_queue.payload_hash",
-                reason: "must match the canonical mailbox payload hash".to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment record",
+                "mailbox_queue.payload_hash",
+                "must match the canonical mailbox payload hash",
+            ));
         }
         if message.message_id.trim().is_empty()
             || message.from_apartment.trim().is_empty()
             || message.channel.trim().is_empty()
             || message.enqueued_sequence == 0
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment record",
-                field: "mailbox_queue",
-                reason:
-                    "mailbox messages must use non-empty ids/origins/channels and valid sequences"
-                        .to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment record",
+                "mailbox_queue",
+                "mailbox messages must use non-empty ids/origins/channels and valid sequences",
+            ));
         }
         Ok(())
     }
@@ -2074,11 +2018,11 @@ impl SoraAgentApartmentRecordV1 {
                 .is_some_and(|hash| hash.trim().is_empty())
             || rule.added_sequence == 0
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment record",
-                field: "artifact_allowlist",
-                reason: "allowlist entries must use non-empty matching artifact hashes and valid metadata".to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment record",
+                "artifact_allowlist",
+                "allowlist entries must use non-empty matching artifact hashes and valid metadata",
+            ));
         }
         Ok(())
     }
@@ -2102,19 +2046,19 @@ impl SoraAgentApartmentRecordV1 {
                 .as_ref()
                 .is_some_and(|hash| hash.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment record",
-                field: "autonomy_run_history",
-                reason: "autonomy run entries must use non-empty ids/hash/label plus positive budgets, process generations, and sequences".to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment record",
+                "autonomy_run_history",
+                "autonomy run entries must use non-empty ids/hash/label plus positive budgets, process generations, and sequences",
+            ));
         }
         if let Some(workflow_input_json) = run.workflow_input_json.as_deref() {
             if workflow_input_json.trim().is_empty() {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora agent apartment record",
-                    field: "autonomy_run_history",
-                    reason: "workflow_input_json must not be empty when provided".to_string(),
-                });
+                return Err(invalid_field(
+                    "sora agent apartment record",
+                    "autonomy_run_history",
+                    "workflow_input_json must not be empty when provided",
+                ));
             }
             norito::json::from_str::<norito::json::Value>(workflow_input_json).map_err(
                 |error| SoracloudManifestError::InvalidField {
@@ -2228,26 +2172,24 @@ impl SoraAgentApartmentAuditEventV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// required identifiers are empty.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora agent apartment audit event",
-                expected: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora agent apartment audit event",
+            self.schema_version,
+            SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
+        )?;
         if self.sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment audit event",
-                field: "sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment audit event",
+                "sequence",
+                "must be greater than zero",
+            ));
         }
         if self.lease_expires_sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment audit event",
-                field: "lease_expires_sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment audit event",
+                "lease_expires_sequence",
+                "must be greater than zero",
+            ));
         }
         validate_soracloud_digest_hash(
             "sora agent apartment audit event",
@@ -2282,56 +2224,45 @@ impl SoraAgentApartmentAuditEventV1 {
             ("handler_name", self.handler_name.as_deref()),
         ] {
             if value.is_some_and(|value| value.trim().is_empty()) {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora agent apartment audit event",
+                return Err(invalid_field(
+                    "sora agent apartment audit event",
                     field,
-                    reason: "must not be empty when provided".to_string(),
-                });
+                    "must not be empty when provided",
+                ));
             }
         }
         if self.budget_units.is_some_and(|budget| budget == 0) {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora agent apartment audit event",
-                field: "budget_units",
-                reason: "must be greater than zero when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora agent apartment audit event",
+                "budget_units",
+                "must be greater than zero when provided",
+            ));
         }
         if self.action == SoraAgentApartmentActionV1::AutonomyRunExecuted {
             if self.run_id.is_none() {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora agent apartment audit event",
-                    field: "run_id",
-                    reason: "autonomy execution events require a run_id".to_string(),
-                });
+                return Err(invalid_field(
+                    "sora agent apartment audit event",
+                    "run_id",
+                    "autonomy execution events require a run_id",
+                ));
             }
             if self.result_commitment.is_none() {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora agent apartment audit event",
-                    field: "result_commitment",
-                    reason: "autonomy execution events require a result_commitment".to_string(),
-                });
+                return Err(invalid_field(
+                    "sora agent apartment audit event",
+                    "result_commitment",
+                    "autonomy execution events require a result_commitment",
+                ));
             }
             if self.succeeded.is_none() {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora agent apartment audit event",
-                    field: "succeeded",
-                    reason: "autonomy execution events require a success flag".to_string(),
-                });
+                return Err(invalid_field(
+                    "sora agent apartment audit event",
+                    "succeeded",
+                    "autonomy execution events require a success flag",
+                ));
             }
         }
         Ok(())
     }
-}
-
-fn validate_optional_nonempty(
-    manifest: &'static str,
-    field: &'static str,
-    value: Option<&str>,
-) -> Result<(), SoracloudManifestError> {
-    if matches!(value, Some(value) if value.trim().is_empty()) {
-        return Err(SoracloudManifestError::EmptyField { manifest, field });
-    }
-    Ok(())
 }
 
 fn validate_public_url(
@@ -2340,15 +2271,13 @@ fn validate_public_url(
     value: &str,
 ) -> Result<(), SoracloudManifestError> {
     let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(SoracloudManifestError::EmptyField { manifest, field });
-    }
+    validate_nonblank_field(manifest, field, trimmed)?;
     if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "must start with http:// or https://".to_string(),
-        });
+            "must start with http:// or https://",
+        ));
     }
     Ok(())
 }
@@ -2358,15 +2287,9 @@ fn validate_absolute_path(
     field: &'static str,
     value: &str,
 ) -> Result<(), SoracloudManifestError> {
-    if value.trim().is_empty() {
-        return Err(SoracloudManifestError::EmptyField { manifest, field });
-    }
+    validate_nonblank_field(manifest, field, value)?;
     if !value.starts_with('/') {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest,
-            field,
-            reason: "must start with `/`".to_string(),
-        });
+        return Err(invalid_field(manifest, field, "must start with `/`"));
     }
     Ok(())
 }
@@ -2415,13 +2338,11 @@ impl SoraAppStaticSiteBindingV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when version or URL/path fields are malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_APP_STATIC_SITE_BINDING_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora app static site binding",
-                expected: SORA_APP_STATIC_SITE_BINDING_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora app static site binding",
+            self.schema_version,
+            SORA_APP_STATIC_SITE_BINDING_VERSION_V1,
+        )?;
         validate_public_url(
             "sora app static site binding",
             "public_url",
@@ -2477,13 +2398,11 @@ impl SoraAppRouteProjectionV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when version or route fields are malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_APP_ROUTE_PROJECTION_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora app route projection",
-                expected: SORA_APP_ROUTE_PROJECTION_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora app route projection",
+            self.schema_version,
+            SORA_APP_ROUTE_PROJECTION_VERSION_V1,
+        )?;
         validate_absolute_path(
             "sora app route projection",
             "path_prefix",
@@ -2540,19 +2459,16 @@ impl SoraAppInfraServiceRefV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when version, revision, or routes are malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_APP_INFRA_SERVICE_REF_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora app infra service ref",
-                expected: SORA_APP_INFRA_SERVICE_REF_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
-        if self.service_version.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora app infra service ref",
-                field: "service_version",
-            });
-        }
+        validate_schema_version(
+            "sora app infra service ref",
+            self.schema_version,
+            SORA_APP_INFRA_SERVICE_REF_VERSION_V1,
+        )?;
+        validate_nonblank_field(
+            "sora app infra service ref",
+            "service_version",
+            &self.service_version,
+        )?;
         validate_soracloud_digest_hash(
             "sora app infra service ref",
             "service_manifest_hash",
@@ -2624,26 +2540,19 @@ impl SoraAppInfraManifestV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the topology is malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_APP_INFRA_MANIFEST_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora app infra manifest",
-                expected: SORA_APP_INFRA_MANIFEST_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
-        if self.app_version.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora app infra manifest",
-                field: "app_version",
-            });
-        }
+        validate_schema_version(
+            "sora app infra manifest",
+            self.schema_version,
+            SORA_APP_INFRA_MANIFEST_VERSION_V1,
+        )?;
+        validate_nonblank_field("sora app infra manifest", "app_version", &self.app_version)?;
         validate_public_url("sora app infra manifest", "public_url", &self.public_url)?;
         if self.services.is_empty() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora app infra manifest",
-                field: "services",
-                reason: "at least one service reference is required".to_string(),
-            });
+            return Err(invalid_field(
+                "sora app infra manifest",
+                "services",
+                "at least one service reference is required",
+            ));
         }
         if let Some(static_site) = self.static_site.as_ref() {
             static_site.validate()?;
@@ -2692,41 +2601,39 @@ impl SoraAppInfraStateV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the state is inconsistent.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_APP_INFRA_STATE_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora app infra state",
-                expected: SORA_APP_INFRA_STATE_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora app infra state",
+            self.schema_version,
+            SORA_APP_INFRA_STATE_VERSION_V1,
+        )?;
         self.manifest.validate()?;
         if self.app_name != self.manifest.app_name {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora app infra state",
-                field: "app_name",
-                reason: "must match embedded manifest app_name".to_string(),
-            });
+            return Err(invalid_field(
+                "sora app infra state",
+                "app_name",
+                "must match embedded manifest app_name",
+            ));
         }
         if self.current_app_version != self.manifest.app_version {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora app infra state",
-                field: "current_app_version",
-                reason: "must match embedded manifest app_version".to_string(),
-            });
+            return Err(invalid_field(
+                "sora app infra state",
+                "current_app_version",
+                "must match embedded manifest app_version",
+            ));
         }
         if self.current_manifest_hash != self.manifest.manifest_hash() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora app infra state",
-                field: "current_manifest_hash",
-                reason: "must match embedded manifest hash".to_string(),
-            });
+            return Err(invalid_field(
+                "sora app infra state",
+                "current_manifest_hash",
+                "must match embedded manifest hash",
+            ));
         }
         if self.revision_count == 0 || self.deployed_sequence == 0 || self.updated_sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora app infra state",
-                field: "sequence",
-                reason: "revision_count and audit sequences must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora app infra state",
+                "sequence",
+                "revision_count and audit sequences must be greater than zero",
+            ));
         }
         Ok(())
     }
@@ -2766,37 +2673,30 @@ impl SoraAppInfraAuditEventV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when event fields are malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora app infra audit event",
-                expected: SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora app infra audit event",
+            self.schema_version,
+            SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1,
+        )?;
         if self.sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora app infra audit event",
-                field: "sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora app infra audit event",
+                "sequence",
+                "must be greater than zero",
+            ));
         }
-        if self.to_version.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora app infra audit event",
-                field: "to_version",
-            });
-        }
+        validate_nonblank_field("sora app infra audit event", "to_version", &self.to_version)?;
         validate_soracloud_digest_hash(
             "sora app infra audit event",
             "app_manifest_hash",
             self.app_manifest_hash,
         )?;
         if self.service_count == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora app infra audit event",
-                field: "service_count",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora app infra audit event",
+                "service_count",
+                "must be greater than zero",
+            ));
         }
         validate_optional_nonempty(
             "sora app infra audit event",
@@ -2883,20 +2783,18 @@ impl SoraServiceAuditEventV1 {
     }
 
     fn validate_required_fields(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_SERVICE_AUDIT_EVENT_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora service audit event",
-                expected: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora service audit event",
+            self.schema_version,
+            SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
+        )?;
 
         if self.sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service audit event",
-                field: "sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service audit event",
+                "sequence",
+                "must be greater than zero",
+            ));
         }
 
         if self
@@ -2904,19 +2802,14 @@ impl SoraServiceAuditEventV1 {
             .as_ref()
             .is_some_and(|version| version.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service audit event",
-                field: "from_version",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service audit event",
+                "from_version",
+                "must not be empty when provided",
+            ));
         }
 
-        if self.to_version.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora service audit event",
-                field: "to_version",
-            });
-        }
+        validate_nonblank_field("sora service audit event", "to_version", &self.to_version)?;
         validate_soracloud_digest_hash(
             "sora service audit event",
             "service_manifest_hash",
@@ -2936,11 +2829,11 @@ impl SoraServiceAuditEventV1 {
             .as_ref()
             .is_some_and(|handle| handle.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service audit event",
-                field: "rollout_handle",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service audit event",
+                "rollout_handle",
+                "must not be empty when provided",
+            ));
         }
 
         if self
@@ -2948,22 +2841,22 @@ impl SoraServiceAuditEventV1 {
             .as_ref()
             .is_some_and(|state_key| state_key.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service audit event",
-                field: "state_key",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service audit event",
+                "state_key",
+                "must not be empty when provided",
+            ));
         }
         if self
             .state_key
             .as_ref()
             .is_some_and(|state_key| !state_key.starts_with('/'))
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service audit event",
-                field: "state_key",
-                reason: "must start with '/' when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service audit event",
+                "state_key",
+                "must start with '/' when provided",
+            ));
         }
         if let Some(config_name) = self.config_name.as_deref() {
             validate_service_material_name("sora service audit event", "config_name", config_name)?;
@@ -2976,11 +2869,11 @@ impl SoraServiceAuditEventV1 {
             .as_ref()
             .is_some_and(|tag| tag.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service audit event",
-                field: "jurisdiction_tag",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service audit event",
+                "jurisdiction_tag",
+                "must not be empty when provided",
+            ));
         }
         if let Some(governance_tx_hash) = self.governance_tx_hash {
             validate_soracloud_digest_hash(
@@ -3012,25 +2905,25 @@ impl SoraServiceAuditEventV1 {
             .as_ref()
             .is_some_and(|reason| reason.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service audit event",
-                field: "break_glass_reason",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service audit event",
+                "break_glass_reason",
+                "must not be empty when provided",
+            ));
         }
         if self.break_glass == Some(false) && self.break_glass_reason.is_some() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service audit event",
-                field: "break_glass_reason",
-                reason: "must be omitted when break_glass=false".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service audit event",
+                "break_glass_reason",
+                "must be omitted when break_glass=false",
+            ));
         }
         if self.break_glass == Some(true) && self.break_glass_reason.is_none() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service audit event",
-                field: "break_glass_reason",
-                reason: "must be provided when break_glass=true".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service audit event",
+                "break_glass_reason",
+                "must be provided when break_glass=true",
+            ));
         }
         Ok(())
     }
@@ -3091,37 +2984,34 @@ impl SoraServiceRuntimeStateV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// runtime-state fields are out of range.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_SERVICE_RUNTIME_STATE_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora service runtime state",
-                expected: SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora service runtime state",
+            self.schema_version,
+            SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
+        )?;
 
-        if self.active_service_version.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora service runtime state",
-                field: "active_service_version",
-            });
-        }
+        validate_nonblank_field(
+            "sora service runtime state",
+            "active_service_version",
+            &self.active_service_version,
+        )?;
 
         if self.load_factor_bps > 10_000 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service runtime state",
-                field: "load_factor_bps",
-                reason: "must be within 0..=10_000".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service runtime state",
+                "load_factor_bps",
+                "must be within 0..=10_000",
+            ));
         }
 
         if let Some(handle) = self.rollout_handle.as_ref()
             && handle.trim().is_empty()
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service runtime state",
-                field: "rollout_handle",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service runtime state",
+                "rollout_handle",
+                "must not be empty when provided",
+            ));
         }
         validate_soracloud_digest_hash(
             "sora service runtime state",
@@ -3191,45 +3081,37 @@ impl SoraInrouReplicaRuntimeStateV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// runtime-state fields are out of range.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora inrou replica runtime state",
-                expected: SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
-        if self.service_version.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora inrou replica runtime state",
-                field: "service_version",
-            });
-        }
+        validate_schema_version(
+            "sora inrou replica runtime state",
+            self.schema_version,
+            SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
+        )?;
+        validate_nonblank_field(
+            "sora inrou replica runtime state",
+            "service_version",
+            &self.service_version,
+        )?;
         if self.replica_slot == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora inrou replica runtime state",
-                field: "replica_slot",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora inrou replica runtime state",
+                "replica_slot",
+                "must be greater than zero",
+            ));
         }
-        if self.peer_id.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora inrou replica runtime state",
-                field: "peer_id",
-            });
-        }
+        validate_nonblank_field("sora inrou replica runtime state", "peer_id", &self.peer_id)?;
         if self.load_factor_bps > 10_000 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora inrou replica runtime state",
-                field: "load_factor_bps",
-                reason: "must be within 0..=10_000".to_string(),
-            });
+            return Err(invalid_field(
+                "sora inrou replica runtime state",
+                "load_factor_bps",
+                "must be within 0..=10_000",
+            ));
         }
         if self.updated_at_ms == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora inrou replica runtime state",
-                field: "updated_at_ms",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora inrou replica runtime state",
+                "updated_at_ms",
+                "must be greater than zero",
+            ));
         }
         validate_soracloud_digest_hash(
             "sora inrou replica runtime state",
@@ -3286,13 +3168,11 @@ impl SoraServiceMailboxMessageV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// availability/expiry sequences are inconsistent.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora service mailbox message",
-                expected: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora service mailbox message",
+            self.schema_version,
+            SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+        )?;
         validate_soracloud_digest_hash(
             "sora service mailbox message",
             "message_id",
@@ -3305,29 +3185,29 @@ impl SoraServiceMailboxMessageV1 {
         )?;
 
         if self.available_after_sequence < self.enqueue_sequence {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service mailbox message",
-                field: "available_after_sequence",
-                reason: "must be >= enqueue_sequence".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service mailbox message",
+                "available_after_sequence",
+                "must be >= enqueue_sequence",
+            ));
         }
 
         if Hash::new(self.payload_bytes.as_slice()) != self.payload_commitment {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service mailbox message",
-                field: "payload_commitment",
-                reason: "must match payload_bytes".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service mailbox message",
+                "payload_commitment",
+                "must match payload_bytes",
+            ));
         }
 
         if let Some(expires_at) = self.expires_at_sequence
             && expires_at <= self.available_after_sequence
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service mailbox message",
-                field: "expires_at_sequence",
-                reason: "must be greater than available_after_sequence".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service mailbox message",
+                "expires_at_sequence",
+                "must be greater than available_after_sequence",
+            ));
         }
 
         Ok(())
@@ -3388,20 +3268,17 @@ impl SoraRuntimeReceiptV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// handler-class/certification invariants are violated.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_RUNTIME_RECEIPT_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora runtime receipt",
-                expected: SORA_RUNTIME_RECEIPT_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora runtime receipt",
+            self.schema_version,
+            SORA_RUNTIME_RECEIPT_VERSION_V1,
+        )?;
 
-        if self.service_version.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora runtime receipt",
-                field: "service_version",
-            });
-        }
+        validate_nonblank_field(
+            "sora runtime receipt",
+            "service_version",
+            &self.service_version,
+        )?;
         validate_soracloud_digest_hash("sora runtime receipt", "receipt_id", self.receipt_id)?;
         validate_soracloud_digest_hash(
             "sora runtime receipt",
@@ -3437,54 +3314,46 @@ impl SoraRuntimeReceiptV1 {
                 checkpoint_artifact_hash,
             )?;
         }
-        if self
-            .selected_peer_id
-            .as_ref()
-            .is_some_and(|peer_id| peer_id.trim().is_empty())
-        {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora runtime receipt",
-                field: "selected_peer_id",
-            });
-        }
+        validate_optional_nonempty(
+            "sora runtime receipt",
+            "selected_peer_id",
+            self.selected_peer_id.as_deref(),
+        )?;
         let placement_field_count = usize::from(self.placement_id.is_some())
             + usize::from(self.selected_validator_account_id.is_some())
             + usize::from(self.selected_peer_id.is_some());
         if placement_field_count != 0 && placement_field_count != 3 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora runtime receipt",
-                field: "placement_id",
-                reason:
-                    "placement attribution must provide placement_id, selected_validator_account_id, and selected_peer_id together"
-                        .to_string(),
-            });
+            return Err(invalid_field(
+                "sora runtime receipt",
+                "placement_id",
+                "placement attribution must provide placement_id, selected_validator_account_id, and selected_peer_id together",
+            ));
         }
 
         match self.handler_class {
             SoraServiceHandlerClassV1::Asset | SoraServiceHandlerClassV1::Query => {
                 if self.certified_by == SoraCertifiedResponsePolicyV1::None {
-                    return Err(SoracloudManifestError::InvalidField {
-                        manifest: "sora runtime receipt",
-                        field: "certified_by",
-                        reason: "asset/query receipts must remain certified".to_string(),
-                    });
+                    return Err(invalid_field(
+                        "sora runtime receipt",
+                        "certified_by",
+                        "asset/query receipts must remain certified",
+                    ));
                 }
                 if self.mailbox_message_id.is_some() {
-                    return Err(SoracloudManifestError::InvalidField {
-                        manifest: "sora runtime receipt",
-                        field: "mailbox_message_id",
-                        reason: "asset/query receipts must not originate from mailbox delivery"
-                            .to_string(),
-                    });
+                    return Err(invalid_field(
+                        "sora runtime receipt",
+                        "mailbox_message_id",
+                        "asset/query receipts must not originate from mailbox delivery",
+                    ));
                 }
             }
             SoraServiceHandlerClassV1::Update | SoraServiceHandlerClassV1::PrivateUpdate => {
                 if self.certified_by != SoraCertifiedResponsePolicyV1::None {
-                    return Err(SoracloudManifestError::InvalidField {
-                        manifest: "sora runtime receipt",
-                        field: "certified_by",
-                        reason: "update/private_update receipts use ordered mailbox execution instead of certified fast-path responses".to_string(),
-                    });
+                    return Err(invalid_field(
+                        "sora runtime receipt",
+                        "certified_by",
+                        "update/private_update receipts use ordered mailbox execution instead of certified fast-path responses",
+                    ));
                 }
             }
         }
@@ -3492,4 +3361,3 @@ impl SoraRuntimeReceiptV1 {
         Ok(())
     }
 }
-

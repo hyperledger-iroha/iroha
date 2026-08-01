@@ -513,8 +513,9 @@ root = Path(sys.argv[1]).resolve(strict=True)
 project = Path(sys.argv[2]).resolve(strict=True)
 allowed_path = root / ".cargo/config.toml"
 allowed_configuration = {
-    "build": {"jobs": 1},
-    "env": {"RUST_TEST_THREADS": {"value": "1", "force": False}},
+    "alias": {
+        "xtask": "run --package xtask --features dev-tools --bin xtask --",
+    },
 }
 
 directory = project
@@ -550,8 +551,8 @@ while True:
             raise SystemExit(f"error: unable to parse repository Cargo configuration: {error}")
         if configuration != allowed_configuration:
             raise SystemExit(
-                "error: repository Cargo configuration may only pin build.jobs=1 "
-                "and the non-forced RUST_TEST_THREADS default"
+                "error: repository Cargo configuration may only define the "
+                "approved xtask alias and must not impose global parallelism"
             )
     if directory.parent == directory:
         break
@@ -1095,6 +1096,7 @@ export IROHA_PYTHON_TEST_INSTALLED_PACKAGE=1
 export PYTHONPATH="${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python"
 "${VENV_DIR}/bin/python" -I -B -m pytest -q \
   tests/privacy_catalog_test.py \
+  tests/privacy_exact12_fixture_test.py \
   tests/package_import_fallback_test.py \
   tests/privacy_native_registry_test.py \
   tests/privacy_zk_x509_transport_test.py \

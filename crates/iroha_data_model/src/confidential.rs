@@ -203,7 +203,7 @@ impl Default for ConfidentialEncryptedPayload {
 }
 
 impl norito::NoritoSerialize for ConfidentialEncryptedPayload {
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), NoritoError> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         if self.ciphertext.len() > CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES {
             return Err(NoritoError::Message(format!(
                 "confidential encrypted payload ciphertext must not exceed {CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES} bytes",
@@ -212,7 +212,7 @@ impl norito::NoritoSerialize for ConfidentialEncryptedPayload {
         writer.write_all(&[self.version])?;
         writer.write_all(&self.ephemeral_pubkey)?;
         writer.write_all(&self.nonce)?;
-        self::write_varint(&mut writer, self.ciphertext.len())?;
+        self::write_varint(writer, self.ciphertext.len())?;
         writer.write_all(&self.ciphertext)?;
         Ok(())
     }

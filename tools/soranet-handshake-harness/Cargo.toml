@@ -1,11 +1,20 @@
 [package]
 name = "soranet-handshake-harness"
+autobins = false
 version = "0.0.0"
 edition = "2024"
 publish = false
 
 [package.metadata]
 description = "Reference harness for SoraNet handshake fixtures"
+
+[features]
+dev-tools = []
+
+[[bin]]
+name = "soranet-handshake-harness"
+path = "src/main.rs"
+required-features = ["dev-tools"]
 
 [dependencies]
 base64 = { workspace = true }

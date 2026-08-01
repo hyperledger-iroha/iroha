@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate deterministic SignedRansTablesV1 artefacts with the xtask helper.
 
-The script wraps `cargo run -p xtask -- codec rans-tables` to ensure the tables
+The script wraps `cargo run -p xtask --features dev-tools --bin xtask -- codec rans-tables` to ensure the tables
 are produced inside `codec/rans/tables/` with the CC0/Apache notice applied.
 """
 
@@ -98,6 +98,8 @@ def run_xtask(
         "run",
         "-p",
         "xtask",
+        "--features",
+        "dev-tools",
         "--bin",
         "xtask",
         "--",

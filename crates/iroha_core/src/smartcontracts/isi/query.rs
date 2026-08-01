@@ -356,7 +356,7 @@ fn bounded_bare_encoded_len<T: NoritoSerialize>(value: &T, limit: u64) -> Result
     }
 
     let mut writer = BoundedLengthWriter::new(limit);
-    if value.serialize(&mut writer).is_err() {
+    if norito::core::serialize_to_writer(value, &mut writer).is_err() {
         return if writer.exceeded {
             Err(Error::GasBudgetExceeded)
         } else {
@@ -3691,14 +3691,46 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
 }
 
+/// Validate a fresh client query without exposing a reusable execution capability.
+///
+/// Stored continuations must enter through [`crate::query::snapshot`], which revalidates the
+/// archived `Start` request before advancing its cursor. This facade therefore accepts only
+/// `Singular` and `Start` requests and returns no raw validated-query object.
+///
+/// # Errors
+///
+/// Returns an error when the request is a bare continuation, exceeds limits, or fails mandatory
+/// native and executor authorization.
+pub fn validate_fresh_query_for_client_world_parts(
+    request: QueryRequest,
+    authority: &AccountId,
+    world_ro: &impl WorldReadOnly,
+    latest_block: Option<BlockHeader>,
+    limits: QueryLimits,
+) -> Result<(), ValidationFail> {
+    if matches!(request, QueryRequest::Continue(_)) {
+        return Err(ValidationFail::NotPermitted(
+            "bare query continuation must use the store-aware snapshot corridor".to_owned(),
+        ));
+    }
+    ValidQueryRequest::validate_for_client_world_parts(
+        request,
+        authority,
+        world_ro,
+        latest_block,
+        limits,
+    )
+    .map(drop)
+}
+
 /// Query Request statefully validated on the Iroha node side.
-pub struct ValidQueryRequest {
+pub(crate) struct ValidQueryRequest {
     request: QueryRequest,
     limits: QueryLimits,
 }
 
 /// Lightweight trait abstraction for IVM-side query validation to decouple from `ivm::state`.
-pub trait IvmQueryValidator {
+pub(crate) trait IvmQueryValidator {
     /// Account on whose behalf the query will run.
     fn authority(&self) -> &AccountId;
     /// Validate a query in the executor context.
@@ -3718,7 +3750,7 @@ impl ValidQueryRequest {
     /// # Errors
     ///
     /// Returns an error if the query validation fails or request limits are exceeded.
-    pub fn validate_for_client_parts(
+    pub(crate) fn validate_for_client_parts(
         request: QueryRequest,
         authority: &AccountId,
         state_ro: &impl StateReadOnly,
@@ -3739,7 +3771,7 @@ impl ValidQueryRequest {
     /// # Errors
     ///
     /// Returns an error if the query validation fails or request limits are exceeded.
-    pub fn validate_for_client_world_parts(
+    pub(crate) fn validate_for_client_world_parts(
         request: QueryRequest,
         authority: &AccountId,
         world_ro: &impl WorldReadOnly,
@@ -3762,7 +3794,7 @@ impl ValidQueryRequest {
     /// # Errors
     ///
     /// Returns an error if the query validation fails.
-    pub fn validate_for_client_parts_with_config(
+    pub(crate) fn validate_for_client_parts_with_config(
         request: QueryRequest,
         authority: &AccountId,
         state_ro: &impl StateReadOnly,
@@ -3780,7 +3812,7 @@ impl ValidQueryRequest {
     ///
     /// # Errors
     /// Returns a validation error if the request is rejected by the IVM validator.
-    pub fn validate_for_ivm(
+    pub(crate) fn validate_for_ivm(
         query: QueryRequest,
         state: &mut impl IvmQueryValidator,
         limits: QueryLimits,
@@ -3805,7 +3837,7 @@ impl ValidQueryRequest {
     /// # Errors
     ///
     /// Returns an error if the query execution fails.
-    pub fn execute(
+    pub(crate) fn execute(
         self,
         live_query_store: &LiveQueryStoreHandle,
         state: &impl StateReadOnly,
@@ -3820,7 +3852,7 @@ impl ValidQueryRequest {
     /// # Errors
     ///
     /// Returns an error if the query execution fails.
-    pub fn execute_with_replay_state(
+    pub(crate) fn execute_with_replay_state(
         self,
         live_query_store: &LiveQueryStoreHandle,
         state: &impl StateReadOnly,
@@ -3842,7 +3874,7 @@ impl ValidQueryRequest {
     /// # Errors
     ///
     /// Returns an error if query execution or budgeted projection fails.
-    pub fn execute_with_replay_state_and_start_budget(
+    pub(crate) fn execute_with_replay_state_and_start_budget(
         self,
         live_query_store: &LiveQueryStoreHandle,
         state: &impl StateReadOnly,
@@ -5432,7 +5464,7 @@ impl ValidQueryRequest {
     ///
     /// # Errors
     /// Returns an error if the query execution fails.
-    pub fn execute_ephemeral(
+    pub(crate) fn execute_ephemeral(
         self,
         live_query_store: &LiveQueryStoreHandle,
         state: &impl StateReadOnly,

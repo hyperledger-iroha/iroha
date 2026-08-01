@@ -144,13 +144,16 @@ public struct ProofAttachment: Sendable, Equatable {
         guard !proof.isEmpty else {
             throw ProofAttachmentError.emptyProof
         }
-        let encodedProofBoxLength = try Self.canonicalProofBoxEncodedLength(
-            backendUTF8Count: normalizedBackend.utf8.count,
-            proofByteCount: proof.count
+        let maximumProofBytes = try Self.maximumProofByteCount(
+            backendUTF8Count: normalizedBackend.utf8.count
         )
-        guard encodedProofBoxLength <= Self.maximumEncodedProofBoxBytes else {
+        guard proof.count <= maximumProofBytes else {
+            let encodedProofBoxLength = try Self.canonicalProofBoxEncodedLength(
+                backendUTF8Count: normalizedBackend.utf8.count,
+                proofByteCount: proof.count
+            )
             throw ProofAttachmentError.proofBoxTooLarge(
-                maximum: Self.maximumEncodedProofBoxBytes,
+                maximum: Self.maximumEncodedProofBoxBytesV1,
                 actual: encodedProofBoxLength
             )
         }
@@ -313,7 +316,8 @@ public struct ProofAttachment: Sendable, Equatable {
 
     private static let hashLength = 32
     private static let maximumIdentifierBytes = 256
-    private static let maximumEncodedProofBoxBytes = 64 * 1024 * 1024
+    /// Maximum canonical bytes admitted for the complete nested V1 ProofBox.
+    public static let maximumEncodedProofBoxBytesV1 = 64 * 1024 * 1024
     private static let forbiddenIdentifierSeparators = [
         "..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:"
     ]
@@ -331,15 +335,97 @@ public struct ProofAttachment: Sendable, Equatable {
         proofByteCount: Int
     ) throws -> Int {
         guard backendUTF8Count >= 0, proofByteCount >= 0 else {
-            throw ProofAttachmentError.proofBoxTooLarge(maximum: maximumEncodedProofBoxBytes, actual: Int.max)
+            throw ProofAttachmentError.proofBoxTooLarge(
+                maximum: maximumEncodedProofBoxBytesV1,
+                actual: Int.max
+            )
         }
-        return try [32, backendUTF8Count, proofByteCount].reduce(0) { partial, value in
-            let (sum, overflow) = partial.addingReportingOverflow(value)
-            if overflow {
-                throw ProofAttachmentError.proofBoxTooLarge(maximum: maximumEncodedProofBoxBytes, actual: Int.max)
+        // `Ident` encodes as compact UTF-8 length plus bytes. Both ProofBox
+        // members then receive their own compact field frame. `Vec<u8>` keeps
+        // its fixed-width V1 sequence count inside the proof member.
+        let backendValueLength = try checkedProofBoxAdd(
+            compactLengthByteCount(backendUTF8Count),
+            backendUTF8Count
+        )
+        let backendFieldLength = try checkedProofBoxAdd(
+            compactLengthByteCount(backendValueLength),
+            backendValueLength
+        )
+        let proofValueLength = try checkedProofBoxAdd(8, proofByteCount)
+        let proofFieldLength = try checkedProofBoxAdd(
+            compactLengthByteCount(proofValueLength),
+            proofValueLength
+        )
+        return try checkedProofBoxAdd(backendFieldLength, proofFieldLength)
+    }
+
+    /// Largest proof vector that keeps the complete canonical nested
+    /// `ProofBox` payload within the fixed 64 MiB first-release ceiling.
+    ///
+    /// Compact prefix widths make the size monotone but piecewise-linear, so
+    /// this uses a bounded binary search and never allocates proof storage.
+    public static func maximumProofByteCountV1(forBackend backend: String) throws -> Int {
+        let canonicalBackend = try requirePortableIdentifier(
+            backend,
+            field: "backend",
+            emptyError: .emptyBackend
+        )
+        return try maximumProofByteCount(backendUTF8Count: canonicalBackend.utf8.count)
+    }
+
+    static func maximumProofByteCount(backendUTF8Count: Int) throws -> Int {
+        guard backendUTF8Count >= 0 else {
+            throw ProofAttachmentError.proofBoxTooLarge(
+                maximum: maximumEncodedProofBoxBytesV1,
+                actual: Int.max
+            )
+        }
+        guard try canonicalProofBoxEncodedLength(
+            backendUTF8Count: backendUTF8Count,
+            proofByteCount: 0
+        ) <= maximumEncodedProofBoxBytesV1 else {
+            throw ProofAttachmentError.proofBoxTooLarge(
+                maximum: maximumEncodedProofBoxBytesV1,
+                actual: Int.max
+            )
+        }
+        var lower = 0
+        var upper = maximumEncodedProofBoxBytesV1
+        while lower < upper {
+            let distance = upper - lower
+            let candidate = lower + distance / 2 + distance % 2
+            if try canonicalProofBoxEncodedLength(
+                backendUTF8Count: backendUTF8Count,
+                proofByteCount: candidate
+            ) <= maximumEncodedProofBoxBytesV1 {
+                lower = candidate
+            } else {
+                upper = candidate - 1
             }
-            return sum
         }
+        return lower
+    }
+
+    private static func compactLengthByteCount(_ value: Int) -> Int {
+        precondition(value >= 0)
+        var remaining = UInt(value)
+        var byteCount = 1
+        while remaining >= 0x80 {
+            remaining >>= 7
+            byteCount += 1
+        }
+        return byteCount
+    }
+
+    private static func checkedProofBoxAdd(_ left: Int, _ right: Int) throws -> Int {
+        let (sum, overflow) = left.addingReportingOverflow(right)
+        guard !overflow else {
+            throw ProofAttachmentError.proofBoxTooLarge(
+                maximum: maximumEncodedProofBoxBytesV1,
+                actual: Int.max
+            )
+        }
+        return sum
     }
 
     private static func canonicalEnvelopeHash(for proof: Data) -> Data {

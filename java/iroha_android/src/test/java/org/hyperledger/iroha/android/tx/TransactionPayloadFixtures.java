@@ -27,13 +27,36 @@ import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
-import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.testing.SimpleJson;
 import org.hyperledger.iroha.android.util.HashLiteral;
 
 final class TransactionPayloadFixtures {
 
-  private static final NoritoJavaCodecAdapter DECODER = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
+  private static final List<String> FIXTURE_FIELDS =
+      Collections.unmodifiableList(
+          Arrays.asList(
+              "name",
+              "chain",
+              "authority",
+              "creation_time_ms",
+              "time_to_live_ms",
+              "nonce",
+              "payload_base64",
+              "signed_base64",
+              "payload_hash",
+              "signed_hash",
+              "payload"));
+  private static final List<String> PAYLOAD_FIELDS =
+      Collections.unmodifiableList(
+          Arrays.asList(
+              "chain",
+              "authority",
+              "creation_time_ms",
+              "time_to_live_ms",
+              "nonce",
+              "fee_payment",
+              "metadata",
+              "executable"));
 
   private TransactionPayloadFixtures() {}
 
@@ -47,24 +70,20 @@ final class TransactionPayloadFixtures {
     final List<Object> fixturesRaw = (List<Object>) parsed;
     final List<Fixture> fixtures = new ArrayList<>();
     final Set<String> names = new HashSet<>();
-    final Set<ByteBuffer> encodedPayloads = new HashSet<>();
+    final Set<ByteBuffer> payloadBytes = new HashSet<>();
     for (Object entry : fixturesRaw) {
       final Fixture fixture = Fixture.fromObject(entry);
       if (!names.add(fixture.name())) {
         throw new IllegalStateException("Duplicate fixture name: " + fixture.name());
       }
-      fixture
-          .encoded()
-          .ifPresent(
-              encoded -> {
-                final ByteBuffer identity =
-                    ByteBuffer.wrap(decodeCanonicalBase64(encoded, fixture.name() + ".encoded"))
-                        .asReadOnlyBuffer();
-                if (!encodedPayloads.add(identity)) {
-                  throw new IllegalStateException(
-                      "Duplicate fixture payload bytes: " + fixture.name());
-                }
-              });
+      final ByteBuffer identity =
+          ByteBuffer.wrap(
+                  decodeCanonicalBase64(
+                      fixture.payloadBase64(), fixture.name() + ".payload_base64"))
+              .asReadOnlyBuffer();
+      if (!payloadBytes.add(identity)) {
+        throw new IllegalStateException("Duplicate fixture payload bytes: " + fixture.name());
+      }
       fixtures.add(fixture);
     }
     return fixtures;
@@ -105,8 +124,7 @@ final class TransactionPayloadFixtures {
     private final Optional<Long> timeToLiveMs;
     private final Optional<Long> nonce;
     private final Map<String, Object> payload;
-    private final String encoded;
-    private final TransactionPayload decodedPayload;
+    private final String payloadBase64;
 
     private Fixture(
         final String name,
@@ -116,7 +134,7 @@ final class TransactionPayloadFixtures {
         final Optional<Long> timeToLiveMs,
         final Optional<Long> nonce,
         final Map<String, Object> payload,
-        final String encoded) {
+        final String payloadBase64) {
       this.name = name;
       this.chain = chain;
       this.authority = authority;
@@ -124,53 +142,53 @@ final class TransactionPayloadFixtures {
       this.timeToLiveMs = timeToLiveMs;
       this.nonce = nonce;
       this.payload = payload;
-      this.encoded = encoded;
-      this.decodedPayload = payload == null && encoded != null ? decodePayload(name, encoded) : null;
+      this.payloadBase64 = payloadBase64;
     }
 
     static Fixture fromObject(final Object value) {
       if (!(value instanceof Map)) {
         throw new IllegalStateException("Fixture entries must be objects");
       }
-      @SuppressWarnings("unchecked")
-      final Map<Object, Object> map = (Map<Object, Object>) value;
-      final String name = Objects.toString(map.get("name"), "<unnamed>");
-      final Map<String, Object> payload =
-          map.containsKey("payload") ? asMap(map.get("payload"), "payload", name) : null;
-      final Object chainRaw =
-          map.containsKey("chain") ? map.get("chain") : payload == null ? null : payload.get("chain");
-      final Object authorityRaw =
-          map.containsKey("authority")
-              ? map.get("authority")
-              : payload == null ? null : payload.get("authority");
-      final Object creationTimeRaw =
-          map.containsKey("creation_time_ms")
-              ? map.get("creation_time_ms")
-              : payload == null ? null : payload.get("creation_time_ms");
-      final Object nonceRaw =
-          map.containsKey("nonce") ? map.get("nonce") : payload == null ? null : payload.get("nonce");
-      final String chain = asString(chainRaw, "chain");
-      final String authority = asString(authorityRaw, "authority");
+      final Map<String, Object> map = asMap(value, "fixture", "<unnamed>");
+      final String name = asString(map.get("name"), "fixture.name");
+      requireExactFields(map, FIXTURE_FIELDS, name, "top-level");
+      final Map<String, Object> payload = asMap(map.get("payload"), "payload", name);
+      requireExactFields(payload, PAYLOAD_FIELDS, name, "payload");
+      final String chain = asString(map.get("chain"), name + ".chain");
+      final String authority = asString(map.get("authority"), name + ".authority");
       final long creationTimeMs =
-          asNumber(creationTimeRaw, "creation_time_ms").longValue();
+          asNumber(map.get("creation_time_ms"), name + ".creation_time_ms").longValue();
       final long timeToLiveMs =
           requiredPositiveInteger(map, "time_to_live_ms", name + ".time_to_live_ms");
-      if (payload != null) {
-        final long payloadTimeToLiveMs =
-            requiredPositiveInteger(
-                payload, "time_to_live_ms", name + ".payload.time_to_live_ms");
-        if (payloadTimeToLiveMs != timeToLiveMs) {
-          throw new IllegalStateException(
-              name + ": top-level and payload time_to_live_ms values must match");
-        }
+      final Optional<Long> nonce = optionalLong(map.get("nonce"), name + ".nonce");
+      final String payloadBase64 =
+          asString(map.get("payload_base64"), name + ".payload_base64");
+      decodeCanonicalBase64(payloadBase64, name + ".payload_base64");
+      decodeCanonicalBase64(
+          asString(map.get("signed_base64"), name + ".signed_base64"),
+          name + ".signed_base64");
+      asString(map.get("payload_hash"), name + ".payload_hash");
+      asString(map.get("signed_hash"), name + ".signed_hash");
+
+      final String payloadChain = asString(payload.get("chain"), name + ".payload.chain");
+      final String payloadAuthority =
+          asString(payload.get("authority"), name + ".payload.authority");
+      final long payloadCreationTimeMs =
+          asNumber(payload.get("creation_time_ms"), name + ".payload.creation_time_ms")
+              .longValue();
+      final long payloadTimeToLiveMs =
+          requiredPositiveInteger(
+              payload, "time_to_live_ms", name + ".payload.time_to_live_ms");
+      final Optional<Long> payloadNonce =
+          optionalLong(payload.get("nonce"), name + ".payload.nonce");
+      if (!chain.equals(payloadChain)
+          || !authority.equals(payloadAuthority)
+          || creationTimeMs != payloadCreationTimeMs
+          || timeToLiveMs != payloadTimeToLiveMs
+          || !nonce.equals(payloadNonce)) {
+        throw new IllegalStateException(
+            name + ": top-level transaction metadata must exactly match payload metadata");
       }
-      final Optional<Long> nonce = optionalLong(nonceRaw, "nonce");
-      final Object encoded = map.get("encoded");
-      final Object payloadBase64 = map.get("payload_base64");
-      final String resolvedEncoded =
-          encoded != null
-              ? Objects.toString(encoded)
-              : payloadBase64 == null ? null : Objects.toString(payloadBase64);
       return new Fixture(
           name,
           chain,
@@ -179,7 +197,7 @@ final class TransactionPayloadFixtures {
           Optional.of(timeToLiveMs),
           nonce,
           payload,
-          resolvedEncoded);
+          payloadBase64);
     }
 
     String name() {
@@ -206,24 +224,11 @@ final class TransactionPayloadFixtures {
       return nonce;
     }
 
-    boolean isDecodable() {
-      return payload != null || decodedPayload != null;
-    }
-
-    Optional<String> encoded() {
-      return Optional.ofNullable(encoded);
+    String payloadBase64() {
+      return payloadBase64;
     }
 
     TransactionPayload toPayload() {
-      if ("ivm_transfer".equals(name) && encoded != null) {
-        return decodePayload(name, encoded);
-      }
-      if (payload == null) {
-        if (decodedPayload != null) {
-          return decodedPayload;
-        }
-        throw new IllegalStateException(name + ": fixture missing payload and encoded data");
-      }
       final TransactionPayload.Builder builder =
           TransactionPayload.builder()
               .setFeePayment(parseFeePayment(payload.get("fee_payment"), name))
@@ -233,6 +238,10 @@ final class TransactionPayloadFixtures {
                   asNumber(payload.get("creation_time_ms"), "creation_time_ms").longValue());
 
       final Map<String, Object> exec = asMap(payload.get("executable"), "executable", name);
+      if (exec.size() != 1) {
+        throw new IllegalStateException(
+            name + ": executable must contain exactly one externally tagged variant");
+      }
       if (exec.containsKey("Ivm")) {
         final String base64 = asString(exec.get("Ivm"), "executable.Ivm");
         builder.setExecutable(
@@ -285,9 +294,8 @@ final class TransactionPayloadFixtures {
       final Object nonce = payload.get("nonce");
       builder.setNonce(nonce == null ? null : asNumber(nonce, "nonce").longValue());
 
-      final Map<String, Object> metadataRaw = payload.get("metadata") == null
-          ? Collections.emptyMap()
-          : asMap(payload.get("metadata"), "metadata", name);
+      final Map<String, Object> metadataRaw =
+          asMap(payload.get("metadata"), "metadata", name);
       final Map<String, JsonValue> metadata = new LinkedHashMap<>();
       metadataRaw.forEach((key, value) -> metadata.put(key, jsonValue(value)));
       builder.setMetadata(metadata);
@@ -372,9 +380,6 @@ final class TransactionPayloadFixtures {
 
     private static FeePaymentIntent parseFeePayment(
         final Object value, final String fixtureName) {
-      if (value == null) {
-        return FeePaymentIntent.authority(Collections.emptyList());
-      }
       final Map<String, Object> payment = asMap(value, "fee_payment", fixtureName);
       final String payer = asString(payment.get("payer"), "fee_payment.payer");
       final Map<String, Object> paymentValue =
@@ -444,13 +449,35 @@ final class TransactionPayloadFixtures {
       throw new IllegalStateException("Unsupported metadata JSON value type: " + value.getClass());
     }
 
-    private static TransactionPayload decodePayload(final String name, final String encoded) {
-      try {
-        final byte[] bytes = decodeCanonicalBase64(encoded, name + ".encoded");
-        return DECODER.decodeTransaction(bytes);
-      } catch (final Exception ex) {
-        System.err.println("[fixture] " + name + ": failed to decode encoded payload (" + ex.getMessage() + ")");
-        return null;
+  }
+
+  private static void requireExactFields(
+      final Map<String, Object> map,
+      final List<String> expectedFields,
+      final String fixtureName,
+      final String context) {
+    for (final String field : map.keySet()) {
+      if (!expectedFields.contains(field)) {
+        throw new IllegalStateException(
+            "fixture '"
+                + fixtureName
+                + "' contains unknown "
+                + context
+                + " field '"
+                + field
+                + "'");
+      }
+    }
+    for (final String field : expectedFields) {
+      if (!map.containsKey(field)) {
+        throw new IllegalStateException(
+            "fixture '"
+                + fixtureName
+                + "' missing required "
+                + context
+                + " field '"
+                + field
+                + "'");
       }
     }
   }

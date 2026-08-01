@@ -46,7 +46,10 @@ struct NamedByteArrays {
 #[derive(NoritoSerialize)]
 struct TupleByteArrays(u8, [u8; 32], [u8; 7]);
 
-fn assert_derived_lengths_match_payload_for_supported_layouts<T: NoritoSerialize>(value: &T) {
+fn assert_lengths_match_payload_for_supported_layouts<T: NoritoSerialize>(
+    value: &T,
+    emits_field_bitset: bool,
+) {
     use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
 
     for flags in [
@@ -55,15 +58,16 @@ fn assert_derived_lengths_match_payload_for_supported_layouts<T: NoritoSerialize
         PACKED_SEQ,
         PACKED_SEQ | COMPACT_LEN,
         PACKED_STRUCT,
+        PACKED_SEQ | PACKED_STRUCT,
         PACKED_STRUCT | COMPACT_LEN,
+        PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN,
         PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
         PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
     ] {
         norito::core::reset_decode_state();
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
         let mut payload = Vec::new();
-        value
-            .serialize(&mut payload)
+        norito::core::serialize_to_buffer(value, &mut payload)
             .expect("serialize derived byte-array payload");
         assert_eq!(
             value.encoded_len_hint(),
@@ -80,12 +84,18 @@ fn assert_derived_lengths_match_payload_for_supported_layouts<T: NoritoSerialize
         let advertised_flags = frame[norito::core::Header::SIZE - 1];
         norito::core::validate_header_flags(advertised_flags)
             .expect("encoder must advertise a supported layout combination");
-        if flags & FIELD_BITSET != 0 {
+        if flags & FIELD_BITSET != 0 && emits_field_bitset {
             let required = FIELD_BITSET | PACKED_STRUCT | COMPACT_LEN;
             assert_eq!(
                 advertised_flags & required,
                 required,
                 "field-bitset frame dropped a required dependency for flags 0x{flags:02x}"
+            );
+        } else if flags & FIELD_BITSET != 0 {
+            assert_eq!(
+                advertised_flags & FIELD_BITSET,
+                0,
+                "frame advertised a field bitset that the payload did not emit for flags 0x{flags:02x}"
             );
         }
     }
@@ -94,18 +104,30 @@ fn assert_derived_lengths_match_payload_for_supported_layouts<T: NoritoSerialize
 
 #[test]
 fn derive_named_byte_array_lengths_match_every_supported_layout() {
-    assert_derived_lengths_match_payload_for_supported_layouts(&NamedByteArrays {
-        tag: 9,
-        digest: [0xA5; 32],
-        suffix: [0x5A; 7],
-    });
+    assert_lengths_match_payload_for_supported_layouts(
+        &NamedByteArrays {
+            tag: 9,
+            digest: [0xA5; 32],
+            suffix: [0x5A; 7],
+        },
+        true,
+    );
 }
 
 #[test]
 fn derive_tuple_byte_array_lengths_match_every_supported_layout() {
-    assert_derived_lengths_match_payload_for_supported_layouts(&TupleByteArrays(
-        9, [0xA5; 32], [0x5A; 7],
-    ));
+    assert_lengths_match_payload_for_supported_layouts(
+        &TupleByteArrays(9, [0xA5; 32], [0x5A; 7]),
+        true,
+    );
+}
+
+#[test]
+fn nested_builtin_tuple_lengths_match_every_supported_layout() {
+    assert_lengths_match_payload_for_supported_layouts(
+        &(7_u32, vec![Some(11_u32), None, Some(13_u32)]),
+        false,
+    );
 }
 
 #[test]

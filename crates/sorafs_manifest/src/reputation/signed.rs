@@ -1268,7 +1268,10 @@ mod tests {
         struct MustNotSerialize;
 
         impl norito::NoritoSerialize for MustNotSerialize {
-            fn serialize<W: std::io::Write>(&self, _writer: W) -> Result<(), norito::core::Error> {
+            fn serialize(
+                &self,
+                _writer: &mut norito::core::Encoder<'_>,
+            ) -> Result<(), norito::core::Error> {
                 panic!("oversized value must be rejected before serialization")
             }
 

@@ -1562,7 +1562,7 @@ pub fn write_fixture(path: &Path, check_only: bool) -> Result<(), Box<dyn Error>
         let existing = fs::read_to_string(path)?;
         if existing != rendered {
             return Err(format!(
-                "fixture {} is stale; run cargo run -p iroha_data_model --bin sumeragi_v2_wire_fixtures",
+                "fixture {} is stale; run cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures",
                 path.display(),
             )
             .into());

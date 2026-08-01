@@ -317,14 +317,17 @@ pub(super) fn run_vega_stage_v1(
 
             let revoked_record = PrivacyVegaIssuerRecordV1::new(
                 issuer_record.issuer_id,
-                issuer_record.record_epoch,
+                issuer_record
+                    .record_epoch
+                    .checked_add(1)
+                    .ok_or(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?,
                 issuer_record.issuer_public_key,
                 issuer_record.document_type,
                 issuer_record.namespace,
                 issuer_record.digest_algorithm,
                 issuer_record.issuer_authentication_algorithm,
                 issuer_record.device_authentication_algorithm,
-                issuer_record.previous_record_digest,
+                Some(issuer_record.record_digest),
                 PrivacyVegaIssuerRecordLifecycleV1::Revoked,
             )
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
@@ -389,7 +392,11 @@ pub(super) fn run_vega_stage_v1(
                 &corrupt_header,
             )
             .is_ok()
-                || verify_vega_release_production_envelope_v1(
+            {
+                return Err(PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted);
+            }
+            require_vega_release_production_native_rejection_v1(
+                verify_vega_release_production_envelope_v1(
                     &statement,
                     Some(&issuer_record),
                     &corrupt_header,
@@ -397,11 +404,9 @@ pub(super) fn run_vega_stage_v1(
                     genesis_hash,
                     authoritative_action_index,
                     VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
-                )
-                .is_ok()
-            {
-                return Err(PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted);
-            }
+                ),
+                PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
+            )?;
 
             let mut corrupt_interior = proof.clone();
             let interior_index = corrupt_interior.len() / 2;
@@ -416,7 +421,11 @@ pub(super) fn run_vega_stage_v1(
                 &corrupt_interior,
             )
             .is_ok()
-                || verify_vega_release_production_envelope_v1(
+            {
+                return Err(PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted);
+            }
+            require_vega_release_production_native_rejection_v1(
+                verify_vega_release_production_envelope_v1(
                     &statement,
                     Some(&issuer_record),
                     &corrupt_interior,
@@ -424,11 +433,9 @@ pub(super) fn run_vega_stage_v1(
                     genesis_hash,
                     authoritative_action_index,
                     VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
-                )
-                .is_ok()
-            {
-                return Err(PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted);
-            }
+                ),
+                PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
+            )?;
 
             let truncated_length = proof
                 .len()
@@ -441,7 +448,11 @@ pub(super) fn run_vega_stage_v1(
                 &proof[..truncated_length],
             )
             .is_ok()
-                || verify_vega_release_production_envelope_v1(
+            {
+                return Err(PrivacyReleaseEvidenceErrorClassV1::ProofTruncationAccepted);
+            }
+            require_vega_release_production_native_rejection_v1(
+                verify_vega_release_production_envelope_v1(
                     &statement,
                     Some(&issuer_record),
                     &proof[..truncated_length],
@@ -449,11 +460,9 @@ pub(super) fn run_vega_stage_v1(
                     genesis_hash,
                     authoritative_action_index,
                     VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
-                )
-                .is_ok()
-            {
-                return Err(PrivacyReleaseEvidenceErrorClassV1::ProofTruncationAccepted);
-            }
+                ),
+                PrivacyReleaseEvidenceErrorClassV1::ProofTruncationAccepted,
+            )?;
             (
                 original_material,
                 PrivacyReleaseFailureClassV1::CanonicalWireCorruptionAndTruncationRejected,
@@ -479,7 +488,18 @@ pub(super) fn run_vega_stage_v1(
     })
 }
 
-fn verify_vega_release_production_envelope_v1(
+pub(super) fn require_vega_release_production_native_rejection_v1(
+    result: Result<(), PrivacyReleaseEvidenceErrorClassV1>,
+    accepted_class: PrivacyReleaseEvidenceErrorClassV1,
+) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
+    match result {
+        Err(PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected) => Ok(()),
+        Ok(()) => Err(accepted_class),
+        Err(_) => Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant),
+    }
+}
+
+pub(super) fn verify_vega_release_production_envelope_v1(
     statement: &VegaExistingCredentialStatementV1,
     issuer_record: Option<&PrivacyVegaIssuerRecordV1>,
     proof: &[u8],

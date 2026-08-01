@@ -133,20 +133,91 @@ final class ProofAttachmentNoritoTests: XCTestCase {
 
     func testProofBoxLimitAppliesToCompleteEncodedField() throws {
         let maximum = 64 * 1024 * 1024
-        let backendBytes = "halo2/ipa".utf8.count
+        let backendBytes = "halo2/ipa::transfer_v1".utf8.count
+        XCTAssertEqual(ProofAttachment.maximumEncodedProofBoxBytesV1, maximum)
+        XCTAssertEqual(
+            try ProofAttachment.maximumProofByteCountV1(
+                forBackend: "halo2/ipa::transfer_v1"
+            ),
+            maximum - 36
+        )
+        let maximumProofBytes = try ProofAttachment.maximumProofByteCount(
+            backendUTF8Count: backendBytes
+        )
+        XCTAssertEqual(maximumProofBytes, maximum - 36)
         XCTAssertEqual(
             try ProofAttachment.canonicalProofBoxEncodedLength(
                 backendUTF8Count: backendBytes,
-                proofByteCount: maximum - 32 - backendBytes
+                proofByteCount: maximumProofBytes
             ),
             maximum
         )
-        XCTAssertGreaterThan(
+        XCTAssertEqual(
             try ProofAttachment.canonicalProofBoxEncodedLength(
                 backendUTF8Count: backendBytes,
-                proofByteCount: maximum - 31 - backendBytes
+                proofByteCount: maximumProofBytes + 1
             ),
-            maximum
+            maximum + 1
+        )
+    }
+
+    func testProofBoxCompactLengthTransitionsAreExact() throws {
+        XCTAssertEqual(
+            try ProofAttachment.canonicalProofBoxEncodedLength(
+                backendUTF8Count: 127,
+                proofByteCount: 0
+            ),
+            139
+        )
+        XCTAssertEqual(
+            try ProofAttachment.canonicalProofBoxEncodedLength(
+                backendUTF8Count: 128,
+                proofByteCount: 0
+            ),
+            141
+        )
+        XCTAssertEqual(
+            try ProofAttachment.canonicalProofBoxEncodedLength(
+                backendUTF8Count: 16_383,
+                proofByteCount: 0
+            ),
+            16_397
+        )
+        XCTAssertEqual(
+            try ProofAttachment.canonicalProofBoxEncodedLength(
+                backendUTF8Count: 16_384,
+                proofByteCount: 0
+            ),
+            16_399
+        )
+
+        XCTAssertEqual(
+            try ProofAttachment.canonicalProofBoxEncodedLength(
+                backendUTF8Count: 0,
+                proofByteCount: 119
+            ),
+            130
+        )
+        XCTAssertEqual(
+            try ProofAttachment.canonicalProofBoxEncodedLength(
+                backendUTF8Count: 0,
+                proofByteCount: 120
+            ),
+            132
+        )
+        XCTAssertEqual(
+            try ProofAttachment.canonicalProofBoxEncodedLength(
+                backendUTF8Count: 0,
+                proofByteCount: 16_375
+            ),
+            16_387
+        )
+        XCTAssertEqual(
+            try ProofAttachment.canonicalProofBoxEncodedLength(
+                backendUTF8Count: 0,
+                proofByteCount: 16_376
+            ),
+            16_389
         )
     }
 

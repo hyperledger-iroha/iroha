@@ -25,6 +25,7 @@ fi
 
 echo "[norito-regenerate] regenerating goldens in ${GOLDEN_DIR}"
 cargo run --manifest-path "${REPO_ROOT}/crates/norito/Cargo.toml" \
+  --features dev-tools \
   --bin norito_regen_goldens -- "${GOLDEN_DIR}"
 
 relative_dir="${GOLDEN_DIR#${REPO_ROOT}/}"

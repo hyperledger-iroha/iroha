@@ -19,7 +19,6 @@ use core::{
 use std::{
     borrow::ToOwned as _,
     boxed::Box,
-    io::Write,
     string::{String, ToString as _},
 };
 
@@ -252,7 +251,7 @@ impl JsonDeserialize for ConstString {
 }
 
 impl NoritoSerialize for ConstString {
-    fn serialize<W: Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         <&str as NoritoSerialize>::serialize(&self.as_ref(), writer)
     }
 }

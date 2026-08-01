@@ -97,16 +97,16 @@ sumeragi_v2_ensure_source_bound_localnet_binaries() {
     # metadata survived in the fixed cache.  Remove only the four exact
     # top-level outputs so this invocation must relink them.
     rm -f -- \
-      "${prebuilt_default_cache}/release/iroha3d" \
+      "${prebuilt_default_cache}/release/irohad" \
       "${prebuilt_default_cache}/release/iroha" \
       "${prebuilt_default_cache}/release/kagami" \
-      "${prebuilt_message_control_cache}/release/iroha3d" || exit $?
+      "${prebuilt_message_control_cache}/release/irohad" || exit $?
 
     (
       export CARGO_TARGET_DIR="$prebuilt_default_cache"
       export ENABLE_RANS_BUNDLES=1
       export NORITO_SKIP_BINDINGS_SYNC=1
-      run_cargo build --locked --offline --release -p irohad --bin iroha3d || exit $?
+      run_cargo build --locked --offline --release -p irohad --bin irohad || exit $?
       run_cargo build --locked --offline --release -p iroha_cli --bin iroha || exit $?
       run_cargo build --locked --offline --release -p iroha_kagami --bin kagami || exit $?
     ) || exit $?
@@ -114,7 +114,7 @@ sumeragi_v2_ensure_source_bound_localnet_binaries() {
       export CARGO_TARGET_DIR="$prebuilt_message_control_cache"
       export ENABLE_RANS_BUNDLES=1
       export NORITO_SKIP_BINDINGS_SYNC=1
-      run_cargo build --locked --offline --release -p irohad --bin iroha3d \
+      run_cargo build --locked --offline --release -p irohad --bin irohad \
         --features test-network-message-control || exit $?
     ) || exit $?
 
@@ -171,8 +171,8 @@ sumeragi_v2_export_source_bound_localnet_binaries() {
     echo "refusing to publish unattested source-bound localnet binaries" >&2
     return 1
   fi
-  export TEST_NETWORK_BIN_IROHAD="${IROHA_TEST_TARGET_DIR}/release/iroha3d"
-  export TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="${IROHA_TEST_TARGET_DIR}/message-control/release/iroha3d"
+  export TEST_NETWORK_BIN_IROHAD="${IROHA_TEST_TARGET_DIR}/release/irohad"
+  export TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="${IROHA_TEST_TARGET_DIR}/message-control/release/irohad"
   export TEST_NETWORK_BIN_IROHA="${IROHA_TEST_TARGET_DIR}/release/iroha"
   export KAGAMI_BIN="${IROHA_TEST_TARGET_DIR}/release/kagami"
 }

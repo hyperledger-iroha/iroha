@@ -72,7 +72,10 @@ pub mod message {
     }
 
     impl norito::core::NoritoSerialize for Message {
-        fn serialize<W: std::io::Write>(&self, _writer: W) -> Result<(), norito::core::Error> {
+        fn serialize(
+            &self,
+            _writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
             Err(norito::core::Error::Message(
                 "refusing to emit decode-only Sumeragi v1 block-sync message".to_owned(),
             ))

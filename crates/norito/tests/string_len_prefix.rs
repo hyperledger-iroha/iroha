@@ -1,7 +1,7 @@
 //! Regression tests for string length-prefix decoding.
 
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize,
     core::{self, DecodeFlagsGuard, header_flags, reset_decode_state},
 };
 
@@ -58,7 +58,7 @@ fn archived_string_requires_bounded_payload_context() {
     let mut payload = Vec::new();
     {
         let _guard = DecodeFlagsGuard::enter(0);
-        s.serialize(&mut payload).expect("serialize string");
+        core::serialize_to_buffer(&s, &mut payload).expect("serialize string");
     }
     let archived = core::archived_from_slice::<String>(&payload).expect("archived string");
     let _flags = DecodeFlagsGuard::enter(0);

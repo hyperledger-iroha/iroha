@@ -545,6 +545,48 @@ fn every_decimal_rounding_mode_matches_between_folding_and_vm_execution() {
 }
 
 #[test]
+fn every_quantity_rounding_mode_matches_between_folding_and_vm_execution() {
+    for mode in [
+        "toward_zero",
+        "away_from_zero",
+        "floor",
+        "ceil",
+        "nearest_even",
+        "nearest_away",
+        "nearest_toward_zero",
+    ] {
+        let folded_source = format!(
+            "seiyaku FoldedRoundedQuantity {{\n\
+                 const quantity VALUE = 1;\n\
+                 const decimal DIVISOR = 8;\n\
+                 const int SCALE = 2;\n\
+                 view fn run() -> quantity {{\n\
+                     return VALUE.div_round(\n\
+                         divisor: DIVISOR, scale: SCALE, mode: Rounding::{mode});\n\
+                 }}\n\
+             }}"
+        );
+        let runtime_source = format!(
+            "seiyaku RuntimeRoundedQuantity {{\n\
+                 view fn run(quantity value, decimal divisor, int scale) -> quantity {{\n\
+                     return value.div_round(\n\
+                         divisor: divisor, scale: scale, mode: Rounding::{mode});\n\
+                 }}\n\
+             }}"
+        );
+        assert_numeric_fold_runtime_parity(
+            mode,
+            &folded_source,
+            &runtime_source,
+            r#"{"value":"1","divisor":"8","scale":"2"}"#,
+            NumericReturnKind::Quantity,
+            syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_ROUND,
+            FoldedSyscallExpectation::Omitted,
+        );
+    }
+}
+
+#[test]
 fn decimal_to_int_conversions_match_folding_for_success_and_failure() {
     for (case, value) in [
         ("decimal-to-int-exact", "42"),
@@ -691,11 +733,47 @@ fn quantity_arithmetic_folding_matches_parameterized_vm_execution() {
             syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_EXACT,
         ),
         (
+            "quantity-div-decimal-repeating",
+            "const quantity LEFT = 1.0; const decimal RIGHT = 3.0;",
+            "quantity left, decimal right",
+            "left / right",
+            r#"{"left":"1","right":"3"}"#,
+            NumericReturnKind::Quantity,
+            syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_EXACT,
+        ),
+        (
+            "quantity-div-decimal-zero",
+            "const quantity LEFT = 1.0; const decimal RIGHT = 0.0;",
+            "quantity left, decimal right",
+            "left / right",
+            r#"{"left":"1","right":"0"}"#,
+            NumericReturnKind::Quantity,
+            syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_EXACT,
+        ),
+        (
             "quantity-ratio",
             "const quantity LEFT = 1.0; const quantity RIGHT = 8.0;",
             "quantity left, quantity right",
             "left / right",
             r#"{"left":"1","right":"8"}"#,
+            NumericReturnKind::Decimal,
+            syscalls::SYSCALL_QUANTITY_RATIO_EXACT,
+        ),
+        (
+            "quantity-ratio-repeating",
+            "const quantity LEFT = 1.0; const quantity RIGHT = 3.0;",
+            "quantity left, quantity right",
+            "left / right",
+            r#"{"left":"1","right":"3"}"#,
+            NumericReturnKind::Decimal,
+            syscalls::SYSCALL_QUANTITY_RATIO_EXACT,
+        ),
+        (
+            "quantity-ratio-zero",
+            "const quantity LEFT = 1.0; const quantity RIGHT = 0.0;",
+            "quantity left, quantity right",
+            "left / right",
+            r#"{"left":"1","right":"0"}"#,
             NumericReturnKind::Decimal,
             syscalls::SYSCALL_QUANTITY_RATIO_EXACT,
         ),
