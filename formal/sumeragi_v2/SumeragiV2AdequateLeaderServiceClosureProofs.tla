@@ -5797,6 +5797,26 @@ AdequateLeaderProtectedIngressLifecycleOwned(
         /\ record.schedulerOrdinal
              < AsyncEffectiveTimeoutLifecycleOrdinal(node)
 
+\* A periodic clock episode frozen before the current-view timeout is one
+\* bounded predecessor episode.  Snapshot it even while an older Candidate is
+\* ahead of it: draining that Candidate must reveal an already-frozen owner,
+\* not appear to replenish the periodic prefix.
+AdequateLeaderPeriodicLifecyclePredecessorOwned(
+    node, leaderContext, leaderView) ==
+  /\ leaderContext = context
+  /\ nodeView[node] = leaderView
+  /\ AsyncTimeoutLifecycleOwned(node)
+  /\ AsyncOlderRetransmitLifecycleBlocksTimeout(node)
+
+\* The third concrete post-deadline protection arm is the same frozen
+\* periodic predecessor once no still-earlier Candidate owns runtime priority.
+\* (The Candidate arm covers that earlier-prefix case.)
+AdequateLeaderProtectedPeriodicLifecycleOwned(
+    node, leaderContext, leaderView) ==
+  /\ AdequateLeaderPeriodicLifecyclePredecessorOwned(
+       node, leaderContext, leaderView)
+  /\ ~AsyncOlderCandidateLifecycleBlocksRetransmit(node)
+
 AdequateLeaderProtectedNodeServiceWindow(
     node, leaderContext, leaderView) ==
   /\ node \in ValidatorIds
@@ -5809,6 +5829,8 @@ AdequateLeaderProtectedNodeServiceWindow(
   /\ "TimeoutElapsed" \notin asyncOutstandingTags[node]
   /\ \/ AsyncOlderCandidateLifecycleBlocksTimeout(node)
      \/ AdequateLeaderProtectedIngressLifecycleOwned(
+          node, leaderContext, leaderView)
+     \/ AdequateLeaderProtectedPeriodicLifecycleOwned(
           node, leaderContext, leaderView)
 
 \* After the fresh synchronization boundary, the fixed episode carries its
@@ -5843,6 +5865,20 @@ THEOREM AdequateLeaderProtectedCandidateWindowPreventsTimeoutOvertake ==
        /\ ~DeferredTimeoutExecutable(node)
 BY AsyncOlderCandidateLifecyclePreventsDueTimeoutOvertake
    DEF AdequateLeaderProtectedNodeServiceWindow
+
+THEOREM AdequateLeaderProtectedPeriodicWindowPreventsTimeoutOvertake ==
+  \A node \in ValidatorIds,
+     leaderContext \in ContextRecords,
+     leaderView \in Views:
+    /\ AdequateLeaderProtectedNodeServiceWindow(
+         node, leaderContext, leaderView)
+    /\ AdequateLeaderProtectedPeriodicLifecycleOwned(
+         node, leaderContext, leaderView)
+    => /\ ~TimeoutDue(node)
+       /\ ~DeferredTimeoutExecutable(node)
+BY AsyncOlderRetransmitLifecyclePreventsDueTimeoutOvertake
+   DEF AdequateLeaderProtectedNodeServiceWindow,
+       AdequateLeaderProtectedPeriodicLifecycleOwned
 
 THEOREM AdequateLeaderProtectedIngressLifecyclePrecedesTimeout ==
   \A node \in ValidatorIds,
@@ -5901,6 +5937,275 @@ AdequateLeaderCorridorAuthorityReceipt(
    view |-> leaderView,
    roster |-> AdequateLeaderFrozenResponsiveRoster(leaderContext)]
 
+\* Periodic retransmission is not a protocol owner and therefore never enters
+\* `AdequateLeaderFrozenOwnerUniverse`.  It is a finite scheduler prefix
+\* snapshotted separately when an occurrence owner is selected.  The identity
+\* binds both immutable ordinals: `retransmitOrdinal` identifies the one live
+\* periodic episode, while `timeoutOrdinalCeiling` records the timeout owner
+\* which it was already ahead of.  Transport retries of that episode retain
+\* this identity.  A later wall-clock episode consumes a fresh shared ordinal
+\* and cannot re-enter the snapshot.
+AdequateLeaderProtectedPeriodicOwnerIdentity(
+    target, leaderContext, leader, leaderView, subject,
+    owner, retransmitOrdinal, timeoutOrdinalCeiling) ==
+  [kind |-> "AdequateLeaderProtectedPeriodicOwner",
+   target |-> target,
+   context |-> leaderContext,
+   leader |-> leader,
+   view |-> leaderView,
+   subject |-> subject,
+   phase |-> "PeriodicRetransmit",
+   authority |->
+     AdequateLeaderCorridorAuthorityReceipt(
+       target, leaderContext, leader, leaderView),
+   owner |-> owner,
+   retransmitOrdinal |-> retransmitOrdinal,
+   timeoutOrdinalCeiling |-> timeoutOrdinalCeiling]
+
+AdequateLeaderProtectedPeriodicSnapshotIdentity(
+    identity, target, leaderContext, leader, leaderView, subject) ==
+  \E owner \in {target, leader},
+     retransmitOrdinal \in Nat \ {0},
+     timeoutOrdinalCeiling \in Nat \ {0}:
+    /\ retransmitOrdinal < timeoutOrdinalCeiling
+    /\ identity =
+         AdequateLeaderProtectedPeriodicOwnerIdentity(
+           target, leaderContext, leader, leaderView, subject,
+           owner, retransmitOrdinal, timeoutOrdinalCeiling)
+
+AdequateLeaderProtectedPeriodicIdentityActive(
+    identity, target, leaderContext, leader, leaderView, subject) ==
+  /\ AdequateLeaderProtectedPeriodicSnapshotIdentity(
+       identity, target, leaderContext, leader, leaderView, subject)
+  /\ AdequateLeaderPeriodicLifecyclePredecessorOwned(
+       identity.owner, leaderContext, leaderView)
+  /\ AsyncRetransmitLifecycleOrdinal(identity.owner)
+       = identity.retransmitOrdinal
+  /\ AsyncTimeoutLifecycleOrdinal(identity.owner)
+       = identity.timeoutOrdinalCeiling
+
+AdequateLeaderProtectedPeriodicSnapshot(
+    target, leaderContext, leader, leaderView, subject) ==
+  {AdequateLeaderProtectedPeriodicOwnerIdentity(
+     target, leaderContext, leader, leaderView, subject,
+     owner, AsyncRetransmitLifecycleOrdinal(owner),
+     AsyncTimeoutLifecycleOrdinal(owner)):
+     owner \in
+       {node \in {target, leader}:
+          AdequateLeaderPeriodicLifecyclePredecessorOwned(
+            node, leaderContext, leaderView)}}
+
+\* This state-derived receipt is the tombstone for one drained periodic
+\* identity.  The active slot is empty for that exact ordinal and the shared
+\* high-watermark has already passed it.  No temporal-history variable or new
+\* protocol field is introduced.
+AdequateLeaderProtectedPeriodicRetirementReceipt(identity) ==
+  /\ \/ ~AsyncRetransmitLifecycleOwned(identity.owner)
+     \/ AsyncRetransmitLifecycleOrdinal(identity.owner)
+          # identity.retransmitOrdinal
+  /\ identity.retransmitOrdinal
+       < AsyncNextCandidateLifecycleOrdinal(identity.owner)
+
+AdequateLeaderProtectedPeriodicSnapshotRetired(
+    snapshot, target, leaderContext, leader, leaderView, subject) ==
+  /\ \A identity \in snapshot:
+       AdequateLeaderProtectedPeriodicSnapshotIdentity(
+         identity, target, leaderContext, leader, leaderView, subject)
+  /\ \A identity \in snapshot:
+       AdequateLeaderProtectedPeriodicRetirementReceipt(identity)
+
+\* Retiring only the identities captured by the initial snapshot is not a
+\* sufficient endpoint: a proof could otherwise start the Candidate/Wire
+\* episode while a replacement periodic owner still precedes the frozen
+\* timeout.  The current protected snapshot must be empty at the handoff.
+AdequateLeaderProtectedPeriodicSnapshotDrained(
+    snapshot, target, leaderContext, leader, leaderView, subject) ==
+  /\ AdequateLeaderProtectedPeriodicSnapshotRetired(
+       snapshot, target, leaderContext, leader, leaderView, subject)
+  /\ AdequateLeaderProtectedPeriodicSnapshot(
+       target, leaderContext, leader, leaderView, subject) = {}
+
+AdequateLeaderProtectedPeriodicIdentityStage(
+    identity, target, leaderContext, leader, leaderView, subject) ==
+  IF AdequateLeaderProtectedPeriodicIdentityActive(
+       identity, target, leaderContext, leader, leaderView, subject)
+  THEN IF "RetransmitElapsed"
+            \in asyncOutstandingTags[identity.owner]
+       THEN 1
+       ELSE 2
+  ELSE 0
+
+AdequateLeaderProtectedPeriodicSnapshotTokens(
+    snapshot, target, leaderContext, leader, leaderView, subject) ==
+  {<<identity, stage>>:
+     identity \in snapshot,
+     stage \in
+       1..AdequateLeaderProtectedPeriodicIdentityStage(
+            identity, target, leaderContext,
+            leader, leaderView, subject)}
+
+AdequateLeaderProtectedPeriodicSnapshotBudget(
+    snapshot, target, leaderContext, leader, leaderView, subject) ==
+  Cardinality(
+    AdequateLeaderProtectedPeriodicSnapshotTokens(
+      snapshot, target, leaderContext, leader, leaderView, subject))
+
+THEOREM AdequateLeaderProtectedPeriodicSnapshotIsExactAndFinite ==
+  \A target, leaderContext, leader, leaderView, subject:
+    /\ AsyncStrongTypeInvariant
+    /\ target \in ValidatorIds
+    /\ leader \in ValidatorIds
+    /\ leaderContext \in ContextRecords
+    /\ leaderView \in Views
+    /\ subject \in Subjects
+    => LET snapshot ==
+             AdequateLeaderProtectedPeriodicSnapshot(
+               target, leaderContext, leader, leaderView, subject)
+       IN /\ IsFiniteSet(snapshot)
+          /\ Cardinality(snapshot) <= 2
+          /\ \A identity \in snapshot:
+               /\ AdequateLeaderProtectedPeriodicSnapshotIdentity(
+                    identity, target, leaderContext,
+                    leader, leaderView, subject)
+               /\ AdequateLeaderProtectedPeriodicIdentityActive(
+                    identity, target, leaderContext,
+                    leader, leaderView, subject)
+          /\ AdequateLeaderProtectedPeriodicSnapshotBudget(
+               snapshot, target, leaderContext,
+               leader, leaderView, subject) \in Nat
+          /\ AdequateLeaderProtectedPeriodicSnapshotBudget(
+               snapshot, target, leaderContext,
+               leader, leaderView, subject) <= 4
+BY FS_Interval, FS_Image, FS_Product, FS_Subset,
+   FS_CardinalityType, IsaT(600)
+   DEF AdequateLeaderProtectedPeriodicSnapshot,
+       AdequateLeaderProtectedPeriodicSnapshotIdentity,
+       AdequateLeaderProtectedPeriodicIdentityActive,
+       AdequateLeaderProtectedPeriodicSnapshotTokens,
+       AdequateLeaderProtectedPeriodicSnapshotBudget,
+       AdequateLeaderProtectedPeriodicIdentityStage,
+       AdequateLeaderProtectedPeriodicOwnerIdentity,
+       AdequateLeaderPeriodicLifecyclePredecessorOwned,
+       AsyncOlderRetransmitLifecycleBlocksTimeout,
+       AsyncEffectiveTimeoutLifecycleOrdinal
+
+THEOREM AdequateLeaderProtectedPeriodicRetryCoalescesAtExactOrdinal ==
+  \A identity, target, leaderContext, leader, leaderView, subject:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncNext
+    /\ AdequateLeaderProtectedPeriodicIdentityActive(
+         identity, target, leaderContext, leader, leaderView, subject)
+    /\ ~AsyncRetransmitLifecycleEpisodeCompletesThisStep(identity.owner)
+    /\ ~AsyncRetransmitLifecycleResetThisStep(identity.owner)
+    /\ ~AsyncTimeoutLifecycleResetThisStep(identity.owner)
+    /\ ~AsyncTimeoutLifecycleTransfersThisStep(identity.owner)
+    => AdequateLeaderProtectedPeriodicIdentityActive(
+         identity, target, leaderContext, leader, leaderView, subject)'
+BY AsyncTimeoutLifecycleOrdinalPersistsUntilEndpoint,
+   AsyncRetransmitFreshLiveEpisodeRetainsSharedLifecycleOrdinal,
+   AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntilEndpoint,
+   IsaT(900)
+   DEF AdequateLeaderProtectedPeriodicIdentityActive,
+       AdequateLeaderProtectedPeriodicSnapshotIdentity,
+       AdequateLeaderPeriodicLifecyclePredecessorOwned,
+       AsyncOlderRetransmitLifecycleBlocksTimeout,
+       AsyncEffectiveTimeoutLifecycleOrdinal,
+       AsyncNext, AsyncControlServiceSlotTransition,
+       AsyncCandidateLifecycleStateAfterServeIngressAdmission,
+       AsyncRetransmitLifecycleConsumesFreshOrdinal,
+       AsyncRetransmitLifecycleOwned,
+       AsyncRetransmitLifecycleOrdinal,
+       AsyncAllVars
+
+THEOREM AdequateLeaderProtectedPeriodicCompletionInstallsRetirementReceipt ==
+  \A identity, target, leaderContext, leader, leaderView, subject:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncNext
+    /\ AdequateLeaderProtectedPeriodicIdentityActive(
+         identity, target, leaderContext, leader, leaderView, subject)
+    /\ AsyncRetransmitLifecycleEpisodeCompletesThisStep(identity.owner)
+    => AdequateLeaderProtectedPeriodicRetirementReceipt(identity)'
+BY AsyncRetransmitCompletedEpisodeClearsActiveOwner,
+   AsyncRetransmitCompletedOwnedEpisodeDefersFreshAcquisition,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   IsaT(900)
+   DEF AdequateLeaderProtectedPeriodicIdentityActive,
+       AdequateLeaderProtectedPeriodicSnapshotIdentity,
+       AdequateLeaderProtectedPeriodicRetirementReceipt,
+       AsyncStrongTypeInvariant, AsyncControlServiceStateTypeInvariant,
+       AsyncNextCandidateLifecycleOrdinal,
+       AsyncRetransmitLifecycleOwned,
+       AsyncRetransmitLifecycleOrdinal,
+       AsyncNext, AsyncControlServiceSlotTransition,
+       AsyncCandidateLifecycleStateAfterServeIngressAdmission,
+       AsyncAllVars
+
+THEOREM AdequateLeaderProtectedPeriodicIdentityUsesFrozenTimeoutStage ==
+  \A identity, target, leaderContext, leader, leaderView, subject:
+    AdequateLeaderProtectedPeriodicIdentityActive(
+      identity, target, leaderContext, leader, leaderView, subject)
+      => /\ AdequateLeaderProtectedPeriodicIdentityStage(
+               identity, target, leaderContext,
+               leader, leaderView, subject)
+             = TimeoutRuntimePriorityPeriodicStage(
+                 identity.owner, identity.timeoutOrdinalCeiling)
+         /\ TimeoutRuntimePriorityPeriodicStage(
+               identity.owner, identity.timeoutOrdinalCeiling)
+              \in {1, 2}
+BY Isa
+   DEF AdequateLeaderProtectedPeriodicIdentityActive,
+       AdequateLeaderProtectedPeriodicIdentityStage,
+       AdequateLeaderPeriodicLifecyclePredecessorOwned,
+       TimeoutRuntimePriorityPeriodicStage,
+       AsyncOlderRetransmitLifecycleBlocksTimeout,
+       AsyncEffectiveTimeoutLifecycleOrdinal
+
+THEOREM AdequateLeaderProtectedPeriodicRetirementCannotResurrect ==
+  \A identity, target, leaderContext, leader, leaderView, subject:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AdequateLeaderProtectedPeriodicSnapshotIdentity(
+         identity, target, leaderContext, leader, leaderView, subject)
+    /\ AdequateLeaderProtectedPeriodicRetirementReceipt(identity)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ context' = leaderContext
+    /\ nodeView'[identity.owner] = leaderView
+    /\ AsyncTimeoutLifecycleOwned(identity.owner)'
+    /\ AsyncTimeoutLifecycleOrdinal(identity.owner)'
+         = identity.timeoutOrdinalCeiling
+    => AdequateLeaderProtectedPeriodicRetirementReceipt(identity)'
+BY AsyncRetransmitCompletedOwnedEpisodeDefersFreshAcquisition,
+   AsyncRetransmitFreshEpisodeCannotReuseDrainedPosition,
+   AsyncRetransmitFreshLiveEpisodeRetainsSharedLifecycleOrdinal,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   IsaT(1200)
+   DEF AdequateLeaderProtectedPeriodicSnapshotIdentity,
+       AdequateLeaderProtectedPeriodicRetirementReceipt,
+       AsyncRetransmitLifecycleFreshOrdinalForStep,
+       AsyncRetransmitLifecycleOwned,
+       AsyncRetransmitLifecycleOrdinal,
+       AsyncNextCandidateLifecycleOrdinal,
+       AsyncAllVars
+
+THEOREM AdequateLeaderProtectedPeriodicRetiredSnapshotPersists ==
+  \A snapshot, target, leaderContext, leader, leaderView, subject:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AdequateLeaderProtectedPeriodicSnapshotRetired(
+         snapshot, target, leaderContext, leader, leaderView, subject)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ context' = leaderContext
+    /\ nodeView'[target] = leaderView
+    /\ nodeView'[leader] = leaderView
+    /\ \A identity \in snapshot:
+         /\ AsyncTimeoutLifecycleOwned(identity.owner)'
+         /\ AsyncTimeoutLifecycleOrdinal(identity.owner)'
+              = identity.timeoutOrdinalCeiling
+    => AdequateLeaderProtectedPeriodicSnapshotRetired(
+         snapshot, target, leaderContext, leader, leaderView, subject)'
+BY AdequateLeaderProtectedPeriodicRetirementCannotResurrect, PTL
+   DEF AdequateLeaderProtectedPeriodicSnapshotRetired
+
 AdequateLeaderCorridorAuthorityReceiptValid(receipt) ==
   /\ receipt.context \in ContextRecords
   /\ receipt.roster =
@@ -5956,6 +6261,40 @@ AdequateLeaderFrozenTargetCorridor(
   /\ AdequateLeaderActiveTargetLeaderServiceWindow(
        target, leaderContext, leader, leaderView)
   /\ ~NodeHasDecision(target)
+
+THEOREM AdequateLeaderProtectedPeriodicIdentityOwnsExactRuntimePriority ==
+  \A identity, target, leaderContext, leader, leaderView, subject:
+    /\ AsyncStrongTypeInvariant
+    /\ AdequateLeaderFrozenTargetCorridor(
+         target, leaderContext, leader, leaderView)
+    /\ AdequateLeaderProtectedPeriodicIdentityActive(
+         identity, target, leaderContext, leader, leaderView, subject)
+    => \/ AsyncOlderCandidateLifecycleBlocksRetransmit(identity.owner)
+       \/ /\ "RetransmitElapsed"
+                  \notin asyncOutstandingTags[identity.owner]
+             /\ RetransmitDue(identity.owner)
+          \/ /\ "RetransmitElapsed"
+                  \in asyncOutstandingTags[identity.owner]
+             /\ DeferredTagExecutable(identity.owner)
+BY AdequateLeaderProtectedPeriodicWindowPreventsTimeoutOvertake,
+   IsaT(900)
+   DEF AdequateLeaderProtectedPeriodicIdentityActive,
+       AdequateLeaderProtectedPeriodicSnapshotIdentity,
+       AdequateLeaderPeriodicLifecyclePredecessorOwned,
+       AdequateLeaderProtectedPeriodicLifecycleOwned,
+       AdequateLeaderFrozenTargetCorridor,
+       AdequateLeaderResponsiveViewSynchronized,
+       AdequateLeaderActiveTargetLeaderServiceWindow,
+       AdequateLeaderActiveNodeServiceWindow,
+       AdequateLeaderProtectedNodeServiceWindow,
+       AsyncOlderRetransmitLifecycleBlocksTimeout,
+       AsyncOlderCandidateLifecycleBlocksRetransmit,
+       AsyncEffectiveTimeoutLifecycleOrdinal,
+       RetransmitDue, RetransmitTagPresent,
+       DeferredTagExecutable,
+       AsyncStrongTypeInvariant,
+       ResponsiveReplayQuarantined,
+       AsyncTimeoutClockDue, AsyncTimeoutClockDueIn
 
 AdequateLeaderFreshSynchronizedTargetCorridor(
     target, leaderContext, leader, leaderView) ==
@@ -11338,6 +11677,247 @@ AdequateLeaderTargetOccurrenceRankServiceExitGoal(
     target, leaderContext, leader, leaderView,
     subject, sourceOccurrenceRank, owner)
 
+(***************************************************************************
+Selected-occurrence periodic prefix.
+
+The periodic clock is an outer scheduler episode, not a member of the
+Candidate/Wire discovery universe.  The source occurrence and its selected
+candidate owner are frozen while the exact at-most-two-owner snapshot drains.
+If either ceases to be that exact frontier, the transition must expose the
+existing occurrence-service exit.  Otherwise every snapshot identity reaches
+its high-watermark-backed retirement receipt before the ordinary finite owner
+episode is initialized.
+***************************************************************************)
+AdequateLeaderProtectedPeriodicIdentityServiceResidual(
+    target, leaderContext, leader, leaderView, subject,
+    sourceOccurrenceRank, owner, identity) ==
+  /\ AdequateLeaderFrozenTargetCorridor(
+       target, leaderContext, leader, leaderView)
+  /\ AdequateLeaderTargetProtocolSubjectSource(
+       target, leaderContext, leader, leaderView, subject)
+  /\ AdequateLeaderTargetOccurrenceOwnerSelected(
+       target, leaderContext, leader, leaderView,
+       subject, sourceOccurrenceRank, owner)
+  /\ AdequateLeaderProtectedPeriodicIdentityActive(
+       identity, target, leaderContext, leader, leaderView, subject)
+
+AdequateLeaderProtectedPeriodicIdentityServiceGoal(
+    target, leaderContext, leader, leaderView, subject,
+    sourceOccurrenceRank, owner, identity) ==
+  \/ AdequateLeaderTargetOccurrenceRankServiceExitGoal(
+       target, leaderContext, leader, leaderView,
+       subject, sourceOccurrenceRank, owner)
+  \/ /\ AdequateLeaderFrozenTargetCorridor(
+          target, leaderContext, leader, leaderView)
+     /\ AdequateLeaderTargetOccurrenceOwnerSelected(
+          target, leaderContext, leader, leaderView,
+          subject, sourceOccurrenceRank, owner)
+     /\ AdequateLeaderProtectedPeriodicRetirementReceipt(identity)
+
+AdequateLeaderProtectedPeriodicIdentityServiceProperty(specification) ==
+  specification
+    => \A target \in ValidatorIds,
+          leaderContext \in ContextRecords,
+          leader \in ValidatorIds,
+          leaderView \in Views,
+          subject \in Subjects,
+          sourceOccurrenceRank \in
+            AdequateLeaderTargetOccurrenceRankCarrier,
+          owner \in
+            AdequateLeaderFrozenCandidateOwnerUniverse(
+              target, leaderContext, leader, leaderView, subject):
+         \A identity:
+           AdequateLeaderProtectedPeriodicIdentityServiceResidual(
+             target, leaderContext, leader, leaderView, subject,
+             sourceOccurrenceRank, owner, identity)
+             ~> AdequateLeaderProtectedPeriodicIdentityServiceGoal(
+                  target, leaderContext, leader, leaderView, subject,
+                  sourceOccurrenceRank, owner, identity)
+
+AdequateLeaderProtectedPeriodicEpisodeResidual(
+    target, leaderContext, leader, leaderView, subject,
+    sourceOccurrenceRank, owner, snapshot) ==
+  /\ AdequateLeaderFrozenTargetCorridor(
+       target, leaderContext, leader, leaderView)
+  /\ AdequateLeaderTargetProtocolSubjectSource(
+       target, leaderContext, leader, leaderView, subject)
+  /\ AdequateLeaderTargetOccurrenceOwnerSelected(
+       target, leaderContext, leader, leaderView,
+       subject, sourceOccurrenceRank, owner)
+  /\ snapshot =
+       AdequateLeaderProtectedPeriodicSnapshot(
+         target, leaderContext, leader, leaderView, subject)
+  /\ snapshot # {}
+
+AdequateLeaderProtectedPeriodicEpisodeGoal(
+    target, leaderContext, leader, leaderView, subject,
+    sourceOccurrenceRank, owner, snapshot) ==
+  \/ AdequateLeaderTargetOccurrenceRankServiceExitGoal(
+       target, leaderContext, leader, leaderView,
+       subject, sourceOccurrenceRank, owner)
+  \/ /\ AdequateLeaderFrozenTargetCorridor(
+          target, leaderContext, leader, leaderView)
+     /\ AdequateLeaderTargetProtocolSubjectSource(
+          target, leaderContext, leader, leaderView, subject)
+     /\ AdequateLeaderTargetOccurrenceOwnerSelected(
+          target, leaderContext, leader, leaderView,
+          subject, sourceOccurrenceRank, owner)
+     /\ AdequateLeaderProtectedPeriodicSnapshotDrained(
+          snapshot, target, leaderContext, leader, leaderView, subject)
+
+AdequateLeaderProtectedPeriodicEpisodeClosureProperty(specification) ==
+  specification
+    => \A target \in ValidatorIds,
+          leaderContext \in ContextRecords,
+          leader \in ValidatorIds,
+          leaderView \in Views,
+          subject \in Subjects,
+          sourceOccurrenceRank \in
+            AdequateLeaderTargetOccurrenceRankCarrier,
+          owner \in
+            AdequateLeaderFrozenCandidateOwnerUniverse(
+              target, leaderContext, leader, leaderView, subject):
+         \A snapshot:
+           AdequateLeaderProtectedPeriodicEpisodeResidual(
+             target, leaderContext, leader, leaderView, subject,
+             sourceOccurrenceRank, owner, snapshot)
+             ~> AdequateLeaderProtectedPeriodicEpisodeGoal(
+                  target, leaderContext, leader, leaderView, subject,
+                  sourceOccurrenceRank, owner, snapshot)
+
+\* While the exact selected occurrence and its frozen corridor survive one
+\* transition, the protected periodic prefix can only shrink.  A live retry
+\* retains its ordinal; completion leaves the slot empty for that transition;
+\* and a later clock episode is allocated at the monotone shared high-watermark,
+\* already strictly above the still-owned timeout ordinal.  Thus a fresh
+\* episode cannot enter below the frozen timeout ceiling.
+THEOREM AdequateLeaderProtectedPeriodicSnapshotCannotReplenish ==
+  \A target, leaderContext, leader, leaderView,
+     subject, sourceOccurrenceRank, owner:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AdequateLeaderFrozenTargetCorridor(
+         target, leaderContext, leader, leaderView)
+    /\ AdequateLeaderTargetOccurrenceOwnerSelected(
+         target, leaderContext, leader, leaderView,
+         subject, sourceOccurrenceRank, owner)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ AdequateLeaderFrozenTargetCorridor(
+         target, leaderContext, leader, leaderView)'
+    /\ AdequateLeaderTargetOccurrenceOwnerSelected(
+         target, leaderContext, leader, leaderView,
+         subject, sourceOccurrenceRank, owner)'
+    => AdequateLeaderProtectedPeriodicSnapshot(
+         target, leaderContext, leader, leaderView, subject)'
+         \subseteq
+       AdequateLeaderProtectedPeriodicSnapshot(
+         target, leaderContext, leader, leaderView, subject)
+BY AsyncTimeoutLifecycleOrdinalPersistsUntilEndpoint,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   AsyncRetransmitCompletedEpisodeClearsActiveOwner,
+   AsyncRetransmitCompletedOwnedEpisodeDefersFreshAcquisition,
+   AsyncRetransmitFreshEpisodeCannotReuseDrainedPosition,
+   AsyncRetransmitFreshLiveEpisodeRetainsSharedLifecycleOrdinal,
+   AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntilEndpoint,
+   IsaT(2400)
+   DEF AdequateLeaderProtectedPeriodicSnapshot,
+       AdequateLeaderProtectedPeriodicOwnerIdentity,
+       AdequateLeaderPeriodicLifecyclePredecessorOwned,
+       AdequateLeaderFrozenTargetCorridor,
+       AdequateLeaderResponsiveViewSynchronized,
+       AdequateLeaderActiveTargetLeaderServiceWindow,
+       AdequateLeaderActiveNodeServiceWindow,
+       AdequateLeaderProtectedNodeServiceWindow,
+       AdequateLeaderTargetOccurrenceOwnerSelected,
+       AdequateLeaderTargetOccurrenceOwnerIdentitySet,
+       AdequateLeaderTargetOccurrenceRankFrontier,
+       AsyncOlderRetransmitLifecycleBlocksTimeout,
+       AsyncEffectiveTimeoutLifecycleOrdinal,
+       AsyncRetransmitLifecycleFreshOrdinalForStep,
+       AsyncRetransmitLifecycleOwned,
+       AsyncRetransmitLifecycleOrdinal,
+       AsyncTimeoutLifecycleOwned,
+       AsyncTimeoutLifecycleOrdinal,
+       AsyncNextCandidateLifecycleOrdinal,
+       AsyncNext, AsyncControlServiceSlotTransition,
+       AsyncCandidateLifecycleStateAfterServeIngressAdmission,
+       AsyncAllVars
+
+THEOREM AdequateLeaderProtectedPeriodicIdentityServiceClosesSnapshot ==
+  \A specification:
+    AdequateLeaderProtectedPeriodicIdentityServiceProperty(specification)
+      => AdequateLeaderProtectedPeriodicEpisodeClosureProperty(specification)
+BY AdequateLeaderProtectedPeriodicSnapshotIsExactAndFinite,
+   AdequateLeaderProtectedPeriodicRetiredSnapshotPersists,
+   AdequateLeaderProtectedPeriodicSnapshotCannotReplenish,
+   PTL, IsaT(1200)
+   DEF AdequateLeaderProtectedPeriodicIdentityServiceProperty,
+       AdequateLeaderProtectedPeriodicIdentityServiceResidual,
+       AdequateLeaderProtectedPeriodicIdentityServiceGoal,
+       AdequateLeaderProtectedPeriodicEpisodeClosureProperty,
+       AdequateLeaderProtectedPeriodicEpisodeResidual,
+       AdequateLeaderProtectedPeriodicEpisodeGoal,
+       AdequateLeaderProtectedPeriodicSnapshotDrained,
+       AdequateLeaderProtectedPeriodicSnapshotRetired,
+       AdequateLeaderProtectedPeriodicSnapshot
+
+\* This provider consumes the exact timeout-owner scheduler decomposition,
+\* not aggregate timeout/view progress.  The Candidate/continuation prefix,
+\* earlier exact Serve prefix, and periodic/Runtime suffix are discharged in
+\* that order.  At the suffix endpoint the old retransmit ordinal is absent;
+\* completion plus the monotone shared high-watermark installs the retirement
+\* receipt.  If servicing an earlier selected candidate changes the frozen
+\* occurrence first, the existing occurrence exit is the other terminal.
+THEOREM AsyncLiveProvidesAdequateLeaderProtectedPeriodicIdentityService ==
+  \A initialContext:
+    AdequateLeaderProtectedPeriodicIdentityServiceProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncSpecProvidesProtectedServiceFiniteRunnerEpisodeClosure,
+   AsyncLiveClosesTimeoutFixedOwnerPriorityTicketNonReplenishment,
+   TimeoutRuntimeModeOwnerHasExactFrozenLifecycleSnapshot,
+   AsyncLiveClosesTimeoutFrozenOlderCandidatePrefix,
+   TimeoutEarlierServeExactIngressRankStepClosesFrozenPrefix,
+   TimeoutPriorityClearSuffixReachesModeAction,
+   TimeoutPriorityClearRankCellIsSafe,
+   TimeoutPriorityClearRunNodeStrictlyReachesModeAction,
+   AdequateLeaderProtectedPeriodicIdentityUsesFrozenTimeoutStage,
+   AdequateLeaderProtectedPeriodicRetryCoalescesAtExactOrdinal,
+   AdequateLeaderProtectedPeriodicCompletionInstallsRetirementReceipt,
+   AdequateLeaderProtectedPeriodicRetirementCannotResurrect,
+   PTL, IsaT(2400)
+   DEF AdequateLeaderProtectedPeriodicIdentityServiceProperty,
+       AdequateLeaderProtectedPeriodicIdentityServiceResidual,
+       AdequateLeaderProtectedPeriodicIdentityServiceGoal,
+       AdequateLeaderTargetOccurrenceRankServiceExitGoal,
+       AdequateLeaderTargetOccurrenceRankOwnerServiceExitGoal,
+       AdequateLeaderTargetOccurrenceCorridorExitHandoff,
+       AdequateLeaderTargetOccurrenceStrictlyLowerGoal,
+       AdequateLeaderTargetOffSubjectOccurrenceDrainGoal,
+       AdequateLeaderProtectedPeriodicIdentityActive,
+       AdequateLeaderProtectedPeriodicSnapshotIdentity,
+       AdequateLeaderProtectedPeriodicRetirementReceipt,
+       AdequateLeaderPeriodicLifecyclePredecessorOwned,
+       AdequateLeaderProtectedNodeServiceWindow,
+       AdequateLeaderFrozenTargetCorridor,
+       AdequateLeaderActiveTargetLeaderServiceWindow,
+       AdequateLeaderActiveNodeServiceWindow,
+       TimeoutRuntimeModeCarrier, TimeoutRuntimeModeOwner,
+       TimeoutDeadlineArmedOwner, TimeoutRuntimePriorityClearGoal,
+       TimeoutRuntimeModeActionOwner,
+       AsyncOlderRetransmitLifecycleBlocksTimeout,
+       AsyncEffectiveTimeoutLifecycleOrdinal,
+       AsyncRetransmitLifecycleOwned,
+       AsyncRetransmitLifecycleOrdinal,
+       AsyncNextCandidateLifecycleOrdinal,
+       AsyncLiveSpecAt, AsyncAllVars
+
+THEOREM AsyncLiveProvidesAdequateLeaderProtectedPeriodicEpisodeClosure ==
+  \A initialContext:
+    AdequateLeaderProtectedPeriodicEpisodeClosureProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveProvidesAdequateLeaderProtectedPeriodicIdentityService,
+   AdequateLeaderProtectedPeriodicIdentityServiceClosesSnapshot
+
 AdequateLeaderTargetCarriedNonDescentKnownAdvanceGoal(
     target, leaderContext, leader, leaderView,
     subject, sourceOccurrenceRank, known, budget, owner) ==
@@ -12102,6 +12682,7 @@ AdequateLeaderTargetNonDescentEpisodeClosureProperty(specification) ==
                 subject, sourceOccurrenceRank, owner)
 
 AdequateLeaderTargetComposedRankDescentProperty(specification) ==
+  /\ AdequateLeaderProtectedPeriodicEpisodeClosureProperty(specification)
   /\ AdequateLeaderTargetOccurrenceRankServiceProperty(specification)
   /\ AdequateLeaderTargetProducerTransportOccurrenceClosureProperty(
        specification)
@@ -12115,7 +12696,8 @@ THEOREM AdequateLeaderOccurrenceAndProducerClosureProvideComposedRankDescent ==
          AsyncLiveSpecAt(initialContext))
     => AdequateLeaderTargetComposedRankDescentProperty(
          AsyncLiveSpecAt(initialContext))
-BY AdequateLeaderOccurrenceAndProducerClosureAdvanceKnownBudget
+BY AdequateLeaderOccurrenceAndProducerClosureAdvanceKnownBudget,
+   AsyncLiveProvidesAdequateLeaderProtectedPeriodicEpisodeClosure
    DEF AdequateLeaderTargetComposedRankDescentProperty
 
 THEOREM AdequateLeaderTargetOccurrenceFrontierStartsFiniteEpisode ==
@@ -12130,6 +12712,8 @@ THEOREM AdequateLeaderTargetOccurrenceFrontierStartsFiniteEpisode ==
     /\ AdequateLeaderTargetOccurrenceOwnerSelected(
          target, leaderContext, leader, leaderView,
          subject, sourceOccurrenceRank, owner)
+    /\ AdequateLeaderProtectedPeriodicSnapshot(
+         target, leaderContext, leader, leaderView, subject) = {}
     => \/ AdequateLeaderTargetStrictOccurrenceDescentGoal(
             target, leaderContext, leader, leaderView,
             subject, sourceOccurrenceRank)
@@ -12155,7 +12739,85 @@ BY AdequateLeaderTargetCurrentOwnersInitializeKnownEpisode,
        AdequateLeaderTargetOccurrenceOwnerCarried,
        AdequateLeaderTargetOccurrenceOwnerSelected,
        AdequateLeaderTargetOccurrenceOwnerIdentitySet,
-       AdequateLeaderTargetLiveOwnerIdentitySet
+       AdequateLeaderTargetLiveOwnerIdentitySet,
+       AdequateLeaderProtectedPeriodicSnapshot
+
+\* This is the only entry to the Candidate/Wire known-discovery episode.  An
+\* exact selected occurrence with no protected periodic predecessor starts it
+\* immediately.  Otherwise the separately proved periodic closure must first
+\* reach either the normal service exit or the same selected occurrence with
+\* its frozen periodic snapshot durably retired.  Periodic identities are
+\* consequently never inserted into `known` merely to make this step finite.
+AdequateLeaderTargetOccurrenceAwaitingFiniteEpisode(
+    target, leaderContext, leader, leaderView,
+    subject, sourceOccurrenceRank, owner) ==
+  /\ AdequateLeaderFrozenTargetCorridor(
+       target, leaderContext, leader, leaderView)
+  /\ AdequateLeaderTargetProtocolSubjectSource(
+       target, leaderContext, leader, leaderView, subject)
+  /\ AdequateLeaderTargetOccurrenceOwnerSelected(
+       target, leaderContext, leader, leaderView,
+       subject, sourceOccurrenceRank, owner)
+
+AdequateLeaderTargetOccurrenceFiniteEpisodeOrExitGoal(
+    target, leaderContext, leader, leaderView,
+    subject, sourceOccurrenceRank, owner) ==
+  \/ AdequateLeaderTargetOccurrenceRankServiceExitGoal(
+       target, leaderContext, leader, leaderView,
+       subject, sourceOccurrenceRank, owner)
+  \/ AdequateLeaderTargetStrictOccurrenceDescentGoal(
+       target, leaderContext, leader, leaderView,
+       subject, sourceOccurrenceRank)
+  \/ \E known
+         \in SUBSET AdequateLeaderFrozenOwnerUniverse(
+              target, leaderContext, leader, leaderView, subject),
+       budget \in Nat:
+       AdequateLeaderTargetNonDescentEpisodeBudgetFrontier(
+         target, leaderContext, leader, leaderView,
+         subject, sourceOccurrenceRank, owner, known, budget)
+
+AdequateLeaderTargetPeriodicPrefixThenFiniteEpisodeProperty(
+    specification) ==
+  specification
+    => \A target \in ValidatorIds,
+          leaderContext \in ContextRecords,
+          leader \in ValidatorIds,
+          leaderView \in Views,
+          subject \in Subjects,
+          sourceOccurrenceRank \in
+            AdequateLeaderTargetOccurrenceRankCarrier,
+          owner \in
+            AdequateLeaderFrozenCandidateOwnerUniverse(
+              target, leaderContext, leader, leaderView, subject):
+         AdequateLeaderTargetOccurrenceAwaitingFiniteEpisode(
+           target, leaderContext, leader, leaderView,
+           subject, sourceOccurrenceRank, owner)
+           ~> AdequateLeaderTargetOccurrenceFiniteEpisodeOrExitGoal(
+                target, leaderContext, leader, leaderView,
+                subject, sourceOccurrenceRank, owner)
+
+THEOREM AdequateLeaderProtectedPeriodicClosureStartsFiniteOwnerEpisode ==
+  \A initialContext:
+    AdequateLeaderProtectedPeriodicEpisodeClosureProperty(
+      AsyncLiveSpecAt(initialContext))
+      => AdequateLeaderTargetPeriodicPrefixThenFiniteEpisodeProperty(
+           AsyncLiveSpecAt(initialContext))
+BY AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncLiveSpecProjectsAsyncSpec,
+   AdequateLeaderProtectedPeriodicSnapshotIsExactAndFinite,
+   AdequateLeaderTargetOccurrenceFrontierStartsFiniteEpisode,
+   PTL, IsaT(1200)
+   DEF AdequateLeaderProtectedPeriodicEpisodeClosureProperty,
+       AdequateLeaderProtectedPeriodicEpisodeResidual,
+       AdequateLeaderProtectedPeriodicEpisodeGoal,
+       AdequateLeaderProtectedPeriodicSnapshotDrained,
+       AdequateLeaderProtectedPeriodicSnapshotRetired,
+       AdequateLeaderProtectedPeriodicSnapshot,
+       AdequateLeaderTargetOccurrenceAwaitingFiniteEpisode,
+       AdequateLeaderTargetOccurrenceFiniteEpisodeOrExitGoal,
+       AdequateLeaderTargetPeriodicPrefixThenFiniteEpisodeProperty,
+       AdequateLeaderTargetOccurrenceOwnerSelected,
+       AdequateLeaderTargetNonDescentEpisodeBudgetFrontier
 
 THEOREM AdequateLeaderKnownAdvanceProjectsToServiceExitBudgetDescent ==
   \A initialContext:
@@ -12246,7 +12908,7 @@ THEOREM AdequateLeaderComposedRankDescentClosesOccurrenceService ==
            AsyncLiveSpecAt(initialContext))
 BY AsyncSpecAlwaysStrongTypeInvariant,
    AsyncLiveSpecProjectsAsyncSpec,
-   AdequateLeaderTargetOccurrenceFrontierStartsFiniteEpisode,
+   AdequateLeaderProtectedPeriodicClosureStartsFiniteOwnerEpisode,
    AdequateLeaderKnownAdvanceProjectsToServiceExitBudgetDescent,
    AdequateLeaderFiniteBudgetDescentClosesNonDescentEpisode,
    PTL
@@ -12260,6 +12922,9 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
        AdequateLeaderTargetNonDescentEpisodeClosureProperty,
        AdequateLeaderTargetNonDescentEpisodeBudgetFrontier,
        AdequateLeaderTargetNonDescentEpisodeAtBudget,
+       AdequateLeaderTargetOccurrenceAwaitingFiniteEpisode,
+       AdequateLeaderTargetOccurrenceFiniteEpisodeOrExitGoal,
+       AdequateLeaderTargetPeriodicPrefixThenFiniteEpisodeProperty,
        AdequateLeaderTargetRankServiceExitProperty
 
 AdequateLeaderTargetSemanticCompositionProperty(specification) ==

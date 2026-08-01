@@ -2834,29 +2834,42 @@ TimeoutFrozenRuntimeLifecycleOwner(
   /\ ownerOrigin.view = sourceView
   /\ ownerOrigin.phase = "BeginTimeout"
 
-TimeoutOlderLifecycleOriginsBelow(source, ownerOrdinal) ==
+TimeoutFrozenRuntimeLifecyclePhysicalCut(source, ownerOrdinal) ==
+  AsyncTimeoutLifecyclePhysicalCut(source)
+
+TimeoutOlderLifecycleOriginsBelow(source, ownerOrdinal, physicalCut) ==
   {record.origin:
      record \in AsyncCandidateLifecycleAdmissions,
      /\ record.node = source
-     /\ ~record.retired
-     /\ record.ordinal < ownerOrdinal}
+     /\ record.ordinal < ownerOrdinal
+     /\ record.sourcePhysicalOrdinal < physicalCut}
 
 TimeoutFrozenRuntimeLifecycleSnapshot(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins) ==
   /\ TimeoutFrozenRuntimeLifecycleOwner(
        mode, source, sourceView,
        ownerContext, ownerOrigin, ownerOrdinal)
+  /\ physicalCut =
+       TimeoutFrozenRuntimeLifecyclePhysicalCut(source, ownerOrdinal)
   /\ predecessorOrigins =
-       TimeoutOlderLifecycleOriginsBelow(source, ownerOrdinal)
+       TimeoutOlderLifecycleOriginsBelow(
+         source, ownerOrdinal, physicalCut)
 
 TimeoutFrozenRuntimeLifecyclePending(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins) ==
   /\ TimeoutFrozenRuntimeLifecycleOwner(
        mode, source, sourceView,
        ownerContext, ownerOrigin, ownerOrdinal)
-  /\ TimeoutOlderLifecycleOriginsBelow(source, ownerOrdinal)
+  /\ physicalCut \in Nat
+  /\ physicalCut =
+       TimeoutFrozenRuntimeLifecyclePhysicalCut(source, ownerOrdinal)
+  /\ physicalCut <= AsyncNextIngressPhysicalOrdinal(source)
+  /\ TimeoutOlderLifecycleOriginsBelow(
+       source, ownerOrdinal, physicalCut)
        \subseteq predecessorOrigins
 
 TimeoutFrozenOlderLifecycleCandidates(
@@ -2868,38 +2881,150 @@ TimeoutFrozenOlderLifecycleCandidates(
      /\ candidate.causalOrigin \in predecessorOrigins
      /\ AsyncCandidateLifecycleOrdinal(candidate) < ownerOrdinal}
 
-TimeoutFrozenOlderCandidateWorkTokens(
+TimeoutFrozenOlderContinuationRecords(
     source, ownerOrdinal, predecessorOrigins) ==
-  {<<candidate, token>>:
-     candidate \in TimeoutFrozenOlderLifecycleCandidates(
-                       source, ownerOrdinal, predecessorOrigins),
-     token \in 1..AsyncCausalRemainingWorkWeight(candidate.kind)}
+  {record
+     \in AsyncCandidateProducerContinuationResolutionRecordsForNode(source):
+     /\ record.ordinal < ownerOrdinal
+     /\ record.causalOrigin \in predecessorOrigins}
+
+TimeoutFrozenOlderDormantLocalReplayCandidates(
+    source, ownerOrdinal, predecessorOrigins) ==
+  {candidate \in AsyncCandidateSet:
+     \E record \in TimeoutFrozenOlderContinuationRecords(
+                         source, ownerOrdinal, predecessorOrigins):
+       /\ record.status = "Reserved"
+       /\ record.sourceClass = "Local"
+       /\ ~AsyncCandidateProducerContinuationConcreteSuccessorOwned(record)
+       /\ ~AsyncCandidateProducerContinuationHandoffRetired(record)
+       /\ candidate = record.candidate}
+
+TimeoutFrozenOlderOrdinaryIngressCandidates(
+    source, ownerOrdinal, physicalCut) ==
+  {DeliveryCandidate(carrier.item):
+     carrier
+       \in {owned
+             \in asyncControlServiceState.ordinaryIngressCarrierEvidence:
+             /\ owned.node = source
+             /\ owned.status = "Ingress"
+             /\ owned.schedulerOrdinal < ownerOrdinal
+             /\ owned.physicalOrdinal < physicalCut}}
+
+TimeoutFrozenOlderLeaderWireCandidates(
+    source, ownerOrdinal, physicalCut) ==
+  AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(
+    source, ownerOrdinal, physicalCut)
+
+TimeoutFrozenOlderCandidateOwners(
+    source, ownerOrdinal, physicalCut, predecessorOrigins) ==
+  TimeoutFrozenOlderLifecycleCandidates(
+    source, ownerOrdinal, predecessorOrigins)
+    \cup TimeoutFrozenOlderDormantLocalReplayCandidates(
+           source, ownerOrdinal, predecessorOrigins)
+    \cup TimeoutFrozenOlderOrdinaryIngressCandidates(
+           source, ownerOrdinal, physicalCut)
+    \cup TimeoutFrozenOlderLeaderWireCandidates(
+           source, ownerOrdinal, physicalCut)
+
+TimeoutFrozenOlderCandidateWorkTokens(
+    source, ownerOrdinal, physicalCut, predecessorOrigins) ==
+  {<<"Candidate", candidate, token>>:
+     candidate \in TimeoutFrozenOlderCandidateOwners(
+                       source, ownerOrdinal, physicalCut,
+                       predecessorOrigins),
+     token \in
+       1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)}
+    \cup
+  {<<"Continuation", record.identity, token>>:
+     record \in TimeoutFrozenOlderContinuationRecords(
+                  source, ownerOrdinal, predecessorOrigins),
+     token \in
+       1..AsyncCandidateProducerContinuationStatusRank(record.status)}
 
 TimeoutFrozenOlderCandidateWorkBudget(
-    source, ownerOrdinal, predecessorOrigins) ==
+    source, ownerOrdinal, physicalCut, predecessorOrigins) ==
   Cardinality(
     TimeoutFrozenOlderCandidateWorkTokens(
-      source, ownerOrdinal, predecessorOrigins))
+      source, ownerOrdinal, physicalCut, predecessorOrigins))
+
+\* This is the existing protected-Candidate ingress rank instantiated at the
+\* immutable timeout lifecycle cut.  Its producer component prepays dormant
+\* Local replay and continuation status; its outer and dependency components
+\* retain the physical-ingress, mode, capacity, selector, lane, source, I/O,
+\* and runner geometry.  The timeout lifecycle is the stable cut owner even
+\* though it is not itself a scheduled Candidate.
+TimeoutFrozenOlderProducerIngressRank(
+    source, ownerOrdinal, physicalCut, predecessorOrigins) ==
+  <<AsyncFrozenLeaderWireBarrierStageBudget(
+      source, ownerOrdinal - 1, physicalCut, "Logical"),
+    <<TimeoutFrozenOlderCandidateWorkBudget(
+        source, ownerOrdinal, physicalCut, predecessorOrigins),
+      AsyncFrozenLeaderWireIngressDependencyRank(
+        source, ownerOrdinal - 1, physicalCut, "Logical")>>>
+
+TimeoutFrozenOlderProducerEpisodeRank(
+    source, ownerOrdinal, physicalCut, predecessorOrigins) ==
+  TimeoutFrozenOlderProducerIngressRank(
+    source, ownerOrdinal, physicalCut, predecessorOrigins)
+
+TimeoutFrozenOlderProducerEpisodeTailRankCarrier ==
+  Nat \X AsyncFrozenLeaderWireIngressDependencyRankCarrier
+
+TimeoutFrozenOlderProducerEpisodeTailRankOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat),
+    AsyncFrozenLeaderWireIngressDependencyRankOrdering,
+    Nat, AsyncFrozenLeaderWireIngressDependencyRankCarrier)
+
+TimeoutFrozenOlderProducerEpisodeRankCarrier ==
+  Nat \X TimeoutFrozenOlderProducerEpisodeTailRankCarrier
+
+TimeoutFrozenOlderProducerEpisodeRankOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat),
+    TimeoutFrozenOlderProducerEpisodeTailRankOrdering,
+    Nat, TimeoutFrozenOlderProducerEpisodeTailRankCarrier)
+
+TimeoutFrozenOlderProducerEpisodeDrained(
+    source, ownerOrdinal, physicalCut, predecessorOrigins) ==
+  /\ TimeoutFrozenOlderCandidateWorkBudget(
+       source, ownerOrdinal, physicalCut, predecessorOrigins) = 0
+  /\ AsyncFrozenLeaderWireBarrierRecords(
+       source, ownerOrdinal - 1, physicalCut, "Logical") = {}
+  /\ AsyncFrozenOrdinaryIngressBarrierRecords(
+       source, ownerOrdinal - 1, physicalCut, "Logical") = {}
+
+TimeoutFrozenOlderProducerDrainCertificate(
+    source, ownerOrdinal, physicalCut, predecessorOrigins) ==
+  TimeoutFrozenOlderProducerEpisodeDrained(
+    source, ownerOrdinal, physicalCut, predecessorOrigins)
 
 TimeoutFrozenOlderCandidatePrefixGoal(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins) ==
   \/ TimeoutRuntimeModeEndpoint(mode, source, sourceView)
   \/ /\ TimeoutFrozenRuntimeLifecyclePending(
           mode, source, sourceView,
-          ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins)
-     /\ ~AsyncOlderCandidateLifecycleBlocksTimeout(source)
+          ownerContext, ownerOrigin, ownerOrdinal,
+          physicalCut, predecessorOrigins)
+     /\ TimeoutFrozenOlderProducerEpisodeDrained(
+          source, ownerOrdinal, physicalCut, predecessorOrigins)
 
 TimeoutFrozenOlderCandidatePrefixAtRank(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins, rank) ==
-  /\ rank \in Nat
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, rank) ==
+  /\ rank \in TimeoutFrozenOlderProducerEpisodeRankCarrier
   /\ TimeoutFrozenRuntimeLifecyclePending(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins)
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins)
   /\ ~TimeoutRuntimeModeEndpoint(mode, source, sourceView)
-  /\ TimeoutFrozenOlderCandidateWorkBudget(
-       source, ownerOrdinal, predecessorOrigins) = rank
+  /\ ~TimeoutFrozenOlderProducerEpisodeDrained(
+       source, ownerOrdinal, physicalCut, predecessorOrigins)
+  /\ TimeoutFrozenOlderProducerEpisodeRank(
+       source, ownerOrdinal, physicalCut, predecessorOrigins) = rank
 
 THEOREM TimeoutRuntimeModeOwnerHasExactFrozenLifecycleSnapshot ==
   \A mode \in TimeoutRuntimeModeCarrier,
@@ -2911,15 +3036,18 @@ THEOREM TimeoutRuntimeModeOwnerHasExactFrozenLifecycleSnapshot ==
     => \E ownerContext \in ContextRecords,
           ownerOrigin \in AsyncCandidateCausalOriginSet,
           ownerOrdinal \in Nat \ {0},
+          physicalCut \in Nat,
           predecessorOrigins:
          TimeoutFrozenRuntimeLifecycleSnapshot(
            mode, source, sourceView,
-           ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins)
+           ownerContext, ownerOrigin, ownerOrdinal,
+           physicalCut, predecessorOrigins)
 BY IsaT(600)
    DEF TimeoutRuntimeModeCarrier,
        TimeoutRuntimeModeOwner,
        TimeoutFrozenRuntimeLifecycleSnapshot,
        TimeoutFrozenRuntimeLifecycleOwner,
+       TimeoutFrozenRuntimeLifecyclePhysicalCut,
        TimeoutOlderLifecycleOriginsBelow,
        TimeoutDeadlineArmedOwner,
        TimeoutDeferredRuntimeOwner,
@@ -2937,186 +3065,462 @@ THEOREM TimeoutFrozenOlderCandidateWorkBudgetIsNatural ==
      ownerContext \in ContextRecords,
      ownerOrigin \in AsyncCandidateCausalOriginSet,
      ownerOrdinal \in Nat \ {0},
+     physicalCut \in Nat,
      predecessorOrigins:
     /\ AsyncStrongTypeInvariant
     /\ TimeoutFrozenRuntimeLifecyclePending(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)
     => TimeoutFrozenOlderCandidateWorkBudget(
-         source, ownerOrdinal, predecessorOrigins) \in Nat
+         source, ownerOrdinal, physicalCut, predecessorOrigins) \in Nat
 BY AsyncCausalRemainingWorkWeightIsPositive,
    FS_Image, FS_Product, FS_Subset, FS_Interval,
    FS_CardinalityType, IsaT(300)
    DEF TimeoutFrozenOlderCandidateWorkBudget,
        TimeoutFrozenOlderCandidateWorkTokens,
+       TimeoutFrozenOlderCandidateOwners,
        TimeoutFrozenOlderLifecycleCandidates,
+       TimeoutFrozenOlderDormantLocalReplayCandidates,
+       TimeoutFrozenOlderOrdinaryIngressCandidates,
+       TimeoutFrozenOlderLeaderWireCandidates,
+       TimeoutFrozenOlderContinuationRecords,
        TimeoutFrozenRuntimeLifecyclePending,
+       TimeoutFrozenRuntimeLifecyclePhysicalCut,
        TimeoutOlderLifecycleOriginsBelow,
-       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
-       QueuedCandidates, DeferredCandidates,
-       CausalCandidates, TrackedWorkCandidates
+       AsyncCandidateProducerContinuationFrozenLeaderWireCandidates,
+       AsyncCandidateProducerContinuationCausalWeight,
+       AsyncCandidateProducerContinuationStatusRank,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant
 
-THEOREM TimeoutFrozenOlderBlockerHasExactCandidateWitness ==
-  \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins:
+THEOREM TimeoutFrozenOlderProducerEpisodeRankIsInCarrier ==
+  \A mode \in TimeoutRuntimeModeCarrier,
+     source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     ownerContext \in ContextRecords,
+     ownerOrigin \in AsyncCandidateCausalOriginSet,
+     ownerOrdinal \in Nat \ {0},
+     physicalCut \in Nat,
+     predecessorOrigins:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ TimeoutFrozenRuntimeLifecyclePending(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins)
-    /\ AsyncOlderCandidateLifecycleBlocksTimeout(source)
-    => TimeoutFrozenOlderLifecycleCandidates(
-         source, ownerOrdinal, predecessorOrigins) # {}
-BY IsaT(300)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)
+    => TimeoutFrozenOlderProducerEpisodeRank(
+         source, ownerOrdinal, physicalCut, predecessorOrigins)
+         \in TimeoutFrozenOlderProducerEpisodeRankCarrier
+BY TimeoutFrozenOlderCandidateWorkBudgetIsNatural,
+   AsyncFrozenLeaderWireBarrierRankIsFinite,
+   FS_CardinalityType, IsaT(1200)
+   DEF TimeoutFrozenOlderProducerEpisodeRank,
+       TimeoutFrozenOlderProducerIngressRank,
+       TimeoutFrozenOlderProducerEpisodeTailRankCarrier,
+       TimeoutFrozenOlderProducerEpisodeRankCarrier,
+       AsyncFrozenLeaderWireBarrierStageBudget,
+       AsyncFrozenLeaderWireIngressDependencyRank,
+       AsyncFrozenLeaderWireIngressDependencyRankCarrier,
+       TimeoutFrozenRuntimeLifecyclePending,
+       TimeoutFrozenRuntimeLifecycleOwner
+
+THEOREM TimeoutFrozenOlderProducerEpisodeRankOrderingIsWellFounded ==
+  IsWellFoundedOn(
+    TimeoutFrozenOlderProducerEpisodeRankOrdering,
+    TimeoutFrozenOlderProducerEpisodeRankCarrier)
+BY NatLessThanWellFounded,
+   AsyncFrozenLeaderWireIngressDependencyOrderingIsWellFounded,
+   WFLexPairOrdering
+   DEF TimeoutFrozenOlderProducerEpisodeRankOrdering,
+       TimeoutFrozenOlderProducerEpisodeRankCarrier,
+       TimeoutFrozenOlderProducerEpisodeTailRankOrdering,
+       TimeoutFrozenOlderProducerEpisodeTailRankCarrier
+
+(***************************************************************************
+Action-local predecessor safety.
+
+The timeout owner pins the existing producer-continuation physical cut.  A
+retired lifecycle remains in that frozen set while its replay/status charge
+is live; a fresh root receives a larger shared ordinal or a post-cut physical
+ordinal.  This first phase charges only Candidate/continuation production and
+the rigid ingress barrier.  Serve and periodic work are discharged by the
+separate suffix ranks below.
+***************************************************************************)
+
+THEOREM TimeoutFrozenOlderPredecessorSetCannotBeReplenished ==
+  \A mode, source, sourceView,
+     ownerContext, ownerOrigin, ownerOrdinal,
+     physicalCut, predecessorOrigins:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ TimeoutFrozenRuntimeLifecyclePending(
+         mode, source, sourceView,
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ ~TimeoutRuntimeModeEndpoint(mode, source, sourceView)'
+    => TimeoutOlderLifecycleOriginsBelow(
+         source, ownerOrdinal, physicalCut)'
+         \subseteq predecessorOrigins
+BY AsyncTimeoutLifecycleOrdinalPersistsUntilEndpoint,
+   AsyncTimeoutLifecycleOrdinalClearsOnlyAtEndpoint,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   AsyncIngressPhysicalHighWatermarkIsMonotone,
+   AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
+   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   IsaT(900)
    DEF TimeoutFrozenRuntimeLifecyclePending,
        TimeoutFrozenRuntimeLifecycleOwner,
+       TimeoutFrozenRuntimeLifecyclePhysicalCut,
        TimeoutOlderLifecycleOriginsBelow,
-       TimeoutFrozenOlderLifecycleCandidates,
-       AsyncOlderCandidateLifecycleBlocksTimeout,
-       AsyncEffectiveTimeoutLifecycleOrdinal,
-       AsyncCandidateLifecycleOrdinal,
-       AsyncCandidateLifecycleRecordsFor,
-       AsyncProgressOwnershipInvariant,
-       AsyncLogicalCandidateOwnershipInvariant
+       TimeoutRuntimeModeEndpoint,
+       TimeoutRuntimeModeOwner,
+       AsyncAllVars
 
-THEOREM TimeoutFrozenOlderCandidateIsIndividuallyProtected ==
+TimeoutFrozenOlderProducerRankGoal(
+    mode, source, sourceView,
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, rank) ==
+  \/ TimeoutFrozenOlderCandidatePrefixGoal(
+       mode, source, sourceView,
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins)
+  \/ \E lowerRank \in
+       SetLessThan(
+         rank,
+         TimeoutFrozenOlderProducerEpisodeRankOrdering,
+         TimeoutFrozenOlderProducerEpisodeRankCarrier):
+       TimeoutFrozenOlderCandidatePrefixAtRank(
+         mode, source, sourceView,
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, lowerRank)
+
+TimeoutFrozenOlderProducerContinuationAtRank(
+    mode, source, sourceView,
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, rank) ==
+  /\ TimeoutFrozenOlderCandidatePrefixAtRank(
+       mode, source, sourceView,
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins, rank)
+  /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(source)
+
+TimeoutFrozenOlderProducerResolvedAtRank(
+    mode, source, sourceView,
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, rank) ==
+  /\ TimeoutFrozenOlderCandidatePrefixAtRank(
+       mode, source, sourceView,
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins, rank)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(source)
+
+TimeoutFrozenOlderProducerContinuationGoal(
+    mode, source, sourceView,
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, rank) ==
+  \/ TimeoutFrozenOlderProducerRankGoal(
+       mode, source, sourceView,
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins, rank)
+  \/ TimeoutFrozenOlderProducerResolvedAtRank(
+       mode, source, sourceView,
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins, rank)
+
+TimeoutFrozenOlderProducerFairOwner(source, ownerOrdinal) ==
+  "Runner"
+
+TimeoutFrozenOlderProducerSelectedFairAction(source, ownerOrdinal) ==
+  AsyncProtectedCandidateFairAction(
+    source,
+    TimeoutFrozenOlderProducerFairOwner(source, ownerOrdinal))
+
+THEOREM TimeoutFrozenOlderProducerEpisodeStepIsDescentOrFrame ==
   \A mode \in TimeoutRuntimeModeCarrier,
      source \in AsyncCurrentResponsiveVoters,
      sourceView \in Views,
-     ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins:
-    \A candidate \in TimeoutFrozenOlderLifecycleCandidates(
-                       source, ownerOrdinal, predecessorOrigins):
-      /\ AsyncStrongTypeInvariant
-      /\ AsyncProgressOwnershipInvariant
-      /\ TimeoutFrozenRuntimeLifecyclePending(
-           mode, source, sourceView,
-           ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins)
-      => /\ gst
-         /\ ResponsiveProtectedCandidateOwned(candidate)
-BY IsaT(300)
-   DEF TimeoutFrozenOlderLifecycleCandidates,
+     ownerContext \in ContextRecords,
+     ownerOrigin \in AsyncCandidateCausalOriginSet,
+     ownerOrdinal \in Nat \ {0},
+     physicalCut \in Nat,
+     predecessorOrigins,
+     rank \in TimeoutFrozenOlderProducerEpisodeRankCarrier:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceLifecycleInvariant
+    /\ TimeoutFrozenOlderCandidatePrefixAtRank(
+         mode, source, sourceView,
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, rank)
+    /\ [AsyncNext]_AsyncAllVars
+      => \/ TimeoutFrozenOlderProducerRankGoal(
+              mode, source, sourceView,
+              ownerContext, ownerOrigin, ownerOrdinal,
+              physicalCut, predecessorOrigins, rank)'
+         \/ TimeoutFrozenOlderCandidatePrefixAtRank(
+              mode, source, sourceView,
+              ownerContext, ownerOrigin, ownerOrdinal,
+              physicalCut, predecessorOrigins, rank)'
+BY TimeoutFrozenOlderPredecessorSetCannotBeReplenished,
+   AsyncTimeoutLifecycleOrdinalPersistsUntilEndpoint,
+   AsyncTimeoutLifecycleOrdinalClearsOnlyAtEndpoint,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   AsyncIngressPhysicalHighWatermarkIsMonotone,
+   CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight,
+   CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge,
+   CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge,
+   CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst,
+   CandidateProducerContinuationFrozenOrdinaryIngressChargeCannotAppearAtGst,
+   CandidateProducerContinuationActionInertDormantHasZeroFrozenStage,
+   CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix,
+   CandidateProducerContinuationPostCutOrdinaryAdmissionCannotEnterFrozenPrefix,
+   CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame,
+   CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage,
+   CandidateProducerContinuationPreCutOrdinaryIngressConsumesBarrierStage,
+   CandidateProducerContinuationFrozenServeCutCannotReplenish,
+   CandidateProducerContinuationPostCutServeCannotEnterFrozenPrefix,
+   AsyncServeIngressFrozenPredecessorPrefixNeverReplenishesOnDrain,
+   AsyncServeQueuedIdentityDepartureInstallsTombstone,
+   AsyncServeTombstonedIdentityCannotRequeueAtGst,
+   AsyncCandidateProducerContinuationStatusIsMonotone,
+   AsyncCandidateProducerSemanticHandoffReservedPersistsWithoutAck,
+   AsyncCandidateProducerSemanticHandoffMaterializationRequiresSuccessor,
+   AsyncCandidateProducerSemanticHandoffRetirementRequiresAck,
+   AsyncRetransmitCompletedEpisodeClearsActiveOwner,
+   AsyncRetransmitCompletedOwnedEpisodeDefersFreshAcquisition,
+   AsyncRetransmitFreshEpisodeCannotReuseDrainedPosition,
+   AsyncRetransmitFreshLiveEpisodeRetainsSharedLifecycleOrdinal,
+   FS_CardinalityType, FS_Subset, IsaT(7200)
+   DEF TimeoutFrozenOlderProducerRankGoal,
+       TimeoutFrozenOlderCandidatePrefixAtRank,
+       TimeoutFrozenOlderCandidatePrefixGoal,
+       TimeoutFrozenOlderProducerEpisodeDrained,
+       TimeoutFrozenOlderProducerEpisodeRank,
+       TimeoutFrozenOlderProducerIngressRank,
+       TimeoutFrozenOlderProducerEpisodeRankOrdering,
+       TimeoutFrozenOlderProducerEpisodeRankCarrier,
+       TimeoutFrozenOlderCandidateWorkBudget,
+       TimeoutFrozenOlderCandidateWorkTokens,
+       TimeoutFrozenOlderCandidateOwners,
+       TimeoutFrozenOlderLifecycleCandidates,
+       TimeoutFrozenOlderDormantLocalReplayCandidates,
+       TimeoutFrozenOlderOrdinaryIngressCandidates,
+       TimeoutFrozenOlderLeaderWireCandidates,
+       TimeoutFrozenOlderContinuationRecords,
+       TimeoutFrozenRuntimeLifecyclePending,
+       TimeoutFrozenRuntimeLifecycleOwner,
+       TimeoutFrozenRuntimeLifecyclePhysicalCut,
+       TimeoutOlderLifecycleOriginsBelow,
+       AsyncCandidateProducerContinuationFrozenLeaderWireCandidates,
+       AsyncCandidateProducerContinuationCausalWeight,
+       AsyncCandidateProducerContinuationStatusRank,
+       AsyncFrozenLeaderWireBarrierStageBudget,
+       AsyncFrozenLeaderWireBarrierRecords,
+       AsyncFrozenOrdinaryIngressBarrierRecords,
+       AsyncFrozenLeaderWireIngressDependencyRank,
+       AsyncAllVars, LexPairOrdering, SetLessThan, OpToRel
+
+THEOREM TimeoutFrozenOlderProducerResolvedSelectedOwnerIsEnabled ==
+  \A mode \in TimeoutRuntimeModeCarrier,
+     source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     ownerContext \in ContextRecords,
+     ownerOrigin \in AsyncCandidateCausalOriginSet,
+     ownerOrdinal \in Nat \ {0},
+     physicalCut \in Nat,
+     predecessorOrigins,
+     rank \in TimeoutFrozenOlderProducerEpisodeRankCarrier:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ TimeoutFrozenOlderProducerResolvedAtRank(
+         mode, source, sourceView,
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, rank)
+      => /\ TimeoutFrozenOlderProducerFairOwner(source, ownerOrdinal)
+               \in AsyncProtectedCandidateFairOwnerKinds
+         /\ ENABLED
+              <<TimeoutFrozenOlderProducerSelectedFairAction(
+                   source, ownerOrdinal)>>_AsyncAllVars
+BY ResponsiveUnappliedRunNodeIsEnabled,
+   EnabledRunNodeLiftsPostGst,
+   ExpandENABLED, ENABLEDaxioms, IsaT(1800)
+   DEF TimeoutFrozenOlderProducerResolvedAtRank,
+       TimeoutFrozenOlderCandidatePrefixAtRank,
        TimeoutFrozenRuntimeLifecyclePending,
        TimeoutFrozenRuntimeLifecycleOwner,
        TimeoutRuntimeModeOwner,
        TimeoutDeadlineArmedOwner,
        TimeoutDeferredRuntimeOwner,
        TimeoutRoundStable,
-       ResponsiveProtectedCandidateOwned,
-       ProtectedCandidateOwned, ProtectedServiceCandidate,
-       CandidateScheduled,
-       AsyncProgressOwnershipInvariant,
-       AsyncLogicalCandidateOwnershipInvariant
+       TimeoutFrozenOlderProducerSelectedFairAction,
+       TimeoutFrozenOlderProducerFairOwner,
+       AsyncProtectedCandidateFairOwnerKinds,
+       AsyncProtectedCandidateFairAction,
+       AsyncCausalEpisodeFairAction,
+       AsyncCurrentResponsiveVoters,
+       PostGstRunNode, RunNode, RunNodeWork,
+       AsyncAllVars
 
-(***************************************************************************
-Action-local predecessor safety.
-
-The first theorem excludes a later root from the frozen predecessor set.  The
-second classifies a physical departure: an endpoint may be reached, or the
-radix-four budget strictly decreases after replacing the serviced parent by
-its bounded lower-stage successor batch.  No replacement is itself called
-progress; only the strictly smaller remaining-work budget is.
-***************************************************************************)
-
-THEOREM TimeoutFrozenOlderPredecessorSetCannotBeReplenished ==
-  \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins:
+THEOREM TimeoutFrozenOlderProducerResolvedFairActionConsumesRankCell ==
+  \A mode \in TimeoutRuntimeModeCarrier,
+     source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     ownerContext \in ContextRecords,
+     ownerOrigin \in AsyncCandidateCausalOriginSet,
+     ownerOrdinal \in Nat \ {0},
+     physicalCut \in Nat,
+     predecessorOrigins,
+     rank \in TimeoutFrozenOlderProducerEpisodeRankCarrier:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
-    /\ TimeoutFrozenRuntimeLifecyclePending(
+    /\ AsyncCandidateServiceLifecycleInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ TimeoutFrozenOlderProducerResolvedAtRank(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins)
-    /\ [AsyncNext]_AsyncAllVars
-    /\ ~TimeoutRuntimeModeEndpoint(mode, source, sourceView)'
-    => TimeoutOlderLifecycleOriginsBelow(source, ownerOrdinal)'
-         \subseteq predecessorOrigins
-BY AsyncTimeoutLifecycleOrdinalPersistsUntilEndpoint,
-   AsyncTimeoutLifecycleOrdinalClearsOnlyAtEndpoint,
-   AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
-   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
-   IsaT(900)
-   DEF TimeoutFrozenRuntimeLifecyclePending,
-       TimeoutFrozenRuntimeLifecycleOwner,
-       TimeoutOlderLifecycleOriginsBelow,
-       TimeoutRuntimeModeEndpoint,
-       TimeoutRuntimeModeOwner,
-       AsyncAllVars
-
-THEOREM TimeoutFrozenOlderCandidateDepartureConsumesWorkBudget ==
-  \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins,
-     rank \in Nat:
-    \A candidate \in TimeoutFrozenOlderLifecycleCandidates(
-                       source, ownerOrdinal, predecessorOrigins):
-      /\ AsyncStrongTypeInvariant
-      /\ AsyncProgressOwnershipInvariant
-      /\ TimeoutFrozenOlderCandidatePrefixAtRank(
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, rank)
+    /\ <<TimeoutFrozenOlderProducerSelectedFairAction(
+            source, ownerOrdinal)>>_AsyncAllVars
+      => TimeoutFrozenOlderProducerRankGoal(
            mode, source, sourceView,
            ownerContext, ownerOrigin, ownerOrdinal,
-           predecessorOrigins, rank)
-      /\ [AsyncNext]_AsyncAllVars
-      /\ ~ResponsiveProtectedCandidateOwned(candidate)'
-      => \/ TimeoutFrozenOlderCandidatePrefixGoal(
-              mode, source, sourceView,
-              ownerContext, ownerOrigin, ownerOrdinal,
-              predecessorOrigins)'
-         \/ \E lowerRank \in SetLessThan(rank, OpToRel(<, Nat), Nat):
-              TimeoutFrozenOlderCandidatePrefixAtRank(
-                mode, source, sourceView,
-                ownerContext, ownerOrigin, ownerOrdinal,
-                predecessorOrigins, lowerRank)'
-BY TimeoutFrozenOlderPredecessorSetCannotBeReplenished,
-   AsyncCommandSuccessorsStrictlyLowerRemainingWorkStage,
-   AsyncCommandSuccessorBatchStrictlyConsumesRemainingWork,
-   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
-   AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
-   AsyncCausalRemainingWorkWeightIsPositive,
-   IsaT(1200)
-   DEF TimeoutFrozenOlderCandidatePrefixAtRank,
-       TimeoutFrozenOlderCandidatePrefixGoal,
-       TimeoutFrozenOlderCandidateWorkBudget,
-       TimeoutFrozenOlderCandidateWorkTokens,
-       TimeoutFrozenOlderLifecycleCandidates,
-       TimeoutFrozenRuntimeLifecyclePending,
-       SetLessThan, OpToRel, AsyncAllVars
+           physicalCut, predecessorOrigins, rank)'
+BY TimeoutFrozenOlderProducerEpisodeStepIsDescentOrFrame,
+   ExhaustedIngressStepDecreasesDrainableIngressTurnReach,
+   LocalStepDecreasesDrainableIngressTurnReach,
+   SerializedLocalPredecessorDecreasesDrainableIngressTurnReach,
+   RuntimeStepDecreasesDrainableIngressTurnReach,
+   OlderRuntimeInterleaveDecreasesDrainableIngressTurnReach,
+   AsyncRetransmitCompletedEpisodeClearsActiveOwner,
+   IsaT(3600)
+   DEF TimeoutFrozenOlderProducerResolvedAtRank,
+       TimeoutFrozenOlderProducerRankGoal,
+       TimeoutFrozenOlderProducerSelectedFairAction,
+       TimeoutFrozenOlderProducerFairOwner,
+       AsyncProtectedCandidateFairAction,
+       AsyncCausalEpisodeFairAction,
+       AsyncAllVars
 
-THEOREM TimeoutFrozenOlderCandidateRankCellIsSafe ==
-  \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins,
-     rank \in Nat:
-    \A candidate \in TimeoutFrozenOlderLifecycleCandidates(
-                       source, ownerOrdinal, predecessorOrigins):
-      /\ AsyncStrongTypeInvariant
-      /\ AsyncProgressOwnershipInvariant
-      /\ TimeoutFrozenOlderCandidatePrefixAtRank(
+THEOREM TimeoutFrozenOlderProducerFairOwnerPersistsInResolvedRankCell ==
+  \A mode \in TimeoutRuntimeModeCarrier,
+     source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     ownerContext \in ContextRecords,
+     ownerOrigin \in AsyncCandidateCausalOriginSet,
+     ownerOrdinal \in Nat \ {0},
+     physicalCut \in Nat,
+     predecessorOrigins,
+     rank \in TimeoutFrozenOlderProducerEpisodeRankCarrier:
+    LET owner ==
+          TimeoutFrozenOlderProducerFairOwner(source, ownerOrdinal)
+    IN /\ AsyncStrongTypeInvariant
+       /\ AsyncProgressOwnershipInvariant
+       /\ TimeoutFrozenOlderProducerResolvedAtRank(
+            mode, source, sourceView,
+            ownerContext, ownerOrigin, ownerOrdinal,
+            physicalCut, predecessorOrigins, rank)
+       /\ [AsyncNext]_AsyncAllVars
+       /\ TimeoutFrozenOlderProducerResolvedAtRank(
+            mode, source, sourceView,
+            ownerContext, ownerOrigin, ownerOrdinal,
+            physicalCut, predecessorOrigins, rank)'
+       => TimeoutFrozenOlderProducerFairOwner(
+            source, ownerOrdinal)' = owner
+BY IsaT(180)
+   DEF TimeoutFrozenOlderProducerResolvedAtRank,
+       TimeoutFrozenOlderCandidatePrefixAtRank,
+       TimeoutFrozenOlderProducerFairOwner,
+       AsyncAllVars
+
+TimeoutFrozenOlderProducerContinuationClosureProperty(
+    specification, initialContext) ==
+  specification
+    => \A mode \in TimeoutRuntimeModeCarrier,
+          source \in AsyncVotersAt(initialContext),
+          sourceView \in Views,
+          ownerContext \in ContextRecords,
+          ownerOrigin \in AsyncCandidateCausalOriginSet,
+          ownerOrdinal \in Nat \ {0},
+          physicalCut \in Nat,
+          predecessorOrigins,
+          rank \in TimeoutFrozenOlderProducerEpisodeRankCarrier:
+         TimeoutFrozenOlderProducerContinuationAtRank(
            mode, source, sourceView,
            ownerContext, ownerOrigin, ownerOrdinal,
-           predecessorOrigins, rank)
-      /\ ResponsiveProtectedCandidateOwned(candidate)
-      /\ [AsyncNext]_AsyncAllVars
-      => \/ TimeoutFrozenOlderCandidatePrefixGoal(
-              mode, source, sourceView,
-              ownerContext, ownerOrigin, ownerOrdinal,
-              predecessorOrigins)'
-         \/ \E lowerRank \in SetLessThan(rank, OpToRel(<, Nat), Nat):
-              TimeoutFrozenOlderCandidatePrefixAtRank(
+           physicalCut, predecessorOrigins, rank)
+           ~> TimeoutFrozenOlderProducerContinuationGoal(
                 mode, source, sourceView,
                 ownerContext, ownerOrigin, ownerOrdinal,
-                predecessorOrigins, lowerRank)'
-         \/ /\ TimeoutFrozenOlderCandidatePrefixAtRank(
-                  mode, source, sourceView,
-                  ownerContext, ownerOrigin, ownerOrdinal,
-                  predecessorOrigins, rank)'
-            /\ ResponsiveProtectedCandidateOwned(candidate)'
-BY TimeoutFrozenOlderPredecessorSetCannotBeReplenished,
-   TimeoutFrozenOlderCandidateDepartureConsumesWorkBudget,
-   AsyncCommandSuccessorBatchStrictlyConsumesRemainingWork,
-   IsaT(1200)
-   DEF TimeoutFrozenOlderCandidatePrefixAtRank,
-       TimeoutFrozenOlderCandidatePrefixGoal,
-       TimeoutFrozenOlderCandidateWorkBudget,
-       TimeoutFrozenOlderCandidateWorkTokens,
-       TimeoutFrozenOlderLifecycleCandidates,
-       AsyncAllVars
+                physicalCut, predecessorOrigins, rank)
+
+THEOREM AsyncLiveClosesTimeoutFrozenOlderProducerContinuation ==
+  \A initialContext:
+    TimeoutFrozenOlderProducerContinuationClosureProperty(
+      AsyncLiveSpecAt(initialContext), initialContext)
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecProvidesVoterCandidateProducerContinuationResolutionClosure,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncSpecAlwaysUsesFixedResponsiveVoters,
+   TimeoutFrozenOlderProducerEpisodeStepIsDescentOrFrame,
+   PTL, IsaT(1800)
+   DEF TimeoutFrozenOlderProducerContinuationClosureProperty,
+       TimeoutFrozenOlderProducerContinuationAtRank,
+       TimeoutFrozenOlderProducerContinuationGoal,
+       TimeoutFrozenOlderProducerResolvedAtRank,
+       TimeoutFrozenOlderProducerRankGoal,
+       AsyncVoterCandidateProducerContinuationEpisodePending,
+       AsyncVoterCandidateProducerContinuationResolutionClosureProperty,
+       AsyncLiveSpecAt
+
+TimeoutFrozenOlderProducerResolvedRankStepProperty(specification) ==
+  specification
+    => \A mode \in TimeoutRuntimeModeCarrier,
+          source \in AsyncCurrentResponsiveVoters,
+          sourceView \in Views,
+          ownerContext \in ContextRecords,
+          ownerOrigin \in AsyncCandidateCausalOriginSet,
+          ownerOrdinal \in Nat \ {0},
+          physicalCut \in Nat,
+          predecessorOrigins,
+          rank \in TimeoutFrozenOlderProducerEpisodeRankCarrier:
+         TimeoutFrozenOlderProducerResolvedAtRank(
+           mode, source, sourceView,
+           ownerContext, ownerOrigin, ownerOrdinal,
+           physicalCut, predecessorOrigins, rank)
+           ~> TimeoutFrozenOlderProducerRankGoal(
+                mode, source, sourceView,
+                ownerContext, ownerOrigin, ownerOrdinal,
+                physicalCut, predecessorOrigins, rank)
+
+THEOREM AsyncLiveClosesTimeoutFrozenOlderProducerResolvedRankStep ==
+  \A initialContext:
+    TimeoutFrozenOlderProducerResolvedRankStepProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
+   AsyncSpecAlwaysUsesFixedResponsiveVoters,
+   TimeoutFrozenOlderProducerEpisodeStepIsDescentOrFrame,
+   TimeoutFrozenOlderProducerResolvedSelectedOwnerIsEnabled,
+   TimeoutFrozenOlderProducerResolvedFairActionConsumesRankCell,
+   TimeoutFrozenOlderProducerFairOwnerPersistsInResolvedRankCell,
+   AsyncRunnerEpisodeConcreteOwnerUsesExistingFairness,
+   AsyncVoterRuntimeReadyHasNoNonRunnerContinuationInsertion,
+   WF1, PTL, IsaT(1800)
+   DEF TimeoutFrozenOlderProducerResolvedRankStepProperty,
+       TimeoutFrozenOlderProducerResolvedAtRank,
+       TimeoutFrozenOlderProducerRankGoal,
+       TimeoutFrozenOlderProducerFairOwner,
+       TimeoutFrozenOlderProducerSelectedFairAction,
+       AsyncLiveSpecAt
 
 TimeoutFrozenOlderCandidateRankStepProperty(specification) ==
   specification
@@ -3126,22 +3530,17 @@ TimeoutFrozenOlderCandidateRankStepProperty(specification) ==
           ownerContext \in ContextRecords,
           ownerOrigin \in AsyncCandidateCausalOriginSet,
           ownerOrdinal \in Nat \ {0},
+          physicalCut \in Nat,
           predecessorOrigins,
-          rank \in Nat:
+          rank \in TimeoutFrozenOlderProducerEpisodeRankCarrier:
          TimeoutFrozenOlderCandidatePrefixAtRank(
            mode, source, sourceView,
            ownerContext, ownerOrigin, ownerOrdinal,
-           predecessorOrigins, rank)
-           ~> (TimeoutFrozenOlderCandidatePrefixGoal(
-                 mode, source, sourceView,
-                 ownerContext, ownerOrigin, ownerOrdinal,
-                 predecessorOrigins)
-                \/ \E lowerRank \in
-                     SetLessThan(rank, OpToRel(<, Nat), Nat):
-                     TimeoutFrozenOlderCandidatePrefixAtRank(
-                       mode, source, sourceView,
-                       ownerContext, ownerOrigin, ownerOrdinal,
-                       predecessorOrigins, lowerRank))
+           physicalCut, predecessorOrigins, rank)
+           ~> TimeoutFrozenOlderProducerRankGoal(
+                mode, source, sourceView,
+                ownerContext, ownerOrigin, ownerOrdinal,
+                physicalCut, predecessorOrigins, rank)
 
 THEOREM AsyncLiveClosesTimeoutFrozenOlderCandidateRankStep ==
   \A initialContext:
@@ -3149,18 +3548,16 @@ THEOREM AsyncLiveClosesTimeoutFrozenOlderCandidateRankStep ==
       AsyncSpecAt(initialContext))
       => TimeoutFrozenOlderCandidateRankStepProperty(
            AsyncLiveSpecAt(initialContext))
-BY StarvationFreedomObligation,
-   AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncSpecAlwaysProgressOwnershipInvariant,
-   TimeoutFrozenOlderBlockerHasExactCandidateWitness,
-   TimeoutFrozenOlderCandidateIsIndividuallyProtected,
-   TimeoutFrozenOlderCandidateRankCellIsSafe,
-   TimeoutFrozenOlderCandidateDepartureConsumesWorkBudget,
+BY AsyncLiveClosesTimeoutFrozenOlderProducerContinuation,
+   AsyncLiveClosesTimeoutFrozenOlderProducerResolvedRankStep,
    PTL, IsaT(900)
    DEF TimeoutFrozenOlderCandidateRankStepProperty,
+       TimeoutFrozenOlderProducerContinuationClosureProperty,
+       TimeoutFrozenOlderProducerResolvedRankStepProperty,
+       TimeoutFrozenOlderProducerContinuationAtRank,
+       TimeoutFrozenOlderProducerResolvedAtRank,
        TimeoutFrozenOlderCandidatePrefixAtRank,
-       TimeoutFrozenOlderCandidatePrefixGoal,
-       StarvationFreedomProperty,
+       TimeoutFrozenOlderProducerRankGoal,
        AsyncLiveSpecAt
 
 TimeoutFrozenOlderCandidatePrefixClosureProperty(specification) ==
@@ -3171,14 +3568,16 @@ TimeoutFrozenOlderCandidatePrefixClosureProperty(specification) ==
           ownerContext \in ContextRecords,
           ownerOrigin \in AsyncCandidateCausalOriginSet,
           ownerOrdinal \in Nat \ {0},
+          physicalCut \in Nat,
           predecessorOrigins:
          TimeoutFrozenRuntimeLifecycleSnapshot(
            mode, source, sourceView,
-           ownerContext, ownerOrigin, ownerOrdinal, predecessorOrigins)
+           ownerContext, ownerOrigin, ownerOrdinal,
+           physicalCut, predecessorOrigins)
            ~> TimeoutFrozenOlderCandidatePrefixGoal(
                  mode, source, sourceView,
                  ownerContext, ownerOrigin, ownerOrdinal,
-                 predecessorOrigins)
+                 physicalCut, predecessorOrigins)
 
 THEOREM AsyncLiveClosesTimeoutFrozenOlderCandidatePrefix ==
   \A initialContext:
@@ -3187,14 +3586,137 @@ THEOREM AsyncLiveClosesTimeoutFrozenOlderCandidatePrefix ==
       => TimeoutFrozenOlderCandidatePrefixClosureProperty(
            AsyncLiveSpecAt(initialContext))
 BY AsyncLiveClosesTimeoutFrozenOlderCandidateRankStep,
-   TimeoutFrozenOlderCandidateWorkBudgetIsNatural,
-   NatLessThanWellFounded, WellFoundedLeadsTo, PTL
+   TimeoutFrozenOlderProducerEpisodeRankIsInCarrier,
+   TimeoutFrozenOlderProducerEpisodeRankOrderingIsWellFounded,
+   WellFoundedLeadsTo, PTL
    DEF TimeoutFrozenOlderCandidatePrefixClosureProperty,
        TimeoutFrozenOlderCandidateRankStepProperty,
        TimeoutFrozenRuntimeLifecycleSnapshot,
        TimeoutFrozenRuntimeLifecyclePending,
        TimeoutFrozenOlderCandidatePrefixAtRank,
-       TimeoutFrozenOlderCandidatePrefixGoal
+       TimeoutFrozenOlderCandidatePrefixGoal,
+       TimeoutFrozenOlderProducerRankGoal,
+       TimeoutFrozenOlderProducerEpisodeRankOrdering,
+       TimeoutFrozenOlderProducerEpisodeRankCarrier
+
+THEOREM TimeoutFrozenOlderProducerDrainCertificateExcludesBlockers ==
+  \A mode \in TimeoutRuntimeModeCarrier,
+     source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     ownerContext \in ContextRecords,
+     ownerOrigin \in AsyncCandidateCausalOriginSet,
+     ownerOrdinal \in Nat \ {0},
+     physicalCut \in Nat,
+     predecessorOrigins:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ TimeoutFrozenRuntimeLifecycleOwner(
+         mode, source, sourceView,
+         ownerContext, ownerOrigin, ownerOrdinal)
+    /\ TimeoutFrozenRuntimeLifecyclePending(
+         mode, source, sourceView,
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)
+    /\ TimeoutFrozenOlderProducerDrainCertificate(
+         source, ownerOrdinal, physicalCut, predecessorOrigins)
+      => /\ ~AsyncOlderCandidateLifecycleBlocksTimeout(source)
+         /\ ~AsyncCandidateProducerContinuationOwnsRunNodeTurn(
+               source)
+BY AsyncCandidateProducerContinuationLaterThanTimeoutCannotOwnRunnerTurn,
+   AsyncCandidateProducerContinuationPostTimeoutCutCannotOwnRunnerTurn,
+   AsyncCandidateProducerContinuationScheduledPredecessorOwnsRunnerFirst,
+   IsaT(2400)
+   DEF TimeoutFrozenOlderProducerDrainCertificate,
+       TimeoutFrozenOlderProducerEpisodeDrained,
+       TimeoutFrozenOlderCandidateWorkBudget,
+       TimeoutFrozenOlderCandidateWorkTokens,
+       TimeoutFrozenOlderCandidateOwners,
+       TimeoutFrozenOlderLifecycleCandidates,
+       TimeoutFrozenOlderDormantLocalReplayCandidates,
+       TimeoutFrozenOlderOrdinaryIngressCandidates,
+       TimeoutFrozenOlderLeaderWireCandidates,
+       TimeoutFrozenOlderContinuationRecords,
+       TimeoutFrozenRuntimeLifecyclePhysicalCut,
+       TimeoutOlderLifecycleOriginsBelow,
+       TimeoutFrozenRuntimeLifecycleOwner,
+       AsyncCandidateProducerContinuationFrozenLeaderWireCandidates,
+       AsyncCandidateProducerContinuationCausalWeight,
+       AsyncCandidateProducerContinuationStatusRank,
+       AsyncFrozenLeaderWireBarrierRecords,
+       AsyncFrozenOrdinaryIngressBarrierRecords,
+       AsyncCandidateProducerContinuationOwnsRunNodeTurn,
+       AsyncCandidateProducerContinuationRunnerResolutionRequired,
+       AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationRunnableResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationMayOwnRuntimeTurn,
+       AsyncCandidateProducerContinuationMayPrecedeOwnedTimeout,
+       AsyncCandidateProducerContinuationScheduledPredecessorsFor,
+       AsyncOlderCandidateLifecycleBlocksTimeout,
+       AsyncEffectiveTimeoutLifecycleOrdinal,
+       AsyncEffectiveTimeoutLifecyclePhysicalCut,
+       AsyncCandidateLifecycleOrdinal
+
+THEOREM TimeoutFrozenOlderProducerDrainCertificatePersists ==
+  \A mode \in TimeoutRuntimeModeCarrier,
+     source \in AsyncCurrentResponsiveVoters,
+     sourceView \in Views,
+     ownerContext \in ContextRecords,
+     ownerOrigin \in AsyncCandidateCausalOriginSet,
+     ownerOrdinal \in Nat \ {0},
+     physicalCut \in Nat,
+     predecessorOrigins:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceLifecycleInvariant
+    /\ TimeoutFrozenRuntimeLifecycleOwner(
+         mode, source, sourceView,
+         ownerContext, ownerOrigin, ownerOrdinal)
+    /\ TimeoutFrozenRuntimeLifecyclePending(
+         mode, source, sourceView,
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)
+    /\ TimeoutFrozenOlderProducerDrainCertificate(
+         source, ownerOrdinal, physicalCut, predecessorOrigins)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ ~TimeoutRuntimeModeEndpoint(mode, source, sourceView)'
+      => TimeoutFrozenOlderProducerDrainCertificate(
+           source, ownerOrdinal, physicalCut, predecessorOrigins)'
+BY TimeoutFrozenOlderPredecessorSetCannotBeReplenished,
+   AsyncTimeoutLifecycleOrdinalPersistsUntilEndpoint,
+   AsyncTimeoutLifecycleOrdinalClearsOnlyAtEndpoint,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   AsyncIngressPhysicalHighWatermarkIsMonotone,
+   CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix,
+   CandidateProducerContinuationPostCutOrdinaryAdmissionCannotEnterFrozenPrefix,
+   CandidateProducerContinuationActionInertDormantHasZeroFrozenStage,
+   CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst,
+   CandidateProducerContinuationFrozenOrdinaryIngressChargeCannotAppearAtGst,
+   CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge,
+   AsyncCandidateProducerContinuationStatusIsMonotone,
+   AsyncCandidateProducerSemanticHandoffRetirementRequiresAck,
+   AsyncServeTombstonedIdentityCannotRequeueAtGst,
+   IsaT(3600)
+   DEF TimeoutFrozenOlderProducerDrainCertificate,
+       TimeoutFrozenOlderProducerEpisodeDrained,
+       TimeoutFrozenOlderCandidateWorkBudget,
+       TimeoutFrozenOlderCandidateWorkTokens,
+       TimeoutFrozenOlderCandidateOwners,
+       TimeoutFrozenOlderLifecycleCandidates,
+       TimeoutFrozenOlderDormantLocalReplayCandidates,
+       TimeoutFrozenOlderOrdinaryIngressCandidates,
+       TimeoutFrozenOlderLeaderWireCandidates,
+       TimeoutFrozenOlderContinuationRecords,
+       TimeoutFrozenRuntimeLifecyclePhysicalCut,
+       TimeoutOlderLifecycleOriginsBelow,
+       TimeoutFrozenRuntimeLifecycleOwner,
+       TimeoutRuntimeModeEndpoint,
+       AsyncCandidateProducerContinuationFrozenLeaderWireCandidates,
+       AsyncCandidateProducerContinuationCausalWeight,
+       AsyncCandidateProducerContinuationStatusRank,
+       AsyncFrozenLeaderWireBarrierRecords,
+       AsyncFrozenOrdinaryIngressBarrierRecords,
+       AsyncAllVars
 
 (***************************************************************************
 Frozen earlier Serve predecessors and the sole later-ticket residual.
@@ -3228,20 +3750,25 @@ TimeoutFrozenEarlierServeTicketBudget(source, ownerOrdinal) ==
 
 TimeoutFrozenEarlierServePrefixPending(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal) ==
-  /\ TimeoutFrozenRuntimeLifecycleOwner(
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins) ==
+  /\ TimeoutFrozenRuntimeLifecyclePending(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal)
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins)
   /\ ~TimeoutRuntimeModeEndpoint(mode, source, sourceView)
-  /\ ~AsyncOlderCandidateLifecycleBlocksTimeout(source)
+  /\ TimeoutFrozenOlderProducerDrainCertificate(
+       source, ownerOrdinal, physicalCut, predecessorOrigins)
 
 TimeoutFrozenEarlierServePrefixGoal(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins) ==
   \/ TimeoutRuntimeModeEndpoint(mode, source, sourceView)
   \/ /\ TimeoutFrozenEarlierServePrefixPending(
           mode, source, sourceView,
-          ownerContext, ownerOrigin, ownerOrdinal)
+          ownerContext, ownerOrigin, ownerOrdinal,
+          physicalCut, predecessorOrigins)
      /\ TimeoutFrozenEarlierServeTicketIdentities(
           source, ownerOrdinal) = {}
 
@@ -3252,27 +3779,34 @@ TimeoutFrozenEarlierServePrefixClosureProperty(specification) ==
           sourceView \in Views,
           ownerContext \in ContextRecords,
           ownerOrigin \in AsyncCandidateCausalOriginSet,
-          ownerOrdinal \in Nat \ {0}:
+          ownerOrdinal \in Nat \ {0},
+          physicalCut \in Nat,
+          predecessorOrigins:
          TimeoutFrozenEarlierServePrefixPending(
            mode, source, sourceView,
-           ownerContext, ownerOrigin, ownerOrdinal)
+           ownerContext, ownerOrigin, ownerOrdinal,
+           physicalCut, predecessorOrigins)
            ~> TimeoutFrozenEarlierServePrefixGoal(
                  mode, source, sourceView,
-                 ownerContext, ownerOrigin, ownerOrdinal)
+                 ownerContext, ownerOrigin, ownerOrdinal,
+                 physicalCut, predecessorOrigins)
 
 THEOREM TimeoutFrozenEarlierServeTicketBudgetIsNatural ==
   \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal:
+     ownerContext, ownerOrigin, ownerOrdinal,
+     physicalCut, predecessorOrigins:
     /\ AsyncStrongTypeInvariant
     /\ TimeoutFrozenEarlierServePrefixPending(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)
     => TimeoutFrozenEarlierServeTicketBudget(
          source, ownerOrdinal) \in Nat
 BY FS_Subset, FS_CardinalityType, IsaT(180)
    DEF TimeoutFrozenEarlierServeTicketBudget,
        TimeoutFrozenEarlierServeTicketIdentities,
        TimeoutFrozenEarlierServePrefixPending,
+       TimeoutFrozenRuntimeLifecyclePending,
        TimeoutFrozenRuntimeLifecycleOwner,
        AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant
 
@@ -3322,17 +3856,20 @@ TimeoutEarlierServeTicketSourcePosition(node, identity) ==
 
 TimeoutEarlierServeExactTicketResidual(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, identity) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, identity) ==
   /\ TimeoutFrozenEarlierServePrefixPending(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal)
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins)
   /\ identity \in
        TimeoutFrozenEarlierServeTicketIdentities(source, ownerOrdinal)
   /\ TimeoutEarlierServeTicketSources(source, identity) # {}
 
 TimeoutEarlierServeExactTicketGoal(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, identity) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, identity) ==
   \/ TimeoutRuntimeModeEndpoint(mode, source, sourceView)
   \/ identity \notin
        TimeoutFrozenEarlierServeTicketIdentities(source, ownerOrdinal)
@@ -3542,11 +4079,13 @@ BY IsaT(600)
 
 THEOREM TimeoutEarlierServeLifecycleRankInCarrier ==
   \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal, identity:
+     ownerContext, ownerOrigin, ownerOrdinal,
+     physicalCut, predecessorOrigins, identity:
     /\ AsyncStrongTypeInvariant
     /\ TimeoutEarlierServeExactTicketResidual(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, identity)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, identity)
     => TimeoutEarlierServeLifecycleRank(source, identity)
          \in TimeoutEarlierServeLifecycleRankCarrier
 BY TimeoutEarlierServeOwnedTicketHasExactLaneOccurrence,
@@ -3587,11 +4126,13 @@ BY TimeoutEarlierServeOwnedTicketHasExactLaneOccurrence,
 
 THEOREM TimeoutEarlierServeEpisodeBudgetIsFinite ==
   \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal, identity:
+     ownerContext, ownerOrigin, ownerOrdinal,
+     physicalCut, predecessorOrigins, identity:
     /\ AsyncStrongTypeInvariant
     /\ TimeoutEarlierServeExactTicketResidual(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, identity)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, identity)
     => /\ IsFiniteSet(
              TimeoutEarlierServeEpisodeOwnerSet(source, identity))
        /\ TimeoutEarlierServeEpisodeBudget(source, identity) \in Nat
@@ -3655,15 +4196,18 @@ BY AsyncLiveServeIngressDuplicateRetainsSchedulerOrdinal
 
 THEOREM TimeoutEarlierServeTicketSchedulerOrdinalPersistsUntilDrain ==
   \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal, identity:
+     ownerContext, ownerOrigin, ownerOrdinal,
+     physicalCut, predecessorOrigins, identity:
     /\ AsyncStrongTypeInvariant
     /\ TimeoutEarlierServeExactTicketResidual(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, identity)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, identity)
     /\ AsyncNext
     /\ TimeoutEarlierServeExactTicketResidual(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, identity)'
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, identity)'
     => AsyncServeIngressAdmissionSchedulerOrdinal(source, identity)'
          = AsyncServeIngressAdmissionSchedulerOrdinal(source, identity)
 BY IsaT(300)
@@ -3686,15 +4230,18 @@ BY IsaT(300)
 
 THEOREM TimeoutEarlierServeFrozenPredecessorsDoNotReplenish ==
   \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal, identity:
+     ownerContext, ownerOrigin, ownerOrdinal,
+     physicalCut, predecessorOrigins, identity:
     /\ AsyncStrongTypeInvariant
     /\ TimeoutEarlierServeExactTicketResidual(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, identity)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, identity)
     /\ AsyncNext
     /\ TimeoutEarlierServeExactTicketResidual(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, identity)'
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, identity)'
     => TimeoutEarlierServeFrozenPredecessorSet(source, identity)'
          \subseteq
            TimeoutEarlierServeFrozenPredecessorSet(source, identity)
@@ -3737,13 +4284,15 @@ BY IsaT(600)
 
 THEOREM TimeoutEarlierServeFrozenSelectorRejectsPostCutIngress ==
   \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal, identity,
+     ownerContext, ownerOrigin, ownerOrdinal,
+     physicalCut, predecessorOrigins, identity,
      laneSource, index:
     LET item == asyncIngressLanes[source][laneSource][index]
     IN /\ AsyncStrongTypeInvariant
        /\ TimeoutEarlierServeExactTicketResidual(
             mode, source, sourceView,
-            ownerContext, ownerOrigin, ownerOrdinal, identity)
+            ownerContext, ownerOrigin, ownerOrdinal,
+            physicalCut, predecessorOrigins, identity)
        /\ identity =
             AsyncServeEarliestIngressLifecycleOwnerIdentity(source)
        /\ laneSource \in AsyncIngressSources
@@ -3776,13 +4325,15 @@ BY Isa
 
 THEOREM TimeoutEarlierServeFreshAdmissionIsAfterFrozenOwner ==
   \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal:
+     ownerContext, ownerOrigin, ownerOrdinal,
+     physicalCut, predecessorOrigins:
     \A admission \in
          AsyncFreshServeIngressAdmissionsForNodeThisStep(source):
       /\ AsyncStrongTypeInvariant
       /\ TimeoutFrozenEarlierServePrefixPending(
            mode, source, sourceView,
-           ownerContext, ownerOrigin, ownerOrdinal)
+           ownerContext, ownerOrigin, ownerOrdinal,
+           physicalCut, predecessorOrigins)
       /\ AsyncNext
       => ownerOrdinal < admission.schedulerOrdinal
 BY AsyncFreshServeIngressCannotReacquirePriorSchedulerOrdinal,
@@ -3823,15 +4374,18 @@ BY Isa
 
 THEOREM TimeoutFrozenEarlierServeTicketSetCannotReplenish ==
   \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal:
+     ownerContext, ownerOrigin, ownerOrdinal,
+     physicalCut, predecessorOrigins:
     /\ AsyncStrongTypeInvariant
     /\ TimeoutFrozenEarlierServePrefixPending(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)
     /\ AsyncNext
     /\ TimeoutFrozenEarlierServePrefixPending(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal)'
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)'
     => TimeoutFrozenEarlierServeTicketIdentities(
          source, ownerOrdinal)'
          \subseteq
@@ -3871,14 +4425,17 @@ action is assumed.
 
 TimeoutEarlierServeFiniteProducerEpisodeAction(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, identity) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, identity) ==
   /\ TimeoutEarlierServeExactTicketResidual(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal, identity)
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins, identity)
   /\ AsyncNext
   /\ TimeoutEarlierServeExactTicketResidual(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal, identity)'
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins, identity)'
   /\ TimeoutEarlierServeLifecycleRank(source, identity)'
        = TimeoutEarlierServeLifecycleRank(source, identity)
   /\ TimeoutEarlierServeEpisodeBudget(source, identity)'
@@ -3886,14 +4443,17 @@ TimeoutEarlierServeFiniteProducerEpisodeAction(
 
 TimeoutEarlierServeNoninterferenceAction(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, identity) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, identity) ==
   /\ TimeoutEarlierServeExactTicketResidual(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal, identity)
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins, identity)
   /\ AsyncNext
   /\ TimeoutEarlierServeExactTicketResidual(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal, identity)'
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins, identity)'
   /\ TimeoutEarlierServeLifecycleRank(source, identity)'
        = TimeoutEarlierServeLifecycleRank(source, identity)
   /\ TimeoutEarlierServeEpisodeBudget(source, identity)'
@@ -3945,15 +4505,18 @@ TimeoutEarlierServeIngressStrictComponentDecrease(source, identity) ==
 
 THEOREM TimeoutEarlierServeStrictComponentLowersIngressRank ==
   \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal, identity:
+     ownerContext, ownerOrigin, ownerOrdinal,
+     physicalCut, predecessorOrigins, identity:
     /\ AsyncStrongTypeInvariant
     /\ TimeoutEarlierServeExactTicketResidual(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, identity)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, identity)
     /\ AsyncStrongTypeInvariant'
     /\ TimeoutEarlierServeExactTicketResidual(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, identity)'
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, identity)'
     /\ TimeoutEarlierServeIngressStrictComponentDecrease(source, identity)
     => <<TimeoutEarlierServeIngressRank(source, identity)',
           TimeoutEarlierServeIngressRank(source, identity)>>
@@ -3974,14 +4537,17 @@ BY Isa
 
 THEOREM TimeoutEarlierServeStutterPreservesRankAndBudget ==
   \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal, identity:
+     ownerContext, ownerOrigin, ownerOrdinal,
+     physicalCut, predecessorOrigins, identity:
     /\ TimeoutEarlierServeExactTicketResidual(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, identity)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, identity)
     /\ UNCHANGED AsyncAllVars
     => /\ TimeoutEarlierServeExactTicketResidual(
             mode, source, sourceView,
-            ownerContext, ownerOrigin, ownerOrdinal, identity)'
+            ownerContext, ownerOrigin, ownerOrdinal,
+            physicalCut, predecessorOrigins, identity)'
        /\ TimeoutEarlierServeLifecycleRank(source, identity)'
             = TimeoutEarlierServeLifecycleRank(source, identity)
        /\ TimeoutEarlierServeEpisodeBudget(source, identity)'
@@ -4015,46 +4581,57 @@ BY Isa
 
 TimeoutEarlierServeLifecycleStepClassification(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, identity) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, identity) ==
   /\ TimeoutEarlierServeExactTicketResidual(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal, identity)
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins, identity)
   /\ AsyncNext
   => \/ TimeoutEarlierServeExactTicketGoal(
           mode, source, sourceView,
-          ownerContext, ownerOrigin, ownerOrdinal, identity)'
+          ownerContext, ownerOrigin, ownerOrdinal,
+          physicalCut, predecessorOrigins, identity)'
      \/ <<TimeoutEarlierServeLifecycleRank(source, identity)',
            TimeoutEarlierServeLifecycleRank(source, identity)>>
           \in TimeoutEarlierServeLifecycleRankOrdering
      \/ TimeoutEarlierServeFiniteProducerEpisodeAction(
           mode, source, sourceView,
-          ownerContext, ownerOrigin, ownerOrdinal, identity)
+          ownerContext, ownerOrigin, ownerOrdinal,
+          physicalCut, predecessorOrigins, identity)
      \/ TimeoutEarlierServeNoninterferenceAction(
           mode, source, sourceView,
-          ownerContext, ownerOrigin, ownerOrdinal, identity)
+          ownerContext, ownerOrigin, ownerOrdinal,
+          physicalCut, predecessorOrigins, identity)
 
 TimeoutEarlierServeAtRank(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, identity, rank) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, identity, rank) ==
   /\ TimeoutEarlierServeExactTicketResidual(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal, identity)
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins, identity)
   /\ TimeoutEarlierServeLifecycleRank(source, identity) = rank
 
 TimeoutEarlierServeAtRankAndBudget(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, identity, rank, budget) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, identity, rank, budget) ==
   /\ TimeoutEarlierServeAtRank(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal, identity, rank)
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins, identity, rank)
   /\ TimeoutEarlierServeEpisodeBudget(source, identity) = budget
 
 TimeoutEarlierServeRankGoal(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, identity, rank) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, identity, rank) ==
   \/ TimeoutEarlierServeExactTicketGoal(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal, identity)
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins, identity)
   \/ <<TimeoutEarlierServeLifecycleRank(source, identity), rank>>
        \in TimeoutEarlierServeLifecycleRankOrdering
 
@@ -4093,16 +4670,18 @@ TimeoutEarlierServeSelectedConcreteFairAction(source, identity) ==
 
 TimeoutEarlierServeRankCellOutcome(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, identity, rank, budget) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, identity, rank, budget) ==
   \/ TimeoutEarlierServeRankGoal(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal, identity, rank)
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins, identity, rank)
   \/ \E lowerBudget \in
        SetLessThan(budget, OpToRel(<, Nat), Nat):
        TimeoutEarlierServeAtRankAndBudget(
          mode, source, sourceView,
          ownerContext, ownerOrigin, ownerOrdinal,
-         identity, rank, lowerBudget)
+         physicalCut, predecessorOrigins, identity, rank, lowerBudget)
 
 TimeoutEarlierServeConcreteActionOriginProperty(specification) ==
   /\ specification
@@ -4112,17 +4691,20 @@ TimeoutEarlierServeConcreteActionOriginProperty(specification) ==
                   ownerContext \in ContextRecords,
                   ownerOrigin \in AsyncCandidateCausalOriginSet,
                   ownerOrdinal \in Nat \ {0},
+                  physicalCut \in Nat,
+                  predecessorOrigins,
                   identity \in AsyncServeLogicalRequestIdentities,
                   rank \in TimeoutEarlierServeLifecycleRankCarrier,
                   budget \in Nat:
               /\ TimeoutEarlierServeAtRankAndBudget(
                    mode, source, sourceView,
                    ownerContext, ownerOrigin, ownerOrdinal,
+                   physicalCut, predecessorOrigins,
                    identity, rank, budget)
               /\ ~TimeoutEarlierServeRankGoal(
                    mode, source, sourceView,
                    ownerContext, ownerOrigin, ownerOrdinal,
-                   identity, rank)
+                   physicalCut, predecessorOrigins, identity, rank)
               => /\ TimeoutEarlierServeConcreteFairOwner(source, identity)
                        \in TimeoutEarlierServeConcreteFairOwnerKinds
                  /\ ENABLED
@@ -4135,25 +4717,30 @@ TimeoutEarlierServeConcreteActionOriginProperty(specification) ==
                   ownerContext \in ContextRecords,
                   ownerOrigin \in AsyncCandidateCausalOriginSet,
                   ownerOrdinal \in Nat \ {0},
+                  physicalCut \in Nat,
+                  predecessorOrigins,
                   identity \in AsyncServeLogicalRequestIdentities,
                   rank \in TimeoutEarlierServeLifecycleRankCarrier,
                   budget \in Nat:
               /\ TimeoutEarlierServeAtRankAndBudget(
                    mode, source, sourceView,
                    ownerContext, ownerOrigin, ownerOrdinal,
+                   physicalCut, predecessorOrigins,
                    identity, rank, budget)
               /\ ~TimeoutEarlierServeRankGoal(
                    mode, source, sourceView,
                    ownerContext, ownerOrigin, ownerOrdinal,
-                   identity, rank)
+                   physicalCut, predecessorOrigins, identity, rank)
               /\ [AsyncNext]_AsyncAllVars
               => \/ TimeoutEarlierServeRankCellOutcome(
                       mode, source, sourceView,
                       ownerContext, ownerOrigin, ownerOrdinal,
+                      physicalCut, predecessorOrigins,
                       identity, rank, budget)'
                  \/ /\ TimeoutEarlierServeAtRankAndBudget(
                            mode, source, sourceView,
                            ownerContext, ownerOrigin, ownerOrdinal,
+                           physicalCut, predecessorOrigins,
                            identity, rank, budget)'
                     /\ TimeoutEarlierServeConcreteFairOwner(
                          source, identity)'
@@ -4166,22 +4753,26 @@ TimeoutEarlierServeConcreteActionOriginProperty(specification) ==
                   ownerContext \in ContextRecords,
                   ownerOrigin \in AsyncCandidateCausalOriginSet,
                   ownerOrdinal \in Nat \ {0},
+                  physicalCut \in Nat,
+                  predecessorOrigins,
                   identity \in AsyncServeLogicalRequestIdentities,
                   rank \in TimeoutEarlierServeLifecycleRankCarrier,
                   budget \in Nat:
               /\ TimeoutEarlierServeAtRankAndBudget(
                    mode, source, sourceView,
                    ownerContext, ownerOrigin, ownerOrdinal,
+                   physicalCut, predecessorOrigins,
                    identity, rank, budget)
               /\ ~TimeoutEarlierServeRankGoal(
                    mode, source, sourceView,
                    ownerContext, ownerOrigin, ownerOrdinal,
-                   identity, rank)
+                   physicalCut, predecessorOrigins, identity, rank)
               /\ <<TimeoutEarlierServeSelectedConcreteFairAction(
                      source, identity)>>_AsyncAllVars
               => TimeoutEarlierServeRankCellOutcome(
                    mode, source, sourceView,
                    ownerContext, ownerOrigin, ownerOrdinal,
+                   physicalCut, predecessorOrigins,
                    identity, rank, budget)')
 
 TimeoutEarlierServeExactIngressRankStepProperty(specification) ==
@@ -4192,24 +4783,30 @@ TimeoutEarlierServeExactIngressRankStepProperty(specification) ==
                   ownerContext \in ContextRecords,
                   ownerOrigin \in AsyncCandidateCausalOriginSet,
                   ownerOrdinal \in Nat \ {0},
+                  physicalCut \in Nat,
+                  predecessorOrigins,
                   identity \in AsyncServeLogicalRequestIdentities:
               TimeoutEarlierServeLifecycleStepClassification(
                 mode, source, sourceView,
-                ownerContext, ownerOrigin, ownerOrdinal, identity))
+                ownerContext, ownerOrigin, ownerOrdinal,
+                physicalCut, predecessorOrigins, identity))
   /\ TimeoutEarlierServeConcreteActionOriginProperty(specification)
 
 THEOREM TimeoutEarlierServeLifecycleStepClassificationIsExhaustive ==
   \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal, identity:
+     ownerContext, ownerOrigin, ownerOrdinal,
+     physicalCut, predecessorOrigins, identity:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ TimeoutEarlierServeExactTicketResidual(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, identity)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, identity)
     /\ AsyncNext
     => TimeoutEarlierServeLifecycleStepClassification(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, identity)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, identity)
 BY TimeoutEarlierServeFrozenPredecessorsDoNotReplenish,
    TimeoutEarlierServeTicketSchedulerOrdinalPersistsUntilDrain,
    TimeoutEarlierServeTombstoneCannotResurrectServeJob,
@@ -4275,7 +4872,7 @@ BY TimeoutEarlierServeFrozenPredecessorsDoNotReplenish,
 THEOREM TimeoutEarlierServeSelectedActionEnabledAtEpisode ==
   \A mode, source, sourceView,
      ownerContext, ownerOrigin, ownerOrdinal,
-     identity, rank, budget:
+     physicalCut, predecessorOrigins, identity, rank, budget:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
@@ -4283,10 +4880,11 @@ THEOREM TimeoutEarlierServeSelectedActionEnabledAtEpisode ==
     /\ TimeoutEarlierServeAtRankAndBudget(
          mode, source, sourceView,
          ownerContext, ownerOrigin, ownerOrdinal,
-         identity, rank, budget)
+         physicalCut, predecessorOrigins, identity, rank, budget)
     /\ ~TimeoutEarlierServeRankGoal(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, identity, rank)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, identity, rank)
     => ENABLED
          <<TimeoutEarlierServeSelectedConcreteFairAction(
              source, identity)>>_AsyncAllVars
@@ -4333,23 +4931,24 @@ BY QueuedIoEnablesPostGstService,
 THEOREM TimeoutEarlierServeBracketStepPreservesEpisodeOrGoal ==
   \A mode, source, sourceView,
      ownerContext, ownerOrigin, ownerOrdinal,
-     identity, rank, budget:
+     physicalCut, predecessorOrigins, identity, rank, budget:
     /\ TimeoutEarlierServeLifecycleStepClassification(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, identity)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, identity)
     /\ TimeoutEarlierServeAtRankAndBudget(
          mode, source, sourceView,
          ownerContext, ownerOrigin, ownerOrdinal,
-         identity, rank, budget)
+         physicalCut, predecessorOrigins, identity, rank, budget)
     /\ [AsyncNext]_AsyncAllVars
     => \/ TimeoutEarlierServeRankCellOutcome(
             mode, source, sourceView,
             ownerContext, ownerOrigin, ownerOrdinal,
-            identity, rank, budget)'
+            physicalCut, predecessorOrigins, identity, rank, budget)'
        \/ TimeoutEarlierServeAtRankAndBudget(
             mode, source, sourceView,
             ownerContext, ownerOrigin, ownerOrdinal,
-            identity, rank, budget)'
+            physicalCut, predecessorOrigins, identity, rank, budget)'
 BY TimeoutEarlierServeStutterPreservesRankAndBudget, IsaT(300)
    DEF TimeoutEarlierServeLifecycleStepClassification,
        TimeoutEarlierServeFiniteProducerEpisodeAction,
@@ -4363,21 +4962,22 @@ BY TimeoutEarlierServeStutterPreservesRankAndBudget, IsaT(300)
 THEOREM TimeoutEarlierServeConcreteOwnerPersistsInRankCell ==
   \A mode, source, sourceView,
      ownerContext, ownerOrigin, ownerOrdinal,
-     identity, rank, budget:
+     physicalCut, predecessorOrigins, identity, rank, budget:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ TimeoutEarlierServeAtRankAndBudget(
          mode, source, sourceView,
          ownerContext, ownerOrigin, ownerOrdinal,
-         identity, rank, budget)
+         physicalCut, predecessorOrigins, identity, rank, budget)
     /\ ~TimeoutEarlierServeRankGoal(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, identity, rank)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, identity, rank)
     /\ [AsyncNext]_AsyncAllVars
     /\ TimeoutEarlierServeAtRankAndBudget(
          mode, source, sourceView,
          ownerContext, ownerOrigin, ownerOrdinal,
-         identity, rank, budget)'
+         physicalCut, predecessorOrigins, identity, rank, budget)'
     => TimeoutEarlierServeConcreteFairOwner(source, identity)'
          = TimeoutEarlierServeConcreteFairOwner(source, identity)
 BY TimeoutEarlierServeFrozenPredecessorsDoNotReplenish,
@@ -4416,22 +5016,23 @@ BY TimeoutEarlierServeFrozenPredecessorsDoNotReplenish,
 THEOREM TimeoutEarlierServeSelectedActionConsumesEpisode ==
   \A mode, source, sourceView,
      ownerContext, ownerOrigin, ownerOrdinal,
-     identity, rank, budget:
+     physicalCut, predecessorOrigins, identity, rank, budget:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ TimeoutEarlierServeAtRankAndBudget(
          mode, source, sourceView,
          ownerContext, ownerOrigin, ownerOrdinal,
-         identity, rank, budget)
+         physicalCut, predecessorOrigins, identity, rank, budget)
     /\ ~TimeoutEarlierServeRankGoal(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, identity, rank)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, identity, rank)
     /\ <<TimeoutEarlierServeSelectedConcreteFairAction(
            source, identity)>>_AsyncAllVars
     => TimeoutEarlierServeRankCellOutcome(
          mode, source, sourceView,
          ownerContext, ownerOrigin, ownerOrdinal,
-         identity, rank, budget)'
+         physicalCut, predecessorOrigins, identity, rank, budget)'
 BY TimeoutEarlierServeFrozenPredecessorsDoNotReplenish,
    TimeoutEarlierServeFrozenSelectorRejectsPostCutIngress,
    TimeoutEarlierServeReservationFencesLaterIoProducer,
@@ -4514,8 +5115,10 @@ THEOREM AsyncLiveClosesTimeoutEarlierServeExactIngressRankStep ==
       AsyncLiveSpecAt(initialContext))
 BY AsyncSpecAlwaysStrongTypeInvariant,
    AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle,
    AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
    AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
+   TimeoutFrozenOlderProducerDrainCertificatePersists,
    TimeoutEarlierServeLifecycleStepClassificationIsExhaustive,
    TimeoutEarlierServeSelectedActionEnabledAtEpisode,
    TimeoutEarlierServeBracketStepPreservesEpisodeOrGoal,
@@ -4534,17 +5137,19 @@ TimeoutEarlierServeFiniteEpisodeClosureProperty(specification) ==
           ownerContext \in ContextRecords,
           ownerOrigin \in AsyncCandidateCausalOriginSet,
           ownerOrdinal \in Nat \ {0},
+          physicalCut \in Nat,
+          predecessorOrigins,
           identity \in AsyncServeLogicalRequestIdentities,
           rank \in TimeoutEarlierServeLifecycleRankCarrier,
           budget \in Nat:
          TimeoutEarlierServeAtRankAndBudget(
            mode, source, sourceView,
            ownerContext, ownerOrigin, ownerOrdinal,
-           identity, rank, budget)
+           physicalCut, predecessorOrigins, identity, rank, budget)
            ~> TimeoutEarlierServeRankCellOutcome(
                  mode, source, sourceView,
                  ownerContext, ownerOrigin, ownerOrdinal,
-                 identity, rank, budget)
+                 physicalCut, predecessorOrigins, identity, rank, budget)
 
 TimeoutEarlierServeRankCellClosureProperty(specification) ==
   specification
@@ -4554,14 +5159,18 @@ TimeoutEarlierServeRankCellClosureProperty(specification) ==
           ownerContext \in ContextRecords,
           ownerOrigin \in AsyncCandidateCausalOriginSet,
           ownerOrdinal \in Nat \ {0},
+          physicalCut \in Nat,
+          predecessorOrigins,
           identity \in AsyncServeLogicalRequestIdentities,
           rank \in TimeoutEarlierServeLifecycleRankCarrier:
          TimeoutEarlierServeAtRank(
            mode, source, sourceView,
-           ownerContext, ownerOrigin, ownerOrdinal, identity, rank)
+           ownerContext, ownerOrigin, ownerOrdinal,
+           physicalCut, predecessorOrigins, identity, rank)
            ~> TimeoutEarlierServeRankGoal(
                  mode, source, sourceView,
-                 ownerContext, ownerOrigin, ownerOrdinal, identity, rank)
+                 ownerContext, ownerOrigin, ownerOrdinal,
+                 physicalCut, predecessorOrigins, identity, rank)
 
 TimeoutEarlierServeExactTicketConvergenceProperty(specification) ==
   specification
@@ -4571,13 +5180,17 @@ TimeoutEarlierServeExactTicketConvergenceProperty(specification) ==
           ownerContext \in ContextRecords,
           ownerOrigin \in AsyncCandidateCausalOriginSet,
           ownerOrdinal \in Nat \ {0},
+          physicalCut \in Nat,
+          predecessorOrigins,
           identity \in AsyncServeLogicalRequestIdentities:
          TimeoutEarlierServeExactTicketResidual(
            mode, source, sourceView,
-           ownerContext, ownerOrigin, ownerOrdinal, identity)
+           ownerContext, ownerOrigin, ownerOrdinal,
+           physicalCut, predecessorOrigins, identity)
            ~> TimeoutEarlierServeExactTicketGoal(
                  mode, source, sourceView,
-                 ownerContext, ownerOrigin, ownerOrdinal, identity)
+                 ownerContext, ownerOrigin, ownerOrdinal,
+                 physicalCut, predecessorOrigins, identity)
 
 THEOREM TimeoutEarlierServeConcreteOwnerUsesAsyncFairness ==
   \A initialContext, source, ownerKind:
@@ -4639,10 +5252,12 @@ BY TimeoutEarlierServeFiniteEpisodeClosesRankCell,
 
 TimeoutFrozenEarlierServePrefixAtBudget(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, budget) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, budget) ==
   /\ TimeoutFrozenEarlierServePrefixPending(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal)
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins)
   /\ TimeoutFrozenEarlierServeTicketBudget(source, ownerOrdinal) = budget
 
 TimeoutFrozenEarlierServeTicketIdentity(source, ownerOrdinal) ==
@@ -4663,17 +5278,20 @@ BY Isa DEF TimeoutFrozenEarlierServeTicketIdentity
 
 THEOREM TimeoutEarlierServeTicketDepartureLowersFrozenPrefixBudget ==
   \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal, identity:
+     ownerContext, ownerOrigin, ownerOrdinal,
+     physicalCut, predecessorOrigins, identity:
     /\ AsyncStrongTypeInvariant
     /\ TimeoutFrozenEarlierServePrefixPending(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)
     /\ identity \in
          TimeoutFrozenEarlierServeTicketIdentities(source, ownerOrdinal)
     /\ [AsyncNext]_AsyncAllVars
     /\ TimeoutFrozenEarlierServePrefixPending(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal)'
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)'
     /\ identity \notin
          TimeoutFrozenEarlierServeTicketIdentities(source, ownerOrdinal)'
     => TimeoutFrozenEarlierServeTicketBudget(source, ownerOrdinal)'
@@ -4693,20 +5311,25 @@ THEOREM TimeoutEarlierServeRankStepLowersFrozenPrefixBudget ==
                   ownerContext \in ContextRecords,
                   ownerOrigin \in AsyncCandidateCausalOriginSet,
                   ownerOrdinal \in Nat \ {0},
+                  physicalCut \in Nat,
+                  predecessorOrigins,
                   budget \in Nat:
                  TimeoutFrozenEarlierServePrefixAtBudget(
                    mode, source, sourceView,
-                   ownerContext, ownerOrigin, ownerOrdinal, budget)
+                   ownerContext, ownerOrigin, ownerOrdinal,
+                   physicalCut, predecessorOrigins, budget)
                    ~> (TimeoutFrozenEarlierServePrefixGoal(
                          mode, source, sourceView,
-                         ownerContext, ownerOrigin, ownerOrdinal)
+                         ownerContext, ownerOrigin, ownerOrdinal,
+                         physicalCut, predecessorOrigins)
                         \/ \E lowerBudget \in
                              SetLessThan(
                                budget, OpToRel(<, Nat), Nat):
                              TimeoutFrozenEarlierServePrefixAtBudget(
                                mode, source, sourceView,
                                ownerContext, ownerOrigin,
-                               ownerOrdinal, lowerBudget)))
+                               ownerOrdinal, physicalCut,
+                               predecessorOrigins, lowerBudget)))
 BY TimeoutEarlierServeRankStepClosesExactTicket,
    TimeoutEarlierServeOwnedTicketHasExactLaneOccurrence,
    TimeoutFrozenEarlierServeTicketIdentityIsOwned,
@@ -4736,10 +5359,12 @@ BY TimeoutEarlierServeRankStepLowersFrozenPrefixBudget,
 
 TimeoutFixedOwnerLaterServeTicket(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, identity) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, identity) ==
   /\ TimeoutFrozenEarlierServePrefixPending(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal)
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins)
   /\ TimeoutFrozenEarlierServeTicketIdentities(
        source, ownerOrdinal) = {}
   /\ AsyncServeIngressLifecycleOwnerIdentities(source) # {}
@@ -4754,22 +5379,26 @@ TimeoutFixedOwnerLaterServeTicket(
 
 TimeoutFixedOwnerLaterServeTicketAtRuntimeRank(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, identity, rank) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, identity, rank) ==
   /\ rank \in Nat
   /\ TimeoutFixedOwnerLaterServeTicket(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal, identity)
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins, identity)
   /\ asyncRunnerPhase[source] = "Runtime"
   /\ RuntimeReachRank(source) = rank
 
 TimeoutFixedOwnerLaterServeOvertakeAction(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins) ==
   \E identity:
     \E rank \in Nat:
       /\ TimeoutFixedOwnerLaterServeTicketAtRuntimeRank(
            mode, source, sourceView,
-           ownerContext, ownerOrigin, ownerOrdinal, identity, rank)
+           ownerContext, ownerOrigin, ownerOrdinal,
+           physicalCut, predecessorOrigins, identity, rank)
       /\ PostGstRunNode(source)
       /\ AsyncServeIngressTargetOnlyTurn(source)
 
@@ -4780,13 +5409,15 @@ TimeoutFixedOwnerLaterServeInterleavingProperty(specification) ==
           sourceView \in Views,
           ownerContext \in ContextRecords,
           ownerOrigin \in AsyncCandidateCausalOriginSet,
-          ownerOrdinal \in Nat \ {0}:
+          ownerOrdinal \in Nat \ {0},
+          physicalCut \in Nat,
+          predecessorOrigins:
          /\ \A identity:
               \A rank \in Nat:
                 [](TimeoutFixedOwnerLaterServeTicketAtRuntimeRank(
                      mode, source, sourceView,
                      ownerContext, ownerOrigin, ownerOrdinal,
-                     identity, rank)
+                     physicalCut, predecessorOrigins, identity, rank)
                      => ENABLED
                           <<PostGstRunNode(source)
                               /\ SerializedRuntimePrecedesServeIngressStep(
@@ -4794,7 +5425,8 @@ TimeoutFixedOwnerLaterServeInterleavingProperty(specification) ==
          /\ []
               [~TimeoutFixedOwnerLaterServeOvertakeAction(
                   mode, source, sourceView,
-                  ownerContext, ownerOrigin, ownerOrdinal)]_AsyncAllVars
+                  ownerContext, ownerOrigin, ownerOrdinal,
+                  physicalCut, predecessorOrigins)]_AsyncAllVars
 
 TimeoutFixedOwnerPriorityTicketNonReplenishmentProperty(specification) ==
   /\ TimeoutEarlierServeExactIngressRankStepProperty(specification)
@@ -4806,13 +5438,16 @@ THEOREM TimeoutLaterServeTicketFairOccurrenceInterleavesExactRuntimeEpisode ==
      sourceView \in Views,
      ownerContext \in ContextRecords,
      ownerOrigin \in AsyncCandidateCausalOriginSet,
-     ownerOrdinal \in Nat \ {0}:
+     ownerOrdinal \in Nat \ {0},
+     physicalCut \in Nat,
+     predecessorOrigins:
     \A identity:
       \A rank \in Nat:
         /\ AsyncStrongTypeInvariant
         /\ TimeoutFixedOwnerLaterServeTicketAtRuntimeRank(
              mode, source, sourceView,
-             ownerContext, ownerOrigin, ownerOrdinal, identity, rank)
+             ownerContext, ownerOrigin, ownerOrdinal,
+             physicalCut, predecessorOrigins, identity, rank)
         /\ PostGstRunNode(source)
         => /\ SerializedRuntimePrecedesServeIngressStep(source)
            /\ TimeoutRuntimeModeEndpoint(mode, source, sourceView)'
@@ -4846,14 +5481,17 @@ THEOREM TimeoutFixedOwnerLaterServeTicketEnablesExactRuntimeEpisode ==
      sourceView \in Views,
      ownerContext \in ContextRecords,
      ownerOrigin \in AsyncCandidateCausalOriginSet,
-     ownerOrdinal \in Nat \ {0}:
+     ownerOrdinal \in Nat \ {0},
+     physicalCut \in Nat,
+     predecessorOrigins:
     \A identity:
       \A rank \in Nat:
         /\ AsyncStrongTypeInvariant
         /\ AsyncProgressOwnershipInvariant
         /\ TimeoutFixedOwnerLaterServeTicketAtRuntimeRank(
              mode, source, sourceView,
-             ownerContext, ownerOrigin, ownerOrdinal, identity, rank)
+             ownerContext, ownerOrigin, ownerOrdinal,
+             physicalCut, predecessorOrigins, identity, rank)
         => ENABLED
              <<PostGstRunNode(source)
                  /\ SerializedRuntimePrecedesServeIngressStep(
@@ -4869,7 +5507,6 @@ BY ENABLEDaxioms, IsaT(900)
        TimeoutRoundStable,
        PostGstRunNode, RunNode, RunNodeWork,
        AsyncOlderRuntimeLifecyclePrecedesServeIngress,
-       AsyncOlderFrozenTimeoutLifecyclePrecedesServeIngress,
        SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
@@ -4916,37 +5553,73 @@ bounded serialized Runtime episode.  Only
 
 TimeoutRuntimePriorityClearPending(
     mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal) ==
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins) ==
   /\ TimeoutFrozenEarlierServePrefixPending(
        mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal)
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins)
   /\ TimeoutFrozenEarlierServeTicketIdentities(
        source, ownerOrdinal) = {}
+  /\ TimeoutFrozenOlderProducerDrainCertificate(
+       source, ownerOrdinal, physicalCut, predecessorOrigins)
+  /\ ~AsyncCandidateProducerContinuationOwnsRunNodeTurn(source)
 
-TimeoutRuntimePriorityClearAtRank(
-    mode, source, sourceView,
-    ownerContext, ownerOrigin, ownerOrdinal, rank) ==
-  /\ rank \in Nat
-  /\ TimeoutRuntimePriorityClearPending(
-       mode, source, sourceView,
-       ownerContext, ownerOrigin, ownerOrdinal)
-  /\ ~TimeoutRuntimeModeActionOwner(mode, source, sourceView)
-  /\ RuntimeReachRank(source) = rank
+\* A periodic root admitted before the frozen timeout is a real scheduler
+\* predecessor, not replenishment progress.  Stage 2 is its raw direct owner;
+\* a Busy direct turn moves it to the one-shot deferred tag at stage 1; drain
+\* or reset reaches stage 0.  Any later periodic freeze consumes the shared
+\* high-watermark above the already-frozen timeout and cannot raise this stage.
+TimeoutRuntimePriorityPeriodicStage(source, ownerOrdinal) ==
+  IF /\ AsyncRetransmitLifecycleOwned(source)
+     /\ AsyncRetransmitLifecycleOrdinal(source) < ownerOrdinal
+  THEN IF "RetransmitElapsed" \in asyncOutstandingTags[source]
+       THEN 1
+       ELSE 2
+  ELSE 0
+
+TimeoutRuntimePriorityClearRank(source, ownerOrdinal) ==
+  <<TimeoutRuntimePriorityPeriodicStage(source, ownerOrdinal),
+    RuntimeReachRank(source)>>
+
+TimeoutRuntimePriorityClearRankCarrier == Nat \X Nat
+
+TimeoutRuntimePriorityClearRankOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), OpToRel(<, Nat), Nat, Nat)
 
 TimeoutRuntimePriorityClearGoal(mode, source, sourceView) ==
   \/ TimeoutRuntimeModeEndpoint(mode, source, sourceView)
   \/ TimeoutRuntimeModeActionOwner(mode, source, sourceView)
 
-THEOREM TimeoutRuntimePriorityClearRankIsNatural ==
+TimeoutRuntimePriorityClearAtRank(
+    mode, source, sourceView,
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins, rank) ==
+  /\ rank \in TimeoutRuntimePriorityClearRankCarrier
+  /\ TimeoutRuntimePriorityClearPending(
+       mode, source, sourceView,
+       ownerContext, ownerOrigin, ownerOrdinal,
+       physicalCut, predecessorOrigins)
+  /\ ~TimeoutRuntimeModeActionOwner(mode, source, sourceView)
+  /\ TimeoutRuntimePriorityClearRank(source, ownerOrdinal) = rank
+
+THEOREM TimeoutRuntimePriorityClearRankInCarrier ==
   \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal:
+    ownerContext, ownerOrigin, ownerOrdinal,
+    physicalCut, predecessorOrigins:
     /\ AsyncStrongTypeInvariant
     /\ TimeoutRuntimePriorityClearPending(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal)
-    => RuntimeReachRank(source) \in Nat
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)
+    => TimeoutRuntimePriorityClearRank(source, ownerOrdinal)
+         \in TimeoutRuntimePriorityClearRankCarrier
 BY RuntimeReachRankIsNatural, Isa
    DEF TimeoutRuntimePriorityClearPending,
+       TimeoutRuntimePriorityClearRank,
+       TimeoutRuntimePriorityPeriodicStage,
+       TimeoutRuntimePriorityClearRankCarrier,
        TimeoutFrozenEarlierServePrefixPending,
        TimeoutFrozenRuntimeLifecycleOwner,
        TimeoutRuntimeModeOwner,
@@ -4954,25 +5627,41 @@ BY RuntimeReachRankIsNatural, Isa
        TimeoutDeferredRuntimeOwner,
        TimeoutRoundStable
 
+THEOREM TimeoutRuntimePriorityClearRankOrderingIsWellFounded ==
+  IsWellFoundedOn(
+    TimeoutRuntimePriorityClearRankOrdering,
+    TimeoutRuntimePriorityClearRankCarrier)
+BY NatLessThanWellFounded, WFLexPairOrdering
+   DEF TimeoutRuntimePriorityClearRankOrdering,
+       TimeoutRuntimePriorityClearRankCarrier
+
 THEOREM TimeoutPriorityClearRunNodeStrictlyReachesModeAction ==
   \A mode, source, sourceView,
      ownerContext, ownerOrigin, ownerOrdinal,
-     rank \in Nat:
+     physicalCut, predecessorOrigins,
+     rank \in TimeoutRuntimePriorityClearRankCarrier:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ TimeoutRuntimePriorityClearAtRank(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, rank)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, rank)
     /\ PostGstRunNode(source)
     /\ ~TimeoutFixedOwnerLaterServeOvertakeAction(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)
     => \/ TimeoutRuntimePriorityClearGoal(
             mode, source, sourceView)'
-       \/ \E lowerRank \in SetLessThan(rank, OpToRel(<, Nat), Nat):
+       \/ \E lowerRank \in
+            SetLessThan(
+              rank,
+              TimeoutRuntimePriorityClearRankOrdering,
+              TimeoutRuntimePriorityClearRankCarrier):
             TimeoutRuntimePriorityClearAtRank(
               mode, source, sourceView,
-              ownerContext, ownerOrigin, ownerOrdinal, lowerRank)'
+              ownerContext, ownerOrigin, ownerOrdinal,
+              physicalCut, predecessorOrigins, lowerRank)'
 BY AsyncLaterServeTicketInterleavesOlderRuntimeEpisode,
    TimeoutLaterServeTicketFairOccurrenceInterleavesExactRuntimeEpisode,
    IsaT(1200)
@@ -4991,6 +5680,10 @@ BY AsyncLaterServeTicketInterleavesOlderRuntimeEpisode,
        TimeoutDeadlineArmedOwner,
        TimeoutDeferredRuntimeOwner,
        TimeoutRoundStable,
+       TimeoutRuntimePriorityClearRank,
+       TimeoutRuntimePriorityPeriodicStage,
+       TimeoutRuntimePriorityClearRankCarrier,
+       TimeoutRuntimePriorityClearRankOrdering,
        PostGstRunNode, RunNode, RunNodeWork,
        AsyncServeIngressTargetOnlyTurn,
        AsyncOlderRuntimeLifecyclePrecedesServeIngress,
@@ -5003,38 +5696,58 @@ BY AsyncLaterServeTicketInterleavesOlderRuntimeEpisode,
        DeferredWorkOwnsRuntimeTurn,
        DeferredTagExecutable, DeferredTagStep,
        TimeoutDue, DirectTimeoutStep,
+       RetransmitDue, DirectRetransmitStep,
+       DeferredRetransmitStep,
        DeferredTimeoutStep, DeferredTimeoutExecutable,
        AsyncTimeoutPriorityPrecedesCandidate,
+       AsyncRetransmitPriorityPrecedesCandidate,
        AsyncOlderCandidateLifecycleBlocksTimeout,
+       AsyncOlderCandidateLifecycleBlocksRetransmit,
+       AsyncOlderRetransmitLifecycleBlocksTimeout,
        RuntimeReachRank, AsyncAllVars,
-       SetLessThan, OpToRel
+       SetLessThan, LexPairOrdering, OpToRel
 
 THEOREM TimeoutPriorityClearRankCellIsSafe ==
   \A mode, source, sourceView,
      ownerContext, ownerOrigin, ownerOrdinal,
-     rank \in Nat:
+     physicalCut, predecessorOrigins,
+     rank \in TimeoutRuntimePriorityClearRankCarrier:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ TimeoutRuntimePriorityClearAtRank(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal, rank)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins, rank)
     /\ [AsyncNext]_AsyncAllVars
     /\ ~TimeoutFixedOwnerLaterServeOvertakeAction(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)
     => \/ TimeoutRuntimePriorityClearGoal(
             mode, source, sourceView)'
-       \/ \E lowerRank \in SetLessThan(rank, OpToRel(<, Nat), Nat):
+       \/ \E lowerRank \in
+            SetLessThan(
+              rank,
+              TimeoutRuntimePriorityClearRankOrdering,
+              TimeoutRuntimePriorityClearRankCarrier):
             TimeoutRuntimePriorityClearAtRank(
               mode, source, sourceView,
-              ownerContext, ownerOrigin, ownerOrdinal, lowerRank)'
+              ownerContext, ownerOrigin, ownerOrdinal,
+              physicalCut, predecessorOrigins, lowerRank)'
        \/ TimeoutRuntimePriorityClearAtRank(
             mode, source, sourceView,
-            ownerContext, ownerOrigin, ownerOrdinal, rank)'
+            ownerContext, ownerOrigin, ownerOrdinal,
+            physicalCut, predecessorOrigins, rank)'
 BY TimeoutFrozenOlderPredecessorSetCannotBeReplenished,
+   TimeoutFrozenOlderProducerDrainCertificatePersists,
    TimeoutPriorityClearRunNodeStrictlyReachesModeAction,
    AsyncTimeoutLifecycleOrdinalPersistsUntilEndpoint,
    AsyncTimeoutLifecycleOrdinalClearsOnlyAtEndpoint,
+   AsyncRetransmitCompletedEpisodeClearsActiveOwner,
+   AsyncRetransmitCompletedOwnedEpisodeDefersFreshAcquisition,
+   AsyncRetransmitFreshEpisodeCannotReuseDrainedPosition,
+   AsyncRetransmitFreshLiveEpisodeRetainsSharedLifecycleOrdinal,
+   AsyncVoterRuntimeReadyHasNoNonRunnerContinuationInsertion,
    IsaT(1500)
    DEF TimeoutRuntimePriorityClearAtRank,
        TimeoutRuntimePriorityClearPending,
@@ -5044,8 +5757,13 @@ BY TimeoutFrozenOlderPredecessorSetCannotBeReplenished,
        TimeoutRuntimeModeEndpoint,
        TimeoutRuntimeModeOwner,
        TimeoutFrozenRuntimeLifecycleOwner,
+       TimeoutRuntimePriorityClearRank,
+       TimeoutRuntimePriorityPeriodicStage,
+       TimeoutRuntimePriorityClearRankCarrier,
+       TimeoutRuntimePriorityClearRankOrdering,
+       AsyncRetransmitLifecycleFreshOrdinalForStep,
        RuntimeReachRank, AsyncAllVars,
-       SetLessThan, OpToRel
+       SetLessThan, LexPairOrdering, OpToRel
 
 THEOREM TimeoutPriorityClearSuffixReachesModeAction ==
   \A initialContext,
@@ -5054,26 +5772,32 @@ THEOREM TimeoutPriorityClearSuffixReachesModeAction ==
      sourceView \in Views,
      ownerContext \in ContextRecords,
      ownerOrigin \in AsyncCandidateCausalOriginSet,
-     ownerOrdinal \in Nat \ {0}:
+     ownerOrdinal \in Nat \ {0},
+     physicalCut \in Nat,
+     predecessorOrigins:
     /\ AsyncLiveSpecAt(initialContext)
     /\ TimeoutFixedOwnerPriorityTicketNonReplenishmentProperty(
          AsyncLiveSpecAt(initialContext))
     => TimeoutRuntimePriorityClearPending(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)
          ~> TimeoutRuntimePriorityClearGoal(mode, source, sourceView)
 BY AsyncSpecAlwaysStrongTypeInvariant,
    AsyncSpecAlwaysProgressOwnershipInvariant,
    AsyncSpecProvidesTimeoutRuntimeRunNodeFairness,
-   TimeoutRuntimePriorityClearRankIsNatural,
+   TimeoutRuntimePriorityClearRankInCarrier,
+   TimeoutRuntimePriorityClearRankOrderingIsWellFounded,
    TimeoutPriorityClearRankCellIsSafe,
    TimeoutPriorityClearRunNodeStrictlyReachesModeAction,
-   NatLessThanWellFounded, WellFoundedLeadsTo,
+   WellFoundedLeadsTo,
    PTL, Isa
    DEF TimeoutFixedOwnerPriorityTicketNonReplenishmentProperty,
        TimeoutRuntimePriorityClearAtRank,
        TimeoutRuntimePriorityClearPending,
        TimeoutRuntimePriorityClearGoal,
+       TimeoutRuntimePriorityClearRankOrdering,
+       TimeoutRuntimePriorityClearRankCarrier,
        TimeoutRuntimeModeOwner,
        AsyncLiveSpecAt
 
@@ -5104,26 +5828,33 @@ BY DirectTimeoutCreatesExactWalOrDeferredOwner,
 
 THEOREM TimeoutModeActionOwnerIsSafeUntilExactReducerEndpoint ==
   \A mode, source, sourceView,
-     ownerContext, ownerOrigin, ownerOrdinal:
+     ownerContext, ownerOrigin, ownerOrdinal,
+     physicalCut, predecessorOrigins:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceLifecycleInvariant
     /\ TimeoutRuntimePriorityClearPending(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)
     /\ TimeoutRuntimeModeActionOwner(mode, source, sourceView)
     /\ [AsyncNext]_AsyncAllVars
     /\ ~TimeoutFixedOwnerLaterServeOvertakeAction(
          mode, source, sourceView,
-         ownerContext, ownerOrigin, ownerOrdinal)
+         ownerContext, ownerOrigin, ownerOrdinal,
+         physicalCut, predecessorOrigins)
     => \/ TimeoutRuntimeModeEndpoint(mode, source, sourceView)'
        \/ /\ TimeoutRuntimePriorityClearPending(
                 mode, source, sourceView,
-                ownerContext, ownerOrigin, ownerOrdinal)'
+                ownerContext, ownerOrigin, ownerOrdinal,
+                physicalCut, predecessorOrigins)'
           /\ TimeoutRuntimeModeActionOwner(
                mode, source, sourceView)'
 BY TimeoutModeFairOccurrenceReachesExactReducerEndpoint,
    AsyncTimeoutLifecycleOrdinalPersistsUntilEndpoint,
    AsyncTimeoutLifecycleOrdinalClearsOnlyAtEndpoint,
    TimeoutFrozenOlderPredecessorSetCannotBeReplenished,
+   TimeoutFrozenOlderProducerDrainCertificatePersists,
    IsaT(1200)
    DEF TimeoutRuntimePriorityClearPending,
        TimeoutRuntimeModeActionOwner,
@@ -5140,16 +5871,21 @@ THEOREM TimeoutPriorityClearSuffixConsumesExactModeAction ==
      sourceView \in Views,
      ownerContext \in ContextRecords,
      ownerOrigin \in AsyncCandidateCausalOriginSet,
-     ownerOrdinal \in Nat \ {0}:
+     ownerOrdinal \in Nat \ {0},
+     physicalCut \in Nat,
+     predecessorOrigins:
     /\ AsyncLiveSpecAt(initialContext)
     /\ TimeoutFixedOwnerPriorityTicketNonReplenishmentProperty(
          AsyncLiveSpecAt(initialContext))
     => (/\ TimeoutRuntimePriorityClearPending(
                mode, source, sourceView,
-               ownerContext, ownerOrigin, ownerOrdinal)
+               ownerContext, ownerOrigin, ownerOrdinal,
+               physicalCut, predecessorOrigins)
          /\ TimeoutRuntimeModeActionOwner(mode, source, sourceView))
          ~> TimeoutRuntimeModeEndpoint(mode, source, sourceView)
 BY AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle,
    AsyncSpecProvidesTimeoutRuntimeRunNodeFairness,
    TimeoutModeActionOwnerIsSafeUntilExactReducerEndpoint,
    TimeoutModeFairOccurrenceReachesExactReducerEndpoint,
@@ -5157,6 +5893,7 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
    DEF TimeoutFixedOwnerPriorityTicketNonReplenishmentProperty,
        TimeoutRuntimeModeOwner,
        TimeoutRuntimePriorityClearPending,
+       AsyncCandidateServiceTombstoneLifecycleInvariant,
        AsyncLiveSpecAt
 
 THEOREM TimeoutFixedOwnerPriorityTicketNonReplenishmentClosesMode ==
@@ -5176,6 +5913,7 @@ BY AsyncLiveClosesTimeoutFrozenOlderCandidatePrefix,
    TimeoutEarlierServeExactIngressRankStepClosesFrozenPrefix,
    AsyncLiveClosesTimeoutFixedOwnerLaterServeInterleaving,
    TimeoutRuntimeModeOwnerHasExactFrozenLifecycleSnapshot,
+   TimeoutFrozenOlderProducerDrainCertificateExcludesBlockers,
    TimeoutPriorityClearSuffixReachesModeAction,
    TimeoutPriorityClearSuffixConsumesExactModeAction,
    PTL, IsaT(900)

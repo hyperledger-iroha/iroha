@@ -58,10 +58,15 @@ def test_checked_in_shards_are_bounded_ordered_and_uniquely_resolved() -> None:
 def test_deadlock_shard_exact_finite_runner_dependency_is_acyclic() -> None:
     deadlock = "SumeragiV2AsyncDeadlockProofs"
     finite_runner = "SumeragiV2AsyncFiniteRunnerEpisodeProofs"
+    producer_continuation = "SumeragiV2AsyncCandidateProducerContinuationProofs"
+    expected_dependencies = (finite_runner, producer_continuation)
     sources = _sources()
 
-    assert checker._module_extends(sources[deadlock]) == (finite_runner,)
-    assert checker.ASYNC_LIVENESS_EXTENDS_OVERRIDES[deadlock] == (finite_runner,)
+    assert checker._module_extends(sources[deadlock]) == expected_dependencies
+    assert (
+        checker.ASYNC_LIVENESS_EXTENDS_OVERRIDES[deadlock]
+        == expected_dependencies
+    )
 
     def reaches(module: str, target: str, seen: set[str]) -> bool:
         if module == target:
@@ -75,7 +80,8 @@ def test_deadlock_shard_exact_finite_runner_dependency_is_acyclic() -> None:
         source = path.read_text(encoding="utf-8")
         return any(reaches(dependency, target, seen) for dependency in checker._module_extends(source))
 
-    assert not reaches(finite_runner, deadlock, set())
+    for dependency in expected_dependencies:
+        assert not reaches(dependency, deadlock, set())
 
 
 def test_shard_contract_rejects_missing_reordered_and_duplicate_sources() -> None:
@@ -222,6 +228,25 @@ def test_shard_contract_rejects_reconstruction_drift() -> None:
     errors, _ = checker._async_liveness_shard_contract(sources)
 
     assert any("not a mechanical partition" in error for error in errors)
+
+
+def test_shard_contract_rejects_reconstruction_header_bypass() -> None:
+    sources = _sources()
+    deadlock = "SumeragiV2AsyncDeadlockProofs"
+    sources[deadlock] = sources[deadlock].replace(
+        "EXTENDS SumeragiV2AsyncFiniteRunnerEpisodeProofs, "
+        "SumeragiV2AsyncCandidateProducerContinuationProofs\n",
+        "EXTENDS SumeragiV2AsyncFiniteRunnerEpisodeProofs,\n"
+        "        SumeragiV2AsyncCandidateProducerContinuationProofs\n",
+        1,
+    )
+
+    errors, _ = checker._async_liveness_shard_contract(sources)
+
+    assert any(
+        f"{deadlock}.tla must retain the exact mechanical shard header" in error
+        for error in errors
+    )
 
 
 def test_facade_evidence_maps_symbols_to_provider_logs() -> None:

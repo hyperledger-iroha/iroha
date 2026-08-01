@@ -1,6 +1,5 @@
 ---- MODULE SumeragiV2AsyncDeadlockProofs ----
-EXTENDS SumeragiV2AsyncFiniteRunnerEpisodeProofs,
-        SumeragiV2AsyncCandidateProducerContinuationProofs
+EXTENDS SumeragiV2AsyncFiniteRunnerEpisodeProofs, SumeragiV2AsyncCandidateProducerContinuationProofs
 
 (***************************************************************************
 Productive deadlock freedom includes concrete terminating local work.

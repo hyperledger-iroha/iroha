@@ -60,7 +60,6 @@ PROOF
     <2> QED BY <1>1, <2>1, <2>2, SMT
          DEF AsyncCandidateTyped, AsyncEvidenceSet
   <1> QED BY <1>1
-
 THEOREM NonInstallCommandSuccessorsTypedAndOwned ==
   \A command:
     /\ AsyncTypeInvariant
@@ -78,7 +77,6 @@ BY CausalCandidateFromTypedCommand, SMTT(120)
        AsyncQueueTyped, AsyncCausalQueueOwnership,
        AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds,
        SequenceSet
-
 THEOREM ExecutedInstallSuccessorIsTypedAndOwned ==
   \A command:
     /\ StrongInductiveInvariant
@@ -153,7 +151,6 @@ PROOF
              AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
              AsyncCandidateTyped
   <1> QED BY <1>1
-
 THEOREM ExecutedInstallProposalSuccessorMatchesPostState ==
   \A command:
     /\ StrongInductiveInvariant
@@ -219,7 +216,6 @@ PROOF
          DEF InstallProposalSuccessor, AsyncCandidateAtConsumer,
              AsyncCandidateWithIdentity
   <1> QED BY <1>1
-
 THEOREM ExecutedInstallCommitSignSuccessorIsTypedAndOwned ==
   \A command:
     /\ StrongInductiveInvariant

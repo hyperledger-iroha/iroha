@@ -8761,8 +8761,19 @@ def _async_liveness_shard_contract(
                 f"---- MODULE {module} ----\n"
                 f"EXTENDS {', '.join(expected_extends)}\n\n"
             )
-        if source.startswith(prefix) and source.endswith(footer):
-            reconstructed_parts.append(source[len(prefix) : -len(footer)])
+        if not source.startswith(prefix):
+            errors.append(
+                f"{module}.tla must retain the exact mechanical shard header; "
+                "otherwise reconstruction fidelity cannot be checked"
+            )
+            continue
+        if not source.endswith(footer):
+            errors.append(
+                f"{module}.tla must retain the exact mechanical shard footer; "
+                "otherwise reconstruction fidelity cannot be checked"
+            )
+            continue
+        reconstructed_parts.append(source[len(prefix) : -len(footer)])
     if len(reconstructed_parts) == len(ASYNC_LIVENESS_SHARDS):
         reconstructed = "".join(reconstructed_parts)
         corrected_quantifier = (
@@ -9695,9 +9706,16 @@ def _async_candidate_producer_continuation_contract_errors(
         "AsyncCandidateProducerContinuationStateAfterDeparture",
         (
             "AsyncCandidateProducerContinuationRecord",
-            "AsyncNextIngressPhysicalOrdinal",
+            (
+                "AsyncCandidateProducerContinuationSourcePhysicalOrdinalIn"
+            ),
+            "AsyncCandidateProducerContinuationPhysicalCutIn",
         ),
-        ("AsyncNextIngressPhysicalOrdinal(candidate.node)",),
+        (
+            "AsyncCandidateProducerContinuationSourcePhysicalOrdinalIn( "
+            "state, candidate)",
+            "AsyncCandidateProducerContinuationPhysicalCutIn( state, candidate)",
+        ),
     )
     require_continuation_physical_cut_operator(
         "AsyncCandidateProducerContinuationRunnerMayPrecedeIngress",
@@ -9714,6 +9732,176 @@ def _async_candidate_producer_continuation_contract_errors(
             "record.ordinal <= AsyncEarliestIngressSchedulerOrdinal(node)",
         ),
     )
+    require_continuation_physical_cut_operator(
+        "AsyncTimeoutLifecyclePhysicalCut",
+        ("asyncControlServiceState", "timeoutLifecyclePhysicalCut", "node"),
+        ("asyncControlServiceState.timeoutLifecyclePhysicalCut[node]",),
+    )
+    require_continuation_physical_cut_operator(
+        "AsyncTimeoutLifecyclePhysicalCutForStep",
+        (
+            "timeoutLifecycleOrdinal",
+            "timeoutLifecyclePhysicalCut",
+            "AsyncTimeoutLifecycleUsesRecordedOriginOrdinal",
+            "physicalCut",
+            "AsyncNextIngressPhysicalOrdinal",
+        ),
+        ("ELSE AsyncNextIngressPhysicalOrdinal(node)'",),
+    )
+    require_continuation_physical_cut_operator(
+        "AsyncCandidateLifecycleStateAfterTimeoutOwnership",
+        (
+            "timeoutLifecycleOrdinal",
+            "timeoutLifecycleOrigin",
+            "timeoutLifecyclePhysicalCut",
+            "AsyncTimeoutLifecycleResetThisStep",
+            "AsyncTimeoutLifecycleTransfersThisStep",
+            "AsyncTimeoutLifecyclePhysicalCutForStep",
+        ),
+        ("!.timeoutLifecyclePhysicalCut",),
+    )
+    require_continuation_physical_cut_operator(
+        "AsyncRetransmitLifecyclePhysicalCut",
+        (
+            "asyncControlServiceState",
+            "retransmitLifecyclePhysicalCut",
+            "node",
+        ),
+        ("asyncControlServiceState.retransmitLifecyclePhysicalCut[node]",),
+    )
+    require_continuation_physical_cut_operator(
+        "AsyncRetransmitLifecyclePhysicalCutForStep",
+        (
+            "state",
+            "retransmitLifecycleOrdinal",
+            "retransmitLifecyclePhysicalCut",
+            "AsyncNextIngressPhysicalOrdinal",
+        ),
+        ("ELSE AsyncNextIngressPhysicalOrdinal(node)'",),
+    )
+    require_continuation_physical_cut_operator(
+        "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
+        (
+            "retransmitLifecycleOrdinal",
+            "retransmitLifecyclePhysicalCut",
+            "AsyncRetransmitLifecycleResetThisStep",
+            "AsyncRetransmitLifecycleEpisodeCompletesThisStep",
+            "AsyncRetransmitLifecycleConsumesFreshOrdinal",
+            "AsyncRetransmitLifecyclePhysicalCutForStep",
+        ),
+        ("!.retransmitLifecyclePhysicalCut",),
+    )
+    require_continuation_physical_cut_operator(
+        "AsyncCandidateProducerContinuationMayPrecedeOwnedRetransmit",
+        (
+            "AsyncRetransmitLifecycleOwned",
+            "sourcePhysicalOrdinal",
+            "AsyncRetransmitLifecyclePhysicalCut",
+            "ordinal",
+            "AsyncRetransmitLifecycleOrdinal",
+        ),
+        (
+            "record.sourcePhysicalOrdinal < "
+            "AsyncRetransmitLifecyclePhysicalCut(node)",
+            "record.ordinal < AsyncRetransmitLifecycleOrdinal(node)",
+        ),
+    )
+    require_continuation_physical_cut_operator(
+        "AsyncCandidateProducerContinuationMayOwnRuntimeTurn",
+        (
+            "AsyncCandidateProducerContinuationScheduledPredecessorsFor",
+            "AsyncCandidateProducerContinuationMayPrecedeOwnedTimeout",
+            "AsyncCandidateProducerContinuationMayPrecedeOwnedRetransmit",
+        ),
+    )
+    require_continuation_physical_cut_operator(
+        "AsyncCandidateProducerContinuationPhysicallyBehindOwnedTimeout",
+        (
+            "AsyncTimeoutLifecycleOrdinal",
+            "sourcePhysicalOrdinal",
+            "AsyncTimeoutLifecyclePhysicalCut",
+        ),
+        (
+            "record.sourcePhysicalOrdinal >= "
+            "AsyncTimeoutLifecyclePhysicalCut(node)",
+        ),
+    )
+    require_continuation_physical_cut_operator(
+        (
+            "AsyncCandidateProducerContinuationRuntimePhysicallyEligible"
+            "RecordsForNode"
+        ),
+        (
+            (
+                "AsyncCandidateProducerContinuationPhysicallyEligible"
+                "ResolutionRecordsForNode"
+            ),
+            "AsyncCandidateProducerContinuationPhysicallyBehindOwnedTimeout",
+        ),
+    )
+    require_continuation_physical_cut_operator(
+        "AsyncCandidateProducerContinuationRuntimeSelectedResolutionRecord",
+        (
+            (
+                "AsyncCandidateProducerContinuationRuntimePhysicallyEligible"
+                "RecordsForNode"
+            ),
+            (
+                "AsyncCandidateProducerContinuationRuntimeResolution"
+                "PredecessorsFor"
+            ),
+        ),
+    )
+    require_continuation_physical_cut_operator(
+        "AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord",
+        (
+            (
+                "AsyncCandidateProducerContinuationRuntimeSelected"
+                "ResolutionRecord"
+            ),
+        ),
+    )
+    require_continuation_physical_cut_operator(
+        "AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode",
+        (
+            (
+                "AsyncCandidateProducerContinuationRuntimePhysicallyEligible"
+                "RecordsForNode"
+            ),
+            "AsyncCandidateProducerContinuationRunnerMayPrecedeIngress",
+        ),
+    )
+    require_continuation_physical_cut_operator(
+        "AsyncCandidateProducerContinuationRunnerResolutionRequired",
+        (
+            "AsyncCandidateProducerContinuationIngressResolutionRequired",
+            (
+                "AsyncCandidateProducerContinuationRunnerSelected"
+                "ResolutionRecord"
+            ),
+            (
+                "AsyncCandidateProducerContinuationRunnableResolution"
+                "RecordsForNode"
+            ),
+        ),
+    )
+    require_continuation_physical_cut_operator(
+        (
+            "AsyncCandidateProducerContinuationEnqueueConsumesSelected"
+            "ReplayReservation"
+        ),
+        (
+            (
+                "AsyncCandidateProducerContinuationRuntimeSelected"
+                "ResolutionRecord"
+            ),
+            (
+                "AsyncCandidateProducerContinuationRuntimeResolution"
+                "Required"
+            ),
+            "asyncRunnerBudget",
+        ),
+    )
 
     for symbol, required_statement_tokens, required_proof_tokens in (
         (
@@ -9728,7 +9916,10 @@ def _async_candidate_producer_continuation_contract_errors(
             "AsyncCandidateProducerContinuationReservationFreezesPhysicalCut",
             (
                 "AsyncCandidateProducerContinuationStateAfterDeparture",
-                "AsyncNextIngressPhysicalOrdinal",
+                (
+                    "AsyncCandidateProducerContinuationSourcePhysicalOrdinalIn"
+                ),
+                "AsyncCandidateProducerContinuationPhysicalCutIn",
                 "physicalCut",
             ),
             (
@@ -9756,6 +9947,164 @@ def _async_candidate_producer_continuation_contract_errors(
                 "AsyncEarliestIngressSchedulerOrdinal",
             ),
             ("AsyncCandidateProducerContinuationRunnerMayPrecedeIngress",),
+        ),
+        (
+            "AsyncCandidateProducerContinuationPostTimeoutCutCannotOwnRunnerTurn",
+            (
+                "AsyncTimeoutLifecyclePhysicalCut",
+                "sourcePhysicalOrdinal",
+                (
+                    "AsyncCandidateProducerContinuationRunnableResolution"
+                    "RecordsForNode"
+                ),
+            ),
+            (
+                "AsyncCandidateProducerContinuationMayPrecedeOwnedTimeout",
+            ),
+        ),
+        (
+            "AsyncCandidateProducerContinuationPostRetransmitCutCannotOwnRunnerTurn",
+            (
+                "AsyncRetransmitLifecyclePhysicalCut",
+                "sourcePhysicalOrdinal",
+                (
+                    "AsyncCandidateProducerContinuationRunnableResolution"
+                    "RecordsForNode"
+                ),
+            ),
+            (
+                "AsyncCandidateProducerContinuationMayPrecedeOwnedRetransmit",
+            ),
+        ),
+        (
+            (
+                "AsyncCandidateProducerContinuationRuntimeSelectionIs"
+                "LogicalMinimum"
+            ),
+            (
+                (
+                    "AsyncCandidateProducerContinuationRuntimeSelected"
+                    "ResolutionRecord"
+                ),
+                (
+                    "AsyncCandidateProducerContinuationRuntimePhysically"
+                    "EligibleRecordsForNode"
+                ),
+                (
+                    "AsyncCandidateProducerContinuationRuntimeResolution"
+                    "PredecessorsFor"
+                ),
+            ),
+            (
+                "AsyncCandidateProducerContinuationLogicalOccurrenceRank",
+                (
+                    "AsyncCandidateProducerContinuationLogicalPredecessor"
+                    "StrictlyLowersOccurrenceRank"
+                ),
+            ),
+        ),
+        (
+            (
+                "AsyncCandidateProducerContinuationRunnerSelectionIsTwoStage"
+                "LogicalMinimum"
+            ),
+            (
+                (
+                    "AsyncCandidateProducerContinuationRuntimePhysically"
+                    "EligibleRecordsForNode"
+                ),
+                (
+                    "AsyncCandidateProducerContinuationRuntimeResolution"
+                    "PredecessorsFor"
+                ),
+                (
+                    "AsyncCandidateProducerContinuationRunnableResolution"
+                    "RecordsForNode"
+                ),
+            ),
+            (
+                "AsyncCandidateProducerContinuationRuntimeSelectionIsLogicalMinimum",
+            ),
+        ),
+        (
+            "AsyncTimeoutLifecycleFreezeBoundaryMintsAfterPriorAdmissions",
+            (
+                "AsyncTimeoutLifecyclePhysicalCut",
+                "AsyncNextIngressPhysicalOrdinal",
+            ),
+            (
+                "AsyncCandidateLifecycleStateAfterTimeoutOwnership",
+                "AsyncTimeoutLifecyclePhysicalCutForStep",
+            ),
+        ),
+        (
+            "AsyncTimeoutLifecycleOrdinalPersistsUntilEndpoint",
+            (
+                "AsyncTimeoutLifecyclePhysicalCut",
+                "AsyncTimeoutLifecycleOrdinal",
+            ),
+            ("AsyncCandidateLifecycleStateAfterTimeoutOwnership",),
+        ),
+        (
+            "AsyncTimeoutLifecycleOrdinalClearsOnlyAtEndpoint",
+            (
+                "AsyncTimeoutLifecyclePhysicalCut",
+                "AsyncTimeoutLifecycleTransfersThisStep",
+            ),
+            ("AsyncCandidateLifecycleStateAfterTimeoutOwnership",),
+        ),
+        (
+            "AsyncRetransmitFreshLiveEpisodeFreezesIngressPhysicalCut",
+            (
+                "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
+                "AsyncRetransmitLifecycleConsumesFreshOrdinal",
+                "retransmitLifecyclePhysicalCut",
+                "AsyncNextIngressPhysicalOrdinal",
+            ),
+            (
+                "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
+                "AsyncRetransmitLifecyclePhysicalCutForStep",
+            ),
+        ),
+        (
+            "AsyncRetransmitLiveEpisodeRetainsIngressPhysicalCut",
+            (
+                "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
+                "retransmitLifecycleOrdinal",
+                "retransmitLifecyclePhysicalCut",
+            ),
+            ("AsyncCandidateLifecycleStateAfterServeIngressAdmission",),
+        ),
+        (
+            "AsyncRetransmitLifecycleFreezeBoundaryMintsAfterPriorAdmissions",
+            (
+                "AsyncRetransmitLifecyclePhysicalCut",
+                "AsyncNextIngressPhysicalOrdinal",
+                "AsyncRetransmitLifecycleOrdinal",
+                "AsyncNextCandidateLifecycleOrdinal",
+            ),
+            (
+                "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
+                "AsyncRetransmitLifecyclePhysicalCutForStep",
+            ),
+        ),
+        (
+            "AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntilEndpoint",
+            (
+                "AsyncRetransmitLifecycleOrdinal",
+                "AsyncRetransmitLifecyclePhysicalCut",
+            ),
+            ("AsyncCandidateLifecycleStateAfterServeIngressAdmission",),
+        ),
+        (
+            "AsyncRetransmitLifecycleOwnerAndPhysicalCutClearAtEndpoint",
+            (
+                "AsyncRetransmitLifecycleOrdinal",
+                "AsyncRetransmitLifecyclePhysicalCut",
+                "AsyncRetransmitLifecycleResetThisStep",
+                "AsyncRetransmitLifecycleEpisodeCompletesThisStep",
+            ),
+            ("AsyncCandidateLifecycleStateAfterServeIngressAdmission",),
         ),
     ):
         extracted = _top_level_theorem_body(
@@ -9832,9 +10181,16 @@ def _async_candidate_producer_continuation_contract_errors(
             "record.physicalAdmissionOrdinal < physicalCut}"
         ),
         "AsyncCandidateProducerContinuationFrozenCandidateOwners": (
-            "AsyncCausalEpisodeCandidates(node, targetOrdinal) \\cup "
+            "AsyncCandidateProducerContinuationFrozenCausalCandidates( "
+            "node, targetOrdinal) \\cup "
             "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates( "
-            "node, targetOrdinal)"
+            "node, targetOrdinal) \\cup "
+            "AsyncCandidateProducerContinuationFrozenOrdinaryIngressCandidates( "
+            "node, targetOrdinal) \\cup "
+            "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates( "
+            "node, targetOrdinal, "
+            "AsyncCandidateProducerContinuationTargetPhysicalCut( node, "
+            "targetOrdinal))"
         ),
         "AsyncCandidateProducerContinuationFrozenCandidateTokens": (
             '{<<"Candidate", candidate, token>>: candidate \\in '
@@ -10059,7 +10415,8 @@ def _async_candidate_producer_continuation_contract_errors(
             "candidate.subject, phase |-> candidate.kind, sourceClass |-> "
             "AsyncCandidateProducerContinuationSourceClass(candidate), "
             "causalOrigin |-> candidate.causalOrigin, ordinal |-> ordinal, "
-            "physicalCut |-> physicalCut, status |-> status]"
+            "sourcePhysicalOrdinal |-> sourcePhysicalOrdinal, physicalCut "
+            "|-> physicalCut, status |-> status]"
         ),
         "AsyncCandidateProducerContinuationActiveForIdentityIn": (
             "\\E record \\in "
@@ -10119,7 +10476,11 @@ def _async_candidate_producer_continuation_contract_errors(
             "AsyncCandidateProducerContinuationExactReplayIdentity( node, "
             "AsyncCandidateProducerContinuationSelectedLocalCandidate(node)) "
             "/\\ AsyncCandidateLifecycleOrdinal(record.candidate) = "
-            "record.ordinal /\\ EnqueueCandidate(record.candidate) /\\ "
+            "record.ordinal /\\ "
+            "AsyncCandidateLifecycleSourcePhysicalOrdinal(record.candidate) "
+            "= record.sourcePhysicalOrdinal /\\ "
+            "AsyncCandidateLifecyclePhysicalCut(record.candidate) = "
+            "record.physicalCut /\\ EnqueueCandidate(record.candidate) /\\ "
             "UNCHANGED vars /\\ UNCHANGED asyncCausalQueues /\\ UNCHANGED "
             "AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService /\\ "
             "asyncRunnerPhase' = asyncRunnerPhase /\\ asyncRunnerBudget' = "
@@ -10168,15 +10529,14 @@ def _async_candidate_producer_continuation_contract_errors(
         ),
         "AsyncCandidateProducerContinuationResolutionPredecessorsFor": (
             "{other \\in "
-            "AsyncCandidateProducerContinuationResolutionRecordsForNode(node): "
-            "\\/ other.ordinal < record.ordinal \\/ /\\ other.ordinal = "
-            "record.ordinal /\\ "
-            "AsyncCandidateServiceStageOrdinal(other.address.stage) < "
-            "AsyncCandidateServiceStageOrdinal(record.address.stage)}"
+            "AsyncCandidateProducerContinuationPhysicallyEligibleResolutionRecordsForNode( "
+            "node): AsyncCandidateProducerContinuationLogicalPrecedes(other, "
+            "record)}"
         ),
         "AsyncCandidateProducerContinuationSelectedResolutionRecord": (
             "CHOOSE record \\in "
-            "AsyncCandidateProducerContinuationResolutionRecordsForNode(node): "
+            "AsyncCandidateProducerContinuationPhysicallyEligibleResolutionRecordsForNode( "
+            "node): "
             "AsyncCandidateProducerContinuationResolutionPredecessorsFor( "
             "node, record) = {}"
         ),
@@ -10210,28 +10570,28 @@ def _async_candidate_producer_continuation_contract_errors(
         ),
         "AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode": (
             "{record \\in "
-            "AsyncCandidateProducerContinuationResolutionRecordsForNode(node): "
+            "AsyncCandidateProducerContinuationRuntimePhysicallyEligibleRecordsForNode( "
+            "node): "
             "AsyncCandidateProducerContinuationRunnerMayPrecedeIngress("
             "node, record)}"
         ),
         "AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord": (
-            "AsyncCandidateProducerContinuationSelectedResolutionRecord(node)"
+            "AsyncCandidateProducerContinuationRuntimeSelectedResolutionRecord("
+            "node)"
         ),
         "AsyncCandidateProducerContinuationRunnerResolutionRequired": (
-            "/\\ AsyncCandidateProducerContinuationResolutionRequired(node) "
+            "/\\ AsyncCandidateProducerContinuationIngressResolutionRequired("
+            "node) "
             "/\\ AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord("
             "node) \\in "
-            "AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode( "
+            "AsyncCandidateProducerContinuationRunnableResolutionRecordsForNode( "
             "node)"
         ),
         "AsyncCandidateProducerContinuationRunnerResolutionReady": (
-            "LET record == "
-            "AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord("
-            "node) IN /\\ "
+            "/\\ "
             "AsyncCandidateProducerContinuationRunnerResolutionRequired(node) "
-            '/\\ \\/ record.status = "Materialized" \\/ '
-            "AsyncCandidateProducerContinuationConcreteSuccessorOwned(record) "
-            "\\/ AsyncCandidateProducerContinuationHandoffRetired(record)"
+            "/\\ AsyncCandidateProducerContinuationRuntimeResolutionReady("
+            "node)"
         ),
         "ResolveCandidateProducerContinuation": (
             "/\\ node \\in AsyncCurrentResponsiveVoters /\\ "
@@ -10387,24 +10747,35 @@ def _async_candidate_producer_continuation_contract_errors(
             "targetOrdinal)) /\\ Cardinality( "
             "AsyncCandidateProducerContinuationFrozenCandidateOwners( node, "
             "targetOrdinal)) <= AsyncCandidateProducerEpisodeCapacity + "
-            "AsyncCandidateProducerContinuationCapacity"
+            "AsyncCandidateProducerContinuationCapacity + "
+            "AsyncOrdinaryIngressCarrierEvidenceCapacity"
         ),
-        "CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst": (
+        "CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge": (
             "\\A node \\in ValidatorIds, targetOrdinal \\in Nat: /\\ gst "
             "/\\ AsyncStrongTypeInvariant /\\ "
             "AsyncProgressOwnershipInvariant /\\ "
-            "AsyncCandidateServiceLifecycleInvariant /\\ AsyncNext => "
-            "(AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates( "
-            "node, targetOrdinal))' \\subseteq "
+            "AsyncCandidateServiceLifecycleInvariant /\\ "
+            "(AsyncCandidateProducerContinuationTargetPhysicalCut( node, "
+            "targetOrdinal))' = "
+            "AsyncCandidateProducerContinuationTargetPhysicalCut( node, "
+            "targetOrdinal) /\\ AsyncNext => "
+            "((AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates( "
+            "node, targetOrdinal))' \\ "
             "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates( "
-            "node, targetOrdinal)"
+            "node, targetOrdinal)) \\subseteq "
+            "AsyncCandidateProducerContinuationFrozenCausalCandidates( node, "
+            "targetOrdinal)"
         ),
         "CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge": (
             "\\A node \\in ValidatorIds, targetOrdinal \\in Nat: /\\ "
             "AsyncStrongTypeInvariant /\\ AsyncProgressOwnershipInvariant "
             "/\\ AsyncCandidateServiceLifecycleInvariant /\\ AsyncNext /\\ "
             "AsyncControlServiceSlotTransition /\\ "
-            "AsyncCandidateProducerContinuationExactLocalReplayStep(node) => "
+            "AsyncCandidateProducerContinuationExactLocalReplayStep(node) /\\ "
+            "(AsyncCandidateProducerContinuationTargetPhysicalCut( node, "
+            "targetOrdinal))' = "
+            "AsyncCandidateProducerContinuationTargetPhysicalCut( node, "
+            "targetOrdinal) => "
             "(AsyncCandidateProducerContinuationFrozenCandidateOwners( node, "
             "targetOrdinal))' = "
             "AsyncCandidateProducerContinuationFrozenCandidateOwners( node, "
@@ -10470,7 +10841,7 @@ def _async_candidate_producer_continuation_contract_errors(
             "82204af3840d76e420e671fad567b20995bd649e7c5c53e6a7d96a358c0e0fc1"
         ),
         "CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage": (
-            "e2776657838a637f01064c7ae777768abd23ab44ab093e454eb68036e4db8ca4"
+            "36b091eda718b74321b467cd3acb0785b1cdb2a7cb56cc5f9177ed3697e5db7b"
         ),
         "AsyncFrozenLeaderWireIngressRankOrderingIsWellFounded": (
             "f42decd8d5a9b10dae1f22827c5c843f6dcefbdafdfba0f22fc769e80ddc8a4c"
@@ -10482,7 +10853,7 @@ def _async_candidate_producer_continuation_contract_errors(
             "d715302c130ef21e1e420bedc8c1ba59ab688a132c9809a293aa5bedb6eb2411"
         ),
         "AsyncFrozenLeaderWireBarrierRankIsFinite": (
-            "662bcd0a80d7e2310837b49250628f88fd9ca5a4fd94748c6ea9d5fbc939ca10"
+            "0ad5e1e602a4a49f5c4831be8871953ff94a03fd99a6b5e81f7bc888e41d3089"
         ),
         "AsyncCertifiedResponsePhysicalBarrierRankIsFinite": (
             "168d7a958824266232560350961095a2c622914a9ace3cd710a8d51b17b5ba36"
@@ -10636,23 +11007,39 @@ def _async_candidate_producer_continuation_contract_errors(
         "LocalContinuationPersistsOrDescendsOrReplayExits",
         "CandidateProducerContinuationSuccessorBatchConsumesFrozenWeight",
         "CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight",
+        "CandidateProducerContinuationPostCutCausalRootCannotEnterFrozenPrefix",
+        "CandidateProducerContinuationCausalSuccessorRetainsFrozenPhysicalClass",
+        "CandidateProducerContinuationPostCutServeCannotEnterFrozenPrefix",
         "CandidateProducerContinuationFrozenPrefixRankOrderingIsWellFounded",
         "AsyncFrozenServeSourceCannotResurrectAtGst",
+        "AsyncProtectedCandidateTargetPhysicalCutMatchesLifecycle",
+        "AsyncProtectedCandidateTargetPhysicalCutPersists",
+        "AsyncProtectedCandidateSelectedServeOwnerGeometryIsComplete",
+        "AsyncProtectedCandidateSelectedOwnerIsConcreteAndEnabled",
         "CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier",
         "CandidateProducerContinuationActionInertDormantHasZeroFrozenStage",
         "CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix",
+        "CandidateProducerContinuationPostCutOrdinaryAdmissionCannotEnterFrozenPrefix",
         "CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame",
         "CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage",
+        "CandidateProducerContinuationPreCutOrdinaryIngressConsumesBarrierStage",
         "AsyncFrozenLeaderWireIngressRankOrderingIsWellFounded",
         "AsyncFrozenLeaderWireIngressDependencyOrderingIsWellFounded",
         "AsyncFrozenLeaderWireBarrierRankOrderingIsWellFounded",
         "AsyncFrozenLeaderWireBarrierRankIsFinite",
+        "AsyncProtectedCandidateIngressEpisodeRankOrderingIsWellFounded",
+        "AsyncProtectedCandidateIngressEpisodeRankIsFinite",
         "AsyncCertifiedResponsePhysicalBarrierRankIsFinite",
         "CandidateProducerContinuationFrozenCandidateCarrierHasConfiguredBound",
-        "CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst",
+        "CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge",
         "CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell",
         "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst",
+        "CandidateProducerContinuationFrozenOrdinaryIngressChargeCannotAppearAtGst",
+        "CandidateProducerContinuationFrozenServeCutCannotReplenish",
         "CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge",
+        "AsyncProtectedCandidateFrozenPrefixStepIsDescentOrFrame",
+        "AsyncProtectedCandidateIngressEpisodeStepIsDescentOrFrame",
+        "CandidateProducerContinuationTargetPhysicalCutIsStableUntilStatusExit",
         "HistoricalCandidateProducerContinuationTurnIsResolutionOrExactReplay",
         "HistoricalCandidateProducerContinuationNonreadyTurnUsesLocalReplay",
         "HistoricalCandidateProducerContinuationLocalReplayTurnApproachesReady",
@@ -10714,8 +11101,10 @@ def _async_candidate_producer_continuation_contract_errors(
         "CandidateProducerContinuationFrozenCandidateCarrierHasConfiguredBound": (
             "AsyncCandidateProducerContinuationFrozenCandidateOwners",
             "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates",
+            "AsyncCandidateProducerContinuationFrozenOrdinaryIngressCandidates",
             "AsyncCandidateProducerEpisodeCapacity",
             "AsyncCandidateProducerContinuationCapacity",
+            "AsyncOrdinaryIngressCarrierEvidenceCapacity",
         ),
         "AsyncFrozenServeSourceCannotResurrectAtGst": (
             "AsyncFreshServeIngressCannotReacquirePriorSchedulerOrdinal",
@@ -10791,14 +11180,15 @@ def _async_candidate_producer_continuation_contract_errors(
             "AsyncSharedSchedulerHighWatermarkIsMonotone",
             "AsyncIngressPhysicalHighWatermarkIsMonotone",
             "CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier",
-            "CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell",
             "AtomicDormantLeaderWireAdmissionConsumesRealPacketWithFreshCarrier",
             "AdmitHiddenPacketReservesFreshSharedPhysicalOrdinal",
             "RuntimeLeaderWireCannotRetireMerelyFromIngressPop",
             "RetireLeaderWireLifecycleRetainsTerminalTombstone",
         ),
-        "CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst": (
+        "CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge": (
             "AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates",
+            "AsyncCandidateProducerContinuationFrozenCausalCandidates",
+            "AsyncCandidateProducerContinuationTargetPhysicalCut",
             "AsyncCandidateProducerContinuationGstExcludesResetReplay",
             "AsyncCandidateProducerSemanticHandoffReservedPersistsWithoutAck",
             "AsyncCandidateProducerSemanticHandoffMaterializationRequiresSuccessor",
@@ -10812,9 +11202,12 @@ def _async_candidate_producer_continuation_contract_errors(
         ),
         "CandidateProducerContinuationFrozenPrefixStepCannotReplenish": (
             "CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight",
-            "CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst",
+            "CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge",
             "CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell",
             "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst",
+            "CandidateProducerContinuationFrozenOrdinaryIngressChargeCannotAppearAtGst",
+            "CandidateProducerContinuationFrozenServeCutCannotReplenish",
+            "CandidateProducerContinuationTargetPhysicalCutIsStableUntilStatusExit",
             "CandidateProducerContinuationActionInertDormantHasZeroFrozenStage",
             "CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix",
             "CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame",
@@ -10826,7 +11219,7 @@ def _async_candidate_producer_continuation_contract_errors(
         ),
         "CandidateProducerContinuationFrozenSourcePrefixStepCannotReplenish": (
             "CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight",
-            "CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst",
+            "CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge",
             "CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge",
             "ClaimedResponseCapacityCreatesPrioritySource",
             "PrioritySourceSelectsClaimedResponse",
@@ -10909,7 +11302,7 @@ def _async_candidate_producer_continuation_contract_errors(
             "AsyncCandidateProducerContinuationScheduledExclusionInvariant",
         ),
         "RunNodeWork": (
-            "IF AsyncCandidateProducerContinuationRunnerResolutionRequired(node) "
+            "IF AsyncCandidateProducerContinuationOwnsRunNodeTurn(node) "
             "THEN IF "
             "AsyncCandidateProducerContinuationRunnerResolutionReady(node) THEN "
             "ResolveRunNodeCandidateProducerContinuation(node) ELSE "
@@ -10984,6 +11377,404 @@ def _async_candidate_producer_continuation_contract_errors(
                 f"{network_path}:{line}: producer-continuation scheduled "
                 f"exclusion preservation must retain {missing!r}"
             )
+    return errors
+
+
+def _producer_continuation_physical_cut_mutation_contract_errors(
+    repo_root: Path,
+) -> list[str]:
+    """Pin positive/failing TLC pairs for each repaired physical-cut lasso."""
+
+    errors: list[str] = []
+    formal_dir = repo_root / "formal" / "sumeragi_v2"
+    expected_formal = set(
+        PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_FORMAL_ARTIFACTS
+    )
+    expected_digest_paths = expected_formal | {
+        PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER
+    }
+    if (
+        len(PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_FORMAL_ARTIFACTS)
+        != 11
+        or len(expected_formal) != 11
+        or set(PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_SHA256)
+        != expected_digest_paths
+    ):
+        errors.append(
+            "producer-continuation physical-cut mutation inventory must "
+            "contain exactly eleven formal artifacts plus one runner"
+        )
+    for relative, expected_sha256 in (
+        PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_SHA256.items()
+    ):
+        path = (
+            formal_dir / relative
+            if relative in expected_formal
+            else repo_root / relative
+        )
+        if not path.is_file() or path.is_symlink():
+            continue
+        observed_sha256 = _sha256_file(path)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{path}: physical-cut mutation source SHA-256 must equal "
+                f"{expected_sha256}; found {observed_sha256}"
+            )
+    model_path = (
+        formal_dir / "SumeragiV2ProducerContinuationPhysicalCutMutation.tla"
+    )
+    if not model_path.is_file() or model_path.is_symlink():
+        return [
+            f"{model_path}: producer-continuation physical-cut mutation "
+            "model must be a regular file"
+        ]
+    try:
+        model_source = model_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        return [f"{model_path}: cannot read physical-cut mutation model: {error}"]
+
+    required_model_operators = {
+        "CurrentIngressFixedSpec": (
+            "CurrentIngressInit",
+            "CurrentIngressFixedRunner",
+            "WF_mutationVars",
+        ),
+        "CurrentIngressChurnBugSpec": (
+            "CurrentIngressInit",
+            "CurrentIngressChurnBugRunner",
+            "WF_mutationVars",
+        ),
+        "ContinuationPhysicalCutFixedSpec": (
+            "ContinuationInit",
+            "ContinuationPhysicalCutFixedRunner",
+            "WF_mutationVars",
+        ),
+        "ContinuationLogicalOnlyBugSpec": (
+            "ContinuationInit",
+            "ContinuationLogicalOnlyBugRunner",
+            "WF_mutationVars",
+        ),
+        "TimeoutCutSelectionInit": (
+            "phase",
+            "replaySourcePhysicalOrdinal",
+            "targetHasPhysicalSource",
+        ),
+        "TimeoutCutFilteredSelectsPreCutTarget": (
+            "SourcePhysicalOrdinal",
+            "LogicalOrdinal",
+            "targetDone",
+            "lastSelected",
+        ),
+        "TimeoutCutLogicalMinimumSelectsPostCutReplay": (
+            "SourcePhysicalOrdinal",
+            "LogicalOnlyPrecedes",
+            "replayEpoch",
+            "lastSelected",
+        ),
+        "TimeoutCutFilteredFixedSpec": (
+            "TimeoutCutSelectionInit",
+            "TimeoutCutFilteredFixedRunner",
+            "WF_mutationVars",
+        ),
+        "TimeoutCutLogicalMinimumBugSpec": (
+            "TimeoutCutSelectionInit",
+            "TimeoutCutLogicalMinimumBugRunner",
+            "WF_mutationVars",
+        ),
+        "CausalSuccessorRetainsPostCutPhysicalRoot": (
+            "replayStage",
+            "replaySourcePhysicalOrdinal",
+        ),
+        "TimeoutCutFilterNeverSelectsPostCutReplay": (
+            "phase",
+            "lastSelected",
+        ),
+        "EventuallyExactTargetCompletes": ("targetDone",),
+    }
+    for symbol, required in required_model_operators.items():
+        extracted = _top_level_operator_body(
+            model_source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{model_path}: missing physical-cut mutation operator {symbol}"
+            )
+            continue
+        body, line = extracted
+        tokens = set(tla_code_tokens(body))
+        missing = tuple(token for token in required if token not in tokens)
+        if missing:
+            errors.append(
+                f"{model_path}:{line}: {symbol} must retain the exact "
+                "physical-cut mutation contract; "
+                f"missing={missing!r}"
+            )
+
+    required_model_fragments = {
+        "TimeoutCutSelectionInit": (
+            'phase = "TimeoutSelection"',
+            'lastSelected = "None"',
+        ),
+        "TimeoutCutFilteredSelectsPreCutTarget": (
+            'SourcePhysicalOrdinal("Target") < 2',
+            'SourcePhysicalOrdinal("Replay") >= 2',
+            'lastSelected\' = "Target"',
+        ),
+        "TimeoutCutLogicalMinimumSelectsPostCutReplay": (
+            'SourcePhysicalOrdinal("Replay") >= 2',
+            'LogicalOnlyPrecedes("Replay", "Target")',
+            'lastSelected\' = "Replay"',
+        ),
+        "TimeoutCutFilterNeverSelectsPostCutReplay": (
+            'phase # "TimeoutSelection"',
+            'lastSelected # "Replay"',
+        ),
+    }
+    for symbol, required in required_model_fragments.items():
+        extracted = _top_level_operator_body(
+            model_source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        missing = tuple(fragment for fragment in required if fragment not in normalized)
+        if missing:
+            errors.append(
+                f"{model_path}:{line}: {symbol} must retain exact timeout-cut "
+                f"selection identities; missing={missing!r}"
+            )
+
+    periodic_model_path = (
+        formal_dir / "SumeragiV2AdequateLeaderPeriodicPrefixMutation.tla"
+    )
+    if not periodic_model_path.is_file() or periodic_model_path.is_symlink():
+        errors.append(
+            f"{periodic_model_path}: adequate-leader periodic-prefix "
+            "mutation model must be a regular file"
+        )
+    else:
+        try:
+            periodic_model_source = periodic_model_path.read_text(
+                encoding="utf-8"
+            )
+        except (OSError, UnicodeDecodeError) as error:
+            errors.append(
+                f"{periodic_model_path}: cannot read periodic-prefix "
+                f"mutation model: {error}"
+            )
+        else:
+            periodic_operators = {
+                "PeriodicPredecessorOrdinals": (
+                    "retransmitOrdinal",
+                    "TimeoutOrdinal",
+                ),
+                "FixedInit": (
+                    "candidateAhead",
+                    "frozenSnapshot",
+                    "nextOrdinal",
+                ),
+                "ServiceFrozenPeriodicIdentity": (
+                    "PeriodicRuntimeReady",
+                    "frozenSnapshot",
+                    "retiredOrdinals",
+                ),
+                "AcquireFreshPeriodicAtSharedHighWatermark": (
+                    "nextOrdinal",
+                    "retransmitOrdinal",
+                    "FrozenSnapshotRetired",
+                ),
+                "StartFiniteOwnerEpisodeWithHiddenPeriodicPrefix": (
+                    "frozenSnapshot",
+                    "candidateAhead",
+                    "phase",
+                ),
+                "ReplaceRetiredPeriodicAtSameOrdinal": (
+                    "retiredOrdinals",
+                    "replacementEpoch",
+                    "retransmitOrdinal",
+                ),
+                "FixedSpec": ("FixedInit", "FixedNext", "WF_mutationVars"),
+                "HiddenPrefixBugSpec": (
+                    "HiddenPrefixBugInit",
+                    "HiddenPrefixBugNext",
+                    "WF_mutationVars",
+                ),
+                "ReplenishmentBugSpec": (
+                    "ReplenishmentBugInit",
+                    "ReplenishmentBugNext",
+                    "WF_mutationVars",
+                ),
+                "FrozenPeriodicSnapshotCannotReplenish": (
+                    "PeriodicPredecessorOrdinals",
+                    "frozenSnapshot",
+                ),
+                "FiniteOwnerEpisodeStartsAfterPeriodicPrefixDrains": (
+                    "FrozenSnapshotRetired",
+                    "PeriodicPredecessorOrdinals",
+                ),
+                "TargetEventuallyDone": ("targetDone",),
+            }
+            for symbol, required in periodic_operators.items():
+                extracted = _top_level_operator_body(
+                    periodic_model_source,
+                    symbol,
+                    preserve_string_contents=True,
+                )
+                if extracted is None:
+                    errors.append(
+                        f"{periodic_model_path}: missing periodic-prefix "
+                        f"mutation operator {symbol}"
+                    )
+                    continue
+                body, line = extracted
+                missing = tuple(
+                    token
+                    for token in required
+                    if not _tla_dependency_present(body, token)
+                )
+                if missing:
+                    errors.append(
+                        f"{periodic_model_path}:{line}: {symbol} must retain "
+                        "the exact periodic-prefix mutation contract; "
+                        f"missing={missing!r}"
+                    )
+
+    config_contracts = {
+        "current_ingress_physical_cut_fixed.cfg": (
+            "SPECIFICATION CurrentIngressFixedSpec",
+            "INVARIANT CurrentIngressTurnSelectsExactCarrier",
+            "PROPERTY EventuallyExactTargetCompletes",
+        ),
+        "current_ingress_replenishment_churn_bug.cfg": (
+            "SPECIFICATION CurrentIngressChurnBugSpec",
+            "PROPERTY EventuallyExactTargetCompletes",
+        ),
+        "producer_continuation_physical_cut_fixed.cfg": (
+            "SPECIFICATION ContinuationPhysicalCutFixedSpec",
+            "INVARIANT CausalSuccessorRetainsPostCutPhysicalRoot",
+            "PROPERTY EventuallyExactTargetCompletes",
+        ),
+        "producer_continuation_logical_only_replay_bug.cfg": (
+            "SPECIFICATION ContinuationLogicalOnlyBugSpec",
+            "INVARIANT CausalSuccessorRetainsPostCutPhysicalRoot",
+        ),
+        "producer_continuation_timeout_cut_fixed.cfg": (
+            "SPECIFICATION TimeoutCutFilteredFixedSpec",
+            "INVARIANT TimeoutCutFilterNeverSelectsPostCutReplay",
+            "PROPERTY EventuallyExactTargetCompletes",
+        ),
+        "producer_continuation_timeout_cut_logical_minimum_bug.cfg": (
+            "SPECIFICATION TimeoutCutLogicalMinimumBugSpec",
+            "PROPERTY EventuallyExactTargetCompletes",
+        ),
+        "adequate_leader_periodic_prefix_fixed.cfg": (
+            "SPECIFICATION FixedSpec",
+            "INVARIANT FrozenPeriodicSnapshotCannotReplenish",
+            "INVARIANT RetiredPeriodicIdentityCannotResurrect",
+            "INVARIANT FiniteOwnerEpisodeStartsAfterPeriodicPrefixDrains",
+            "PROPERTY TargetEventuallyDone",
+        ),
+        "adequate_leader_periodic_hidden_prefix_bug.cfg": (
+            "SPECIFICATION HiddenPrefixBugSpec",
+            "INVARIANT FiniteOwnerEpisodeStartsAfterPeriodicPrefixDrains",
+        ),
+        "adequate_leader_periodic_replenishment_bug.cfg": (
+            "SPECIFICATION ReplenishmentBugSpec",
+            "PROPERTY TargetEventuallyDone",
+        ),
+    }
+    for filename, required in config_contracts.items():
+        config_path = formal_dir / filename
+        if not config_path.is_file() or config_path.is_symlink():
+            errors.append(
+                f"{config_path}: physical-cut mutation config must be a "
+                "regular file"
+            )
+            continue
+        try:
+            config_source = config_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            errors.append(f"{config_path}: cannot read mutation config: {error}")
+            continue
+        missing_or_repeated = [
+            fragment
+            for fragment in required
+            if config_source.count(fragment) != 1
+        ]
+        if missing_or_repeated:
+            errors.append(
+                f"{config_path}: physical-cut mutation config must retain "
+                "each reviewed obligation exactly once; "
+                f"missing_or_repeated={missing_or_repeated!r}"
+            )
+
+    runner_path = (
+        repo_root / PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER
+    )
+    if not runner_path.is_file() or runner_path.is_symlink():
+        errors.append(
+            f"{runner_path}: physical-cut mutation runner must be a regular file"
+        )
+        return errors
+    try:
+        runner_source = runner_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        errors.append(f"{runner_path}: cannot read mutation runner: {error}")
+        return errors
+    required_runner_fragments = (
+        'readonly TLA2TOOLS_VERSION="1.7.4"',
+        "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88",
+        'readonly EXPECTED_JAVA_VERSION=\'openjdk version "21.0.12"\'',
+        'readonly MODEL="SumeragiV2ProducerContinuationPhysicalCutMutation.tla"',
+        'readonly CURRENT_FIXED_CONFIG="current_ingress_physical_cut_fixed.cfg"',
+        'readonly CURRENT_CHURN_BUG_CONFIG="current_ingress_replenishment_churn_bug.cfg"',
+        'readonly CONTINUATION_FIXED_CONFIG="producer_continuation_physical_cut_fixed.cfg"',
+        'readonly CONTINUATION_LOGICAL_BUG_CONFIG="producer_continuation_logical_only_replay_bug.cfg"',
+        'readonly TIMEOUT_FIXED_CONFIG="producer_continuation_timeout_cut_fixed.cfg"',
+        'readonly TIMEOUT_LOGICAL_BUG_CONFIG="producer_continuation_timeout_cut_logical_minimum_bug.cfg"',
+        'readonly PERIODIC_MODEL="SumeragiV2AdequateLeaderPeriodicPrefixMutation.tla"',
+        'readonly PERIODIC_FIXED_CONFIG="adequate_leader_periodic_prefix_fixed.cfg"',
+        'readonly PERIODIC_HIDDEN_BUG_CONFIG="adequate_leader_periodic_hidden_prefix_bug.cfg"',
+        'readonly PERIODIC_REPLENISHMENT_BUG_CONFIG="adequate_leader_periodic_replenishment_bug.cfg"',
+        'current_fixed_log="$(run_tlc current-ingress-fixed "$CURRENT_FIXED_CONFIG" 0)"',
+        'continuation_fixed_log="$(run_tlc continuation-cut-fixed "$CONTINUATION_FIXED_CONFIG" 0)"',
+        'timeout_fixed_log="$(run_tlc timeout-cut-fixed "$TIMEOUT_FIXED_CONFIG" 0)"',
+        'current_bug_log="$(run_tlc current-ingress-churn "$CURRENT_CHURN_BUG_CONFIG" 13)"',
+        'timeout_bug_log="$(run_tlc timeout-logical-minimum "$TIMEOUT_LOGICAL_BUG_CONFIG" 13)"',
+        'run_tlc adequate-periodic-fixed "$PERIODIC_FIXED_CONFIG" 0 "$PERIODIC_MODEL"',
+        '"$PERIODIC_HIDDEN_BUG_CONFIG" 12 "$PERIODIC_MODEL"',
+        '"$PERIODIC_REPLENISHMENT_BUG_CONFIG" 13 "$PERIODIC_MODEL"',
+        "run_tlc continuation-logical-only \"$CONTINUATION_LOGICAL_BUG_CONFIG\" 12",
+        "Error: Temporal properties were violated.",
+        "Error: Invariant CausalSuccessorRetainsPostCutPhysicalRoot is violated.",
+        "Error: Invariant FiniteOwnerEpisodeStartsAfterPeriodicPrefixDrains is violated.",
+        "Back to state",
+        "sumeragi_v2_tlc_assert_fixed_success",
+        "sumeragi_v2_tlc_assert_nonzero_state_space",
+    )
+    normalized_runner = " ".join(runner_source.split())
+    missing_or_repeated = [
+        fragment
+        for fragment in required_runner_fragments
+        if normalized_runner.count(fragment) != 1
+    ]
+    if missing_or_repeated:
+        errors.append(
+            f"{runner_path}: physical-cut mutation runner must retain each "
+            "pinned tool, scenario, status, and diagnostic exactly once; "
+            f"missing_or_repeated={missing_or_repeated!r}"
+        )
+    diagnostic_contract = "SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN"
+    if normalized_runner.count(diagnostic_contract) != 4:
+        errors.append(
+            f"{runner_path}: physical-cut mutation runner must apply the "
+            "shared primary-diagnostic contract exactly four times"
+        )
     return errors
 
 
@@ -18479,7 +19270,15 @@ def _proof_obligation_architecture_errors(
                 "AdequateLeaderFixedSelectedEntryActionCarriesAbsoluteCeiling"
             ),
             required=(
-                "ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell",
+                "AdequateLeaderFixedPipelineOriginHistoryFollowsAsyncStep",
+                "AdequateLeaderFixedExactParentDepartureCarriesLifecycleCut",
+                "AdequateLeaderFixedIntermediateRouteCarrierCannotRechargeCut",
+                "AdequateLeaderFixedCutCumulativeActionDebtFitsEpisodeBudget",
+                "CandidateProducerContinuationFrozenOriginsCannotReplenish",
+                "ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets",
+                "ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank",
+                "AdequateLeaderTargetEqualCountReplacementIntroducesAndRetires",
+                "AdequateLeaderTargetCountIncreaseIntroducesOwnerIdentity",
             ),
         )
         for symbol in (
@@ -18519,16 +19318,23 @@ def _proof_obligation_architecture_errors(
             required=(
                 "ExactDecisionTargetNeutralSnapshotIsFinite",
                 "ExactDecisionTargetNeutralEpisodeRankIsInCarrier",
-                "ExactDecisionTargetNeutralConcreteRankForSnapshotInCarrier",
-                "ExactDecisionTargetNeutralProducerEpisodeStepIsDescentOrFrame",
-                "ExactDecisionTargetNeutralRetainedEpisodesDoNotReplenish",
-                "ExactDecisionTargetNeutralNonGoalEpisodeRankRemainsInCarrier",
-                "ExactDecisionTargetNeutralRetainedEpisodeConsumptionLowersRank",
-                "ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell",
+                "ExactDecisionTargetNeutralActiveSnapshotConcreteRankIsInCarrier",
+                "ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets",
+                "ExactDecisionTargetNeutralSnapshotPredecessorsDoNotReplenishAtFixedClock",
+                "ExactDecisionTargetNeutralSnapshotRemainsActiveAtFixedClock",
+                "ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank",
+                "ExactDecisionTargetNeutralSnapshotProducerEpisodeStepIsDescentOrFrame",
+                "ExactDecisionTargetNeutralSnapshotProducerEpisodeDoesNotReplenish",
                 "ExactDecisionTargetNeutralProducerEpisodeBottomHasNoLowerRank",
-                "ExactDecisionTargetNeutralProducerEpisodeBottomForcesStrictRankGoal",
+                "CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner",
+                "CandidateProducerContinuationFrozenSourceFairResolutionStrictlyDescends",
                 "OverdueResponsivePacketEnablesConcreteProgress",
                 "DueNodeServiceEnablesConcreteGateProgress",
+                "HistoricalDiscoveryServeExitEitherLowersOrReplenishes",
+                "HistoricalDiscoveryServeFairActionLowersOccurrenceDebt",
+                "AdequateLeaderFixedExactParentDepartureCarriesLifecycleCut",
+                "AdequateLeaderFixedIntermediateRouteCarrierCannotRechargeCut",
+                "CandidateProducerContinuationFrozenOriginsCannotReplenish",
             ),
         )
         require_operator(
@@ -19581,13 +20387,17 @@ def _proof_obligation_architecture_errors(
             body, line = proofless_candidate_owners
             tokens = set(tla_code_tokens(body))
             required = (
-                "AsyncCausalEpisodeCandidates",
+                "ExactDecisionTargetNeutralCausalCandidatesForSnapshot",
                 (
-                    "AsyncCandidateProducerContinuationFrozenDormant"
-                    "LocalReplayCandidates"
+                    "ExactDecisionTargetNeutralFrozenDormant"
+                    "LocalReplayCandidatesForSnapshot"
                 ),
                 (
                     "ExactDecisionTargetNeutralChargeableLeaderWireCandidates"
+                    "ForSnapshot"
+                ),
+                (
+                    "ExactDecisionTargetNeutralChargeableOrdinaryIngressCandidates"
                     "ForSnapshot"
                 ),
             )
@@ -19686,10 +20496,100 @@ def _proof_obligation_architecture_errors(
         require_target_operator_tokens(
             "ExactDecisionTargetNeutralCausalEpisodeRankForSnapshot",
             (
+                (
+                    "ExactDecisionTargetNeutralExactCandidateOccurrenceBudget"
+                    "ForSnapshot"
+                ),
+                "ExactDecisionTargetNeutralServeWorkBudgetForSnapshot",
+                "ExactDecisionTargetNeutralServeReachDebtForSnapshot",
+            ),
+        )
+        require_target_operator_tokens(
+            "ExactDecisionTargetNeutralCausalCandidatesForSnapshot",
+            (
+                "AsyncCausalEpisodeCandidates",
                 "schedulerCuts",
-                "AsyncCausalEpisodeExactCandidateOccurrenceBudget",
-                "AsyncCausalEpisodeServeWorkBudget",
-                "AsyncCausalEpisodeServeReachDebt",
+                "ExactDecisionTargetNeutralFrozenPredecessorOriginsForSnapshot",
+            ),
+        )
+        causal_candidates = _top_level_operator_body(
+            source,
+            "ExactDecisionTargetNeutralCausalCandidatesForSnapshot",
+            preserve_string_contents=True,
+        )
+        if causal_candidates is not None:
+            body, line = causal_candidates
+            normalized = " ".join(body.split())
+            required_fragments = (
+                "AsyncCausalEpisodeCandidates(node, snapshot.schedulerCuts[node])",
+                "candidate.causalOrigin \\in "
+                "ExactDecisionTargetNeutralFrozenPredecessorOriginsForSnapshot( "
+                "snapshot, node)",
+            )
+            missing = tuple(
+                fragment for fragment in required_fragments if fragment not in normalized
+            )
+            if missing:
+                errors.append(
+                    f"{module}.tla:{line}: "
+                    "ExactDecisionTargetNeutralCausalCandidatesForSnapshot "
+                    "frozen causal candidates must "
+                    "retain both the immutable scheduler cut and predecessor "
+                    f"origin set; missing={missing!r}"
+                )
+        require_target_operator_tokens(
+            "ExactDecisionTargetNeutralExactCandidateOccurrenceTokensForSnapshot",
+            (
+                "ExactDecisionTargetNeutralCausalCandidatesForSnapshot",
+                "AsyncCausalExactRemainingOccurrenceBudget",
+            ),
+        )
+        require_target_operator_tokens(
+            "ExactDecisionTargetNeutralServeIngressIdentitiesForSnapshot",
+            (
+                "AsyncCausalEpisodeServeIngressIdentities",
+                "schedulerCuts",
+                "AsyncServeIngressAdmissionOrdinal",
+                "physicalCuts",
+            ),
+        )
+        serve_ingress_identities = _top_level_operator_body(
+            source,
+            "ExactDecisionTargetNeutralServeIngressIdentitiesForSnapshot",
+            preserve_string_contents=True,
+        )
+        if serve_ingress_identities is not None:
+            body, line = serve_ingress_identities
+            normalized = " ".join(body.split())
+            required_fragments = (
+                "AsyncCausalEpisodeServeIngressIdentities( node, "
+                "snapshot.schedulerCuts[node])",
+                "AsyncServeIngressAdmissionOrdinal(node, identity) < "
+                "snapshot.physicalCuts[node]",
+            )
+            missing = tuple(
+                fragment for fragment in required_fragments if fragment not in normalized
+            )
+            if missing:
+                errors.append(
+                    f"{module}.tla:{line}: "
+                    "ExactDecisionTargetNeutralServeIngressIdentitiesForSnapshot "
+                    "frozen Serve identities must "
+                    "retain both the immutable scheduler prefix and strict "
+                    f"physical admission cut; missing={missing!r}"
+                )
+        require_target_operator_tokens(
+            "ExactDecisionTargetNeutralServeWorkTokensForSnapshot",
+            (
+                "AsyncCausalEpisodeServeWorkTokens",
+                "ExactDecisionTargetNeutralServeIngressIdentitiesForSnapshot",
+            ),
+        )
+        require_target_operator_tokens(
+            "ExactDecisionTargetNeutralServeReachDebtForSnapshot",
+            (
+                "ExactDecisionTargetNeutralServeIngressIdentitiesForSnapshot",
+                "DrainableIngressTurnReachRank",
             ),
         )
         require_target_operator_tokens(
@@ -20050,8 +20950,12 @@ def _proof_obligation_architecture_errors(
             )
             proof_text = "" if len(proof) == 1 else proof[1]
             required_rank_definitions = (
-                "AsyncCausalEpisodeExactCandidateOccurrenceBudget",
-                "AsyncCausalEpisodeServeWorkBudget",
+                (
+                    "ExactDecisionTargetNeutralExactCandidateOccurrenceBudget"
+                    "ForSnapshot"
+                ),
+                "ExactDecisionTargetNeutralServeWorkBudgetForSnapshot",
+                "ExactDecisionTargetNeutralServeReachDebtForSnapshot",
                 "AsyncCausalEpisodeStructuralRankOrdering",
             )
             missing = tuple(
@@ -40367,12 +41271,12 @@ def _shared_tlc_result_contract_source_fidelity_errors(
     }
     specialized_callers = set(SHARED_TLC_RESULT_SPECIALIZED_CALLERS)
     if (
-        len(SHARED_TLC_RESULT_CONTRACT_CALLERS) != 32
-        or len(expected_callers) != 32
+        len(SHARED_TLC_RESULT_CONTRACT_CALLERS) != 33
+        or len(expected_callers) != 33
     ):
         errors.append(
             "shared TLC result-contract caller inventory must contain "
-            "exactly thirty-two unique callers"
+            "exactly thirty-three unique callers"
         )
     if (
         len(SHARED_TLC_RESULT_SPECIALIZED_CALLERS) != 4
@@ -40424,7 +41328,7 @@ def _shared_tlc_result_contract_source_fidelity_errors(
     if digest_paths != expected_paths:
         errors.append(
             "shared TLC result-contract digest inventory must equal the "
-            f"helper and exact thirty-two callers; "
+            f"helper and exact thirty-three callers; "
             f"missing={sorted(expected_paths - digest_paths)}, "
             f"extra={sorted(digest_paths - expected_paths)}"
         )
@@ -48518,6 +49422,211 @@ def _decision_recovery_lifecycle_mutation_source_fidelity_errors(
     return errors
 
 
+def _runtime_clock_reservation_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin the Rust boundary which keeps post-cut replays outside FIFO."""
+
+    errors: list[str] = []
+    runtime_path = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    if not runtime_path.is_file() or runtime_path.is_symlink():
+        return [
+            f"{runtime_path}: immutable clock-reservation runtime source "
+            "must be a regular file"
+        ]
+    try:
+        source = runtime_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        return [f"{runtime_path}: cannot read clock-reservation source: {error}"]
+
+    runtime_context = (
+        (
+            "impl",
+            "<",
+            "D",
+            ":",
+            "RuntimeDriver",
+            ">",
+            "SerializedV2Runtime",
+            "<",
+            "D",
+            ">",
+        ),
+    )
+    runtime_items: dict[str, RustItem | None] = {}
+    for item_name, description in (
+        (
+            "validate_clock_owner_physical_cuts",
+            "paired immutable clock physical-cut validator",
+        ),
+        (
+            "clock_owner_reservation_blocks_occurrence",
+            "post-cut replay reservation predicate",
+        ),
+        (
+            "clock_owner_reservation_blocks",
+            "exact causal-owner clock reservation projection",
+        ),
+        (
+            "enqueue_after_clock_reservation",
+            "recoverable pre-FIFO clock reservation gate",
+        ),
+        (
+            "scheduler_arbitration_inputs",
+            "frozen-prefix clock arbitration projection",
+        ),
+    ):
+        item = _require_rust_item(runtime_path, source, item_name, errors)
+        runtime_items[item_name] = item
+        _require_rust_item_context(
+            runtime_path,
+            item,
+            runtime_context,
+            description,
+            errors,
+        )
+        _require_rust_item_token_sha256(
+            runtime_path,
+            item,
+            _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[item_name],
+            description,
+            errors,
+        )
+
+    _require_rust_token_sequence(
+        runtime_path,
+        runtime_items.get("clock_owner_reservation_blocks_occurrence"),
+        """
+u128::from(source_physical_ordinal) >= physical_cut
+    && lifecycle_ordinal <= owner.lifecycle_ordinal()
+""",
+        "post-cut replay reservation must pair physical non-precedence with "
+        "logical rank at or ahead of the frozen clock owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        runtime_items.get("enqueue_after_clock_reservation"),
+        """
+let owner = command.lifecycle_owner()?;
+if self.clock_owner_reservation_blocks(&owner)? {
+    return Err(EnqueueError::Full);
+}
+self.ingress.enqueue(command)
+""",
+        "post-cut replay gate must backpressure before publishing FIFO state",
+        errors,
+    )
+
+    concrete_context = (
+        (
+            "impl",
+            "SerializedV2Runtime",
+            "<",
+            "SumeragiV2Adapter",
+            ">",
+        ),
+    )
+    for item_name, required, description in (
+        (
+            "enqueue_network_with_ingress_ownership",
+            """
+if let Some((owner, _)) = restored_owner.as_ref() {
+    match self.clock_owner_reservation_blocks(owner) {
+        Ok(true) => {
+            return Err(NetworkIngressError::Backpressure(EnqueueError::Full));
+        }
+        Ok(false) => {}
+        Err(_) => {
+            self.latch_fail_closed(
+                "network replay observed invalid clock reservation ownership",
+            );
+            return Err(NetworkIngressError::FailClosed);
+        }
+    }
+}
+""",
+            "authenticated post-cut replay admission gate",
+        ),
+        (
+            "can_admit_network_message_with_ingress_ownership",
+            """
+match self.clock_owner_reservation_blocks_occurrence(
+    lifecycle_ordinal,
+    physical.source_ordinal,
+) {
+    Ok(true) => return false,
+    Ok(false) => {}
+    Err(_) => return true,
+}
+""",
+            "fair-ingress post-cut replay preflight gate",
+        ),
+    ):
+        item = _require_rust_item(runtime_path, source, item_name, errors)
+        _require_rust_item_context(
+            runtime_path,
+            item,
+            concrete_context,
+            description,
+            errors,
+        )
+        _require_rust_item_token_sha256(
+            runtime_path,
+            item,
+            _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[item_name],
+            description,
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            item,
+            required,
+            description,
+            errors,
+        )
+
+    regression_name = (
+        "deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences"
+    )
+    regression = _require_rust_item(
+        runtime_path,
+        source,
+        regression_name,
+        errors,
+    )
+    _require_rust_item_context(
+        runtime_path,
+        regression,
+        (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+        "post-cut replay and stale FIFO-debt regression",
+        errors,
+        expected_attributes=("#[test]",),
+    )
+    _require_rust_item_token_sha256(
+        runtime_path,
+        regression,
+        _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256[regression_name],
+        "post-cut replay and stale FIFO-debt regression",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        regression,
+        """
+assert_eq!(
+    runtime.enqueue_after_clock_reservation(later_replay_command),
+    Err(EnqueueError::Full),
+);
+assert_eq!(runtime.ingress.commands.len(), queue_len_before_replay,);
+""",
+        "post-cut replay regression must reject FIFO publication while retaining "
+        "the clock target",
+        errors,
+    )
+    return errors
+
+
 def _production_causal_fifo_source_fidelity_errors(
     formal_dir: Path = FORMAL_DIR,
 ) -> list[str]:
@@ -49315,17 +50424,27 @@ SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)
             ),
             (
                 "let _ = self.oldest_lifecycle_ordinal()?;",
-                "let queue_before = self.ownership_projection();",
+                "let queue_before = self.ownership_snapshot();",
                 ".position(|queued| queued.class == CommandClass::Completion "
                 "&& matches_fence(queued))",
                 "identity.kind != RuntimeCommandKind::SignatureCompleted",
+                "let selection_seal = self.mint_selection_seal(",
+                "let mut candidate = RuntimeFifoCandidateOwnership",
+                "if !runtime_fifo_candidate_ingress_is_exact(&candidate)",
+                "candidate.projection_hash = "
+                "runtime_fifo_candidate_projection_hash(&candidate);",
                 """
 let command = self
     .commands
     .remove(index)
     .expect("selected fence completion remains present");
 """,
-                "debug_assert_eq!(queue_before.len, self.ownership_projection().len + 1);",
+                """
+debug_assert_eq!(
+    queue_before.projection.len,
+    self.ownership_projection().len + 1
+);
+""",
             ),
             "fence completion removal must validate all FIFO owners, select an "
             "exact signature completion, and remove only that physical owner",
@@ -49584,7 +50703,7 @@ self.runtime_seal.admission_ordinal() == self.deferred_admission_ordinal
         self.owner.lifecycle_ordinal(),
         self.current_ingress == RuntimeDispatchIngress::DirectAuthenticated,
         self.source_physical_ordinal,
-        self.physical_cut
+        self.physical_cut,
     )
 """,
             "deferred lifecycle validation must bind its private runtime seal to "
@@ -49729,6 +50848,9 @@ return Ok(owner_tag);
 """,
                 "let preflight = self.command_admission_preflight",
                 "let preflight = self.reject_authenticated_preflight_coalescence(preflight)?;",
+                "let restored_owner = match preflight",
+                "if let Some((owner, _)) = restored_owner.as_ref()",
+                "match self.clock_owner_reservation_blocks(owner)",
                 """
 .enqueue_authenticated_with_ingress_ownership_and_owner(
 """,
@@ -49743,6 +50865,29 @@ Ok(owner) => {
             "freeze its physical occurrence, authenticate, merge and register an "
             "exact deferred owner, then preflight and register ordinary enqueue "
             "before returning ownership",
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            enqueue_with_ownership,
+            """
+if let Some((owner, _)) = restored_owner.as_ref() {
+    match self.clock_owner_reservation_blocks(owner) {
+        Ok(true) => {
+            return Err(NetworkIngressError::Backpressure(EnqueueError::Full));
+        }
+        Ok(false) => {}
+        Err(_) => {
+            self.latch_fail_closed(
+                "network replay observed invalid clock reservation ownership",
+            );
+            return Err(NetworkIngressError::FailClosed);
+        }
+    }
+}
+""",
+            "a restored post-cut replay must retain fair-ingress ownership and "
+            "receive recoverable backpressure before FIFO admission",
+            errors,
         )
         can_admit_with_ownership = observed_concrete_runtime_items.get(
             "can_admit_network_message_with_ingress_ownership"
@@ -49761,6 +50906,28 @@ wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => (
 )
 """,
             "CommitCertificateResponse to semantic QC capacity projection",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            can_admit_with_ownership,
+            """
+if let (Ok(Some(lifecycle_ordinal)), Ok(Some(physical))) = (
+    ownership.earliest_lifecycle_ordinal(),
+    ownership.earliest_physical_carrier(),
+) {
+    match self.clock_owner_reservation_blocks_occurrence(
+        lifecycle_ordinal,
+        physical.source_ordinal,
+    ) {
+        Ok(true) => return false,
+        Ok(false) => {}
+        Err(_) => return true,
+    }
+}
+""",
+            "capacity preflight must retain a post-cut replay outside FIFO "
+            "while the immutable clock reservation is active",
             errors,
         )
         _require_rust_token_sequence(
@@ -49843,38 +51010,42 @@ if matches!(
                 f"production causal-FIFO regression {name}",
                 errors,
             )
-        fence_runtime_regressions: dict[str, RustItem | None] = {}
-        for name in (
-            "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo",
-            "real_adapter_fence_completion_breaks_pre_and_post_timeout_retransmit_debt",
-        ):
-            item = _require_rust_item(
-                runtime_path,
-                runtime_source,
-                name,
-                errors,
+        retired_retransmit_fence_regression = (
+            "real_adapter_fence_completion_breaks_pre_and_post_timeout_retransmit_debt"
+        )
+        if rust_items(runtime_source, retired_retransmit_fence_regression):
+            errors.append(
+                f"{runtime_path}: retired production regression "
+                f"{retired_retransmit_fence_regression} is prohibited"
             )
-            fence_runtime_regressions[name] = item
-            _require_rust_item_context(
-                runtime_path,
-                item,
-                runtime_test_context,
-                f"production signature-fence dependency regression {name}",
-                errors,
-                expected_attributes=("#[test]",),
-            )
-            _require_rust_item_token_sha256(
-                runtime_path,
-                item,
-                _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[name],
-                f"production signature-fence dependency regression {name}",
-                errors,
-            )
+
+        fence_regression_name = (
+            "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo"
+        )
+        fence_runtime_regression = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            fence_regression_name,
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            fence_runtime_regression,
+            runtime_test_context,
+            f"production signature-fence dependency regression {fence_regression_name}",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        _require_rust_item_token_sha256(
+            runtime_path,
+            fence_runtime_regression,
+            _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[fence_regression_name],
+            f"production signature-fence dependency regression {fence_regression_name}",
+            errors,
+        )
         _require_rust_token_sequence(
             runtime_path,
-            fence_runtime_regressions.get(
-                "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo"
-            ),
+            fence_runtime_regression,
             """
 assert_eq!(
     scheduling.selected,
@@ -49887,54 +51058,197 @@ assert!(scheduling.validate_exact().is_ok());
             "dependency-bypass carrier",
             errors,
         )
-        retransmit_fence_regression = fence_runtime_regressions.get(
-            "real_adapter_fence_completion_breaks_pre_and_post_timeout_retransmit_debt"
+        periodic_ordering_regression_name = (
+            "fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers"
         )
-        _require_rust_token_sequence(
+        periodic_ordering_regression = _require_rust_item(
             runtime_path,
-            retransmit_fence_regression,
-            """
-runtime
-    .enqueue_signature(prepare_sign_tag, prepare_signature.clone())
-    .expect("enqueue an independently rooted signature callback");
-runtime
-    .enqueue_signature_with_owner(
-        prepare_sign_tag,
-        prepare_signature,
-        &prepare_effect_ownership[0],
-    )
-    .expect("enqueue exact Prepare signature completion");
-""",
-            "retransmit-debt regression must distinguish an independent "
-            "callback from the exact causally owned completion",
+            runtime_source,
+            periodic_ordering_regression_name,
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            periodic_ordering_regression,
+            runtime_test_context,
+            f"production fresh-periodic ordering regression "
+            f"{periodic_ordering_regression_name}",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        _require_rust_item_token_sha256(
+            runtime_path,
+            periodic_ordering_regression,
+            _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[
+                periodic_ordering_regression_name
+            ],
+            f"production fresh-periodic ordering regression "
+            f"{periodic_ordering_regression_name}",
             errors,
         )
         _require_rust_token_sequence(
             runtime_path,
-            retransmit_fence_regression,
+            periodic_ordering_regression,
             """
-assert_eq!(
-    prepare_bypass.selected,
-    RuntimeSelectedOwnerKind::FenceCompletion
+assert!(matches!(
+    runtime
+        .step_and_take_scheduler_ownership_for_test(second_retransmission)
+        .expect("freeze the pre-deadline second retransmission"),
+    RuntimeStep::Idle
+));
+assert!(
+    runtime
+        .driver()
+        .all_deferred_admission_ordinals()
+        .is_empty(),
+    "a younger periodic owner cannot enter the adapter ahead of the signer"
 );
-assert!(prepare_bypass.fence_completion_bypass);
+assert!(
+    runtime.retransmit_owner.is_some(),
+    "the fresh periodic episode remains frozen at its later lifecycle position"
+);
 """,
-            "pre-timeout retransmit debt must be opened by an exact fence "
-            "completion bypass",
+            "a fresh pre-timeout periodic episode must remain at the runtime "
+            "boundary behind an older signer without creating adapter debt",
             errors,
         )
         _require_rust_token_sequence(
             runtime_path,
-            retransmit_fence_regression,
+            periodic_ordering_regression,
             """
-assert_eq!(
-    timeout_bypass.selected,
-    RuntimeSelectedOwnerKind::FenceCompletion
-);
-assert!(timeout_bypass.fence_completion_bypass);
+assert_eq!(prepare_completion.selected, RuntimeSelectedOwnerKind::Fifo);
+assert!(!prepare_completion.fence_completion_bypass);
+assert!(prepare_completion.fence_predecessor_lifecycle_ordinal.is_none());
 """,
-            "post-timeout retransmit debt must be opened by an exact fence "
-            "completion bypass",
+            "the older Prepare completion must retain ordinary FIFO ownership "
+            "without a fence predecessor or dependency bypass",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            periodic_ordering_regression,
+            """
+assert!(
+    runtime.retransmit_owner.is_some(),
+    "the younger periodic episode remains frozen until its own turn"
+);
+assert_eq!(runtime.queued_commands(), 0);
+let retransmit_retry = runtime
+    .step_and_take_scheduler_ownership_for_test(second_retransmission)
+    .expect("service younger pre-deadline retransmission episode");
+assert!(matches!(
+    retransmit_retry,
+    RuntimeStep::Advanced(ref effects)
+        if effects.iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::Broadcast(message)
+                if matches!(
+                    &message.payload,
+                    wire::ConsensusMessageV2Payload::Vote(vote)
+                        if vote.phase == wire::GlobalPhase::Prepare
+                            && vote.round == manifest.round
+                )
+        ))
+));
+assert_eq!(
+    prepare_completion.validate_exact(),
+    Ok(()),
+    "immutable completion evidence remains valid after the younger owner runs"
+);
+assert!(
+    runtime
+        .driver()
+        .all_deferred_admission_ordinals()
+        .is_empty()
+);
+assert!(runtime.deferred_lifecycle_ownership.is_empty());
+assert!(runtime.retransmit_owner.is_none());
+let deadline = start + runtime.round_timeout();
+""",
+            "the retained pre-timeout periodic episode must run only after the "
+            "older completion and then clear its runtime owner",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            periodic_ordering_regression,
+            """
+assert!(matches!(
+    runtime
+        .step_and_take_scheduler_ownership_for_test(post_timeout_retransmission)
+        .expect("freeze post-timeout retransmission behind signing"),
+    RuntimeStep::Idle
+));
+assert!(
+    runtime.retransmit_owner.is_some(),
+    "post-timeout retransmission retains its fresh runtime owner while blocked"
+);
+assert!(
+    runtime
+        .driver()
+        .all_deferred_admission_ordinals()
+        .is_empty()
+);
+""",
+            "a fresh post-timeout periodic episode must remain at the runtime "
+            "boundary behind TimeoutVote signing without creating adapter debt",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            periodic_ordering_regression,
+            """
+assert_eq!(timeout_completion.selected, RuntimeSelectedOwnerKind::Fifo);
+assert!(!timeout_completion.fence_completion_bypass);
+assert!(timeout_completion.fence_predecessor_lifecycle_ordinal.is_none());
+""",
+            "the older TimeoutVote completion must retain ordinary FIFO ownership "
+            "without a fence predecessor or dependency bypass",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            periodic_ordering_regression,
+            """
+let timeout_vote_retry = runtime
+    .step_and_take_scheduler_ownership_for_test(post_timeout_retransmission)
+    .expect("rebroadcast a lost first TimeoutVote");
+assert!(matches!(
+    timeout_vote_retry,
+    RuntimeStep::Advanced(ref effects)
+        if effects.iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::Broadcast(message)
+                if matches!(
+                    &message.payload,
+                    wire::ConsensusMessageV2Payload::TimeoutVote(vote)
+                        if vote.round == manifest.round
+                )
+        ))
+));
+assert_eq!(runtime.queued_commands(), 0);
+assert!(
+    runtime
+        .driver()
+        .all_deferred_admission_ordinals()
+        .is_empty()
+);
+assert!(runtime.deferred_lifecycle_ownership.is_empty());
+assert!(runtime.retransmit_owner.is_none());
+let later_post_timeout_tick = post_timeout_retransmission + runtime.retransmit_interval();
+let later_retry = runtime
+    .step(later_post_timeout_tick)
+    .expect("service a later post-timeout periodic tick");
+let later_retry_owner = runtime
+    .take_last_scheduler_ownership()
+    .expect("later periodic tick retains scheduler ownership");
+assert_eq!(
+    later_retry_owner.selected,
+    RuntimeSelectedOwnerKind::PeriodicTimer
+);
+""",
+            "the retained post-timeout periodic episode must run after the older "
+            "completion, clear, and leave later periodic ticks armed",
             errors,
         )
         _require_rust_token_sequence(
@@ -50024,9 +51338,30 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
         )
         runtime_items = (
             (
+                "validate_clock_owner_physical_cuts",
+                "validate_clock_owner_physical_cuts",
+                "paired immutable timeout and retransmit physical cuts",
+            ),
+            (
+                "clock_owner_reservation_blocks_occurrence",
+                "clock_owner_reservation_blocks_occurrence",
+                "post-cut logical replay admission reservation",
+            ),
+            (
+                "clock_owner_reservation_blocks",
+                "clock_owner_reservation_blocks",
+                "exact-owner post-cut replay projection",
+            ),
+            (
+                "enqueue_after_clock_reservation",
+                "enqueue_after_clock_reservation",
+                "FIFO admission behind immutable clock reservations",
+            ),
+            (
                 "freeze_due_clock_owners",
                 "freeze_due_clock_owners",
-                "clock-owner freeze and cached-root alias fence",
+                "clock-owner freeze with active-episode coalescing and fresh "
+                "drained-episode ownership",
             ),
             (
                 "minimum_active_lifecycle_ordinal",
@@ -50052,6 +51387,11 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
                 "eligible_deferred_admission_ordinals",
                 "eligible_deferred_admission_ordinals",
                 "physical-cut eligible deferred occurrence selector",
+            ),
+            (
+                "scheduler_arbitration_inputs",
+                "scheduler_arbitration_inputs",
+                "physical-cut clock and FIFO arbitration projection",
             ),
             ("step", "runtime_step", "live serialized runtime step"),
             (
@@ -50161,9 +51501,10 @@ for queued in &self.ingress.commands {
             (
                 "if !target.validate_exact()",
                 """
-.oldest_active_lifecycle_ordinal_before_physical_cut_excluding(
+self.ingress
+    .oldest_active_lifecycle_ordinal_before_physical_cut_excluding(
     target.physical_cut,
-    excluded
+    excluded,
 )?
 """,
                 "if excluded.iter().any(|excluded| excluded == owner)",
@@ -50182,16 +51523,102 @@ for queued in &self.ingress.commands {
         require_runtime_item_order(
             eligible_deferred,
             (
-                "for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership",
+                """
+if !deferred_lifecycle_ordinals_are_unique(&self.deferred_lifecycle_ownership)
+    || self.validate_clock_owner_physical_cuts().is_err()
+{
+    return Err(EnqueueError::FailClosed);
+}
+for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership
+""",
                 "candidate.validate_active_against_ingress(",
+                "let physically_eligible = self.deferred_lifecycle_ownership",
                 "let physically_behind_an_active_target",
                 "u128::from(source_physical_ordinal) >= target.physical_cut",
-                "if physically_behind_an_active_target",
-                "self.minimum_active_lifecycle_ordinal_for_deferred(candidate)?",
+                "self.timeout_owner_physical_cut.is_some_and(|timeout_cut|",
+                "u128::from(source_physical_ordinal) >= timeout_cut",
+                "self.retransmit_owner_physical_cut",
+                "u128::from(source_physical_ordinal) >= retransmit_cut",
+                "(!physically_behind_an_active_target).then_some(*admission_ordinal)",
+                "let physically_ineligible_owners = self.deferred_lifecycle_ownership",
+                """
+let mut eligible = BTreeSet::new();
+for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership
+""",
+                "if !physically_eligible.contains(admission_ordinal)",
+                "self.minimum_active_lifecycle_ordinal_for_deferred_excluding(",
+                "&physically_ineligible_owners",
                 "eligible.insert(*admission_ordinal);",
             ),
             "deferred eligibility must globally remove post-cut occurrences before "
             "choosing the logical minimum of the remaining frozen prefix",
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get("validate_clock_owner_physical_cuts"),
+            (
+                "self.timeout_owner.is_some() == self.timeout_owner_physical_cut.is_some()",
+                (
+                    "self.retransmit_owner.is_some() == "
+                    "self.retransmit_owner_physical_cut.is_some()"
+                ),
+                ".chain(self.retransmit_owner_physical_cut)",
+                "cut != 0 && cut <= self.ingress_physical_cut",
+            ),
+            "clock owners must pair each immutable physical cut and bound it by "
+            "the monotone receiver high-watermark",
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get(
+                "clock_owner_reservation_blocks_occurrence"
+            ),
+            (
+                "if lifecycle_ordinal == 0 || source_physical_ordinal == 0",
+                "self.validate_clock_owner_physical_cuts()?;",
+                "u128::from(source_physical_ordinal) >= physical_cut",
+                "lifecycle_ordinal <= owner.lifecycle_ordinal()",
+                ".zip(self.timeout_owner_physical_cut)",
+                ".zip(self.retransmit_owner_physical_cut)",
+            ),
+            "post-cut replay admission must compare physical position before "
+            "allowing an old logical rank into FIFO",
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get("clock_owner_reservation_blocks"),
+            (
+                "if !owner.validate_exact()",
+                "owner.causal_origin().root_ingress_physical_ownership",
+                "self.validate_clock_owner_physical_cuts()?;",
+                "self.clock_owner_reservation_blocks_occurrence(",
+                "owner.lifecycle_ordinal()",
+                "physical.source_ordinal",
+            ),
+            "clock reservation projection must validate and retain the exact "
+            "causal ingress root",
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get("enqueue_after_clock_reservation"),
+            (
+                "let owner = command.lifecycle_owner()?;",
+                "if self.clock_owner_reservation_blocks(&owner)?",
+                "return Err(EnqueueError::Full);",
+                "self.ingress.enqueue(command)",
+            ),
+            "post-cut replay must receive recoverable backpressure before FIFO "
+            "publication",
+        )
+        require_runtime_item_order(
+            observed_runtime_items.get("scheduler_arbitration_inputs"),
+            (
+                "self.validate_clock_owner_physical_cuts()?;",
+                "let global_minimum = self.minimum_active_lifecycle_ordinal()?;",
+                "let fifo_minimum = self.ingress.oldest_lifecycle_ordinal()?;",
+                "self.timeout_owner_physical_cut",
+                "let raw_periodic_timer_due = timers_enabled",
+                "self.retransmit_owner_physical_cut",
+                "Ok(RuntimeSchedulerArbitrationInputs",
+            ),
+            "scheduler arbitration must validate clock pairs and compare only "
+            "their frozen physical prefixes",
         )
         require_runtime_item_order(
             observed_runtime_items.get("step"),
@@ -50415,7 +51842,7 @@ fn accept_driver_dispatch(
     &mut self,
     dispatch: RuntimeDriverDispatch<D::Effect>,
     parent: &RuntimeLifecycleOwner,
-    current_ingress: RuntimeDispatchIngress
+    current_ingress: RuntimeDispatchIngress,
 )
 """,
             "driver acceptance must receive the selected command's exact current "
@@ -50446,7 +51873,7 @@ if retry_unadmitted
 let (source_physical_ordinal, physical_cut) = match (
     current_ingress,
     parent.causal_origin().root_ingress_physical_ownership,
-    retained_ingress
+    retained_ingress,
 )
 """,
                 "self.driver.seal_deferred_runtime_ownership(",
@@ -50514,7 +51941,7 @@ runtime.retain_effect_ownership(
 self.complete_driver_dispatch_leader_wire_owners(
     &effect_parent,
     retained_deferred_ingress,
-    completed_producer_handoff
+    completed_producer_handoff,
 )
 """,
                 "self.observe_effects(now, &effects)",
@@ -50534,7 +51961,7 @@ self.complete_driver_dispatch_leader_wire_owners(
 self.complete_driver_dispatch_leader_wire_owners(
     &owner,
     retained_deferred_ingress,
-    completed_producer_handoff
+    completed_producer_handoff,
 )
 """,
                 "self.observe_effects(now, &effects)",
@@ -50554,7 +51981,7 @@ self.complete_driver_dispatch_leader_wire_owners(
 self.complete_driver_dispatch_leader_wire_owners(
     &lifecycle_owner,
     false,
-    completed_producer_handoff
+    completed_producer_handoff,
 )
 """,
                 "self.observe_effects(now, &effects)",
@@ -52036,6 +53463,16 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"operator {duplicate} must be provided only by "
                     "SumeragiV2AsyncNetwork"
                 )
+
+    for retired_runner_boundary_symbol in (
+        "AsyncRetransmitClockCanAcquireAfter",
+        "AsyncRetransmitCompletedEpisodeClearsOrReplacesDrainedOwner",
+    ):
+        if _symbol_exists(stripped, retired_runner_boundary_symbol):
+            errors.append(
+                f"{path}: retired pre-runner clock lifecycle symbol "
+                f"{retired_runner_boundary_symbol} is prohibited"
+            )
 
     for retired_capacity_shortcut in (
         "AsyncCandidateServiceStoreCapacityInvariantIn",
@@ -82568,6 +84005,7 @@ def validate_ledger(
         )
     )
     errors.extend(_same_round_semantic_kernel_source_fidelity_errors(ROOT_DIR))
+    errors.extend(_runtime_clock_reservation_source_fidelity_errors(ROOT_DIR))
     errors.extend(_installed_tc_selector_source_fidelity_errors(formal_dir))
     errors.extend(_local_proposal_timeout_source_fidelity_errors(ROOT_DIR))
     errors.extend(_proposal_timeout_exactness_source_fidelity_errors(ROOT_DIR))
@@ -82587,6 +84025,9 @@ def validate_ledger(
     errors.extend(_serve_lifecycle_temporal_contract_errors(formal_dir))
     errors.extend(
         _async_candidate_producer_continuation_contract_errors(formal_dir)
+    )
+    errors.extend(
+        _producer_continuation_physical_cut_mutation_contract_errors(ROOT_DIR)
     )
     errors.extend(
         _historical_candidate_producer_continuation_contract_errors(formal_dir)

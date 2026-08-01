@@ -76,13 +76,28 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "98ff14c212f7c5f8b1756e7d8661a3ea502dfc334fc22ca592a7f85958909f29"
     ),
     "pop_fence_completion_with_ownership": (
-        "8fc875ae966aef68a30bec6fb163c10895449a367a9d5731e5e3f8c78594bd64"
+        "615fbf207bf034f1660f2f42e0434e10fd070f57407a3e90e6bbc9055de5e0b9"
     ),
     "fence_blocked_lifecycle_owners": (
         "a6ab663afdf61312dd4da128d54967c262f749f966a953dc63abc77d3751c83d"
     ),
     "freeze_due_clock_owners": (
-        "e3ac13302ebff5862aa5f0832524be2467d7fe79079b0ac43ed5560b7be6327e"
+        "72400e4f0322887b55caf39ccb20693960aaf607db8c5a36ec393014adef01cd"
+    ),
+    "validate_clock_owner_physical_cuts": (
+        "d032de42de6c77bf66ae4955295a4066f9735eb2cc1f531c6fa5986b0361821b"
+    ),
+    "clock_owner_reservation_blocks_occurrence": (
+        "3429be87183f81ffd68b1da7d1f6ee32f1536de8f7a72098d868ca2d747ae882"
+    ),
+    "clock_owner_reservation_blocks": (
+        "f6db1825402a97f52f35c0ef7cabda380be9055ca7507dfae0476d339057304c"
+    ),
+    "enqueue_after_clock_reservation": (
+        "913aa38626b74b70200f4c8212c061b5eb85e72d112ffbba805ba743b90873d6"
+    ),
+    "scheduler_arbitration_inputs": (
+        "0f041e2f24fb6ad723c393a6bec10da8215ffed5a6a655f2751e88b436137239"
     ),
     "minimum_active_lifecycle_ordinal": (
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
@@ -97,25 +112,25 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "2707d2e2a3172161c3e68d8bb9779b686c53bb6414001c3827b5141e13c9483d"
     ),
     "eligible_deferred_admission_ordinals": (
-        "14a7d45a4ae18b350de195e1ba766874b531c0249f57b8072c02b2b663d55127"
+        "80c315add06cdc5b0a18d672ff0f3f6c114bb8f81ecd9f8303ff0b78bce6cfe6"
     ),
     "runtime_step": (
-        "1779e7ccc70bf0d62593d1c1b56d34d3d484ac7d0ebec789560f6ffb2f9e0b31"
+        "b0e2eb20330d892f7c0dec448e673bdf528db4e3bab6b191de5d9164fc72a74a"
     ),
     "runtime_step_recovery": (
-        "9ef76f925b9b11d907fb355e0bce611d8f92e0f4baa797ec5d75ce736060b2f3"
+        "7b81ecba71a58b71e2aae931f8c47f20a99c8b823e60e314d9a7467ca05c3e1a"
     ),
     "dispatch_one_adapter_deferred": (
-        "30428185a9302b8faf09658e0d122bd407d7309f8679791943c35639bf1d6286"
+        "51c2fad21770428bf8c40aaacea930b6e524540ade28c50099b9d8c7bf33cf70"
     ),
     "dispatch_one_fence_dependency": (
-        "048103efd268407f0cd2ad5fd33829d38a8e772c8f67149e558c6ab85e8d9d3c"
+        "7b3230ab5ceaf5e69725fa6769db4477b0b6d5e63480a033facc53f4c79ec5fd"
     ),
     "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo": (
         "fd73f3acdd805bc9f4f34b6f660e49ef8a3b1b3327589e40d745770abd5ace12"
     ),
-    "real_adapter_fence_completion_breaks_pre_and_post_timeout_retransmit_debt": (
-        "340a7a261a1d532414e16c6d98b8670c79fc867cdf4a02c5d36571a01e14b59d"
+    "fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers": (
+        "93f8290d3a87f463bc2b99d13a9585edc988794ce18f5d2a2e3d80282a79e2ca"
     ),
     "tc_promoted_lock_requires_same_subject_reproposal_before_commit": (
         "4a6ae3cd80c629e1ec63e32eadc6d6cfcb68a9ccc77a15997a4915931818279c"
@@ -196,10 +211,10 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "b18470839079c4922c39341a62f804bee2119123e05758c55100b62e183eb363"
     ),
     "reconcile_deferred_ingress_ownership": (
-        "6c47b3670db6f8398e5e4673b8dfc0cd570e0c0a1535aae41aa85c1a7ae0d6c4"
+        "37ebb9c8e38cf6d1eda06a31a83570c40f45771f0847adea36d3305d7a6d38bc"
     ),
     "reconcile_deferred_runtime_ownership_after_retirement": (
-        "2b5b76aaa860e8186f24f20aef7fcf22e4b704678a4179f0e2666b12504addcd"
+        "fb99631aa84450b5b8d2d0ebf09b70d0e5e687868d89977bf8334b554e67b572"
     ),
     "active_leader_wire_runtime_ordinals": (
         "60659f35ec4d592990db68069fb1373bc2af662711fb11a14db1078d8b395dc6"
@@ -217,13 +232,13 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "6fccf9497abffa385d06a6e4f4fd9a0f641745ca51b17f8b6e7dcede26c449eb"
     ),
     "accept_driver_dispatch": (
-        "53c15b0a9cc4d074707377b6365e8fc3497c57e8706c191d5f503313016838be"
+        "464c41421edc5a6e7b4dfe4b5a8e192cd27e32c29ef7031a90c49318c87266fb"
     ),
     "enqueue_network_with_ingress_ownership": (
-        "f7767ff4d68f29e72bdff8ec39d4c3b2ecaba66733a79c137090d2c29fca7d60"
+        "4d24ee550fa9377701d25f13cf660429b5caed20e51955fdb2a91a5604a20a33"
     ),
     "can_admit_network_message_with_ingress_ownership": (
-        "24903fdc43ff249788662132bdf1c260917a8243b260e67ba5e8224a013d361d"
+        "35fa48c500fafb285278d25bed7b0e00603f500bfd900005818685560d9f89df"
     ),
     "take_last_scheduler_ownership": (
         "b781f7ace9823e4ba2b395230912a703a78c2b6ae8fb48e96a0f0f120c9fa7c8"
@@ -234,6 +249,9 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
 }
 
 _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
+    "deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences": (
+        "e6daf057b3d52844546702552174c91b901feef86995195f1fd8f366c935ea7d"
+    ),
     "later_same_semantic_fair_retry_retains_runtime_lifecycle_root": (
         "12e41e90bcd59ef22389131ad4b5cdeb56dce7fa04cd15357d18ce9f62cb1b6a"
     ),

@@ -174,7 +174,7 @@ ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
 # pinned by ``_acyclic_liveness_debt_topology_errors`` before this reviewed
 # mechanical shard seal is accepted.
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-    "58304eaddaf96ca5b5053c96b6c48603110d3b2b6570b1e05d765db03e7f19dc"
+    "9c0edd76ed2f516a7ac657927ef32ff6c637d088ca3183c00b01e3e1b97001da"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
@@ -242,6 +242,8 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "CommitCertificateResponseCandidateHasExactImportLineage",
     "CommitImportCausalSuccessorRetainsExactLineage",
     "AsyncCandidateProducerContinuationLaterOrdinalCannotOwnRunnerTurn",
+    "AsyncCandidateProducerContinuationPostRetransmitCutCannotOwnRunnerTurn",
+    "AsyncPostRetransmitCutCandidateCannotBlockDueRetransmit",
     "AsyncCandidateProducerContinuationRunnerSelectionRespectsIngressCut",
     "AsyncCandidateProducerContinuationRunnerSelectionIsGlobalMinimum",
     "DormantLeaderWireOwnsNoPhysicalIngressPredecessor",
@@ -435,6 +437,11 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncTimeoutLifecycleOrdinalPersistsUntilEndpoint",
     "AsyncTimeoutLifecycleOrdinalClearsOnlyAtEndpoint",
     "AsyncTimeoutLifecycleNewOwnershipUsesRecordedOrFreshOrdinal",
+    "AsyncRetransmitFreshLiveEpisodeFreezesIngressPhysicalCut",
+    "AsyncRetransmitLiveEpisodeRetainsIngressPhysicalCut",
+    "AsyncRetransmitLifecycleFreezeBoundaryMintsAfterPriorAdmissions",
+    "AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntilEndpoint",
+    "AsyncRetransmitLifecycleOwnerAndPhysicalCutClearAtEndpoint",
     "AsyncNextNeverSchedulesAnUnownedCandidateLifecycle",
     "AsyncServeQueuedIdentityDepartureInstallsTombstone",
     "AsyncServeRetiredIdentityCannotRequeueAtGst",
@@ -996,6 +1003,61 @@ SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
         "ddb06b1b1659b8e9b18a0c59e01293f99ac945df1f06dbd32bc217bc611cee12"
     ),
 }
+PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_FORMAL_ARTIFACTS = (
+    "SumeragiV2ProducerContinuationPhysicalCutMutation.tla",
+    "current_ingress_physical_cut_fixed.cfg",
+    "current_ingress_replenishment_churn_bug.cfg",
+    "producer_continuation_physical_cut_fixed.cfg",
+    "producer_continuation_logical_only_replay_bug.cfg",
+    "producer_continuation_timeout_cut_fixed.cfg",
+    "producer_continuation_timeout_cut_logical_minimum_bug.cfg",
+    "SumeragiV2AdequateLeaderPeriodicPrefixMutation.tla",
+    "adequate_leader_periodic_prefix_fixed.cfg",
+    "adequate_leader_periodic_hidden_prefix_bug.cfg",
+    "adequate_leader_periodic_replenishment_bug.cfg",
+)
+PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER = (
+    "scripts/formal/"
+    "run_sumeragi_v2_producer_continuation_physical_cut_mutations.sh"
+)
+PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_SHA256 = {
+    "SumeragiV2ProducerContinuationPhysicalCutMutation.tla": (
+        "dc59e10845828599650fed19b864f56b6ce63546709e1101284c2abe30760eba"
+    ),
+    "current_ingress_physical_cut_fixed.cfg": (
+        "48d9c8247cfa9b92a74738326f2cfac62b03b08d296b438b038c58606565f960"
+    ),
+    "current_ingress_replenishment_churn_bug.cfg": (
+        "39a99eceacb2949f0db838824f5264183dbb270035a710c07ee30782029e2a4e"
+    ),
+    "producer_continuation_physical_cut_fixed.cfg": (
+        "c9c23bca0dd6812c2e48429845ddb47be1283548e392d46f2a3dab71a66bc19d"
+    ),
+    "producer_continuation_logical_only_replay_bug.cfg": (
+        "1721de0fa881994fa5cfd125310ed9d0a0ab2481719990c0b7f1be6507bffbbe"
+    ),
+    "producer_continuation_timeout_cut_fixed.cfg": (
+        "08619e5e2a8cca04fb1b9d07677a6da5bfdc8a4e53529acc394fdea077a3b3d4"
+    ),
+    "producer_continuation_timeout_cut_logical_minimum_bug.cfg": (
+        "bac68e669638812332bb9ed2eec054e4d8eeef399c1d537e83a07f0d9991342e"
+    ),
+    "SumeragiV2AdequateLeaderPeriodicPrefixMutation.tla": (
+        "099ee25e46fa1a20dff86d046c4140fe8df0b54c6ddaad1c2134365b49582cb9"
+    ),
+    "adequate_leader_periodic_prefix_fixed.cfg": (
+        "c367ff9409884904f28dd93ca742d7098d9e002f8b0f017d057b27af1c54d0b6"
+    ),
+    "adequate_leader_periodic_hidden_prefix_bug.cfg": (
+        "5c9e99f59a0ee4ec06afbe8945462642776ae1708b1ee0cbc3c96923811fee4a"
+    ),
+    "adequate_leader_periodic_replenishment_bug.cfg": (
+        "0185e5ec0fe0de3b927bfdee57db59cc598b3b288d0e84df21658e78d71eac10"
+    ),
+    PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER: (
+        "454a44541d5b4c1a5eaaf5b23e34053c111f76eadab75521683713bf773a56bb"
+    ),
+}
 COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_ARTIFACTS = (
     "SumeragiV2CommitImportProvenanceMutation.tla",
     "commit_import_provenance_execution_bug.cfg",
@@ -1073,6 +1135,7 @@ SHARED_TLC_RESULT_CONTRACT_CALLERS = (
     "scripts/formal/run_sumeragi_v2_persist_install_generation_mutation.sh",
     "scripts/formal/run_sumeragi_v2_persist_install_validation_mutation.sh",
     "scripts/formal/run_sumeragi_v2_post_decision_timeout_mutation.sh",
+    PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER,
     "scripts/formal/run_sumeragi_v2_productive_mutation.sh",
     "scripts/formal/run_sumeragi_v2_progress_mutations.sh",
     "scripts/formal/run_sumeragi_v2_replay_locked_body_carrier_mutation.sh",
@@ -1161,6 +1224,9 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
     ),
     "scripts/formal/run_sumeragi_v2_post_decision_timeout_mutation.sh": (
         "9e8a9f07e50230929712a84d01abf4a75f134727a254a0fd21b57e19c93a4e8b"
+    ),
+    PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER: (
+        "454a44541d5b4c1a5eaaf5b23e34053c111f76eadab75521683713bf773a56bb"
     ),
     "scripts/formal/run_sumeragi_v2_productive_mutation.sh": (
         "5cffb84945d844b38e8d5cc492ef1381519111750592c96a412ddcf170dde072"
@@ -1346,6 +1412,7 @@ SHARED_TLC_RESULT_BRANCH_PROFILES = {
         0,
         0,
     ),
+    PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER: (3, 1, 0, 2, 0),
     "scripts/formal/run_sumeragi_v2_productive_mutation.sh": (
         3,
         2,
@@ -1446,6 +1513,13 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
             1,
             1,
         ),
+        PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER: (
+            1,
+            1,
+            5,
+            1,
+            4,
+        ),
         "scripts/formal/run_sumeragi_v2_productive_mutation.sh": (
             3,
             1,
@@ -1478,10 +1552,10 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
     }
 )
 SHARED_TLC_RESULT_BRANCH_PROFILES_SHA256 = (
-    "2c055aedf7762816eb44b420d972e0f40d18e9e53f27f2a2d592f1fea183f007"
+    "90b7e94020ba1522babe116165e2904401a53f1eda5f267abae59c64e841db31"
 )
 SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256 = (
-    "812920890b22735c973ab3affa189e98e9e46c8d0af15f14b25586332981901a"
+    "79df8c9846f4e5059d81fdadc5e8898a2063993a8c12aa6418c85e5e44b7df1d"
 )
 LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "SumeragiV2LocalIngressSchedulerReservationMutation.tla": (

@@ -640,8 +640,9 @@ def mutate_tla_operator(
     )
     assert declaration is not None, symbol
     next_declaration = re.search(
-        r"(?m)^(?:[A-Za-z_][A-Za-z0-9_]*\s*"
-        r"(?:\([^)=]*\))?\s*==|={4,}\s*$)",
+        r"(?m)^(?:(?:(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+)?"
+        r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=]*\))?\s*==|"
+        r"={4,}\s*$)",
         source[declaration.end() :],
     )
     operator_end = (
@@ -7182,6 +7183,53 @@ def test_release_module_list_covers_every_present_module_with_theorems() -> None
     assert async_theorems == module.ASYNC_NETWORK_RELEASE_THEOREMS
 
 
+@pytest.mark.parametrize(
+    ("symbol", "declaration"),
+    (
+        (
+            "AsyncRetransmitClockCanAcquireAfter",
+            "AsyncRetransmitClockCanAcquireAfter(node) == TRUE",
+        ),
+        (
+            "AsyncRetransmitCompletedEpisodeClearsOrReplacesDrainedOwner",
+            "THEOREM "
+            "AsyncRetransmitCompletedEpisodeClearsOrReplacesDrainedOwner == TRUE\n"
+            "BY SMT",
+        ),
+    ),
+)
+def test_async_runner_boundary_rejects_retired_clock_lifecycle_symbols(
+    tmp_path: Path,
+    symbol: str,
+    declaration: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        source.replace(
+            "\n=============================================================================\n",
+            f"\n{declaration}\n\n"
+            "=============================================================================\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "retired pre-runner clock lifecycle symbol" in error
+        and symbol in error
+        for error in errors
+    ), errors
+
+
 def test_release_dependency_coverage_checks_every_imported_theorem_module(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -10153,10 +10201,10 @@ def test_shared_tlc_result_contract_is_complete_and_source_sealed(
     module = load_checker()
     repo_root = copy_shared_tlc_result_contract_fixture(tmp_path, module)
 
-    assert len(module.SHARED_TLC_RESULT_CONTRACT_CALLERS) == 32
-    assert len(set(module.SHARED_TLC_RESULT_CONTRACT_CALLERS)) == 32
+    assert len(module.SHARED_TLC_RESULT_CONTRACT_CALLERS) == 33
+    assert len(set(module.SHARED_TLC_RESULT_CONTRACT_CALLERS)) == 33
     assert len(module.SHARED_TLC_RESULT_SPECIALIZED_CALLERS) == 4
-    assert len(module.SHARED_TLC_RESULT_CONTRACT_SHA256) == 33
+    assert len(module.SHARED_TLC_RESULT_CONTRACT_SHA256) == 34
     assert set(module.SHARED_TLC_RESULT_BRANCH_PROFILES) == set(
         module.SHARED_TLC_RESULT_CONTRACT_CALLERS
     )
@@ -19624,6 +19672,14 @@ def test_exact_target_neutral_theorem_statements_reject_weakening(
             "ExactDecisionTargetNeutralFrozenPastCutOriginsCannotReplenish",
         ),
         (
+            "ExactDecisionTargetNeutralExactOccurrenceStructuralStepIsDescentOrFrame",
+            "ExactDecisionTargetNeutralExactCandidateOccurrenceBudgetForSnapshot",
+        ),
+        (
+            "ExactDecisionTargetNeutralExactOccurrenceStructuralStepIsDescentOrFrame",
+            "ExactDecisionTargetNeutralServeWorkBudgetForSnapshot",
+        ),
+        (
             "ExactDecisionTargetNeutralActiveSnapshotConcreteRankIsInCarrier",
             "ExactDecisionTargetNeutralPacketDependencyRankForSnapshotInCarrier",
         ),
@@ -19649,6 +19705,10 @@ def test_exact_target_neutral_theorem_statements_reject_weakening(
         ),
         (
             "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
+            "ExactDecisionTargetNeutralDormantLocalReplayReplacementConsumesFrozenCausalCharge",
+        ),
+        (
+            "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
             "CandidateProducerContinuationActionInertDormantHasZeroFrozenStage",
         ),
         (
@@ -19665,6 +19725,10 @@ def test_exact_target_neutral_theorem_statements_reject_weakening(
         ),
         (
             "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
+            "ExactDecisionTargetNeutralFrozenOrdinaryIngressCandidatesCannotReplenish",
+        ),
+        (
+            "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
             "ExactDecisionTargetNeutralActionInertDormantHasZeroProoflessCharge",
         ),
         (
@@ -19673,11 +19737,35 @@ def test_exact_target_neutral_theorem_statements_reject_weakening(
         ),
         (
             "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
+            "ExactDecisionTargetNeutralPostCutOrdinaryAdmissionCannotEnterFrozenPrefix",
+        ),
+        (
+            "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
+            "ExactDecisionTargetNeutralPostCutCausalRootCannotEnterFrozenPrefix",
+        ),
+        (
+            "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
+            "ExactDecisionTargetNeutralPostCutContinuationCannotEnterFrozenPrefix",
+        ),
+        (
+            "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
+            "ExactDecisionTargetNeutralPostCutServeCannotEnterFrozenPrefix",
+        ),
+        (
+            "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
             "ExactDecisionTargetNeutralDropPolicyRejectedIsFrozenPhysicalPrefixFrame",
         ),
         (
             "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
             "CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage",
+        ),
+        (
+            "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
+            "ExactDecisionTargetNeutralExactLocalReplayReplacesFrozenCharge",
+        ),
+        (
+            "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
+            "AsyncCandidateCausalSuccessorInheritsContinuationPhysicalOwnership",
         ),
         (
             "ExactDecisionTargetNeutralRetainedEpisodesDoNotReplenish",
@@ -21447,6 +21535,98 @@ def test_exact_target_neutral_frozen_physical_cut_contract_passes() -> None:
     ), errors
 
 
+@pytest.mark.parametrize(
+    ("symbol", "old", "new", "diagnostic"),
+    (
+        (
+            "ExactDecisionTargetNeutralCausalCandidatesForSnapshot",
+            "AsyncCausalEpisodeCandidates(node, snapshot.schedulerCuts[node])",
+            (
+                "AsyncCausalEpisodeCandidates("
+                "node, AsyncNextCandidateLifecycleOrdinal(node))"
+            ),
+            "frozen causal candidates must retain both the immutable scheduler cut",
+        ),
+        (
+            "ExactDecisionTargetNeutralServeIngressIdentitiesForSnapshot",
+            "AsyncServeIngressAdmissionOrdinal(node, identity)\n"
+            "       < snapshot.physicalCuts[node]",
+            "AsyncServeIngressAdmissionOrdinal(node, identity)\n"
+            "       <= snapshot.physicalCuts[node]",
+            "frozen Serve identities must retain both the immutable scheduler prefix",
+        ),
+        (
+            "ExactDecisionTargetNeutralCausalEpisodeRankForSnapshot",
+            "ExactDecisionTargetNeutralServeWorkBudgetForSnapshot(snapshot, node)",
+            "AsyncCausalEpisodeServeWorkBudget(node, snapshot.schedulerCuts[node])",
+            "exact causal-occurrence/Serve rank contract",
+        ),
+    ),
+)
+def test_exact_target_neutral_snapshot_rank_rejects_prefix_weakening(
+    symbol: str,
+    old: str,
+    new: str,
+    diagnostic: str,
+) -> None:
+    """Snapshot ranks may not refresh logical or physical predecessor cuts."""
+
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2ExactDecisionStageServiceClosureProofs"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_operator(source, symbol, old, new)
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(symbol in error and diagnostic in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "TimeoutPhysicalControlPacketDependencyRank",
+            "ExactDecisionTargetNeutralPacketDependencyRankForSnapshot",
+            "ExactDecisionTargetNeutralPacketDependencyRank",
+        ),
+        (
+            "TimeoutPhysicalControlFrozenProducerEpisodeRank",
+            "ExactDecisionTargetNeutralProducerEpisodeRank(snapshot)",
+            "ExactDecisionTargetNeutralProducerEpisodeBottom",
+        ),
+    ),
+)
+def test_timeout_physical_control_snapshot_rank_rejects_weakening(
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    """Timeout control service must consume the same immutable snapshot rank."""
+
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2TimeoutViewProgressProofs"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_operator(source, symbol, old, new)
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error and "must equal only" in error for error in errors
+    ), errors
+
+
 def test_exact_target_neutral_rejects_all_dormant_barrier_charge() -> None:
     """A packetless Dormant lifecycle may not receive positive stage debt."""
 
@@ -21740,6 +21920,45 @@ def test_serve_lifecycle_contract_rejects_missing_operator_and_arbitrary_budget(
 
     assert module._serve_lifecycle_temporal_contract_errors(tmp_path) == []
 
+    async_module = "SumeragiV2AsyncNetwork"
+    async_path = tmp_path / f"{async_module}.tla"
+    async_source = async_path.read_text(encoding="utf-8")
+    async_path.write_text(
+        mutate_tla_operator(
+            async_source,
+            "ReserveExactServeCapacity",
+            "ReserveExactServeCapacityVia",
+            "WeakenedReserveExactServeCapacityVia",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._serve_lifecycle_temporal_contract_errors(tmp_path)
+    assert any(
+        "ReserveExactServeCapacity" in error
+        and "ReserveExactServeCapacityVia" in error
+        for error in errors
+    ), errors
+
+    async_path.write_text(
+        mutate_tla_operator(
+            async_source,
+            "AdvanceExactServeCapacityVia",
+            (
+                "asyncNextServeAdmissionOrdinal' = "
+                "[asyncNextServeAdmissionOrdinal EXCEPT ![node] = @ + 1]"
+            ),
+            "asyncNextServeAdmissionOrdinal' = asyncNextServeAdmissionOrdinal",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._serve_lifecycle_temporal_contract_errors(tmp_path)
+    assert any(
+        "AdvanceExactServeCapacityVia" in error
+        and "reviewed structural dependencies" in error
+        for error in errors
+    ), errors
+    async_path.write_text(async_source, encoding="utf-8")
+
     exact_module = "SumeragiV2ExactDecisionStageServiceClosureProofs"
     exact_path = tmp_path / f"{exact_module}.tla"
     exact_source = exact_path.read_text(encoding="utf-8")
@@ -21967,6 +22186,582 @@ def test_async_candidate_producer_continuation_physical_cut_source_pair(
     ), errors
 
 
+def test_async_candidate_producer_continuation_timeout_cut_selector_contract(
+    tmp_path: Path,
+) -> None:
+    """The runner filters the frozen timeout cut before logical selection."""
+
+    module = load_checker()
+    proof_name = "SumeragiV2AsyncCandidateProducerContinuationProofs.tla"
+    network_name = "SumeragiV2AsyncNetwork.tla"
+    proof_source = (module.FORMAL_DIR / proof_name).read_text(encoding="utf-8")
+    network_source = (module.FORMAL_DIR / network_name).read_text(
+        encoding="utf-8"
+    )
+    (tmp_path / proof_name).write_text(proof_source, encoding="utf-8")
+    network_path = tmp_path / network_name
+    network_path.write_text(network_source, encoding="utf-8")
+
+    baseline = module._async_candidate_producer_continuation_contract_errors(
+        tmp_path
+    )
+    assert not any(
+        "producer-continuation physical cut" in error
+        or "stored-cut preservation" in error
+        or "true pre-cut ingress semantics" in error
+        for error in baseline
+    ), baseline
+
+    mutations = (
+        (
+            "timeout-aware physical eligibility",
+            replace_tla_operator_body(
+                network_source,
+                (
+                    "AsyncCandidateProducerContinuationRuntimePhysically"
+                    "EligibleRecordsForNode"
+                ),
+                (
+                    "AsyncCandidateProducerContinuationPhysicallyEligible"
+                    "ResolutionRecordsForNode(node)"
+                ),
+            ),
+            (
+                "AsyncCandidateProducerContinuationRuntimePhysicallyEligible"
+                "RecordsForNode"
+            ),
+        ),
+        (
+            "runner selector alias",
+            replace_tla_operator_body(
+                network_source,
+                (
+                    "AsyncCandidateProducerContinuationRunnerSelected"
+                    "ResolutionRecord"
+                ),
+                "AsyncCandidateProducerContinuationSelectedResolutionRecord(node)",
+            ),
+            (
+                "AsyncCandidateProducerContinuationRunnerSelected"
+                "ResolutionRecord"
+            ),
+        ),
+        (
+            "complete runner ownership",
+            replace_tla_operator_body(
+                network_source,
+                (
+                    "AsyncCandidateProducerContinuationRunnerResolution"
+                    "Required"
+                ),
+                (
+                    "AsyncCandidateProducerContinuationIngressResolution"
+                    "Required(node)"
+                ),
+            ),
+            (
+                "AsyncCandidateProducerContinuationRunnerResolution"
+                "Required"
+            ),
+        ),
+        (
+            "immutable timeout cut projection",
+            replace_tla_operator_body(
+                network_source,
+                "AsyncTimeoutLifecyclePhysicalCut",
+                "AsyncNextIngressPhysicalOrdinal(node)",
+            ),
+            "AsyncTimeoutLifecyclePhysicalCut",
+        ),
+        (
+            "post-admission timeout freeze boundary",
+            mutate_tla_operator(
+                network_source,
+                "AsyncTimeoutLifecyclePhysicalCutForStep",
+                "ELSE AsyncNextIngressPhysicalOrdinal(node)'",
+                "ELSE AsyncNextIngressPhysicalOrdinal(node)",
+            ),
+            "AsyncTimeoutLifecyclePhysicalCutForStep",
+        ),
+    )
+    for label, mutated, symbol in mutations:
+        assert mutated != network_source, label
+        network_path.write_text(mutated, encoding="utf-8")
+        errors = module._async_candidate_producer_continuation_contract_errors(
+            tmp_path
+        )
+        assert any(
+            symbol in error
+            and "producer-continuation physical cut" in error
+            for error in errors
+        ), (label, errors)
+
+
+def test_async_candidate_producer_continuation_retransmit_cut_selector_contract(
+    tmp_path: Path,
+) -> None:
+    """A due retransmit owns one immutable receiver-local physical cut."""
+
+    module = load_checker()
+    proof_name = "SumeragiV2AsyncCandidateProducerContinuationProofs.tla"
+    network_name = "SumeragiV2AsyncNetwork.tla"
+    proof_source = (module.FORMAL_DIR / proof_name).read_text(encoding="utf-8")
+    network_source = (module.FORMAL_DIR / network_name).read_text(
+        encoding="utf-8"
+    )
+    (tmp_path / proof_name).write_text(proof_source, encoding="utf-8")
+    network_path = tmp_path / network_name
+    network_path.write_text(network_source, encoding="utf-8")
+
+    assert (
+        module._async_candidate_producer_continuation_contract_errors(tmp_path)
+        == []
+    )
+
+    mutations = (
+        (
+            "immutable retransmit cut projection",
+            replace_tla_operator_body(
+                network_source,
+                "AsyncRetransmitLifecyclePhysicalCut",
+                "AsyncNextIngressPhysicalOrdinal(node)",
+            ),
+            "AsyncRetransmitLifecyclePhysicalCut",
+        ),
+        (
+            "post-admission retransmit freeze boundary",
+            mutate_tla_operator(
+                network_source,
+                "AsyncRetransmitLifecyclePhysicalCutForStep",
+                "ELSE AsyncNextIngressPhysicalOrdinal(node)'",
+                "ELSE AsyncNextIngressPhysicalOrdinal(node)",
+            ),
+            "AsyncRetransmitLifecyclePhysicalCutForStep",
+        ),
+        (
+            "atomic owner and cut transition",
+            mutate_tla_operator(
+                network_source,
+                "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
+                "!.retransmitLifecyclePhysicalCut =",
+                "!.timeoutLifecyclePhysicalCut =",
+            ),
+            "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
+        ),
+        (
+            "pre-cut retransmit predecessor",
+            mutate_tla_operator(
+                network_source,
+                "AsyncCandidateProducerContinuationMayPrecedeOwnedRetransmit",
+                (
+                    "record.sourcePhysicalOrdinal\n"
+                    "              < AsyncRetransmitLifecyclePhysicalCut(node)"
+                ),
+                "TRUE",
+            ),
+            "AsyncCandidateProducerContinuationMayPrecedeOwnedRetransmit",
+        ),
+        (
+            "owner and cut persistence statement",
+            mutate_tla_theorem(
+                network_source,
+                (
+                    "AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntil"
+                    "Endpoint"
+                ),
+                (
+                    "AsyncRetransmitLifecyclePhysicalCut(node)'\n"
+                    "              = AsyncRetransmitLifecyclePhysicalCut(node)"
+                ),
+                (
+                    "AsyncNextIngressPhysicalOrdinal(node)'\n"
+                    "              >= AsyncNextIngressPhysicalOrdinal(node)"
+                ),
+            ),
+            (
+                "AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntil"
+                "Endpoint"
+            ),
+        ),
+    )
+    for label, mutated, symbol in mutations:
+        assert mutated != network_source, label
+        network_path.write_text(mutated, encoding="utf-8")
+        errors = module._async_candidate_producer_continuation_contract_errors(
+            tmp_path
+        )
+        assert any(
+            symbol in error and "producer-continuation physical cut" in error
+            or symbol in error and "stored-cut preservation" in error
+            for error in errors
+        ), (label, errors)
+
+
+def test_exact_decision_owned_runtime_rejects_moving_retransmit_cut(
+    tmp_path: Path,
+) -> None:
+    """The owned Runtime prefix binds the stored cut, never live high-water."""
+
+    module = load_checker()
+    module_names = (
+        "SumeragiV2AsyncNetwork",
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+    )
+    for module_name in module_names:
+        shutil.copy2(
+            module.FORMAL_DIR / f"{module_name}.tla",
+            tmp_path / f"{module_name}.tla",
+        )
+
+    baseline = module._serve_lifecycle_temporal_contract_errors(tmp_path)
+    repaired_symbols = (
+        "ExactDecisionRequestRuntimePrefixSnapshot",
+        "ExactDecisionRequestClockPrefixSnapshotBinding",
+        "ExactDecisionRequestOwnedRuntimeAtRank",
+    )
+    assert not any(
+        symbol in error for error in baseline for symbol in repaired_symbols
+    ), baseline
+
+    exact_path = (
+        tmp_path / "SumeragiV2ExactDecisionStageServiceClosureProofs.tla"
+    )
+    exact_source = exact_path.read_text(encoding="utf-8")
+    operator_mutations = (
+        (
+            "ExactDecisionRequestRuntimePrefixSnapshot",
+            mutate_tla_operator(
+                exact_source,
+                "ExactDecisionRequestRuntimePrefixSnapshot",
+                "physicalCut |-> physicalCut",
+                "physicalCut |-> AsyncNextIngressPhysicalOrdinal(node)",
+            ),
+        ),
+        (
+            "ExactDecisionRequestClockPrefixSnapshotBinding",
+            mutate_tla_operator(
+                exact_source,
+                "ExactDecisionRequestClockPrefixSnapshotBinding",
+                (
+                    "snapshot.physicalCut\n"
+                    "              = AsyncRetransmitLifecyclePhysicalCut(node)"
+                ),
+                (
+                    "snapshot.physicalCut\n"
+                    "              <= AsyncNextIngressPhysicalOrdinal(node)"
+                ),
+            ),
+        ),
+        (
+            "ExactDecisionRequestOwnedRuntimeAtRank",
+            mutate_tla_operator(
+                exact_source,
+                "ExactDecisionRequestOwnedRuntimeAtRank",
+                (
+                    "ExactDecisionRequestClockPrefixSnapshotBinding(\n"
+                    '       "Owned", snapshot, node, ownerOrdinal)'
+                ),
+                "snapshot.schedulerCeiling = ownerOrdinal",
+            ),
+        ),
+    )
+    for symbol, mutated in operator_mutations:
+        exact_path.write_text(mutated, encoding="utf-8")
+        errors = module._serve_lifecycle_temporal_contract_errors(tmp_path)
+        assert any(
+            symbol in error and "reviewed structural dependencies" in error
+            for error in errors
+        ), (symbol, errors)
+
+    ledger = module.load_ledger()
+    moving_snapshot_statement = mutate_tla_theorem(
+        exact_source,
+        "ExactDecisionRequestOwnedEpisodeHasRigidPrefixSnapshot",
+        "AsyncRetransmitLifecyclePhysicalCut(node))",
+        "AsyncNextIngressPhysicalOrdinal(node))",
+    )
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {
+            "SumeragiV2ExactDecisionStageServiceClosureProofs": (
+                moving_snapshot_statement
+            )
+        },
+    )
+    assert any(
+        "ExactDecisionRequestOwnedEpisodeHasRigidPrefixSnapshot" in error
+        and "must state only" in error
+        for error in errors
+    ), errors
+
+    unbounded_scheduler_snapshot = mutate_tla_theorem(
+        exact_source,
+        "ExactDecisionRequestRuntimePrefixSnapshotIsFinite",
+        (
+            "schedulerCeiling\n"
+            "         <= AsyncNextCandidateLifecycleOrdinal(node)"
+        ),
+        "TRUE",
+    )
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {
+            "SumeragiV2ExactDecisionStageServiceClosureProofs": (
+                unbounded_scheduler_snapshot
+            )
+        },
+    )
+    assert any(
+        "ExactDecisionRequestRuntimePrefixSnapshotIsFinite" in error
+        and "must state only" in error
+        for error in errors
+    ), errors
+
+    disconnected_composition = mutate_tla_theorem(
+        exact_source,
+        "FairExactDecisionRequestOwnedPrefixAndRuntimeConverges",
+        "ExactDecisionRequestOwnedEpisodeHasRigidPrefixSnapshot",
+        "TRUE",
+    )
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {
+            "SumeragiV2ExactDecisionStageServiceClosureProofs": (
+                disconnected_composition
+            )
+        },
+    )
+    assert any(
+        "FairExactDecisionRequestOwnedPrefixAndRuntimeConverges" in error
+        and "reviewed proof dependencies" in error
+        for error in errors
+    ), errors
+
+
+def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
+    tmp_path: Path,
+) -> None:
+    """Rust replay admission cannot inherit stale FIFO debt past a clock cut."""
+
+    module = load_checker()
+    runtime_relative = Path("crates/iroha_core/src/sumeragi/v2_runtime.rs")
+    runtime_path = tmp_path / runtime_relative
+    runtime_path.parent.mkdir(parents=True)
+    canonical = (module.ROOT_DIR / runtime_relative).read_text(encoding="utf-8")
+    runtime_path.write_text(canonical, encoding="utf-8")
+
+    assert module._runtime_clock_reservation_source_fidelity_errors(tmp_path) == []
+
+    def mutate_item(item_name: str, old: str, new: str) -> str:
+        items = module.rust_items(canonical, item_name)
+        assert len(items) == 1, item_name
+        item = items[0]
+        assert item.source.count(old) == 1, (item_name, old)
+        start = canonical.index(item.source)
+        return (
+            canonical[:start]
+            + item.source.replace(old, new, 1)
+            + canonical[start + len(item.source) :]
+        )
+
+    mutations = (
+        (
+            "clock_owner_reservation_blocks_occurrence",
+            "u128::from(source_physical_ordinal) >= physical_cut",
+            "u128::from(source_physical_ordinal) < physical_cut",
+            "post-cut replay reservation predicate declaration",
+        ),
+        (
+            "clock_owner_reservation_blocks_occurrence",
+            "lifecycle_ordinal <= owner.lifecycle_ordinal()",
+            "lifecycle_ordinal > owner.lifecycle_ordinal()",
+            "post-cut replay reservation predicate declaration",
+        ),
+        (
+            "enqueue_after_clock_reservation",
+            "return Err(EnqueueError::Full);",
+            "return self.ingress.enqueue(command);",
+            "recoverable pre-FIFO clock reservation gate declaration",
+        ),
+        (
+            "enqueue_network_with_ingress_ownership",
+            "match self.clock_owner_reservation_blocks(owner)",
+            "match Ok(false)",
+            "authenticated post-cut replay admission gate declaration",
+        ),
+        (
+            "can_admit_network_message_with_ingress_ownership",
+            "match self.clock_owner_reservation_blocks_occurrence(",
+            "match Ok(false).and(",
+            "fair-ingress post-cut replay preflight gate declaration",
+        ),
+        (
+            "deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences",
+            "Err(EnqueueError::Full),",
+            "Ok(()),",
+            "post-cut replay and stale FIFO-debt regression declaration",
+        ),
+    )
+    for item_name, old, new, expected_error in mutations:
+        runtime_path.write_text(
+            mutate_item(item_name, old, new),
+            encoding="utf-8",
+        )
+        errors = module._runtime_clock_reservation_source_fidelity_errors(
+            tmp_path
+        )
+        assert any(expected_error in error for error in errors), (
+            item_name,
+            errors,
+        )
+        runtime_path.write_text(canonical, encoding="utf-8")
+
+
+def test_producer_continuation_physical_cut_mutation_contract_rejects_skips(
+    tmp_path: Path,
+) -> None:
+    """The aggregate gate pins every repaired and failing TLC scenario."""
+
+    module = load_checker()
+    formal_dir = tmp_path / "formal" / "sumeragi_v2"
+    script_dir = tmp_path / "scripts" / "formal"
+    formal_dir.mkdir(parents=True)
+    script_dir.mkdir(parents=True)
+    filenames = (
+        "SumeragiV2ProducerContinuationPhysicalCutMutation.tla",
+        "current_ingress_physical_cut_fixed.cfg",
+        "current_ingress_replenishment_churn_bug.cfg",
+        "producer_continuation_physical_cut_fixed.cfg",
+        "producer_continuation_logical_only_replay_bug.cfg",
+        "producer_continuation_timeout_cut_fixed.cfg",
+        "producer_continuation_timeout_cut_logical_minimum_bug.cfg",
+        "SumeragiV2AdequateLeaderPeriodicPrefixMutation.tla",
+        "adequate_leader_periodic_prefix_fixed.cfg",
+        "adequate_leader_periodic_hidden_prefix_bug.cfg",
+        "adequate_leader_periodic_replenishment_bug.cfg",
+    )
+    for filename in filenames:
+        shutil.copyfile(module.FORMAL_DIR / filename, formal_dir / filename)
+    runner_name = (
+        "run_sumeragi_v2_producer_continuation_physical_cut_mutations.sh"
+    )
+    runner_path = script_dir / runner_name
+    shutil.copyfile(module.ROOT_DIR / "scripts" / "formal" / runner_name, runner_path)
+
+    assert (
+        module._producer_continuation_physical_cut_mutation_contract_errors(
+            tmp_path
+        )
+        == []
+    )
+
+    model_path = formal_dir / filenames[0]
+    model_source = model_path.read_text(encoding="utf-8")
+    model_path.write_text(
+        replace_tla_operator_body(
+            model_source,
+            "TimeoutCutFilteredSelectsPreCutTarget",
+            (
+                '/\\ phase = "TimeoutSelection"\n'
+                "/\\ phase' = \"Done\"\n"
+                "/\\ targetDone'\n"
+                '/\\ lastSelected\' = "Target"\n'
+                "/\\ UNCHANGED <<replayActive, replayEpoch, replayStage, "
+                "replaySourcePhysicalOrdinal, targetHasPhysicalSource>>"
+            ),
+        ),
+        encoding="utf-8",
+    )
+    errors = module._producer_continuation_physical_cut_mutation_contract_errors(
+        tmp_path
+    )
+    assert any(
+        "TimeoutCutFilteredSelectsPreCutTarget" in error
+        and "physical-cut mutation contract" in error
+        for error in errors
+    ), errors
+
+    model_path.write_text(model_source, encoding="utf-8")
+    timeout_config = formal_dir / "producer_continuation_timeout_cut_fixed.cfg"
+    timeout_source = timeout_config.read_text(encoding="utf-8")
+    timeout_config.write_text(
+        timeout_source.replace("PROPERTY EventuallyExactTargetCompletes\n", ""),
+        encoding="utf-8",
+    )
+    errors = module._producer_continuation_physical_cut_mutation_contract_errors(
+        tmp_path
+    )
+    assert any(
+        timeout_config.name in error and "reviewed obligation" in error
+        for error in errors
+    ), errors
+
+    timeout_config.write_text(timeout_source, encoding="utf-8")
+    periodic_model = formal_dir / filenames[7]
+    periodic_source = periodic_model.read_text(encoding="utf-8")
+    periodic_model.write_text(
+        replace_tla_operator_body(
+            periodic_source,
+            "AcquireFreshPeriodicAtSharedHighWatermark",
+            (
+                '/\\ phase = "Drained"\n'
+                '/\\ phase\' = "FreshLater"\n'
+                "/\\ retransmitOrdinal' = 3\n"
+                "/\\ UNCHANGED <<nextOrdinal, candidateAhead, "
+                "frozenSnapshot, retiredOrdinals, replacementEpoch, "
+                "targetDone>>"
+            ),
+        ),
+        encoding="utf-8",
+    )
+    errors = module._producer_continuation_physical_cut_mutation_contract_errors(
+        tmp_path
+    )
+    assert any(
+        "AcquireFreshPeriodicAtSharedHighWatermark" in error
+        and "periodic-prefix mutation contract" in error
+        for error in errors
+    ), errors
+
+    periodic_model.write_text(periodic_source, encoding="utf-8")
+    periodic_config = formal_dir / "adequate_leader_periodic_prefix_fixed.cfg"
+    periodic_config_source = periodic_config.read_text(encoding="utf-8")
+    periodic_config.write_text(
+        periodic_config_source.replace(
+            "INVARIANT FrozenPeriodicSnapshotCannotReplenish\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._producer_continuation_physical_cut_mutation_contract_errors(
+        tmp_path
+    )
+    assert any(
+        periodic_config.name in error and "reviewed obligation" in error
+        for error in errors
+    ), errors
+
+    periodic_config.write_text(periodic_config_source, encoding="utf-8")
+    runner_source = runner_path.read_text(encoding="utf-8")
+    runner_path.write_text(
+        runner_source.replace(
+            'timeout_bug_log="$(run_tlc timeout-logical-minimum '
+            '"$TIMEOUT_LOGICAL_BUG_CONFIG" 13)"',
+            'timeout_bug_log="$(run_tlc timeout-logical-minimum '
+            '"$TIMEOUT_LOGICAL_BUG_CONFIG" 0)"',
+        ),
+        encoding="utf-8",
+    )
+    errors = module._producer_continuation_physical_cut_mutation_contract_errors(
+        tmp_path
+    )
+    assert any(
+        runner_name in error and "pinned tool, scenario, status" in error
+        for error in errors
+    ), errors
+
+
 def test_async_candidate_producer_continuation_contract_rejects_rank_and_action_weakening(
     tmp_path: Path,
 ) -> None:
@@ -22051,8 +22846,8 @@ def test_async_candidate_producer_continuation_contract_rejects_rank_and_action_
         ),
         (
             "AsyncCandidateProducerContinuationResolutionPredecessorsFor",
-            "other.ordinal < record.ordinal",
-            "other.ordinal <= record.ordinal",
+            "AsyncCandidateProducerContinuationLogicalPrecedes(other, record)",
+            "AsyncCandidateProducerContinuationLogicalPrecedes(record, other)",
         ),
         (
             "ResolveCandidateProducerContinuation",
@@ -22170,7 +22965,7 @@ def test_async_candidate_producer_continuation_contract_rejects_rank_and_action_
             "AsyncCandidateProducerEpisodeCapacity",
         ),
         (
-            "CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst",
+            "CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge",
             "\\subseteq",
             "\\supseteq",
         ),
@@ -22233,12 +23028,12 @@ def test_async_candidate_producer_continuation_contract_rejects_rank_and_action_
             "<= AsyncFrozenLeaderWireBarrierStageBudget(",
             "exact leader-wire producer statement SHA-256",
         ),
-        (
-            "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst",
-            "   CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell,\n",
-            "",
-            "producer-continuation dependencies",
-        ),
+            (
+                "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst",
+                "   CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier,\n",
+                "",
+                "producer-continuation dependencies",
+            ),
         (
             "CandidateProducerContinuationFrozenPrefixStepCannotReplenish",
             "   CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst,\n",
@@ -22434,9 +23229,12 @@ def test_async_candidate_producer_continuation_contract_rejects_rank_and_action_
             "AsyncCandidateProducerContinuationRunnerResolutionRequired",
             (
                 "AsyncCandidateProducerContinuation"
-                "RunnerResolutionRecordsForNode(node)"
+                "RunnableResolutionRecordsForNode(\n           node)"
             ),
-            "AsyncCandidateProducerContinuationResolutionRecordsForNode(node)",
+            (
+                "AsyncCandidateProducerContinuation"
+                "RunnerResolutionRecordsForNode(\n           node)"
+            ),
         ),
         (
             "SumeragiV2AsyncNetwork.tla",
@@ -22464,7 +23262,7 @@ def test_async_candidate_producer_continuation_contract_rejects_rank_and_action_
             "RunNodeWork",
             (
                 "AsyncCandidateProducerContinuation"
-                "RunnerResolutionRequired(node)"
+                "OwnsRunNodeTurn(node)"
             ),
             "AsyncCandidateProducerContinuationResolutionRequired(node)",
         ),
@@ -25825,6 +26623,45 @@ def test_receipt_agreement_proof_cannot_use_chain_history_as_oracle() -> None:
         ),
         (
             "SumeragiV2AdequateLeaderServiceClosureProofs",
+            "AdequateLeaderTargetOccurrenceFrontierStartsFiniteEpisode",
+            (
+                "    /\\ AdequateLeaderProtectedPeriodicSnapshot(\n"
+                "         target, leaderContext, leader, leaderView, subject) = {}"
+            ),
+            "    /\\ TRUE",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs",
+            "AdequateLeaderProtectedPeriodicSnapshotCannotReplenish",
+            (
+                "    => AdequateLeaderProtectedPeriodicSnapshot(\n"
+                "         target, leaderContext, leader, leaderView, subject)'\n"
+                "         \\subseteq\n"
+                "       AdequateLeaderProtectedPeriodicSnapshot(\n"
+                "         target, leaderContext, leader, leaderView, subject)"
+            ),
+            "    => TRUE",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs",
+            "AdequateLeaderProtectedPeriodicIdentityServiceClosesSnapshot",
+            (
+                "      => AdequateLeaderProtectedPeriodicEpisodeClosureProperty("
+                "specification)"
+            ),
+            "      => TRUE",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs",
+            "AdequateLeaderProtectedPeriodicClosureStartsFiniteOwnerEpisode",
+            (
+                "      => AdequateLeaderTargetPeriodicPrefixThenFiniteEpisodeProperty(\n"
+                "           AsyncLiveSpecAt(initialContext))"
+            ),
+            "      => TRUE",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs",
             "AdequateLeaderFrozenTargetCandidatePayloadIsInStaticCarrier",
             "/\\ candidate \\in AsyncCandidateSet",
             "/\\ TRUE",
@@ -26300,6 +27137,21 @@ def test_new_obligation_supporting_theorem_statements_fail_closed(
         (
             "SumeragiV2AdequateLeaderServiceClosureProofs",
             "AdequateLeaderComposedRankDescentClosesOccurrenceService",
+            "AdequateLeaderProtectedPeriodicClosureStartsFiniteOwnerEpisode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs",
+            "AdequateLeaderProtectedPeriodicSnapshotCannotReplenish",
+            "AsyncRetransmitFreshEpisodeCannotReuseDrainedPosition",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs",
+            "AdequateLeaderProtectedPeriodicIdentityServiceClosesSnapshot",
+            "AdequateLeaderProtectedPeriodicSnapshotCannotReplenish",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs",
+            "AdequateLeaderProtectedPeriodicClosureStartsFiniteOwnerEpisode",
             "AdequateLeaderTargetOccurrenceFrontierStartsFiniteEpisode",
         ),
         (
@@ -33119,6 +33971,30 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "deferred eligibility must globally remove post-cut occurrences before choosing the logical minimum",
         ),
         (
+            "clock_owner_reservation_blocks_occurrence",
+            "u128::from(source_physical_ordinal) >= physical_cut",
+            "u128::from(source_physical_ordinal) < physical_cut",
+            "post-cut logical replay admission reservation declaration, contract, and complete control flow must match",
+        ),
+        (
+            "clock_owner_reservation_blocks_occurrence",
+            "lifecycle_ordinal <= owner.lifecycle_ordinal()",
+            "lifecycle_ordinal > owner.lifecycle_ordinal()",
+            "post-cut logical replay admission reservation declaration, contract, and complete control flow must match",
+        ),
+        (
+            "enqueue_after_clock_reservation",
+            "if self.clock_owner_reservation_blocks(&owner)?",
+            "if false",
+            "FIFO admission behind immutable clock reservations declaration, contract, and complete control flow must match",
+        ),
+        (
+            "enqueue_after_clock_reservation",
+            "return Err(EnqueueError::Full);",
+            "return self.ingress.enqueue(command);",
+            "post-cut replay must receive recoverable backpressure before FIFO publication",
+        ),
+        (
             "enqueue_network_with_ingress_ownership",
             "if authenticated_deferred_owner != deferred_owner",
             "if false",
@@ -33131,6 +34007,12 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "                    .recognizes_minted(ordinal)\n"
             "                    .unwrap_or(true) => {}",
             "authenticated admission must reject an unminted or inconsistent actor-global lifecycle before authentication",
+        ),
+        (
+            "enqueue_network_with_ingress_ownership",
+            "match self.clock_owner_reservation_blocks(owner)",
+            "match Ok(false)",
+            "authenticated ingress ownership admission and deferred merge declaration and complete control flow must match",
         ),
         (
             "can_admit_network_message_with_ingress_ownership",
@@ -33147,10 +34029,82 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "capacity preflight must drain an unminted lifecycle into the mutating fail-closed seam",
         ),
         (
+            "can_admit_network_message_with_ingress_ownership",
+            "match self.clock_owner_reservation_blocks_occurrence(",
+            "match Ok(false).and(",
+            "authenticated ingress ownership capacity preflight declaration and complete control flow must match",
+        ),
+        (
+            "deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences",
+            "Err(EnqueueError::Full),",
+            "Ok(()),",
+            "production causal-FIFO regression deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences declaration, contract, and complete control flow must match",
+        ),
+        (
             "take_last_scheduler_ownership",
             "self.last_scheduler_ownership.take()",
             "self.last_scheduler_ownership.clone()",
             "runner scheduler ownership handoff declaration and complete control flow must match",
+        ),
+        (
+            "fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers",
+            "fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers()",
+            "fn removed_fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers()",
+            "named fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers; found 0",
+        ),
+        (
+            "fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers",
+            "fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers()",
+            "fn real_adapter_fence_completion_breaks_pre_and_post_timeout_retransmit_debt()",
+            "retired production regression real_adapter_fence_completion_breaks_pre_and_post_timeout_retransmit_debt is prohibited",
+        ),
+        (
+            "fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers",
+            "                .expect(\"freeze the pre-deadline second retransmission\"),\n"
+            "            RuntimeStep::Idle",
+            "                .expect(\"freeze the pre-deadline second retransmission\"),\n"
+            "            RuntimeStep::Advanced(Vec::new())",
+            "a fresh pre-timeout periodic episode must remain at the runtime boundary behind an older signer without creating adapter debt",
+        ),
+        (
+            "fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers",
+            "assert_eq!(prepare_completion.selected, RuntimeSelectedOwnerKind::Fifo);",
+            "assert_eq!(prepare_completion.selected, RuntimeSelectedOwnerKind::FenceCompletion);",
+            "the older Prepare completion must retain ordinary FIFO ownership without a fence predecessor or dependency bypass",
+        ),
+        (
+            "fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers",
+            "assert!(!prepare_completion.fence_completion_bypass);",
+            "assert!(prepare_completion.fence_completion_bypass);",
+            "the older Prepare completion must retain ordinary FIFO ownership without a fence predecessor or dependency bypass",
+        ),
+        (
+            "fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers",
+            "                .expect(\"freeze post-timeout retransmission behind signing\"),\n"
+            "            RuntimeStep::Idle",
+            "                .expect(\"freeze post-timeout retransmission behind signing\"),\n"
+            "            RuntimeStep::Advanced(Vec::new())",
+            "a fresh post-timeout periodic episode must remain at the runtime boundary behind TimeoutVote signing without creating adapter debt",
+        ),
+        (
+            "fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers",
+            "assert_eq!(timeout_completion.selected, RuntimeSelectedOwnerKind::Fifo);",
+            "assert_eq!(timeout_completion.selected, RuntimeSelectedOwnerKind::FenceCompletion);",
+            "the older TimeoutVote completion must retain ordinary FIFO ownership without a fence predecessor or dependency bypass",
+        ),
+        (
+            "fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers",
+            "assert!(!timeout_completion.fence_completion_bypass);",
+            "assert!(timeout_completion.fence_completion_bypass);",
+            "the older TimeoutVote completion must retain ordinary FIFO ownership without a fence predecessor or dependency bypass",
+        ),
+        (
+            "fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers",
+            "            RuntimeSelectedOwnerKind::PeriodicTimer\n"
+            "        );",
+            "            RuntimeSelectedOwnerKind::Fifo\n"
+            "        );",
+            "the retained post-timeout periodic episode must run after the older completion, clear, and leave later periodic ticks armed",
         ),
         (
             "with_driver_and_lifecycle_ordinals",

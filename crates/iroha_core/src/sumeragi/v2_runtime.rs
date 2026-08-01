@@ -6478,7 +6478,16 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     clocks_armed: bool,
     timeout_emitted: bool,
     timeout_owner: Option<RuntimeLifecycleOwner>,
+    /// Receiver-local ingress high-watermark frozen atomically with the
+    /// current timeout owner. A dormant wire replay admitted at or beyond
+    /// this cut cannot resurrect an older logical ordinal ahead of timeout.
+    timeout_owner_physical_cut: Option<u128>,
     retransmit_owner: Option<RuntimeLifecycleOwner>,
+    /// Receiver-local ingress high-watermark frozen atomically with the
+    /// current periodic owner. Retries of the same clock episode retain this
+    /// cut; a later physical replay cannot revive an older logical position
+    /// ahead of the already-admitted periodic work.
+    retransmit_owner_physical_cut: Option<u128>,
     dormant_fresh_lifecycle_owners:
         BTreeMap<(RuntimeFreshRootKind, iroha_crypto::Hash), RuntimeLifecycleOwner>,
     pending_effect_ownership: Option<Vec<RuntimeEffectOwnership>>,
@@ -6562,7 +6571,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             clocks_armed: false,
             timeout_emitted: false,
             timeout_owner: None,
+            timeout_owner_physical_cut: None,
             retransmit_owner: None,
+            retransmit_owner_physical_cut: None,
             dormant_fresh_lifecycle_owners: BTreeMap::new(),
             pending_effect_ownership: None,
             external_lifecycle_owners: Vec::new(),
@@ -6772,6 +6783,104 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         self.ingress_physical_cut = physical_cut;
         Ok(())
+    }
+
+    fn validate_clock_owner_physical_cuts(&self) -> Result<(), EnqueueError> {
+        let timeout_is_paired =
+            self.timeout_owner.is_some() == self.timeout_owner_physical_cut.is_some();
+        let retransmit_is_paired =
+            self.retransmit_owner.is_some() == self.retransmit_owner_physical_cut.is_some();
+        let cuts_are_valid = self
+            .timeout_owner_physical_cut
+            .into_iter()
+            .chain(self.retransmit_owner_physical_cut)
+            .all(|cut| cut != 0 && cut <= self.ingress_physical_cut);
+        if timeout_is_paired && retransmit_is_paired && cuts_are_valid {
+            Ok(())
+        } else {
+            Err(EnqueueError::FailClosed)
+        }
+    }
+
+    fn clock_owner_physical_cut_for(
+        &self,
+        parent: &RuntimeLifecycleOwner,
+    ) -> Result<Option<u128>, EnqueueError> {
+        self.validate_clock_owner_physical_cuts()?;
+        let timeout_matches = self.timeout_owner.as_ref() == Some(parent);
+        let retransmit_matches = self.retransmit_owner.as_ref() == Some(parent);
+        match (timeout_matches, retransmit_matches) {
+            (true, false) => self
+                .timeout_owner_physical_cut
+                .map(Some)
+                .ok_or(EnqueueError::FailClosed),
+            (false, true) => self
+                .retransmit_owner_physical_cut
+                .map(Some)
+                .ok_or(EnqueueError::FailClosed),
+            (false, false) => Ok(None),
+            (true, true) => Err(EnqueueError::FailClosed),
+        }
+    }
+
+    /// Whether one physically later occurrence would resurrect a logical
+    /// position at or ahead of an already-frozen clock owner.
+    ///
+    /// The occurrence stays in its existing fair-ingress or executor owner
+    /// and is retried after the clock episode transfers.  It must not enter
+    /// the FIFO, where the persistent `fifo_owed` bit could otherwise let a
+    /// different, post-cut identity inherit an earlier command's debt.
+    fn clock_owner_reservation_blocks_occurrence(
+        &self,
+        lifecycle_ordinal: u128,
+        source_physical_ordinal: u64,
+    ) -> Result<bool, EnqueueError> {
+        if lifecycle_ordinal == 0 || source_physical_ordinal == 0 {
+            return Err(EnqueueError::FailClosed);
+        }
+        self.validate_clock_owner_physical_cuts()?;
+        let occurrence_is_blocked = |owner: &RuntimeLifecycleOwner, physical_cut: u128| {
+            u128::from(source_physical_ordinal) >= physical_cut
+                && lifecycle_ordinal <= owner.lifecycle_ordinal()
+        };
+        Ok(self
+            .timeout_owner
+            .as_ref()
+            .zip(self.timeout_owner_physical_cut)
+            .is_some_and(|(owner, physical_cut)| occurrence_is_blocked(owner, physical_cut))
+            || self
+                .retransmit_owner
+                .as_ref()
+                .zip(self.retransmit_owner_physical_cut)
+                .is_some_and(|(owner, physical_cut)| occurrence_is_blocked(owner, physical_cut)))
+    }
+
+    fn clock_owner_reservation_blocks(
+        &self,
+        owner: &RuntimeLifecycleOwner,
+    ) -> Result<bool, EnqueueError> {
+        if !owner.validate_exact() {
+            return Err(EnqueueError::FailClosed);
+        }
+        let Some(physical) = owner.causal_origin().root_ingress_physical_ownership else {
+            self.validate_clock_owner_physical_cuts()?;
+            return Ok(false);
+        };
+        self.clock_owner_reservation_blocks_occurrence(
+            owner.lifecycle_ordinal(),
+            physical.source_ordinal,
+        )
+    }
+
+    fn enqueue_after_clock_reservation(
+        &mut self,
+        command: TaggedCommand<D::Command>,
+    ) -> Result<(), EnqueueError> {
+        let owner = command.lifecycle_owner()?;
+        if self.clock_owner_reservation_blocks(&owner)? {
+            return Err(EnqueueError::Full);
+        }
+        self.ingress.enqueue(command)
     }
 
     /// Replace the bounded set of owners currently held by retained executor
@@ -7089,7 +7198,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             )?,
             RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
         };
-        let result = self.ingress.enqueue(tagged);
+        let result = self.enqueue_after_clock_reservation(tagged);
         if result == Err(EnqueueError::FailClosed) {
             self.latch_fail_closed("runtime ingress exact ownership validation failed");
         }
@@ -7135,7 +7244,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             RuntimeCommandAdmissionPreflight::Coalesce => unreachable!("handled above"),
             RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
         };
-        let result = self.ingress.enqueue(tagged);
+        let result = self.enqueue_after_clock_reservation(tagged);
         if result == Err(EnqueueError::FailClosed) {
             self.latch_fail_closed("causal-successor ingress ownership validation failed");
         }
@@ -7423,6 +7532,15 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             retry_unadmitted,
             producer_handoff,
         } = dispatch;
+        let clock_physical_cut = match self.clock_owner_physical_cut_for(parent) {
+            Ok(cut) => cut,
+            Err(_) => {
+                self.latch_fail_closed(
+                    "driver dispatch observed an unpaired or ambiguous clock physical cut",
+                );
+                return Err(RuntimeError::FailClosed);
+            }
+        };
         let retained_deferred_ingress = deferred_ingress.is_some();
         if retry_unadmitted
             && (deferred_ingress.is_some()
@@ -7484,9 +7602,10 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                         (RuntimeDispatchIngress::LocalOrCausal, Some(ownership), None) => {
                             (Some(ownership.source_ordinal), ownership.physical_cut)
                         }
-                        (RuntimeDispatchIngress::LocalOrCausal, None, None) => {
-                            (None, self.ingress_physical_cut)
-                        }
+                        (RuntimeDispatchIngress::LocalOrCausal, None, None) => (
+                            None,
+                            clock_physical_cut.unwrap_or(self.ingress_physical_cut),
+                        ),
                         _ => {
                             self.latch_fail_closed(
                                 "deferred ingress lineage changed its current or root physical carrier",
@@ -7564,6 +7683,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn freeze_due_clock_owners(&mut self, now: Instant) -> Result<(), EnqueueError> {
         // Validate every active owner before a clock can bypass it.
         let _ = self.minimum_active_lifecycle_ordinal()?;
+        self.validate_clock_owner_physical_cuts()?;
         if !self.clocks_armed {
             return Ok(());
         }
@@ -7571,12 +7691,17 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             && now.saturating_duration_since(self.round_started_at)
                 >= round_timeout_for_view(self.base_round_timeout, self.round_tag.view());
         if raw_timeout_due && self.timeout_owner.is_none() {
-            self.timeout_owner = Some(self.mint_fresh_lifecycle_owner(
+            if self.timeout_owner_physical_cut.is_some() {
+                return Err(EnqueueError::FailClosed);
+            }
+            let owner = self.mint_fresh_lifecycle_owner(
                 self.round_tag,
                 CommandClass::Progress,
                 RuntimeFreshRootKind::Timeout,
                 b"begin-timeout",
-            )?);
+            )?;
+            self.timeout_owner_physical_cut = Some(self.ingress_physical_cut);
+            self.timeout_owner = Some(owner);
         }
         let raw_retransmit_due =
             now.saturating_duration_since(self.retransmit_started_at) >= self.retransmit_interval;
@@ -7588,6 +7713,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         // is false immediately after timeout emission, so post-timeout
         // TimeoutVote and decided-body recovery remain fully enabled.
         if raw_retransmit_due && !raw_timeout_due && self.retransmit_owner.is_none() {
+            if self.retransmit_owner_physical_cut.is_some() {
+                return Err(EnqueueError::FailClosed);
+            }
             let retransmit_origin = RuntimeCandidateCausalOrigin::mint_fresh_root(
                 self.round_tag,
                 CommandClass::Progress,
@@ -7629,6 +7757,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             if self.active_lifecycle_uses_ordinal(owner.lifecycle_ordinal())? {
                 return Ok(());
             }
+            self.retransmit_owner_physical_cut = Some(self.ingress_physical_cut);
             self.retransmit_owner = Some(owner);
         }
         Ok(())
@@ -7670,6 +7799,76 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         for queued in &self.ingress.commands {
             observe(&queued.lifecycle_owner()?)?;
         }
+        for (ordinal, owner) in &self.deferred_lifecycle_ownership {
+            if owner.deferred_admission_ordinal != *ordinal
+                || !owner.validate_active_against_ingress(
+                    self.deferred_ingress_ownership.get(ordinal),
+                    self.driver.deferred_admission_ordinal_source(),
+                )
+            {
+                return Err(EnqueueError::FailClosed);
+            }
+            observe(owner.owner())?;
+        }
+        if let Some(owner) = &self.timeout_owner {
+            observe(owner)?;
+        }
+        if let Some(owner) = &self.retransmit_owner {
+            observe(owner)?;
+        }
+        if let Some(reservation) = &self.active_view_producer {
+            if reservation.tag != self.round_tag || !reservation.ownership.validate_exact() {
+                return Err(EnqueueError::FailClosed);
+            }
+            observe(reservation.ownership.owner())?;
+        }
+        for owner in &self.external_lifecycle_owners {
+            observe(owner)?;
+        }
+        if let Some(ownership) = &self.pending_effect_ownership {
+            for effect in ownership {
+                observe(effect.owner())?;
+            }
+        }
+        if let Some(reservation) = &self.ingress.reserved_body_available {
+            let owner = reservation
+                .lifecycle_owner()
+                .ok_or(EnqueueError::FailClosed)?;
+            observe(&owner)?;
+        }
+        Ok(minimum)
+    }
+
+    /// Return the oldest owner which was physically present before a frozen
+    /// receiver-local cut. Logical ordinals retained by a later wire replay
+    /// cannot become predecessors merely because their semantic identity is
+    /// old. Local owners have no ingress occurrence and remain ordered solely
+    /// by their immutable lifecycle ordinal.
+    fn minimum_active_lifecycle_ordinal_before_physical_cut_excluding(
+        &self,
+        physical_cut: u128,
+        excluded: &[RuntimeLifecycleOwner],
+    ) -> Result<Option<u128>, EnqueueError> {
+        let mut minimum = self
+            .ingress
+            .oldest_active_lifecycle_ordinal_before_physical_cut_excluding(
+                physical_cut,
+                excluded,
+            )?;
+        let mut observe = |owner: &RuntimeLifecycleOwner| -> Result<(), EnqueueError> {
+            if !owner.validate_exact() {
+                return Err(EnqueueError::FailClosed);
+            }
+            if excluded.iter().any(|blocked| blocked == owner)
+                || owner.is_post_physical_cut(physical_cut)
+            {
+                return Ok(());
+            }
+            minimum = Some(minimum.map_or(owner.lifecycle_ordinal(), |ordinal| {
+                ordinal.min(owner.lifecycle_ordinal())
+            }));
+            Ok(())
+        };
         for (ordinal, owner) in &self.deferred_lifecycle_ownership {
             if owner.deferred_admission_ordinal != *ordinal
                 || !owner.validate_active_against_ingress(
@@ -7807,7 +8006,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         // frozen physical intervals overlap.  First remove every occurrence
         // whose source is physically behind any active target.  Only then may
         // logical lifecycle rank select from the remaining acyclic pool.
-        if !deferred_lifecycle_ordinals_are_unique(&self.deferred_lifecycle_ownership) {
+        if !deferred_lifecycle_ordinals_are_unique(&self.deferred_lifecycle_ownership)
+            || self.validate_clock_owner_physical_cuts().is_err()
+        {
             return Err(EnqueueError::FailClosed);
         }
         for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership {
@@ -7820,23 +8021,30 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 return Err(EnqueueError::FailClosed);
             }
         }
-        let physically_eligible = self
-            .deferred_lifecycle_ownership
-            .iter()
-            .filter_map(|(admission_ordinal, candidate)| {
-                let physically_behind_an_active_target = candidate
-                    .source_physical_ordinal
-                    .is_some_and(|source_physical_ordinal| {
-                        self.deferred_lifecycle_ownership
-                            .iter()
-                            .any(|(other_ordinal, target)| {
-                                other_ordinal != admission_ordinal
-                                    && u128::from(source_physical_ordinal) >= target.physical_cut
-                            })
-                    });
-                (!physically_behind_an_active_target).then_some(*admission_ordinal)
-            })
-            .collect::<BTreeSet<_>>();
+        let physically_eligible =
+            self.deferred_lifecycle_ownership
+                .iter()
+                .filter_map(|(admission_ordinal, candidate)| {
+                    let physically_behind_an_active_target = candidate
+                        .source_physical_ordinal
+                        .is_some_and(|source_physical_ordinal| {
+                            self.deferred_lifecycle_ownership.iter().any(
+                                |(other_ordinal, target)| {
+                                    other_ordinal != admission_ordinal
+                                        && u128::from(source_physical_ordinal)
+                                            >= target.physical_cut
+                                },
+                            ) || self.timeout_owner_physical_cut.is_some_and(|timeout_cut| {
+                                u128::from(source_physical_ordinal) >= timeout_cut
+                            }) || self
+                                .retransmit_owner_physical_cut
+                                .is_some_and(|retransmit_cut| {
+                                    u128::from(source_physical_ordinal) >= retransmit_cut
+                                })
+                        });
+                    (!physically_behind_an_active_target).then_some(*admission_ordinal)
+                })
+                .collect::<BTreeSet<_>>();
         let physically_ineligible_owners = self
             .deferred_lifecycle_ownership
             .iter()
@@ -7961,17 +8169,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
     }
 
-    fn older_active_lifecycle_blocks(&self, owner: &RuntimeLifecycleOwner) -> bool {
-        self.minimum_active_lifecycle_ordinal()
-            .map_or(true, |minimum| {
-                minimum.is_some_and(|ordinal| ordinal < owner.lifecycle_ordinal())
-            })
-    }
-
     fn scheduler_arbitration_inputs(
         &self,
         now: Instant,
     ) -> Result<RuntimeSchedulerArbitrationInputs, EnqueueError> {
+        self.validate_clock_owner_physical_cuts()?;
         let global_minimum = self.minimum_active_lifecycle_ordinal()?;
         let fifo_minimum = self.ingress.oldest_lifecycle_ordinal()?;
         let fifo_ready = fifo_minimum.is_some() && fifo_minimum == global_minimum;
@@ -7986,20 +8188,37 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             && !self.timeout_emitted
             && now.saturating_duration_since(self.round_started_at)
                 >= round_timeout_for_view(self.base_round_timeout, self.round_tag.view());
-        let timeout_due = raw_timeout_due
-            && self
-                .timeout_owner
-                .as_ref()
-                .is_some_and(|owner| !self.older_active_lifecycle_blocks(owner));
+        let timeout_due = if !raw_timeout_due {
+            false
+        } else if let (Some(owner), Some(physical_cut)) =
+            (&self.timeout_owner, self.timeout_owner_physical_cut)
+        {
+            !self
+                .minimum_active_lifecycle_ordinal_before_physical_cut_excluding(
+                    physical_cut,
+                    std::slice::from_ref(owner),
+                )?
+                .is_some_and(|ordinal| ordinal < owner.lifecycle_ordinal())
+        } else {
+            false
+        };
         let raw_periodic_timer_due = timers_enabled
             && now.saturating_duration_since(self.retransmit_started_at)
                 >= self.retransmit_interval;
-        let periodic_timer_due = raw_periodic_timer_due
-            && !timeout_due
-            && self
-                .retransmit_owner
-                .as_ref()
-                .is_some_and(|owner| !self.older_active_lifecycle_blocks(owner));
+        let periodic_timer_due = if !raw_periodic_timer_due || timeout_due {
+            false
+        } else if let (Some(owner), Some(physical_cut)) =
+            (&self.retransmit_owner, self.retransmit_owner_physical_cut)
+        {
+            !self
+                .minimum_active_lifecycle_ordinal_before_physical_cut_excluding(
+                    physical_cut,
+                    std::slice::from_ref(owner),
+                )?
+                .is_some_and(|ordinal| ordinal < owner.lifecycle_ordinal())
+        } else {
+            false
+        };
         Ok(RuntimeSchedulerArbitrationInputs {
             live_mode: timers_enabled,
             timeout_due,
@@ -8218,6 +8437,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                         self.latch_fail_closed("due retransmission had no frozen lifecycle owner");
                         RuntimeError::FailClosed
                     })?;
+                    let physical_cut = self.retransmit_owner_physical_cut.ok_or_else(|| {
+                        self.latch_fail_closed(
+                            "due retransmission had no frozen ingress physical cut",
+                        );
+                        RuntimeError::FailClosed
+                    })?;
                     if let Err(error) = self.driver.bind_selected_producer_lifecycle(&owner) {
                         return Err(self.close(error));
                     }
@@ -8238,9 +8463,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                         );
                         return Err(RuntimeError::FailClosed);
                     }
-                    if self.retransmit_owner.as_ref() != Some(&owner) {
+                    if self.retransmit_owner.as_ref() != Some(&owner)
+                        || self.retransmit_owner_physical_cut != Some(physical_cut)
+                    {
                         self.latch_fail_closed(
-                            "retransmission lifecycle reservation changed before transfer",
+                            "retransmission lifecycle reservation or physical cut changed before transfer",
                         );
                         return Err(RuntimeError::FailClosed);
                     }
@@ -8365,6 +8592,13 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             }
             self.latch_fail_closed("effect lifecycle ownership could not be retained");
             return Err(RuntimeError::FailClosed);
+        }
+        match effect_source {
+            RuntimeEffectSource::Timeout => self.timeout_owner_physical_cut = None,
+            RuntimeEffectSource::Retransmit => self.retransmit_owner_physical_cut = None,
+            RuntimeEffectSource::Startup
+            | RuntimeEffectSource::Fifo
+            | RuntimeEffectSource::Deferred => {}
         }
         let mut completed_producer_handoff = None;
         if let Some(token) = producer_handoff {
@@ -9251,7 +9485,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 self.retransmit_started_at = now;
                 self.timeout_emitted = false;
                 self.timeout_owner = None;
+                self.timeout_owner_physical_cut = None;
                 self.retransmit_owner = None;
+                self.retransmit_owner_physical_cut = None;
                 self.dormant_fresh_lifecycle_owners.retain(|_, owner| {
                     let root = owner.causal_origin().root_tag;
                     root.height() == tag.height() && root.view() == tag.view()
@@ -9655,6 +9891,24 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             RuntimeCommandAdmissionPreflight::Coalesce => unreachable!("handled above"),
             RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
         };
+        if let Some((owner, _)) = restored_owner.as_ref() {
+            match self.clock_owner_reservation_blocks(owner) {
+                Ok(true) => {
+                    // Preserve the exact fair-ingress occurrence outside the
+                    // FIFO until the clock target transfers.  Returning
+                    // ordinary backpressure keeps retries coalesced on the
+                    // same transport carrier and allocates no new position.
+                    return Err(NetworkIngressError::Backpressure(EnqueueError::Full));
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    self.latch_fail_closed(
+                        "network replay observed invalid clock reservation ownership",
+                    );
+                    return Err(NetworkIngressError::FailClosed);
+                }
+            }
+        }
         match self
             .ingress
             .enqueue_authenticated_with_ingress_ownership_and_owner(
@@ -9749,6 +10003,21 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         if self.fail_closed {
             return false;
+        }
+        if let (Ok(Some(lifecycle_ordinal)), Ok(Some(physical))) = (
+            ownership.earliest_lifecycle_ordinal(),
+            ownership.earliest_physical_carrier(),
+        ) {
+            match self.clock_owner_reservation_blocks_occurrence(
+                lifecycle_ordinal,
+                physical.source_ordinal,
+            ) {
+                Ok(true) => return false,
+                Ok(false) => {}
+                // Let the mutating seam consume malformed state and latch
+                // fail-closed instead of pinning the fair-ingress head.
+                Err(_) => return true,
+            }
         }
         if let Some((round, _)) = self
             .driver
@@ -13255,7 +13524,7 @@ mod tests {
     }
 
     #[test]
-    fn real_adapter_fence_completion_breaks_pre_and_post_timeout_retransmit_debt() {
+    fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
         let directory = TempDir::new().expect("temporary real-adapter ordering directory");
         let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
             &directory,
@@ -13267,9 +13536,9 @@ mod tests {
             .arm_live_clocks(start)
             .expect("arm runtime after adapter startup");
 
-        // Service the first periodic episode before the signer becomes busy.
-        // Every later tick in this view reconstructs this exact cached root,
-        // including its immutable early lifecycle ordinal.
+        // Service one complete periodic episode before the signer becomes
+        // busy. A later tick must mint a new lifecycle ordinal rather than
+        // resurrecting this drained episode at its old position.
         let before_timeout = start + runtime.retransmit_interval();
         assert!(matches!(
             runtime
@@ -13365,33 +13634,33 @@ mod tests {
             .set_external_lifecycle_owners(vec![prepare_effect_ownership[0].owner().clone()])
             .expect("publish the pending Prepare signer owner");
 
-        // The second periodic episode is still before the absolute deadline.
-        // Its cached root predates the proposal lifecycle, reaches the reducer
-        // while Prepare signing is fenced, and becomes the oldest
-        // Busy-deferred owner.
+        // The second periodic episode is still before the absolute deadline,
+        // but it is frozen only at this serialized runner entry. The pending
+        // Prepare signer already owns an older lifecycle position, so the new
+        // episode waits without entering the adapter or creating fence debt.
         let second_retransmission = before_timeout + runtime.retransmit_interval();
         assert!(second_retransmission < start + runtime.round_timeout());
         assert!(matches!(
             runtime
                 .step_and_take_scheduler_ownership_for_test(second_retransmission)
-                .expect("defer the pre-deadline second retransmission"),
-            RuntimeStep::Advanced(ref effects) if effects.is_empty()
+                .expect("freeze the pre-deadline second retransmission"),
+            RuntimeStep::Idle
         ));
         assert!(
-            !runtime.driver().deferred_work_is_serviceable(),
-            "the exact Prepare signature still fences retransmission debt"
+            runtime
+                .driver()
+                .all_deferred_admission_ordinals()
+                .is_empty(),
+            "a younger periodic owner cannot enter the adapter ahead of the signer"
         );
         assert!(
-            runtime.retransmit_owner.is_none(),
-            "the cached retransmission root must not retain a second runtime alias"
+            runtime.retransmit_owner.is_some(),
+            "the fresh periodic episode remains frozen at its later lifecycle position"
         );
 
         let prepare_signature = Signature::new(keys[0].private_key(), &prepare_signature_preimage)
             .payload()
             .to_vec();
-        runtime
-            .enqueue_signature(prepare_sign_tag, prepare_signature.clone())
-            .expect("enqueue an independently rooted signature callback");
         runtime
             .enqueue_signature_with_owner(
                 prepare_sign_tag,
@@ -13402,99 +13671,24 @@ mod tests {
         runtime
             .set_external_lifecycle_owners(Vec::new())
             .expect("retire the pending Prepare signer owner after completion enqueue");
-        assert_eq!(runtime.queued_commands(), 2);
+        assert_eq!(runtime.queued_commands(), 1);
 
         let prepare_broadcast = runtime
             .step(second_retransmission)
-            .expect("owned Prepare completion opens the retransmission fence");
-        let prepare_bypass = runtime
+            .expect("owned Prepare completion precedes the younger retransmission");
+        let prepare_completion = runtime
             .take_last_scheduler_ownership()
-            .expect("fence completion retains exact scheduler ownership");
-        assert_eq!(
-            prepare_bypass.selected,
-            RuntimeSelectedOwnerKind::FenceCompletion
-        );
-        assert!(prepare_bypass.fence_completion_bypass);
+            .expect("Prepare completion retains exact scheduler ownership");
+        assert_eq!(prepare_completion.selected, RuntimeSelectedOwnerKind::Fifo);
+        assert!(!prepare_completion.fence_completion_bypass);
         assert!(
-            prepare_bypass
+            prepare_completion
                 .fence_predecessor_lifecycle_ordinal
-                .is_some_and(|predecessor| {
-                    let RuntimeSelectedCandidateOwnership::Exact(candidate) =
-                        &prepare_bypass.candidate
-                    else {
-                        return false;
-                    };
-                    predecessor < candidate.lifecycle_ordinal
-                })
+                .is_none()
         );
-        assert!(prepare_bypass.validate_exact().is_ok());
-        let mut local_cut_mutation = prepare_bypass.clone();
-        let mutated_local_cut = local_cut_mutation
-            .fence_predecessor_ownership
-            .as_ref()
-            .expect("local retransmit fence carries its exact wrapper")
-            .physical_cut
-            .checked_add(1)
-            .expect("small local cut has a successor");
-        local_cut_mutation
-            .fence_predecessor_ownership
-            .as_mut()
-            .expect("local retransmit fence carries its exact wrapper")
-            .physical_cut = mutated_local_cut;
-        local_cut_mutation.projection_hash = runtime_scheduler_projection_hash(&local_cut_mutation);
-        assert_eq!(
-            local_cut_mutation.validate_exact(),
-            Err(RuntimeSchedulerEvidenceError::InvalidProjection),
-            "the adapter-private seal rejects a coherently rehashed local cut"
-        );
-        let mut local_rank_mutation = prepare_bypass.clone();
-        let mutated_local_rank = {
-            let wrapper = local_rank_mutation
-                .fence_predecessor_ownership
-                .as_mut()
-                .expect("local retransmit fence carries its exact wrapper");
-            let mutated = wrapper
-                .owner
-                .lifecycle_ordinal
-                .checked_add(1)
-                .expect("small local lifecycle rank has a successor");
-            wrapper.owner.lifecycle_ordinal = mutated;
-            wrapper.owner.causal_origin.root_lifecycle_ordinal = Some(mutated);
-            wrapper.owner.causal_origin.projection_hash =
-                runtime_candidate_causal_origin_projection_hash(&wrapper.owner.causal_origin);
-            wrapper.owner.projection_hash = runtime_lifecycle_owner_projection_hash(&wrapper.owner);
-            mutated
-        };
-        local_rank_mutation.fence_predecessor_lifecycle_ordinal = Some(mutated_local_rank);
-        local_rank_mutation.projection_hash =
-            runtime_scheduler_projection_hash(&local_rank_mutation);
-        assert_eq!(
-            local_rank_mutation.validate_exact(),
-            Err(RuntimeSchedulerEvidenceError::InvalidProjection),
-            "the adapter-private seal rejects a coherently rehashed local logical rank"
-        );
-        let mut foreign_seal_mutation = prepare_bypass.clone();
-        let foreign_wrapper = foreign_seal_mutation
-            .fence_predecessor_ownership
-            .as_mut()
-            .expect("local retransmit fence carries its exact wrapper");
-        foreign_wrapper.runtime_seal = DeferredRuntimeOwnershipSeal::for_test(
-            foreign_wrapper.deferred_admission_ordinal,
-            foreign_wrapper.owner.causal_origin().lifecycle_key.clone(),
-            foreign_wrapper.owner.lifecycle_ordinal(),
-            false,
-            foreign_wrapper.source_physical_ordinal,
-            foreign_wrapper.physical_cut,
-        );
-        foreign_seal_mutation.projection_hash =
-            runtime_scheduler_projection_hash(&foreign_seal_mutation);
-        assert_eq!(
-            foreign_seal_mutation.validate_exact(),
-            Err(RuntimeSchedulerEvidenceError::InvalidProjection),
-            "a same-number foreign capability cannot replace the exact adapter seal"
-        );
+        assert!(prepare_completion.validate_exact().is_ok());
         let RuntimeStep::Advanced(prepare_broadcasts) = prepare_broadcast else {
-            panic!("Prepare fence completion unexpectedly idled")
+            panic!("Prepare completion unexpectedly idled")
         };
         assert!(matches!(
             prepare_broadcasts.as_slice(),
@@ -13511,21 +13705,16 @@ mod tests {
             .take_effect_ownership(prepare_broadcasts.len())
             .expect("test executor consumes Prepare broadcast ownership");
         assert!(
-            runtime.retransmit_owner.is_none(),
-            "the deferred retransmission remains the sole cached-root owner"
+            runtime.retransmit_owner.is_some(),
+            "the younger periodic episode remains frozen until its own turn"
         );
-        assert_eq!(
-            runtime.queued_commands(),
-            1,
-            "the independently rooted callback cannot use the dependency bypass"
-        );
+        assert_eq!(runtime.queued_commands(), 0);
 
-        // Once the fence is open, the exact older retransmission debt runs and
-        // rebroadcasts the newly published Prepare vote. Other finite deferred
-        // work and the independently rooted callback then drain normally.
+        // Once the older completion drains, the retained fresh episode runs
+        // and rebroadcasts the newly published Prepare vote.
         let retransmit_retry = runtime
             .step_and_take_scheduler_ownership_for_test(second_retransmission)
-            .expect("service older pre-deadline retransmission debt");
+            .expect("service younger pre-deadline retransmission episode");
         assert!(matches!(
             retransmit_retry,
             RuntimeStep::Advanced(ref effects)
@@ -13541,28 +13730,22 @@ mod tests {
                 ))
         ));
         assert_eq!(
-            prepare_bypass.validate_exact(),
+            prepare_completion.validate_exact(),
             Ok(()),
-            "immutable fence evidence remains valid after its target is later claimed"
+            "immutable completion evidence remains valid after the younger owner runs"
         );
-        while runtime.driver().deferred_work_is_serviceable() {
-            runtime
-                .step_and_take_scheduler_ownership_for_test(second_retransmission)
-                .expect("drain finite adapter debt after Prepare completion");
-        }
-        while runtime.queued_commands() != 0 {
-            runtime
-                .step_and_take_scheduler_ownership_for_test(second_retransmission)
-                .expect("drain non-bypassing completion normally");
-        }
         assert!(
-            !runtime.fail_closed,
-            "an independently rooted completion remains a recoverable ordinary FIFO occurrence"
+            runtime
+                .driver()
+                .all_deferred_admission_ordinals()
+                .is_empty()
         );
+        assert!(runtime.deferred_lifecycle_ownership.is_empty());
+        assert!(runtime.retransmit_owner.is_none());
 
-        // Absolute timeout remains one-shot after the pre-deadline dependency
-        // cycle has drained. A drained cached retransmission root is not
-        // replenished ahead of this still-unemitted timeout.
+        // Absolute timeout remains one-shot after the pre-deadline episode
+        // drains. Its signing lifecycle likewise predates the next periodic
+        // episode.
         let deadline = start + runtime.round_timeout();
         let timeout_macro_step = runtime
             .step(deadline)
@@ -13590,20 +13773,25 @@ mod tests {
             .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
             .expect("publish the pending TimeoutVote signer owner");
 
-        // The cached retransmission root becomes due again while TimeoutVote
-        // signing is active. It is allowed one bounded turn and becomes
-        // unserviceable Busy debt; it must not be resurrected over its later
-        // exact completion on every subsequent call.
+        // A fresh retransmission episode becomes due while TimeoutVote signing
+        // is active. Its new ordinal follows the signer, so it remains at the
+        // runtime boundary instead of entering the adapter as Busy debt.
         let post_timeout_retransmission = deadline + runtime.retransmit_interval();
         assert!(matches!(
             runtime
                 .step_and_take_scheduler_ownership_for_test(post_timeout_retransmission)
-                .expect("defer post-timeout retransmission behind signing"),
-            RuntimeStep::Advanced(ref effects) if effects.is_empty()
+                .expect("freeze post-timeout retransmission behind signing"),
+            RuntimeStep::Idle
         ));
         assert!(
-            runtime.retransmit_owner.is_none(),
-            "post-timeout deferred retransmission must not retain a runtime alias"
+            runtime.retransmit_owner.is_some(),
+            "post-timeout retransmission retains its fresh runtime owner while blocked"
+        );
+        assert!(
+            runtime
+                .driver()
+                .all_deferred_admission_ordinals()
+                .is_empty()
         );
 
         let timeout_signature = Signature::new(keys[0].private_key(), &timeout_signature_preimage)
@@ -13621,19 +13809,20 @@ mod tests {
             .expect("retire the pending TimeoutVote signer owner after completion enqueue");
         let first_timeout_vote = runtime
             .step(post_timeout_retransmission)
-            .expect("owned TimeoutVote completion opens the retransmission fence");
-        let timeout_bypass = runtime
+            .expect("owned TimeoutVote completion precedes the younger retransmission");
+        let timeout_completion = runtime
             .take_last_scheduler_ownership()
             .expect("TimeoutVote completion retains exact scheduler ownership");
-        assert_eq!(
-            timeout_bypass.selected,
-            RuntimeSelectedOwnerKind::FenceCompletion
+        assert_eq!(timeout_completion.selected, RuntimeSelectedOwnerKind::Fifo);
+        assert!(!timeout_completion.fence_completion_bypass);
+        assert!(
+            timeout_completion
+                .fence_predecessor_lifecycle_ordinal
+                .is_none()
         );
-        assert!(timeout_bypass.fence_completion_bypass);
-        assert!(timeout_bypass.fence_predecessor_lifecycle_ordinal.is_some());
-        assert!(timeout_bypass.validate_exact().is_ok());
+        assert!(timeout_completion.validate_exact().is_ok());
         let RuntimeStep::Advanced(first_timeout_vote_effects) = first_timeout_vote else {
-            panic!("TimeoutVote fence completion unexpectedly idled")
+            panic!("TimeoutVote completion unexpectedly idled")
         };
         assert!(first_timeout_vote_effects.iter().any(|effect| matches!(
             effect,
@@ -13648,14 +13837,13 @@ mod tests {
             .take_effect_ownership(first_timeout_vote_effects.len())
             .expect("test executor consumes first TimeoutVote ownership");
         assert!(
-            runtime.retransmit_owner.is_none(),
-            "the deferred retransmission remains the sole post-timeout cached-root owner"
+            runtime.retransmit_owner.is_some(),
+            "the younger post-timeout episode remains frozen until its own turn"
         );
 
-        // Treat the first TimeoutVote broadcast as lost. The exact overdue
-        // retransmission debt is still present and must rebroadcast it on the
-        // next serialized turn rather than being permanently suppressed after
-        // the absolute deadline.
+        // Treat the first TimeoutVote broadcast as lost. The retained younger
+        // periodic episode now owns the next serialized turn and rebroadcasts
+        // the published vote.
         let timeout_vote_retry = runtime
             .step_and_take_scheduler_ownership_for_test(post_timeout_retransmission)
             .expect("rebroadcast a lost first TimeoutVote");
@@ -15117,6 +15305,7 @@ mod tests {
             post_cut_fair.validate_exact(),
             "the replay retains its exact logical identity at a fresh physical occurrence"
         );
+        let periodic_replay_fair = post_cut_fair.clone();
         let post_cut_command = make_command(&runtime, post_cut_fair);
         runtime
             .ingress
@@ -15177,7 +15366,7 @@ mod tests {
         );
         runtime.pending_effect_ownership = None;
         let replay = deferred_lifecycle_ownership_for_test(
-            replay_owner,
+            replay_owner.clone(),
             8,
             RuntimeDispatchIngress::DirectAuthenticated,
             Some(post_cut_ordinal),
@@ -15212,6 +15401,166 @@ mod tests {
             BTreeSet::from([7]),
             "the earlier target remains the sole runner-eligible continuation"
         );
+
+        // Retire the earlier deferred target, leaving only the replay whose
+        // physical occurrence began at that target's old cut. Its inherited
+        // logical ordinal is older than the timeout which is frozen next, but
+        // the new physical occurrence is not: the timeout cut must win.
+        assert!(runtime.deferred_lifecycle_ownership.remove(&7).is_some());
+        assert_eq!(
+            runtime
+                .eligible_deferred_admission_ordinals()
+                .expect("the replay is otherwise the logical minimum"),
+            BTreeSet::from([8])
+        );
+        runtime
+            .set_ingress_physical_cut(target_cut)
+            .expect("publish the timeout's receiver-local cut");
+        let clock_start = Instant::now();
+        runtime
+            .arm_live_clocks(clock_start)
+            .expect("arm timeout for the post-cut replay regression");
+        let timeout_owner = runtime
+            .frozen_timeout_owner_for_test(clock_start + runtime.base_round_timeout)
+            .expect("freeze one exact timeout owner");
+        assert!(replay_owner.lifecycle_ordinal() < timeout_owner.lifecycle_ordinal());
+        assert_eq!(runtime.timeout_owner_physical_cut, Some(target_cut));
+        assert!(
+            runtime
+                .eligible_deferred_admission_ordinals()
+                .expect("the timeout cut rejects obsolete logical resurrection")
+                .is_empty(),
+            "a post-cut replay cannot overtake the already-admitted timeout"
+        );
+        let frozen_timeout_owner = runtime
+            .timeout_owner
+            .clone()
+            .expect("the timeout owner remains frozen until transfer");
+        runtime.timeout_owner_physical_cut = None;
+        assert!(matches!(
+            runtime.eligible_deferred_admission_ordinals(),
+            Err(EnqueueError::FailClosed)
+        ));
+        runtime.timeout_owner_physical_cut = Some(target_cut);
+        runtime.timeout_owner = None;
+        assert!(matches!(
+            runtime.eligible_deferred_admission_ordinals(),
+            Err(EnqueueError::FailClosed)
+        ));
+        runtime.timeout_owner = Some(frozen_timeout_owner);
+        runtime
+            .set_ingress_physical_cut(
+                target_cut
+                    .checked_add(1)
+                    .expect("small timeout cut has a successor"),
+            )
+            .expect("later ingress advances only the live high-watermark");
+        assert_eq!(
+            runtime.timeout_owner_physical_cut,
+            Some(target_cut),
+            "later ingress cannot refresh the frozen timeout cut"
+        );
+        let arbitration = runtime
+            .scheduler_arbitration_inputs(clock_start + runtime.base_round_timeout)
+            .expect("the frozen timeout compares against its original physical cut");
+        assert!(
+            arbitration.timeout_due,
+            "post-cut deferred replay cannot suppress an already-admitted timeout"
+        );
+        runtime.timeout_owner = None;
+        runtime.timeout_owner_physical_cut = None;
+
+        // Retire the old physical occurrence, freeze a periodic owner at the
+        // advanced receiver cut, then admit another physical replay which
+        // retains the same obsolete logical lifecycle. The periodic selector
+        // must compare only with its immutable pre-cut prefix.
+        assert!(runtime.deferred_lifecycle_ownership.remove(&8).is_some());
+        assert!(runtime.deferred_ingress_ownership.remove(&8).is_some());
+        runtime.timeout_emitted = true;
+        runtime.retransmit_started_at = clock_start;
+        let periodic_due_at = clock_start + runtime.retransmit_interval;
+        runtime
+            .freeze_due_clock_owners(periodic_due_at)
+            .expect("freeze one exact periodic lifecycle and physical cut");
+        let frozen_periodic_owner = runtime
+            .retransmit_owner
+            .clone()
+            .expect("the due periodic episode owns one lifecycle position");
+        let periodic_cut = runtime
+            .retransmit_owner_physical_cut
+            .expect("the due periodic episode freezes receiver ingress");
+        assert_eq!(periodic_cut, runtime.ingress_physical_cut);
+
+        let mut later_replay_fair = periodic_replay_fair;
+        let later_physical_ordinal =
+            u64::try_from(periodic_cut).expect("small periodic cut fits u64");
+        later_replay_fair.first.physical_admission_ordinal = later_physical_ordinal;
+        later_replay_fair.latest.physical_admission_ordinal = later_physical_ordinal;
+        later_replay_fair.runtime_physical_cut = periodic_cut.checked_add(1);
+        assert!(later_replay_fair.validate_exact());
+        let later_replay_command = make_command(&runtime, later_replay_fair.clone());
+        let later_replay_owner = later_replay_command
+            .lifecycle_owner()
+            .expect("later replay retains its old logical lifecycle");
+        assert!(
+            later_replay_owner.lifecycle_ordinal() < frozen_periodic_owner.lifecycle_ordinal(),
+            "the regression requires physically later but logically older replay"
+        );
+        runtime
+            .set_ingress_physical_cut(
+                periodic_cut
+                    .checked_add(1)
+                    .expect("small periodic cut has a successor"),
+            )
+            .expect("publish the later physical admission without refreshing the clock cut");
+        let queue_len_before_replay = runtime.ingress.commands.len();
+        assert_eq!(
+            runtime.enqueue_after_clock_reservation(later_replay_command),
+            Err(EnqueueError::Full),
+            "the physically later replay remains on its existing ingress carrier"
+        );
+        assert_eq!(
+            runtime.ingress.commands.len(),
+            queue_len_before_replay,
+            "backpressure cannot publish a FIFO position ahead of the periodic owner"
+        );
+        assert_eq!(runtime.retransmit_owner_physical_cut, Some(periodic_cut));
+        let arbitration = runtime
+            .scheduler_arbitration_inputs(periodic_due_at)
+            .expect("periodic arbitration uses the frozen physical prefix");
+        assert!(
+            arbitration.periodic_timer_due,
+            "post-cut replay cannot suppress an already-admitted periodic episode"
+        );
+        let (selected, _) = ScheduleState { fifo_owed: true }.select(
+            arbitration.timeout_due,
+            arbitration.periodic_timer_due,
+            arbitration.fifo_ready,
+        );
+        assert_eq!(
+            selected,
+            ScheduledWork::PeriodicTimer,
+            "a later replay cannot inherit stale FIFO debt ahead of the frozen target"
+        );
+
+        runtime.retransmit_owner_physical_cut = None;
+        assert!(matches!(
+            runtime.scheduler_arbitration_inputs(periodic_due_at),
+            Err(EnqueueError::FailClosed)
+        ));
+        runtime.retransmit_owner_physical_cut = Some(periodic_cut);
+        runtime.retransmit_owner = None;
+        assert!(matches!(
+            runtime.eligible_deferred_admission_ordinals(),
+            Err(EnqueueError::FailClosed)
+        ));
+        runtime.retransmit_owner = Some(frozen_periodic_owner);
+        runtime.retransmit_owner = None;
+        runtime.retransmit_owner_physical_cut = None;
+        let later_replay_command = make_command(&runtime, later_replay_fair);
+        runtime
+            .enqueue_after_clock_reservation(later_replay_command)
+            .expect("the same retained replay becomes admissible after target transfer");
 
         // Pairwise target-relative precedence can form a cycle even though
         // every source/cut pair is individually exact: B logically precedes
