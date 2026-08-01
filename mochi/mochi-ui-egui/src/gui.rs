@@ -12647,7 +12647,9 @@ impl ToriiErrorInfoUiExt for ToriiErrorInfo {
     fn color(&self) -> Color32 {
         match self.kind {
             ToriiErrorKind::Decode => Color32::from_rgb(200, 160, 64),
-            ToriiErrorKind::Timeout => Color32::from_rgb(200, 160, 64),
+            ToriiErrorKind::Timeout | ToriiErrorKind::SmokeAdmissionOutcomeUnknown => {
+                Color32::from_rgb(200, 160, 64)
+            }
             ToriiErrorKind::SmokeRejected => Color32::from_rgb(200, 64, 64),
             ToriiErrorKind::HttpTransport
             | ToriiErrorKind::UnexpectedStatus

@@ -130,6 +130,9 @@ pub enum ToriiError {
     /// A smoke transaction was rejected (or expired) before commitment.
     #[error("smoke transaction {hash} rejected: {reason}")]
     SmokeRejected { hash: String, reason: String },
+    /// Torii could not prove whether the exact smoke transaction was admitted.
+    #[error("smoke transaction admission outcome remains unknown for {hash}")]
+    SmokeAdmissionOutcomeUnknown { hash: String },
 }
 
 /// High-level classification for [`ToriiError`] variants.
@@ -157,6 +160,8 @@ pub enum ToriiErrorKind {
     Timeout,
     /// Smoke transaction was rejected or expired.
     SmokeRejected,
+    /// Smoke transaction admission remained ambiguous after exact-hash reconciliation.
+    SmokeAdmissionOutcomeUnknown,
 }
 
 /// Summary of a [`ToriiError`] capturing its user-facing message and kind.
@@ -274,7 +279,35 @@ impl ToriiError {
                 format!("Smoke transaction {hash} was rejected"),
                 reason.clone(),
             ),
+            Self::SmokeAdmissionOutcomeUnknown { hash } => ToriiErrorInfo::with_detail(
+                ToriiErrorKind::SmokeAdmissionOutcomeUnknown,
+                format!("Smoke transaction admission outcome remains unknown for {hash}"),
+                "Reconcile or resubmit only the byte-identical signed transaction".to_owned(),
+            ),
         }
+    }
+
+    fn is_queue_plan_journal_outcome_unknown(&self) -> bool {
+        matches!(
+            self,
+            Self::UnexpectedStatus {
+                reject_code: Some(code),
+                ..
+            } if code == QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN_REJECT_CODE
+        )
+    }
+
+    fn confirms_existing_submission(&self) -> bool {
+        matches!(
+            self,
+            Self::UnexpectedStatus {
+                reject_code: Some(code),
+                ..
+            } if matches!(
+                code.as_str(),
+                "PRTRY:ALREADY_ENQUEUED" | "PRTRY:ALREADY_COMMITTED"
+            )
+        )
     }
 }
 
@@ -408,6 +441,7 @@ pub struct SmokeCommitSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SmokeTransactionStatus {
+    Queued,
     Committed(u64),
     Rejected(String),
     Expired,
@@ -668,11 +702,42 @@ impl LocalMcpProbeResult {
 
 const SMOKE_TTL: Duration = Duration::from_secs(30);
 const SMOKE_SUBMISSION_MARGIN: Duration = Duration::from_secs(5);
+const SMOKE_EXACT_RESUBMIT_DELAY: Duration = Duration::from_millis(250);
+const SMOKE_EXACT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(1);
+const QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN_REJECT_CODE: &str =
+    "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN";
 
 fn unix_time_now() -> Duration {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
+}
+
+#[derive(Debug, Default)]
+struct ReadinessSmokeAttemptCursor {
+    next_index: usize,
+    pinned_index: Option<usize>,
+}
+
+impl ReadinessSmokeAttemptCursor {
+    fn current_index(&self) -> usize {
+        self.pinned_index.unwrap_or(self.next_index)
+    }
+
+    fn record_failure(&mut self, index: usize, error: &ToriiError) {
+        if self.pinned_index.is_some() {
+            return;
+        }
+        if matches!(error, ToriiError::SmokeAdmissionOutcomeUnknown { .. }) {
+            self.pinned_index = Some(index);
+        } else {
+            self.next_index = index.saturating_add(1);
+        }
+    }
+
+    fn is_pinned(&self) -> bool {
+        self.pinned_index.is_some()
+    }
 }
 
 fn build_lane_lifecycle_transaction(
@@ -1939,7 +2004,7 @@ fn parse_pipeline_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeT
             smoke_rejection_reason(status),
         ))),
         "Expired" => Ok(Some(SmokeTransactionStatus::Expired)),
-        "Queued" => Ok(None),
+        "Queued" => Ok(Some(SmokeTransactionStatus::Queued)),
         _ => Ok(None),
     }
 }
@@ -1963,6 +2028,7 @@ fn parse_explorer_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeT
             smoke_rejection_reason(record),
         ))),
         "Expired" => Ok(Some(SmokeTransactionStatus::Expired)),
+        "Queued" | "Pending" => Ok(Some(SmokeTransactionStatus::Queued)),
         _ => Ok(None),
     }
 }
@@ -2608,8 +2674,10 @@ impl ToriiClient {
         let started = Instant::now();
         let mut backoff = plan.backoff.max(Duration::from_millis(50)).min(MAX_BACKOFF);
 
-        for (index, transaction) in plan.transactions.iter().enumerate() {
-            let attempt = index + 1;
+        let mut cursor = ReadinessSmokeAttemptCursor::default();
+        for attempt in 1..=attempts {
+            let transaction_index = cursor.current_index();
+            let transaction = &plan.transactions[transaction_index];
             match self
                 .submit_and_wait_for_commit(transaction, plan.commit_options)
                 .await
@@ -2623,7 +2691,11 @@ impl ToriiClient {
                         status,
                     });
                 }
-                Err(_err) if attempt < attempts => {
+                Err(err @ ToriiError::SmokeRejected { .. }) if cursor.is_pinned() => {
+                    return Err(err);
+                }
+                Err(err) if attempt < attempts => {
+                    cursor.record_failure(transaction_index, &err);
                     sleep(backoff).await;
                     backoff = (backoff.saturating_mul(2)).min(MAX_BACKOFF);
                 }
@@ -2722,18 +2794,37 @@ impl ToriiClient {
         let events_stream = self.events_stream().await?;
         let mut block_rx = block_stream.subscribe();
         let mut event_rx = events_stream.subscribe();
+        let signed_bytes = transaction.encode_versioned();
 
-        self.submit_signed_transaction(transaction).await?;
+        let mut admission_outcome_unknown = match self.submit_transaction(&signed_bytes).await {
+            Ok(()) => false,
+            Err(err) if err.confirms_existing_submission() => false,
+            Err(err) if err.is_queue_plan_journal_outcome_unknown() => true,
+            Err(err) => return Err(err),
+        };
 
         let wait = async {
             let mut status_poll = tokio::time::interval(Duration::from_millis(250));
+            let retry_start = tokio::time::Instant::now() + SMOKE_EXACT_RESUBMIT_DELAY;
+            let mut exact_resubmit =
+                tokio::time::interval_at(retry_start, SMOKE_EXACT_RESUBMIT_INTERVAL);
+            exact_resubmit.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tokio::select! {
                     _ = status_poll.tick() => {
-                        if let Some(status) =
-                            self.fetch_smoke_transaction_status(tx_hash_str.as_str()).await?
+                        let status = match self
+                            .fetch_smoke_transaction_status(tx_hash_str.as_str())
+                            .await
                         {
+                            Ok(status) => status,
+                            Err(_err) if admission_outcome_unknown => None,
+                            Err(err) => return Err(err),
+                        };
+                        if let Some(status) = status {
                             match status {
+                                SmokeTransactionStatus::Queued => {
+                                    admission_outcome_unknown = false;
+                                }
                                 SmokeTransactionStatus::Committed(height) => return Ok(height),
                                 SmokeTransactionStatus::Rejected(reason) => {
                                     return Err(ToriiError::SmokeRejected {
@@ -2750,6 +2841,15 @@ impl ToriiClient {
                             }
                         }
                     }
+                    _ = exact_resubmit.tick(), if admission_outcome_unknown => {
+                        match self.submit_transaction(&signed_bytes).await {
+                            Ok(()) => admission_outcome_unknown = false,
+                            Err(err) if err.confirms_existing_submission() => {
+                                admission_outcome_unknown = false;
+                            }
+                            Err(_err) => {}
+                        }
+                    }
                     message = block_rx.recv() => {
                         match message {
                             Ok(BlockStreamEvent::Block { block, .. }) => {
@@ -2758,7 +2858,9 @@ impl ToriiClient {
                                 }
                             }
                             Ok(BlockStreamEvent::DecodeError { error }) => {
-                                return Err(ToriiError::Decode(error.message));
+                                if !admission_outcome_unknown {
+                                    return Err(ToriiError::Decode(error.message));
+                                }
                             }
                             Ok(BlockStreamEvent::Closed) => {}
                             Ok(BlockStreamEvent::Lagged { .. } | BlockStreamEvent::Text { .. }) => {}
@@ -2796,7 +2898,9 @@ impl ToriiClient {
                                 }
                             }
                             Ok(EventStreamEvent::DecodeError { error }) => {
-                                return Err(ToriiError::Decode(error.message));
+                                if !admission_outcome_unknown {
+                                    return Err(ToriiError::Decode(error.message));
+                                }
                             }
                             Ok(EventStreamEvent::Closed) => {}
                             Ok(EventStreamEvent::Lagged { .. } | EventStreamEvent::Text { .. }) => {}
@@ -2807,11 +2911,15 @@ impl ToriiClient {
             }
         };
 
-        let result = tokio::time::timeout(options.timeout, wait)
-            .await
-            .map_err(|_| ToriiError::Timeout {
+        let result = match tokio::time::timeout(options.timeout, wait).await {
+            Ok(result) => result,
+            Err(_) if admission_outcome_unknown => Err(ToriiError::SmokeAdmissionOutcomeUnknown {
+                hash: tx_hash_str.clone(),
+            }),
+            Err(_) => Err(ToriiError::Timeout {
                 context: format!("smoke commit {tx_hash_str}"),
-            })?;
+            }),
+        };
 
         drop(block_stream);
         drop(events_stream);
@@ -5599,6 +5707,64 @@ mod tests {
         assert_eq!(
             summary.message,
             "Failed to decode Norito payload from Torii"
+        );
+    }
+
+    #[test]
+    fn queue_plan_outcome_unknown_requires_exact_submission_reconciliation() {
+        let ambiguous = ToriiError::UnexpectedStatus {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            reject_code: Some(QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN_REJECT_CODE.to_owned()),
+            message: Some("admission outcome unknown".to_owned()),
+        };
+        assert!(ambiguous.is_queue_plan_journal_outcome_unknown());
+        assert!(!ambiguous.confirms_existing_submission());
+
+        for reject_code in ["PRTRY:ALREADY_ENQUEUED", "PRTRY:ALREADY_COMMITTED"] {
+            let reconciled = ToriiError::UnexpectedStatus {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                reject_code: Some(reject_code.to_owned()),
+                message: None,
+            };
+            assert!(reconciled.confirms_existing_submission());
+        }
+
+        let unresolved = ToriiError::SmokeAdmissionOutcomeUnknown {
+            hash: "abcd".to_owned(),
+        };
+        let mut cursor = ReadinessSmokeAttemptCursor::default();
+        cursor.record_failure(0, &unresolved);
+        assert_eq!(cursor.current_index(), 0);
+        cursor.record_failure(
+            0,
+            &ToriiError::Timeout {
+                context: "same exact transaction".to_owned(),
+            },
+        );
+        assert_eq!(
+            cursor.current_index(),
+            0,
+            "later observational errors must not advance to a replacement transaction"
+        );
+        let mut ordinary_retry = ReadinessSmokeAttemptCursor::default();
+        ordinary_retry.record_failure(
+            0,
+            &ToriiError::Timeout {
+                context: "ordinary unambiguous timeout".to_owned(),
+            },
+        );
+        assert_eq!(ordinary_retry.current_index(), 1);
+        let unresolved = unresolved.summarize();
+        assert_eq!(
+            unresolved.kind,
+            ToriiErrorKind::SmokeAdmissionOutcomeUnknown
+        );
+        assert!(unresolved.message.contains("abcd"));
+        assert!(
+            unresolved
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("byte-identical"))
         );
     }
 
@@ -9780,6 +9946,20 @@ state_tiered_cold_entries 2
             }
             other => panic!("expected rejection, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_pipeline_smoke_status_preserves_queued_reconciliation_evidence() {
+        let value = norito::json!({
+            "hash": "abcd",
+            "status": { "kind": "Queued" },
+            "scope": "local",
+            "resolved_from": "cache"
+        });
+        let status = parse_pipeline_smoke_status(&value)
+            .expect("status")
+            .expect("queued status remains observable");
+        assert_eq!(status, SmokeTransactionStatus::Queued);
     }
 
     #[tokio::test(flavor = "current_thread")]
