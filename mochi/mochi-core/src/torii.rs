@@ -15,7 +15,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use futures::SinkExt;
+use futures::{SinkExt, future::join_all};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     Identifiable,
@@ -446,6 +446,100 @@ pub struct ReadinessOptions {
     pub timeout: Duration,
     /// Delay between successive probes while waiting for readiness.
     pub poll_interval: Duration,
+}
+
+/// A managed Torii peer that failed to report a committed genesis block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedPeerGenesisFailure {
+    /// Stable peer alias from the managed topology.
+    pub alias: String,
+    /// Torii base URL that was probed.
+    pub base_url: String,
+    /// Classified failure returned by the peer's readiness probe.
+    pub error: ToriiErrorInfo,
+}
+
+/// Failure of the all-managed-peer genesis readiness gate.
+#[derive(Debug, thiserror::Error)]
+pub enum ManagedPeerGenesisReadinessError {
+    /// No managed peers were supplied to the gate.
+    #[error("cannot wait for committed genesis because no managed Torii peers were supplied")]
+    NoManagedPeers,
+    /// One or more managed peers failed to report committed genesis before the deadline.
+    #[error("not every managed Torii peer reported committed genesis: {diagnostics}")]
+    PeerFailures {
+        /// Actionable alias, endpoint, and error details for every failed peer.
+        diagnostics: String,
+        /// Structured failures for callers that render their own diagnostics.
+        failures: Vec<ManagedPeerGenesisFailure>,
+    },
+}
+
+impl ManagedPeerGenesisReadinessError {
+    /// Structured per-peer failures, or an empty slice when no peers were supplied.
+    #[must_use]
+    pub fn failures(&self) -> &[ManagedPeerGenesisFailure] {
+        match self {
+            Self::NoManagedPeers => &[],
+            Self::PeerFailures { failures, .. } => failures,
+        }
+    }
+}
+
+/// Wait concurrently until every managed Torii peer reports at least one committed block.
+///
+/// Each peer receives the same bounded readiness deadline. Running the probes concurrently keeps
+/// the topology-wide gate bounded by that deadline rather than multiplying it by the peer count.
+/// No transaction should be submitted to a managed multi-peer network before this gate succeeds.
+pub async fn wait_for_all_managed_peers_genesis(
+    peers: Vec<(String, ToriiClient)>,
+    options: ReadinessOptions,
+) -> Result<Vec<(String, ToriiStatusSnapshot)>, ManagedPeerGenesisReadinessError> {
+    if peers.is_empty() {
+        return Err(ManagedPeerGenesisReadinessError::NoManagedPeers);
+    }
+
+    let probes = peers.into_iter().map(|(alias, client)| async move {
+        let base_url = client.base_url().to_owned();
+        let result = client.wait_for_genesis_commit(options).await;
+        (alias, base_url, result)
+    });
+    let mut committed = Vec::new();
+    let mut failures = Vec::new();
+    for (alias, base_url, result) in join_all(probes).await {
+        match result {
+            Ok(snapshot) => committed.push((alias, snapshot)),
+            Err(error) => failures.push(ManagedPeerGenesisFailure {
+                alias,
+                base_url,
+                error: error.summarize(),
+            }),
+        }
+    }
+
+    if failures.is_empty() {
+        return Ok(committed);
+    }
+
+    let diagnostics = failures
+        .iter()
+        .map(|failure| {
+            let detail = failure
+                .error
+                .detail
+                .as_deref()
+                .map_or_else(String::new, |detail| format!(" ({detail})"));
+            format!(
+                "{} at {}: {}{}",
+                failure.alias, failure.base_url, failure.error.message, detail
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(ManagedPeerGenesisReadinessError::PeerFailures {
+        diagnostics,
+        failures,
+    })
 }
 
 impl ReadinessOptions {
@@ -8306,6 +8400,115 @@ mod tests {
 
         let _ = shutdown.send(());
         let _ = handle.join();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn all_managed_peers_genesis_waits_for_the_lagging_peer() {
+        let committed = TelemetryStatus {
+            blocks: 1,
+            ..TelemetryStatus::default()
+        };
+        let zero_height = TelemetryStatus {
+            blocks: 0,
+            ..TelemetryStatus::default()
+        };
+        let Some((ready_addr, ready_shutdown, ready_handle)) =
+            spawn_status_stub(vec![(200, encode_status_payload(&committed))])
+        else {
+            return;
+        };
+        let Some((lagging_addr, lagging_shutdown, lagging_handle)) = spawn_status_stub(vec![
+            (200, encode_status_payload(&zero_height)),
+            (200, encode_status_payload(&committed)),
+        ]) else {
+            let _ = ready_shutdown.send(());
+            let _ = ready_handle.join();
+            return;
+        };
+        let peers = vec![
+            (
+                "peer0".to_owned(),
+                ToriiClient::new(format!("http://{ready_addr}")).expect("ready client"),
+            ),
+            (
+                "peer1".to_owned(),
+                ToriiClient::new(format!("http://{lagging_addr}")).expect("lagging client"),
+            ),
+        ];
+        let options = ReadinessOptions::new(Duration::from_millis(400))
+            .with_poll_interval(Duration::from_millis(20));
+
+        let mut snapshots = wait_for_all_managed_peers_genesis(peers, options)
+            .await
+            .expect("all managed peers committed genesis");
+        snapshots.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
+        assert_eq!(
+            snapshots
+                .iter()
+                .map(|(alias, snapshot)| (alias.as_str(), snapshot.status.blocks))
+                .collect::<Vec<_>>(),
+            vec![("peer0", 1), ("peer1", 1)]
+        );
+
+        let _ = ready_shutdown.send(());
+        let _ = lagging_shutdown.send(());
+        let _ = ready_handle.join();
+        let _ = lagging_handle.join();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn all_managed_peers_genesis_reports_each_lagging_alias_and_endpoint() {
+        let committed = TelemetryStatus {
+            blocks: 1,
+            ..TelemetryStatus::default()
+        };
+        let zero_height = TelemetryStatus {
+            blocks: 0,
+            ..TelemetryStatus::default()
+        };
+        let Some((ready_addr, ready_shutdown, ready_handle)) =
+            spawn_status_stub(vec![(200, encode_status_payload(&committed))])
+        else {
+            return;
+        };
+        let Some((lagging_addr, lagging_shutdown, lagging_handle)) =
+            spawn_status_stub(vec![(200, encode_status_payload(&zero_height))])
+        else {
+            let _ = ready_shutdown.send(());
+            let _ = ready_handle.join();
+            return;
+        };
+        let lagging_url = format!("http://{lagging_addr}");
+        let peers = vec![
+            (
+                "peer-ready".to_owned(),
+                ToriiClient::new(format!("http://{ready_addr}")).expect("ready client"),
+            ),
+            (
+                "peer-lagging".to_owned(),
+                ToriiClient::new(&lagging_url).expect("lagging client"),
+            ),
+        ];
+        let options = ReadinessOptions::new(Duration::from_millis(120))
+            .with_poll_interval(Duration::from_millis(15));
+
+        let error = wait_for_all_managed_peers_genesis(peers, options)
+            .await
+            .expect_err("lagging managed peer must fail the topology-wide gate");
+        let failures = error.failures();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].alias, "peer-lagging");
+        assert_eq!(failures[0].base_url, format!("{lagging_url}/"));
+        assert_eq!(failures[0].error.kind, ToriiErrorKind::Timeout);
+        let message = error.to_string();
+        assert!(message.contains("peer-lagging"), "{message}");
+        assert!(message.contains(&lagging_url), "{message}");
+        assert!(message.contains("zero committed blocks"), "{message}");
+
+        let _ = ready_shutdown.send(());
+        let _ = lagging_shutdown.send(());
+        let _ = ready_handle.join();
+        let _ = lagging_handle.join();
     }
 
     #[tokio::test(flavor = "current_thread")]
