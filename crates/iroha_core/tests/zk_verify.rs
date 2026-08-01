@@ -101,6 +101,13 @@ fn signed_empty_tx_with_attachments(
     .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
 }
 
+fn bounded_proof_attachments(
+    attachments: Vec<iroha_data_model::proof::ProofAttachment>,
+) -> iroha_data_model::proof::ProofAttachmentList {
+    iroha_data_model::proof::ProofAttachmentList::try_from(attachments)
+        .expect("test attachment set is a valid bounded proof list")
+}
+
 fn grant_vk_management(
     exec: &Executor,
     stx: &mut iroha_core::state::StateTransaction<'_, '_>,
@@ -148,7 +155,7 @@ fn duplicate_proof_in_same_block_is_rejected() {
             .expect("register vk");
         reg_stx.apply();
     }
-    let attachments = iroha_data_model::proof::ProofAttachmentList(vec![
+    let attachments = bounded_proof_attachments(vec![
         iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             fixture.proof_box("halo2/ipa"),
@@ -368,7 +375,7 @@ fn preverify_rejects_missing_vk_reference() {
     let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
     let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_missing");
     let fixture = bound_halo2_fixture();
-    let attachments = iroha_data_model::proof::ProofAttachmentList(vec![
+    let attachments = bounded_proof_attachments(vec![
         iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             fixture.proof_box("halo2/ipa"),
@@ -412,7 +419,7 @@ fn preverify_rejects_proof_backend_mismatch_before_lookup() {
     );
     let tx = signed_empty_tx_with_attachments(
         &state.chain_id,
-        iroha_data_model::proof::ProofAttachmentList(vec![attachment]),
+        bounded_proof_attachments(vec![attachment]),
     );
 
     let mut stx = block.transaction();
@@ -444,7 +451,7 @@ fn preverify_rejects_vk_ref_backend_mismatch_before_lookup() {
     );
     let tx = signed_empty_tx_with_attachments(
         &state.chain_id,
-        iroha_data_model::proof::ProofAttachmentList(vec![attachment]),
+        bounded_proof_attachments(vec![attachment]),
     );
 
     let mut stx = block.transaction();
@@ -484,7 +491,7 @@ fn preverify_rejects_protocol_names_as_backend_labels_before_lookup() {
         );
         let tx = signed_empty_tx_with_attachments(
             &state.chain_id,
-            iroha_data_model::proof::ProofAttachmentList(vec![attachment]),
+            bounded_proof_attachments(vec![attachment]),
         );
 
         let mut stx = block.transaction();
@@ -526,7 +533,7 @@ fn preverify_rejects_production_claim_backend_labels_before_lookup() {
         );
         let tx = signed_empty_tx_with_attachments(
             &state.chain_id,
-            iroha_data_model::proof::ProofAttachmentList(vec![attachment]),
+            bounded_proof_attachments(vec![attachment]),
         );
 
         let mut stx = block.transaction();
@@ -561,7 +568,7 @@ fn preverify_rejects_commitment_only_missing_vk_reference() {
     attachment.vk_commitment = Some([0xAB; 32]);
     let tx = signed_empty_tx_with_attachments(
         &state.chain_id,
-        iroha_data_model::proof::ProofAttachmentList(vec![attachment]),
+        bounded_proof_attachments(vec![attachment]),
     );
 
     let mut stx = block.transaction();
@@ -613,7 +620,7 @@ fn preverify_rejects_inactive_registered_vk_even_with_matching_commitment() {
     attachment.vk_commitment = Some(expected_commitment);
     let tx = signed_empty_tx_with_attachments(
         &state.chain_id,
-        iroha_data_model::proof::ProofAttachmentList(vec![attachment]),
+        bounded_proof_attachments(vec![attachment]),
     );
 
     let mut stx = block.transaction();
@@ -878,7 +885,7 @@ fn preverify_rejects_empty_proof_as_malformed() {
             .expect("register vk");
         reg_stx.apply();
     }
-    let attachments = iroha_data_model::proof::ProofAttachmentList(vec![
+    let attachments = bounded_proof_attachments(vec![
         iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![]),
@@ -937,7 +944,7 @@ fn preverify_rejects_proof_too_big() {
             .expect("register vk");
         reg_stx.apply();
     }
-    let attachments = iroha_data_model::proof::ProofAttachmentList(vec![
+    let attachments = bounded_proof_attachments(vec![
         iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
             iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), big),

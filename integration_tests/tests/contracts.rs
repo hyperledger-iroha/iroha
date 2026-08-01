@@ -1487,33 +1487,38 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         assert_typed_query_projection(all_page, view_name, expected_fields)?;
     }
 
-    for (entrypoint, offset, limit) in [
-        ("accounts", -1_i64, 1_i64),
-        ("assets", 0, 0),
-        ("asset_definitions", 0, 65),
-        ("domains", -1, 64),
-        ("nfts", 0, 65),
-    ] {
-        let rejected = tokio::task::spawn_blocking({
-            let client = network.peers()[0].client();
-            let contract_address = contract_address.clone();
-            let payload = typed_core_query_page_payload(offset, limit);
-            move || {
-                client.post_contract_view_json(
-                    &iroha_test_samples::ALICE_ID,
-                    Some(&contract_address),
-                    None,
-                    entrypoint,
-                    Some(&payload),
-                    1_000_000,
-                )
-            }
-        })
-        .await?;
-        assert!(
-            rejected.is_err(),
-            "{entrypoint} must reject offset={offset}, limit={limit} at runtime"
-        );
+    const INVALID_PAGINATION_BOUNDS: [(&str, i64, i64); 5] = [
+        ("negative offset", -1, 1),
+        ("negative limit", 0, -1),
+        ("offset-plus-limit overflow", i64::MAX - 1, 2),
+        ("zero limit", 0, 0),
+        ("limit above the maximum", 0, 65),
+    ];
+    for (entrypoint, _, _, _) in &families {
+        let entrypoint = *entrypoint;
+        for (bound_class, offset, limit) in INVALID_PAGINATION_BOUNDS {
+            let rejected = tokio::task::spawn_blocking({
+                let client = network.peers()[0].client();
+                let contract_address = contract_address.clone();
+                let payload = typed_core_query_page_payload(offset, limit);
+                move || {
+                    client.post_contract_view_json(
+                        &iroha_test_samples::ALICE_ID,
+                        Some(&contract_address),
+                        None,
+                        entrypoint,
+                        Some(&payload),
+                        1_000_000,
+                    )
+                }
+            })
+            .await?;
+            assert!(
+                rejected.is_err(),
+                "{entrypoint} must reject the {bound_class} bound class: \
+                 offset={offset}, limit={limit}"
+            );
+        }
     }
 
     Ok(())

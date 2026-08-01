@@ -328,7 +328,7 @@ behind a CLI that other SDKs can reuse.
    of CI:
 
    ```bash
-   cargo run -p xtask --bin torii-mock-harness -- \
+   cargo run -p xtask --features dev-tools --bin torii-mock-harness -- \
      --sdk android \
      --scenario submit \
      --metrics-path artifacts/torii_mock/android_submit.prom \

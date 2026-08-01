@@ -1272,7 +1272,7 @@ impl norito::core::NoritoSerialize for BoxedStoredCompletionDeliveryV1 {
         <StoredCompletionDeliveryV1 as norito::core::NoritoSerialize>::schema_hash()
     }
 
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(self.0.as_ref(), writer)
     }
 
@@ -8662,11 +8662,12 @@ mod tests {
         );
 
         let key = KeyPair::try_from_seed(vec![8; 32], Algorithm::Ed25519).expect("key");
-        let attachments = ProofAttachmentList(vec![ProofAttachment::new_ref(
+        let attachments = ProofAttachmentList::try_from(vec![ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
             VerifyingKeyId::new("halo2/ipa", "vk_1"),
-        )]);
+        )])
+        .expect("one attachment is a valid bounded proof list");
         let attached = TransactionBuilder::from_payload(expected.payload().clone())
             .expect("rebuild completion payload")
             .with_attachments(attachments)

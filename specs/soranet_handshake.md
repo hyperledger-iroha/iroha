@@ -302,7 +302,7 @@ external revocation list loaded from disk.
 - **Minting.** The `soranet-admission-token` binary (new in SNNet-16D) replaces the
 
   ```bash
-  cargo run -p soranet-relay --bin soranet_admission_token -- mint \
+  cargo run -p soranet-relay --features dev-tools --bin soranet_admission_token -- mint \
     --issuer-public-hex "$(cat issuer_mldsa_public.hex)" \
     --issuer-secret-hex "$(cat issuer_mldsa_secret.hex)" \
     --relay-id-hex "$RELAY_ID_HEX" \
@@ -325,7 +325,7 @@ external revocation list loaded from disk.
   32-byte hex string). The CLI provides a safe helper:
 
   ```bash
-  cargo run -p soranet-relay --bin soranet_admission_token -- revoke \
+  cargo run -p soranet-relay --features dev-tools --bin soranet_admission_token -- revoke \
     --list /etc/soranet/relay/token_revocations.json \
     --token-id-hex "$TOKEN_ID_HEX"
   ```
@@ -897,11 +897,11 @@ interactive media latency remains minimal.
 
 - **Checkout & verification.** Every SDK pins the fixture bundle at
   `fixtures/soranet_handshake/` and runs
-  `cargo run -p soranet-handshake-harness -- fixtures --verify` as part of its
+  `cargo run -p soranet-handshake-harness --features dev-tools -- fixtures --verify` as part of its
   CI smoke step. This guarantees the vendored vectors match the canonical set.
 - **Transcript parity.** SDK harnesses replay the provided capability vectors and
   transcripts, comparing their computed transcript hash against the JSON emitted
-  by `cargo run -p soranet-handshake-harness -- simulate --json-out - …`.
+  by `cargo run -p soranet-handshake-harness --features dev-tools -- simulate --json-out - …`.
   Mismatches fail the build and instruct contributors to regenerate bindings or
   fix parsing bugs.
 - **Salt payloads.** For SaltAnnouncementV1 fixtures, SDKs decode the `.json`
@@ -927,7 +927,7 @@ interactive media latency remains minimal.
 - **Bandwidth overhead target:** Maintain a moving-average cover ratio
   (`cover_bytes / total_bytes`) ≤ 0.18 over 10-minute windows, derived from the
   `cover_ratio` field in `SoraNetTelemetryV1`. Nightly CI uses
-  `cargo run -p soranet-handshake-harness -- simulate --telemetry-out` to emit a
+  `cargo run -p soranet-handshake-harness --features dev-tools -- simulate --telemetry-out` to emit a
   sample payload and a Prometheus check asserts the ratio stays below the
   threshold. Production relays alarm when the rolling mean exceeds 0.20 for two
   consecutive windows.
@@ -1036,5 +1036,5 @@ aggregates alarms into the following metrics exported via OpenTelemetry:
   `tests/interop/soranet/capabilities/` together with sample telemetry and
   salt announcements in `fixtures/soranet_handshake/`.
 - Developers can inspect raw TLVs or render SaltAnnouncement payloads via
-  `cargo run -p soranet-handshake-harness -- inspect …` and `-- salt …` while the full
+  `cargo run -p soranet-handshake-harness --features dev-tools -- inspect …` and `-- salt …` while the full
   handshake simulation is being implemented.

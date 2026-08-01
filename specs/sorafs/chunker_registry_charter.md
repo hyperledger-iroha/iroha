@@ -40,8 +40,8 @@ CLIs, gateways, and SDKs. It tracks the invariants checked by
      `ChunkerProfileProposalV1` JSON under `specs/sorafs/proposals/`.
    - Include CLI output from:
      ```bash
-     cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
-     cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
+     cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- --list-profiles
+     cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
      cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-

@@ -91,10 +91,10 @@ _PREBUILT_MANIFEST_NAME = ".sumeragi-v2-prebuilt-binaries.tsv"
 _PREBUILT_INVOCATION_RE = re.compile(r"invocation\.[A-Za-z0-9]+")
 _PREBUILT_TRIPLE_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_.]+)+")
 _PREBUILT_BINARY_SPECS = (
-    ("irohad", "release/iroha3d"),
+    ("irohad", "release/irohad"),
     (
         "irohad_message_control",
-        "message-control/release/iroha3d",
+        "message-control/release/irohad",
     ),
     ("iroha", "release/iroha"),
     ("kagami", "release/kagami"),
@@ -4802,7 +4802,7 @@ def _prebuilt_binary_bundle(
     )
     _prebuilt_directory_inventory(
         bundle_dir / "release",
-        {"iroha3d", "iroha", "kagami"},
+        {"irohad", "iroha", "kagami"},
         "prebuilt release directory",
     )
     _prebuilt_directory_inventory(
@@ -4812,7 +4812,7 @@ def _prebuilt_binary_bundle(
     )
     _prebuilt_directory_inventory(
         bundle_dir / "message-control" / "release",
-        {"iroha3d"},
+        {"irohad"},
         "prebuilt message-control release directory",
     )
 
@@ -5376,9 +5376,9 @@ def _seed_run_logs(
     source_bound_root = repo_root / "target" / "sumeragi-v2-release" / manifest
     cargo_target_dir = source_bound_root / "test-suite"
     program_target_dir = prebuilt_bundle_dir
-    irohad = program_target_dir / "release" / "iroha3d"
+    irohad = program_target_dir / "release" / "irohad"
     message_control_irohad = (
-        program_target_dir / "message-control" / "release" / "iroha3d"
+        program_target_dir / "message-control" / "release" / "irohad"
     )
     iroha = program_target_dir / "release" / "iroha"
     kagami = program_target_dir / "release" / "kagami"
@@ -7339,7 +7339,7 @@ def _snapshot_receipt_inputs(
     )
     _prebuilt_directory_inventory(
         prebuilt_root / "release",
-        {"iroha3d", "iroha", "kagami"},
+        {"irohad", "iroha", "kagami"},
         "aggregate prebuilt release directory",
     )
     _prebuilt_directory_inventory(
@@ -7349,7 +7349,7 @@ def _snapshot_receipt_inputs(
     )
     _prebuilt_directory_inventory(
         prebuilt_root / "message-control" / "release",
-        {"iroha3d"},
+        {"irohad"},
         "aggregate prebuilt message-control release directory",
     )
 

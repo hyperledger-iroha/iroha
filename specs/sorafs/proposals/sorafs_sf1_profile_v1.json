@@ -42,7 +42,7 @@
       "commands": [
         "cargo test -p sorafs_chunker",
         "ci/check_sorafs_fixtures.sh",
-        "cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles"
+        "cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- --list-profiles"
       ],
       "notes": "See determinism report for digests and parity results."
     }

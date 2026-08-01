@@ -42,7 +42,6 @@ use iroha_data_model::offline::{
 pub use iroha_data_model::offline::{KagemushaPastaPublicLayoutV4, KagemushaStepCircuitParamsV4};
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
-use std::io::Read as _;
 use std::sync::Arc;
 
 use ff::{Field as _, PrimeField};

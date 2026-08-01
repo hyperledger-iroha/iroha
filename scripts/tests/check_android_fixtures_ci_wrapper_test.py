@@ -21,12 +21,20 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
+def _field(value: bytes) -> bytes:
+    return MODULE.compact_length(len(value)) + value
+
+
+def _signed_transaction(payload: bytes, signature: bytes) -> bytes:
+    return _field(signature) + _field(payload) + _field(b"\x00")
+
+
 def _write_fixture_set(base: Path) -> tuple[Path, Path, Path]:
     resources = base / "resources"
     resources.mkdir(parents=True, exist_ok=True)
 
     payload_bytes = b"alpha-fixture"
-    signed_bytes = b"alpha-signed"
+    signed_bytes = _signed_transaction(payload_bytes, b"alpha-signed")
     (resources / "alpha.norito").write_bytes(payload_bytes)
 
     payloads_path = base / "transaction_payloads.json"
@@ -40,12 +48,30 @@ def _write_fixture_set(base: Path) -> tuple[Path, Path, Path]:
             [
                 {
                     "name": "alpha",
-                    "encoded": base64.b64encode(payload_bytes).decode(),
+                    "payload_base64": base64.b64encode(payload_bytes).decode(),
+                    "payload_hash": MODULE.iroha_hash(payload_bytes),
+                    "signed_base64": base64.b64encode(signed_bytes).decode(),
+                    "signed_hash": MODULE.signed_transaction_entrypoint_hash(
+                        signed_bytes
+                    ),
                     "creation_time_ms": creation_time_ms,
                     "chain": chain,
                     "authority": authority,
                     "time_to_live_ms": time_to_live_ms,
                     "nonce": nonce,
+                    "payload": {
+                        "authority": authority,
+                        "chain": chain,
+                        "creation_time_ms": creation_time_ms,
+                        "executable": {"Instructions": []},
+                        "fee_payment": {
+                            "payer": "authority",
+                            "value": {"charge_limits": []},
+                        },
+                        "metadata": {},
+                        "nonce": nonce,
+                        "time_to_live_ms": time_to_live_ms,
+                    },
                 }
             ],
             indent=2,

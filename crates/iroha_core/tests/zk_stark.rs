@@ -1385,7 +1385,8 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
         norito::to_bytes(&env).expect("encode OpenVerifyEnvelope"),
     );
     let attachment = ProofAttachment::new_ref(backend.into(), proof_box, vk_id);
-    let attachments = ProofAttachmentList(vec![attachment]);
+    let attachments = ProofAttachmentList::try_from(vec![attachment])
+        .expect("one attachment is a valid bounded proof list");
 
     let tx_proved = TransactionBuilder::new(
         state.chain_id.clone(),

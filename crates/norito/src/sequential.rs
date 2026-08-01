@@ -36,7 +36,7 @@ fn read_len_u64(bytes: &[u8], cursor: &mut usize) -> Result<usize, Error> {
 
 fn serialize_element<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
     let mut buf = Vec::new();
-    value.serialize(&mut buf)?;
+    crate::core::serialize_to_buffer(value, &mut buf)?;
     Ok(buf)
 }
 

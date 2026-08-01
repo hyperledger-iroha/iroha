@@ -5,7 +5,7 @@
 //! construction and Norito decoding so untrusted contract payloads cannot
 //! manufacture values that the host itself would never return.
 
-use std::{fmt, io::Write};
+use std::fmt;
 
 use iroha_data_model::prelude::{
     AccountId, AssetDefinitionId, AssetId, DomainId, Json, NftId, Numeric, NumericOperationError,
@@ -81,7 +81,7 @@ impl TryFrom<u64> for CoreQueryEntityTagV1 {
 }
 
 impl NoritoSerialize for CoreQueryEntityTagV1 {
-    fn serialize<W: Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.as_u64().serialize(writer)
     }
 
@@ -194,7 +194,7 @@ impl From<QuantityV1> for Numeric {
 }
 
 impl NoritoSerialize for QuantityV1 {
-    fn serialize<W: Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
     }
 
@@ -319,7 +319,7 @@ impl CoreQueryProjectionV1 for NftView {
 struct QueryPageItemsV1<T>(Vec<T>);
 
 impl<T: NoritoSerialize> NoritoSerialize for QueryPageItemsV1<T> {
-    fn serialize<W: Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
     }
 
@@ -375,7 +375,7 @@ where
 struct NonNegativeOffsetV1(i64);
 
 impl NoritoSerialize for NonNegativeOffsetV1 {
-    fn serialize<W: Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
     }
 
@@ -629,7 +629,7 @@ mod tests {
 
     fn bare<T: NoritoSerialize>(value: &T) -> Vec<u8> {
         let mut bytes = Vec::new();
-        value.serialize(&mut bytes).expect("encode bare payload");
+        norito::core::serialize_to_buffer(value, &mut bytes).expect("encode bare payload");
         bytes
     }
 

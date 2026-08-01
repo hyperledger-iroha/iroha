@@ -747,7 +747,7 @@ fn write_readme(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let path = out_dir.join("README.md");
     let content = String::from(
         "# Provider Admission Fixtures\n\n\
-These files are generated via `cargo run -p sorafs_car --features manifest --bin provider_admission_fixtures`.\n\
+These files are generated via `cargo run -p sorafs_car --features manifest,dev-tools --bin provider_admission_fixtures`.\n\
 They provide deterministic governance proposals, adverts, envelopes, renewals, and revocations for\n\
 integration tests across Rust, Torii, and CLI tooling. Every admission object uses the first-release\n\
 V1 schema. Files named `*_renewed_v1` contain the V1 proposal, advert, and envelope carried by\n\

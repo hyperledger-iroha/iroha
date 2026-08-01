@@ -34,72 +34,6 @@ _VERIFIER_BACKEND_REGISTRY_LABELS_V1: Final[frozenset[str]] = (
 )
 _STARK_FRI_PRODUCTION_BACKEND_LABELS = _STARK_REGISTRY_LABELS_V1
 
-_PENDING_PRODUCTION_BACKEND_ALIASES: Final[frozenset[str]] = frozenset(
-    {
-        "halo2ipaorchard",
-        "orchard",
-        "zcashorchard",
-        "groth16bls12377",
-        "groth16bls12377decaf377",
-        "bls12377",
-        "decaf377",
-        "masp",
-        "penumbra",
-        "penumbramasp",
-        "halo2ipapenumbra",
-        "halo2ipamasp",
-        "fcmppluspluscurvetree",
-        "fcmp",
-        "monero",
-        "monerofcmp",
-        "monerofcmpplusplus",
-        "curvetree",
-        "halo2ipamonero",
-        "halo2ipacurvetree",
-        "latticepcssis",
-        "latticepcszk",
-        "jindo",
-        "jindolatticepcszk",
-        "jindolatticepcszkv0",
-        "jindolatticepcssis",
-        "starkfrimiden",
-        "midenstark",
-        "aztecplonkishprivatekernel",
-        "aztecprivatekernel",
-        "pqmaspstarkfri",
-        "pqmaspstark",
-        "starkfripqmaspstarkfri",
-        "postquantummasp",
-        "anonymouspgc",
-        "anonymouspgckoutofn",
-        "anonymouspgckoutofnv1",
-        "verange",
-        "verangetransparentrange",
-        "verangetransparentrangev1",
-        "zkat",
-        "zkatpolicyprivateauthenticator",
-        "zkatpolicyprivateauthv1",
-        "recursiveanonymousadmission",
-        "recursiveanonymousadmissionv0",
-        "zkamsrecursiveadmission",
-        "zkamsrecursiveadmissionv0",
-        "vegaexistingcredentialzk",
-        "vegaexistingcredentialzkv0",
-        "silentthresholdanoncred",
-        "silentthresholdanoncredv0",
-        "silentthresholdanonymouscredential",
-        "thresholdanonymouscredentials",
-        "zkx509",
-        "zkvmx509identity",
-        "zkx509onchainidentity",
-        "zkx509onchainidentityv0",
-        "siswithhints",
-        "sishints",
-        "sishintsanoncredpqv0",
-        "latticeanonymouscredentials",
-    }
-)
-
 _PRODUCTION_CLAIM_BACKEND_FRAGMENTS = (
     "productionready",
     "productionhardened",
@@ -214,13 +148,6 @@ def _compact_privacy_backend_label(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
-def _is_pending_production_backend_label(value: str) -> bool:
-    return (
-        _compact_privacy_backend_label(value)
-        in _PENDING_PRODUCTION_BACKEND_ALIASES
-    )
-
-
 def _is_production_claim_backend_label(value: str) -> bool:
     compact = _compact_privacy_backend_label(value)
     return any(
@@ -285,7 +212,6 @@ def _is_production_verify_backend_label(value: Any) -> bool:
         not backend
         or backend.strip() != backend
         or not _is_portable_verify_backend_label(backend)
-        or _is_pending_production_backend_label(backend)
         or _is_production_claim_backend_label(backend)
         or _is_trusted_setup_backend_label(backend)
         or _is_developer_only_backend_label(backend)

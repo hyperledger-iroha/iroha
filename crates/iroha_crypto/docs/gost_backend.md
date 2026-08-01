@@ -57,7 +57,7 @@ Hardening` roadmap line items and will be updated as decisions land.
   `cargo test -p iroha_crypto --features gost gost_sign_constant_time_under_dudect`
   (~27 s on reference hardware).
 - After running the Criterion suite, validate the results against the recorded medians with
-  `cargo run -p iroha_crypto --bin gost_perf_check --features gost`. Use `--tolerance` (fractional)
+  `cargo run -p iroha_crypto --bin gost_perf_check --features dev-tools,gost`. Use `--tolerance` (fractional)
   to relax the 20% default; pass `--summary-only` in CI so the Markdown table lands in
   `$GITHUB_STEP_SUMMARY`. When rebaselining deliberately, run the checker with
   `--write-baseline crates/iroha_crypto/benches/gost_perf_baseline.json` after benchmarking to

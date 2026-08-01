@@ -206,7 +206,7 @@ mod model {
 struct ChainIdText(ChainId);
 
 impl norito::core::NoritoSerialize for ChainIdText {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::NoritoSerialize>::serialize(&self.0.as_str(), writer)
     }
 
@@ -331,7 +331,10 @@ mod id_box_codec {
     }
 
     impl norito::core::NoritoSerialize for IdBox {
-        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
             let candidate: IdBoxCandidate = self.clone().into();
             norito::core::NoritoSerialize::serialize(&candidate, writer)
         }

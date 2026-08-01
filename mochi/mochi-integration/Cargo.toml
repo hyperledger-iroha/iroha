@@ -1,5 +1,6 @@
 [package]
 name = "mochi-integration"
+autobins = false
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -12,6 +13,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "kagami_mock"
 path = "src/bin/kagami_mock.rs"
+required-features = ["dev-tools"]
+
+[features]
+dev-tools = []
 
 [dependencies]
 color-eyre = { workspace = true }

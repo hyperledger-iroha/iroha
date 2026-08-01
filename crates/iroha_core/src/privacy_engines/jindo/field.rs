@@ -7,7 +7,20 @@
 //! four-limb Montgomery representation internally.
 
 use core::ops::{Add, Mul, Neg, Sub};
+use iroha_data_model::privacy::IROHA_JINDO_FIELD_MODULUS_LE_V1;
 use zeroize::Zeroize;
+
+const fn read_u64_le(bytes: &[u8; 32], offset: usize) -> u64 {
+    let mut value = 0_u64;
+    let mut index = 0_usize;
+    while index < 8 {
+        // Widening `u8` to `u64` is exact and, unlike `u64::from`, const-stable
+        // on the repository's minimum supported Rust toolchain.
+        value |= (bytes[offset + index] as u64) << (index * 8);
+        index += 1;
+    }
+    value
+}
 
 /// Canonical field element in Montgomery form.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -22,10 +35,10 @@ impl Zeroize for JindoFieldElementV1 {
 impl JindoFieldElementV1 {
     /// Field modulus in little-endian 64-bit limbs.
     pub(crate) const MODULUS: [u64; 4] = [
-        0x0000_0000_0000_0001,
-        0x8e96_30dc_8c37_3281,
-        0xd656_43d9_e6fb_6555,
-        0x430d_4599_6b62_afc2,
+        read_u64_le(&IROHA_JINDO_FIELD_MODULUS_LE_V1, 0),
+        read_u64_le(&IROHA_JINDO_FIELD_MODULUS_LE_V1, 8),
+        read_u64_le(&IROHA_JINDO_FIELD_MODULUS_LE_V1, 16),
+        read_u64_le(&IROHA_JINDO_FIELD_MODULUS_LE_V1, 24),
     ];
 
     /// `R mod p` for `R = 2^256`.
@@ -292,6 +305,11 @@ mod tests {
 
     #[test]
     fn modulus_matches_the_jindo_friendly_base_relation() {
+        assert_eq!(
+            canonical_from_limbs(JindoFieldElementV1::MODULUS),
+            IROHA_JINDO_FIELD_MODULUS_LE_V1,
+            "native Montgomery arithmetic must use the public canonical field boundary"
+        );
         let mut value = JindoFieldElementV1::ONE;
         let base = JindoFieldElementV1::from_u64(JINDO_ENCODING_BASE_V1);
         for _ in 0..JINDO_ENCODING_EXPONENT_V1 {

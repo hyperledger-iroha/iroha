@@ -38,7 +38,8 @@ use super::{
     },
     ring::ProofPolynomialV1,
     transcript::{
-        MatrixRoleV1, PresentationTranscriptV1, ProofMatrixV1, TranscriptErrorV1,
+        MatrixRoleV1, PresentationTranscriptV1, ProofMatrixV1, ProofTranscriptCoreV1,
+        TranscriptErrorV1,
         expand_proof_matrix_v1,
     },
 };
@@ -214,7 +215,7 @@ pub(crate) struct InternalMatricesV1 {
 
 impl InternalMatricesV1 {
     /// Expand all fixed internal matrices from the transcript-bound seed.
-    pub(crate) fn expand(transcript: &PresentationTranscriptV1) -> Result<Self, ToolboxErrorV1> {
+    pub(crate) fn expand(transcript: &ProofTranscriptCoreV1) -> Result<Self, ToolboxErrorV1> {
         let seed = transcript.matrix_seed();
         Ok(Self {
             a1: expand_proof_matrix_v1(seed, MatrixRoleV1::InternalA1)
@@ -1025,7 +1026,7 @@ pub(crate) fn encode_polynomials_v1(polynomials: &[ProofPolynomialV1]) -> Vec<u8
 
 /// Expand all projection rows from a transcript stage.
 pub(crate) fn expand_projection_matrix_v1(
-    transcript: &PresentationTranscriptV1,
+    transcript: &ProofTranscriptCoreV1,
     stage: &[u8],
     components: &[&[u8]],
     columns: usize,

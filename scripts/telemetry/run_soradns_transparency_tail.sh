@@ -123,7 +123,7 @@ if [[ -n "${TAILER_BIN}" ]]; then
   fi
   "${TAILER_BIN}" "${TAILER_ARGS[@]}"
 else
-  cargo run --quiet -p soradns-resolver --bin soradns_transparency_tail -- \
+  cargo run --quiet -p soradns-resolver --features dev-tools --bin soradns_transparency_tail -- \
     "${TAILER_ARGS[@]}"
 fi
 

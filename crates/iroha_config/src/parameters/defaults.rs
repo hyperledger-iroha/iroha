@@ -148,25 +148,6 @@ pub mod ivm {
     }
 }
 
-/// Genesis bootstrap defaults.
-pub mod genesis {
-    use iroha_config_base::util::Bytes;
-
-    use super::*;
-
-    /// Maximum size (bytes) of a genesis payload served or accepted during bootstrap.
-    pub const BOOTSTRAP_MAX_BYTES: Bytes<u64> = Bytes(16 * 1024 * 1024);
-    /// Minimum interval between serving genesis responses to avoid abuse.
-    pub const BOOTSTRAP_RESPONSE_THROTTLE: Duration = Duration::from_secs(1);
-    /// Timeout for each bootstrap request round-trip (preflight or payload).
-    pub const BOOTSTRAP_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
-    /// Base retry/backoff interval between bootstrap attempts.
-    pub const BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_secs(1);
-    /// Request windows per bootstrap retry cycle before resetting backoff and emitting a warning.
-    /// Bootstrap remains active across cycles while enabled.
-    pub const BOOTSTRAP_MAX_ATTEMPTS: u32 = 5;
-}
-
 /// Embedded Soracloud runtime-manager defaults.
 pub mod soracloud_runtime {
     use super::*;
@@ -2589,6 +2570,8 @@ pub mod torii {
     pub const ZK_PROVER_REPORTS_TTL_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
     /// Maximum number of attachments the background prover processes concurrently.
     pub const ZK_PROVER_MAX_INFLIGHT: usize = 2;
+    /// Maximum raw body bytes admitted by the first-release prover worker.
+    pub const ZK_PROVER_ATTACHMENT_BODY_MAX_BYTES_V1: u64 = 8 * 1024 * 1024; // 8 MiB
     /// Maximum aggregate attachment bytes processed per scan cycle.
     pub const ZK_PROVER_MAX_SCAN_BYTES: u64 = 16 * 1024 * 1024; // 16 MiB
     /// Maximum wall-clock time (milliseconds) spent in a single scan cycle.
@@ -3118,8 +3101,8 @@ pub mod nexus {
     pub mod storage {
         use iroha_config_base::util::Bytes;
 
-        /// Aggregate on-disk budget for Iroha3 storage (bytes).
-        pub const MAX_DISK_USAGE_BYTES: Bytes<u64> = Bytes(256 * 1024 * 1024 * 1024);
+        /// Filesystem capacity reserved as runtime storage headroom (basis points).
+        pub const AUTO_STORAGE_HEADROOM_BPS: u16 = 2_000;
         /// Block interval between disk budget enforcement scans (0 = every block).
         pub const BUDGET_ENFORCE_INTERVAL_BLOCKS: u64 = 10;
         /// WSV hot-tier deterministic payload size budget (bytes).

@@ -1,5 +1,6 @@
 [package]
 name = "connect_norito_bridge"
+autobins = false
 version.workspace = true
 edition = "2024"
 
@@ -16,9 +17,20 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [[bin]]
 name = "kagemusha_candidate_scenario_validator"
 path = "src/bin/kagemusha_candidate_scenario_validator.rs"
-required-features = ["kagemusha-candidate-evidence-lab"]
+required-features = ["dev-tools", "kagemusha-candidate-evidence-lab"]
+
+[[bin]]
+name = "soracloud_request_signer"
+path = "src/bin/soracloud_request_signer.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "swift_parity_regen"
+path = "src/bin/swift_parity_regen.rs"
+required-features = ["dev-tools"]
 
 [features]
+dev-tools = []
 # Enable real halo2/ipa proving and verification for confidential-transfer-v2 and unshield.
 # OFF by default; flip on only when all production gates have passed.
 privacy-production-enabled = ["iroha_data_model/kagemusha-production-enabled"]

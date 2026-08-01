@@ -1,7 +1,7 @@
 Reference Proof-of-Retrievability fixtures generated via:
 
 ```
-cargo run -p sorafs_manifest --bin generate_por_fixtures -- --write
+cargo run -p sorafs_manifest --features dev-tools --bin generate_por_fixtures -- --write
 ```
 
 - `challenge_v1.to` / `.json` — canonical PoR challenge and human-readable breakdown.

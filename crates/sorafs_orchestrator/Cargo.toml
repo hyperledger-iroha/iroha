@@ -1,5 +1,6 @@
 [package]
 name = "sorafs_orchestrator"
+autobins = false
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
@@ -14,6 +15,7 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 
 [features]
 default = ["cli-orchestrator"]
+dev-tools = []
 cli-orchestrator = [
     "dep:iroha_config",
     "dep:iroha_crypto",
@@ -77,4 +79,4 @@ required-features = ["cli-orchestrator"]
 [[bin]]
 name = "taikai_viewer"
 path = "src/bin/taikai_viewer.rs"
-required-features = ["cli-orchestrator"]
+required-features = ["cli-orchestrator", "dev-tools"]

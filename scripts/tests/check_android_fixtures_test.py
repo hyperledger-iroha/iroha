@@ -31,20 +31,35 @@ def _write_payloads(path: Path, entries: list[dict]) -> Path:
     enriched: list[dict] = []
     for original in entries:
         entry = dict(original)
-        encoded = entry.get("encoded")
+        payload_base64 = entry.get("payload_base64")
         name = entry.get("name")
-        if isinstance(encoded, str) and isinstance(name, str):
-            payload_bytes = base64.b64decode(encoded, validate=True)
+        if isinstance(payload_base64, str) and isinstance(name, str):
+            payload_bytes = base64.b64decode(payload_base64, validate=True)
             signed_bytes = _signed_transaction(
                 payload_bytes, f"{name}-signed".encode()
             )
-            entry.setdefault("payload_base64", encoded)
             entry.setdefault("payload_hash", MODULE.iroha_hash(payload_bytes))
             entry.setdefault("signed_base64", base64.b64encode(signed_bytes).decode())
             entry.setdefault(
                 "signed_hash",
                 MODULE.signed_transaction_entrypoint_hash(signed_bytes),
             )
+        entry.setdefault(
+            "payload",
+            {
+                "authority": entry.get("authority"),
+                "chain": entry.get("chain"),
+                "creation_time_ms": entry.get("creation_time_ms"),
+                "executable": {"Instructions": []},
+                "fee_payment": {
+                    "payer": "authority",
+                    "value": {"charge_limits": []},
+                },
+                "metadata": {},
+                "nonce": entry.get("nonce"),
+                "time_to_live_ms": entry.get("time_to_live_ms"),
+            },
+        )
         enriched.append(entry)
     path.write_text(json.dumps(enriched, indent=2), encoding="utf-8")
     return path
@@ -86,6 +101,207 @@ def _fixture_entry(
     }
 
 
+def _payload_entry(name: str = "alpha") -> dict:
+    return {
+        "name": name,
+        "payload_base64": base64.b64encode(f"{name}-payload".encode()).decode(),
+        "chain": "00000002",
+        "authority": "sorau-example",
+        "creation_time_ms": 1,
+        "time_to_live_ms": 100_000,
+        "nonce": None,
+    }
+
+
+def test_native_json_loader_rejects_duplicate_payload_and_manifest_keys(
+    tmp_path: Path,
+) -> None:
+    payloads_path = tmp_path / "transaction_payloads.json"
+    payloads_path.write_text(
+        '[{"name":"first","na\\u006de":"second"}]', encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="duplicate JSON object key 'name'"):
+        MODULE.load_payload_fixtures(payloads_path)
+
+    manifest_path = tmp_path / "transaction_fixtures.manifest.json"
+    manifest_path.write_text('{"fixtures":[],"fixtures":[]}', encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate JSON object key 'fixtures'"):
+        MODULE.load_manifest(manifest_path)
+
+
+def test_payload_loader_requires_exact_top_level_and_payload_fields(
+    tmp_path: Path,
+) -> None:
+    entry = _payload_entry()
+    entry["unexpected"] = True
+    path = _write_payloads(tmp_path / "extra-top-level.json", [entry])
+    with pytest.raises(ValueError, match=r"unexpected=\['unexpected'\]"):
+        MODULE.load_payload_fixtures(path)
+
+    path = _write_payloads(
+        tmp_path / "extra-payload.json", [_payload_entry("payload-extra")]
+    )
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document[0]["payload"]["unexpected"] = True
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(ValueError, match=r"unexpected=\['unexpected'\]"):
+        MODULE.load_payload_fixtures(path)
+
+
+def test_payload_loader_requires_one_executable_variant_and_accepts_direct_call(
+    tmp_path: Path,
+) -> None:
+    direct_path = _write_payloads(
+        tmp_path / "direct-call.json", [_payload_entry("direct_call")]
+    )
+    direct_document = json.loads(direct_path.read_text(encoding="utf-8"))
+    direct_document[0]["payload"]["executable"] = {
+        "ContractCall": {
+            "contract_address": "tairac1example",
+            "expected_code_hash": "hash:example",
+            "entrypoint": "main",
+            "arguments": [],
+        }
+    }
+    direct_path.write_text(json.dumps(direct_document), encoding="utf-8")
+    assert set(MODULE.load_payload_fixtures(direct_path)) == {"direct_call"}
+
+    ambiguous_path = _write_payloads(
+        tmp_path / "ambiguous.json", [_payload_entry("ambiguous")]
+    )
+    ambiguous_document = json.loads(ambiguous_path.read_text(encoding="utf-8"))
+    ambiguous_document[0]["payload"]["executable"] = {
+        "Instructions": [],
+        "ContractCall": {},
+    }
+    ambiguous_path.write_text(json.dumps(ambiguous_document), encoding="utf-8")
+    with pytest.raises(ValueError, match="exactly one executable variant"):
+        MODULE.load_payload_fixtures(ambiguous_path)
+
+
+def test_payload_loader_validates_exact_executable_variant_bodies() -> None:
+    instruction = {
+        "wire_name": "iroha.test",
+        "payload_base64": "AQ==",
+    }
+    contract_call = {
+        "contract_address": "tairac1example",
+        "expected_code_hash": "hash:example",
+        "entrypoint": "main",
+        "arguments": [0, 255],
+    }
+    for executable in (
+        {"Ivm": "AQ=="},
+        {"Instructions": [instruction]},
+        {"ContractCall": {**contract_call, "arguments": None}},
+        {
+            "Batch": [
+                {"Instruction": instruction},
+                {"ContractCall": contract_call},
+            ]
+        },
+    ):
+        MODULE.validate_executable(executable, "executable")
+
+    invalid_executables = (
+        ({"Ivm": 1}, r"Ivm must be a base64 string"),
+        ({"Ivm": "YR=="}, r"non-canonical base64"),
+        ({"Instructions": {}}, r"Instructions must be an array"),
+        (
+            {"Instructions": [{**instruction, "unexpected": True}]},
+            r"unexpected=\['unexpected'\]",
+        ),
+        (
+            {"Instructions": [{**instruction, "wire_name": ""}]},
+            r"wire_name must be a non-empty string",
+        ),
+        (
+            {"Instructions": [{**instruction, "payload_base64": ""}]},
+            r"payload_base64 must encode non-empty bytes",
+        ),
+        (
+            {"Instructions": [{**instruction, "payload_base64": "YR=="}]},
+            r"non-canonical base64",
+        ),
+        (
+            {"ContractCall": {**contract_call, "unexpected": True}},
+            r"unexpected=\['unexpected'\]",
+        ),
+        (
+            {
+                "ContractCall": {
+                    "contract_address": contract_call["contract_address"],
+                    "entrypoint": contract_call["entrypoint"],
+                    "arguments": None,
+                }
+            },
+            r"missing=\['expected_code_hash'\]",
+        ),
+        (
+            {"ContractCall": {**contract_call, "arguments": [256]}},
+            r"arguments must be null or an array of bytes",
+        ),
+        ({"Batch": []}, r"Batch must contain at least one item"),
+        ({"Batch": {}}, r"Batch must be an array"),
+        (
+            {
+                "Batch": [
+                    {
+                        "Instruction": instruction,
+                        "ContractCall": contract_call,
+                    }
+                ]
+            },
+            r"must contain exactly one variant",
+        ),
+        (
+            {"Batch": [{"Instruction": {**instruction, "unexpected": True}}]},
+            r"unexpected=\['unexpected'\]",
+        ),
+    )
+    for executable, diagnostic in invalid_executables:
+        with pytest.raises(ValueError, match=diagnostic):
+            MODULE.validate_executable(executable, "executable")
+
+
+def test_manifest_requires_exact_schema_and_canonical_encoded_file(
+    tmp_path: Path,
+) -> None:
+    entry = _fixture_entry(
+        "alpha",
+        "alpha.norito",
+        b"payload",
+        b"signed",
+        1,
+        "00000002",
+        "sorau-example",
+        100_000,
+        None,
+    )
+
+    assert MODULE.compare(tmp_path, {"fixtures": [], "unexpected": True}, {}) == [
+        "manifest has invalid fields: missing=[], unexpected=['unexpected']"
+    ]
+    errors = MODULE.compare(
+        tmp_path, {"fixtures": [{**entry, "unexpected": True}]}, {}
+    )
+    assert errors == [
+        "manifest fixture has invalid fields: missing=[], unexpected=['unexpected']"
+    ]
+
+    renamed = {**entry, "encoded_file": "renamed.norito"}
+    errors = MODULE.compare(tmp_path, {"fixtures": [renamed]}, {})
+    assert any("encoded_file must be exactly 'alpha.norito'" in error for error in errors)
+
+    traversing = {
+        **entry,
+        "name": "../alpha",
+        "encoded_file": "../alpha.norito",
+    }
+    errors = MODULE.compare(tmp_path, {"fixtures": [traversing]}, {})
+    assert any("must not traverse directories" in error for error in errors)
+
+
 @pytest.mark.parametrize(
     "encoded",
     [
@@ -121,7 +337,7 @@ def test_payload_loader_rejects_nonce_outside_nonzero_u32_range(
 ) -> None:
     entry = {
         "name": "invalid-nonce",
-        "encoded": base64.b64encode(b"payload").decode(),
+        "payload_base64": base64.b64encode(b"payload").decode(),
         "chain": "00000002",
         "authority": "sorau-example",
         "creation_time_ms": 1,
@@ -144,7 +360,7 @@ def test_payload_loader_rejects_non_positive_integer_ttl(
 ) -> None:
     entry = {
         "name": "invalid-ttl",
-        "encoded": base64.b64encode(b"payload").decode(),
+        "payload_base64": base64.b64encode(b"payload").decode(),
         "chain": "00000002",
         "authority": "sorau-example",
         "creation_time_ms": 1,
@@ -160,7 +376,7 @@ def test_payload_loader_rejects_non_positive_integer_ttl(
 def test_payload_loader_rejects_missing_ttl(tmp_path: Path) -> None:
     entry = {
         "name": "missing-ttl",
-        "encoded": base64.b64encode(b"payload").decode(),
+        "payload_base64": base64.b64encode(b"payload").decode(),
         "chain": "00000002",
         "authority": "sorau-example",
         "creation_time_ms": 1,
@@ -172,10 +388,28 @@ def test_payload_loader_rejects_missing_ttl(tmp_path: Path) -> None:
         MODULE.load_payload_fixtures(path)
 
 
+def test_payload_loader_rejects_retired_encoded_alias(tmp_path: Path) -> None:
+    payload_base64 = base64.b64encode(b"payload").decode()
+    entry = {
+        "name": "retired-alias",
+        "payload_base64": payload_base64,
+        "encoded": payload_base64,
+        "chain": "00000002",
+        "authority": "sorau-example",
+        "creation_time_ms": 1,
+        "time_to_live_ms": 100_000,
+        "nonce": None,
+    }
+    path = _write_payloads(tmp_path / "transaction_payloads.json", [entry])
+
+    with pytest.raises(ValueError, match="retired encoded alias"):
+        MODULE.load_payload_fixtures(path)
+
+
 def test_payload_loader_rejects_duplicate_fixture_names(tmp_path: Path) -> None:
     entry = {
         "name": "duplicate",
-        "encoded": base64.b64encode(b"payload").decode(),
+        "payload_base64": base64.b64encode(b"payload").decode(),
         "chain": "00000002",
         "authority": "sorau-example",
         "creation_time_ms": 1,
@@ -191,7 +425,7 @@ def test_payload_loader_rejects_duplicate_fixture_names(tmp_path: Path) -> None:
 def test_payload_loader_rejects_renamed_cloned_payloads(tmp_path: Path) -> None:
     first = {
         "name": "first",
-        "encoded": base64.b64encode(b"payload").decode(),
+        "payload_base64": base64.b64encode(b"payload").decode(),
         "chain": "00000002",
         "authority": "sorau-example",
         "creation_time_ms": 1,
@@ -333,7 +567,7 @@ def test_summary_includes_artifact_metadata(tmp_path: Path) -> None:
         [
             {
                 "name": "alpha",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": creation_time_ms,
                 "chain": chain,
                 "authority": authority,
@@ -422,7 +656,7 @@ def test_errors_propagate_into_summary(tmp_path: Path) -> None:
         [
             {
                 "name": "bravo",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": creation_time_ms,
                 "chain": chain,
                 "authority": authority,
@@ -484,7 +718,7 @@ def test_creation_time_mismatch_triggers_error(tmp_path: Path) -> None:
         [
             {
                 "name": "charlie",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_333,
                 "chain": chain,
                 "authority": authority,
@@ -537,7 +771,7 @@ def test_chain_mismatch_triggers_error(tmp_path: Path) -> None:
         [
             {
                 "name": "delta",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_444,
                 "chain": "00000004",
                 "authority": "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
@@ -590,7 +824,7 @@ def test_authority_mismatch_triggers_error(tmp_path: Path) -> None:
         [
             {
                 "name": "golf",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_777,
                 "chain": "00000008",
                 "authority": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
@@ -643,7 +877,7 @@ def test_time_to_live_mismatch_triggers_error(tmp_path: Path) -> None:
         [
             {
                 "name": "hotel",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_888,
                 "chain": "00000009",
                 "authority": "sorauﾛ1NcﾐuﾛﾀKﾓhﾈgｽXｦDTﾏｴtﾔﾐ8PJPfSﾕPuﾃ884ｳﾇヰ4ﾇJKTL36",
@@ -696,7 +930,7 @@ def test_nonce_mismatch_triggers_error(tmp_path: Path) -> None:
         [
             {
                 "name": "india",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_999,
                 "chain": "00000010",
                 "authority": "sorauﾛ1NfｺｷﾘcﾙｦEﾑgsKti4Zﾘ6HKｳZCﾅｸｼ16fvSｲymｶｻﾘﾎ29JNWE",
@@ -749,7 +983,7 @@ def test_missing_nonce_field_fails(tmp_path: Path) -> None:
         [
             {
                 "name": "echo",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_555,
                 "chain": "00000006",
                 "authority": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
@@ -801,7 +1035,7 @@ def test_missing_time_to_live_field_fails(tmp_path: Path) -> None:
         [
             {
                 "name": "foxtrot",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_666,
                 "chain": "00000007",
                 "authority": "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",

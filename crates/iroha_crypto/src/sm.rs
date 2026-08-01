@@ -1738,7 +1738,7 @@ impl JsonDeserialize for Sm3Digest {
 }
 
 impl norito::core::NoritoSerialize for Sm3Digest {
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(&self.0)?;
         Ok(())
     }

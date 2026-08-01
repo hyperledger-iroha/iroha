@@ -28,8 +28,8 @@
 
 ### Mock Harness Contract (2026-06-18 workshop outcome)
 - **Purpose:** Provide a reusable Torii mock harness so Android AND4, Swift IOS3, and JS JS4 can share the same deterministic fixtures, retry semantics, and telemetry hooks during NRPC rollouts.
-- **Implementation:** Source of truth lives in the Android test harness (`java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/mock/ToriiMockServer.java`) and is extracted into the workspace-wide CLI under `tools/torii_mock_harness/`.
-- **Fixture governance:** Harness consumes the Norito fixture catalogue produced by `scripts/android_fixture_regen.sh` and recorded in `specs/android_fixture_changelog.md`. Clients must bump the fixture version string (`mock_harness.fixture_version`) whenever schema hashes change.
+- **Implementation provenance:** The workshop used the Android test harness (`java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/mock/ToriiMockServer.java`) as the prototype for the workspace-wide mock CLI. That historical origin does not make Java a fixture source.
+- **Fixture governance:** The harness consumes the authoritative catalogue under `fixtures/norito_rpc/`. Regenerate it only with `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures`; the same publication writes Java's generated descriptor-and-blob mirror and the descriptor-only Python and Swift mirrors. Clients must bump the fixture version string (`mock_harness.fixture_version`) whenever schema hashes change.
 - **Telemetry requirements:** Every harness-backed CI job must emit:
   - `torii_mock_harness_retry_total{sdk}` — retries triggered by injected failures.
   - `torii_mock_harness_duration_ms{sdk,scenario}` — end-to-end duration per scenario (submit, query, governance, etc.).

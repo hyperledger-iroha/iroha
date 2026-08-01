@@ -576,12 +576,14 @@ mod tests {
             let mut builder = TransactionBuilder::from_payload(payload).expect("valid payload");
             if matches!(mutation, Some(TestTransactionMutation::Attachments)) {
                 let backend = "halo2/ipa".into();
-                builder =
-                    builder.with_attachments(ProofAttachmentList(vec![ProofAttachment::new_ref(
+                builder = builder.with_attachments(
+                    ProofAttachmentList::try_from(vec![ProofAttachment::new_ref(
                         backend,
                         ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
                         VerifyingKeyId::new("halo2/ipa", "test-vk"),
-                    )]));
+                    )])
+                    .expect("one attachment is a valid bounded proof list"),
+                );
             }
             let mut signed = builder
                 .try_sign(self.key_pair.private_key())

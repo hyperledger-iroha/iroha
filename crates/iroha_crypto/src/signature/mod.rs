@@ -590,7 +590,7 @@ pub type ArchivedSignatureOf<T> = norito::core::Archived<SignatureOf<T>>;
 
 #[cfg(not(feature = "ffi_import"))]
 impl ncore::NoritoSerialize for Signature {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
         self.payload.serialize(writer)
     }
 
@@ -634,7 +634,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Signature {
 }
 
 impl<T> norito::core::NoritoSerialize for SignatureOf<T> {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         // Delegate to inner Signature so SignatureOf has identical on-wire bytes.
         norito::core::NoritoSerialize::serialize(&self.0, writer)
     }

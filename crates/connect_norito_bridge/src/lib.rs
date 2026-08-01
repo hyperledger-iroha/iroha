@@ -29,7 +29,6 @@ use iroha_crypto::{
     Algorithm, EcdsaSecp256k1Sha256, Error as CryptoError, Hash, KeyGenOption, KeyPair, PrivateKey,
     PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
     kex::KeyExchangeScheme,
-    privacy::LaneCommitmentId,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
 };
 use iroha_data_model::{
@@ -58,7 +57,7 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     name::Name,
-    nexus::{DataSpaceId, LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LanePrivacyProof},
+    nexus::DataSpaceId,
     offline::{KagemushaConfidentialMerklePathV2, KagemushaNoteMembershipWitnessV2},
     privacy::{
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
@@ -67,10 +66,7 @@ use iroha_data_model::{
         PrivacyExact12FixtureBundleValidationStatusV1, PrivacyProtocolIdV1,
         privacy_exact12_fixture_bundle_bytes_v1, validate_privacy_exact12_fixture_bundle_v1,
     },
-    proof::{
-        ProofAttachment, ProofBox, VerifyingKeyId, proof_box_max_proof_bytes_v1,
-        verifying_key_id_field_is_portable,
-    },
+    proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     ram_lfe::RamLfeReceiptAttestation,
     ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId},
     rwa::RwaId,
@@ -124,6 +120,29 @@ mod kagemusha_candidate_apple;
 mod kagemusha_candidate_scenario;
 #[cfg(all(feature = "kagemusha-candidate-evidence-lab", unix))]
 pub use kagemusha_candidate_scenario::validate_kagemusha_candidate_scenario_directory_v1;
+mod proof_attachment_json;
+
+#[cfg(test)]
+use iroha_data_model::{
+    nexus::LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
+    proof::{PROOF_BOX_MAX_ENCODED_BYTES_V1, VERIFYING_KEY_ID_MAX_FIELD_BYTES},
+};
+use proof_attachment_json::parse_proof_attachment_from_json_bytes;
+#[cfg(test)]
+use proof_attachment_json::{
+    PROOF_ATTACHMENT_JSON_MAX_BASE64_BYTES_V1, decode_canonical_bounded_base64,
+    proof_attachment_json_length_is_valid,
+};
+#[cfg(any(
+    test,
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+use proof_attachment_json::{
+    PROOF_ATTACHMENT_JSON_MAX_BYTES_V1, parse_proof_attachment_from_json_slice,
+};
 
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
 // Increment whenever any NativeSignerBridge JNI method descriptor changes.
@@ -2783,222 +2802,6 @@ fn build_confidential_encrypted_payload(
         .validate()
         .map_err(|_| BridgeError::ConfidentialPayload)?;
     Ok(payload)
-}
-
-fn decode_exact_lower_hex_array<const N: usize>(hex_str: &str) -> BridgeResult<[u8; N]> {
-    if hex_str.len() != N * 2
-        || !hex_str.bytes().all(|byte| byte.is_ascii_hexdigit())
-        || hex_str.bytes().any(|byte| byte.is_ascii_uppercase())
-    {
-        return Err(BridgeError::ProofAttachment);
-    }
-    let bytes = hex::decode(hex_str).map_err(|_| BridgeError::ProofAttachment)?;
-    if bytes.len() != N {
-        return Err(BridgeError::ProofAttachment);
-    }
-    let mut out = [0u8; N];
-    out.copy_from_slice(&bytes);
-    Ok(out)
-}
-
-fn decode_canonical_bounded_base64(value: &str, max_decoded: usize) -> BridgeResult<Vec<u8>> {
-    let max_encoded = max_decoded
-        .checked_add(2)
-        .and_then(|value| value.checked_div(3))
-        .and_then(|value| value.checked_mul(4))
-        .ok_or(BridgeError::ProofAttachment)?;
-    if value.len() > max_encoded {
-        return Err(BridgeError::ProofAttachment);
-    }
-    let bytes = b64gp::STANDARD
-        .decode(value.as_bytes())
-        .map_err(|_| BridgeError::ProofAttachment)?;
-    if bytes.len() > max_decoded || b64gp::STANDARD.encode(&bytes) != value {
-        return Err(BridgeError::ProofAttachment);
-    }
-    Ok(bytes)
-}
-
-fn json_object_has_exact_fields(object: &JsonMap, expected: &[&str]) -> bool {
-    object.len() == expected.len() && expected.iter().all(|field| object.contains_key(*field))
-}
-
-fn parse_exact_json_byte_array<const N: usize>(value: &JsonValue) -> BridgeResult<[u8; N]> {
-    let values = value.as_array().ok_or(BridgeError::ProofAttachment)?;
-    if values.len() != N {
-        return Err(BridgeError::ProofAttachment);
-    }
-    let mut bytes = [0_u8; N];
-    for (index, value) in values.iter().enumerate() {
-        bytes[index] = value
-            .as_u64()
-            .and_then(|value| u8::try_from(value).ok())
-            .ok_or(BridgeError::ProofAttachment)?;
-    }
-    Ok(bytes)
-}
-
-fn parse_lane_privacy_proof_value(value: &JsonValue) -> BridgeResult<LanePrivacyProof> {
-    let object = value.as_object().ok_or(BridgeError::ProofAttachment)?;
-    if !json_object_has_exact_fields(object, &["commitment_id", "witness"]) {
-        return Err(BridgeError::ProofAttachment);
-    }
-    let commitment_id = object
-        .get("commitment_id")
-        .and_then(JsonValue::as_u64)
-        .and_then(|value| u16::try_from(value).ok())
-        .ok_or(BridgeError::ProofAttachment)?;
-
-    let witness = object
-        .get("witness")
-        .and_then(JsonValue::as_object)
-        .ok_or(BridgeError::ProofAttachment)?;
-    if !json_object_has_exact_fields(witness, &["kind", "payload"])
-        || witness.get("kind").and_then(JsonValue::as_str) != Some("merkle")
-    {
-        return Err(BridgeError::ProofAttachment);
-    }
-    let payload = witness
-        .get("payload")
-        .and_then(JsonValue::as_object)
-        .ok_or(BridgeError::ProofAttachment)?;
-    if !json_object_has_exact_fields(payload, &["leaf", "proof"]) {
-        return Err(BridgeError::ProofAttachment);
-    }
-    let leaf = parse_exact_json_byte_array::<32>(
-        payload.get("leaf").ok_or(BridgeError::ProofAttachment)?,
-    )?;
-    let proof = payload
-        .get("proof")
-        .and_then(JsonValue::as_object)
-        .ok_or(BridgeError::ProofAttachment)?;
-    if !json_object_has_exact_fields(proof, &["leaf_index", "audit_path"]) {
-        return Err(BridgeError::ProofAttachment);
-    }
-    let leaf_index = proof
-        .get("leaf_index")
-        .and_then(JsonValue::as_u64)
-        .and_then(|value| u32::try_from(value).ok())
-        .ok_or(BridgeError::ProofAttachment)?;
-    let path = proof
-        .get("audit_path")
-        .and_then(JsonValue::as_array)
-        .ok_or(BridgeError::ProofAttachment)?;
-    if path.is_empty() || path.len() > LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 {
-        return Err(BridgeError::ProofAttachment);
-    }
-    if path.len() < u32::BITS as usize && u64::from(leaf_index) >= 1_u64 << path.len() {
-        return Err(BridgeError::ProofAttachment);
-    }
-    let audit_path = path
-        .iter()
-        .map(|sibling| parse_exact_json_byte_array::<32>(sibling).map(Some))
-        .collect::<BridgeResult<Vec<_>>>()?;
-    LanePrivacyProof::merkle_from_raw_path(
-        LaneCommitmentId::new(commitment_id),
-        leaf,
-        leaf_index,
-        audit_path,
-    )
-    .map_err(|_| BridgeError::ProofAttachment)
-}
-
-fn parse_proof_attachment_from_json_bytes(
-    ptr: *const c_char,
-    len: c_ulong,
-) -> BridgeResult<ProofAttachment> {
-    if ptr.is_null() || len == 0 {
-        return Err(BridgeError::ProofAttachment);
-    }
-    let slice = unsafe { slice::from_raw_parts(ptr as *const u8, len as usize) };
-    parse_proof_attachment_from_json_slice(slice)
-}
-
-fn parse_proof_attachment_from_json_slice(slice: &[u8]) -> BridgeResult<ProofAttachment> {
-    if slice.is_empty() {
-        return Err(BridgeError::ProofAttachment);
-    }
-    let value =
-        norito::json::from_slice::<JsonValue>(slice).map_err(|_| BridgeError::ProofAttachment)?;
-    parse_proof_attachment_value(&value)
-}
-
-fn parse_proof_attachment_value(value: &JsonValue) -> BridgeResult<ProofAttachment> {
-    let object = value.as_object().ok_or(BridgeError::ProofAttachment)?;
-    for field in object.keys() {
-        match field.as_str() {
-            "backend" | "proof_b64" | "vk_ref" | "vk_commitment_hex" | "envelope_hash_hex"
-            | "lane_privacy" => {}
-            "vk_inline" | "vkInline" | "verifyingKeyInline" | "verifying_key_inline" => {
-                return Err(BridgeError::ProofAttachment);
-            }
-            _ => return Err(BridgeError::ProofAttachment),
-        }
-    }
-    let backend_str = value
-        .get("backend")
-        .and_then(JsonValue::as_str)
-        .ok_or(BridgeError::ProofAttachment)?;
-    if !verifying_key_id_field_is_portable(backend_str) {
-        return Err(BridgeError::ProofAttachment);
-    }
-    let backend = backend_str.to_owned();
-    let maximum_proof_bytes =
-        proof_box_max_proof_bytes_v1(backend_str).ok_or(BridgeError::ProofAttachment)?;
-    let proof_bytes = value
-        .get("proof_b64")
-        .and_then(JsonValue::as_str)
-        .map(|value| decode_canonical_bounded_base64(value, maximum_proof_bytes))
-        .transpose()?
-        .ok_or(BridgeError::ProofAttachment)?;
-    let proof = ProofBox::new(backend.clone(), proof_bytes);
-
-    let attachment = if let Some(vk_ref) = value.get("vk_ref").and_then(JsonValue::as_object) {
-        for field in vk_ref.keys() {
-            match field.as_str() {
-                "backend" | "name" => {}
-                _ => return Err(BridgeError::ProofAttachment),
-            }
-        }
-        let vk_backend = vk_ref
-            .get("backend")
-            .and_then(JsonValue::as_str)
-            .ok_or(BridgeError::ProofAttachment)?;
-        if !verifying_key_id_field_is_portable(vk_backend) {
-            return Err(BridgeError::ProofAttachment);
-        }
-        if vk_backend != backend {
-            return Err(BridgeError::ProofAttachment);
-        }
-        let name = vk_ref
-            .get("name")
-            .and_then(JsonValue::as_str)
-            .ok_or(BridgeError::ProofAttachment)?;
-        if !verifying_key_id_field_is_portable(name) {
-            return Err(BridgeError::ProofAttachment);
-        }
-        let id = VerifyingKeyId::new(vk_backend, name);
-        ProofAttachment::new_ref(backend.clone(), proof.clone(), id)
-    } else {
-        return Err(BridgeError::ProofAttachment);
-    };
-
-    let mut attachment = attachment;
-    if let Some(commit_hex) = value.get("vk_commitment_hex").and_then(JsonValue::as_str) {
-        attachment.vk_commitment = Some(decode_exact_lower_hex_array(commit_hex)?);
-    }
-    let envelope_hex = value
-        .get("envelope_hash_hex")
-        .and_then(JsonValue::as_str)
-        .ok_or(BridgeError::ProofAttachment)?;
-    attachment.envelope_hash = Some(decode_exact_lower_hex_array(envelope_hex)?);
-    if let Some(lane_privacy) = value.get("lane_privacy") {
-        attachment.lane_privacy = Some(parse_lane_privacy_proof_value(lane_privacy)?);
-    }
-    if attachment.structural_error().is_some() {
-        return Err(BridgeError::ProofAttachment);
-    }
-    Ok(attachment)
 }
 
 fn parse_fixed_32_chunks(
@@ -14888,7 +14691,7 @@ mod detached_transaction_scaffold_tests {
     use iroha_data_model::{
         asset::AssetId,
         nexus::DataSpaceId,
-        proof::ProofAttachmentList,
+        proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         smart_contract::ContractAddress,
         transaction::{
             executable::{ContractArgumentRecord, ContractInvocation, IvmBytecode},
@@ -15107,7 +14910,14 @@ mod detached_transaction_scaffold_tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(contract)
-        .with_attachments(ProofAttachmentList(Vec::new()))
+        .with_attachments(
+            ProofAttachmentList::try_from(vec![ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+                VerifyingKeyId::new("halo2/ipa", "detached-scaffold-vk"),
+            )])
+            .expect("one attachment is a valid bounded proof list"),
+        )
         .try_sign(placeholder.private_key())
         .unwrap()
         .with_authority(authority);
@@ -28032,6 +27842,17 @@ mod accel_tests {
         )
     }
 
+    fn parse_proof_attachment_test_json(json: &str) -> BridgeResult<ProofAttachment> {
+        parse_proof_attachment_from_json_slice(json.as_bytes())
+    }
+
+    fn proof_attachment_json_with_lane(lane: &str) -> String {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        let mut json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
+        json.insert_str(json.len() - 1, &format!(r#", "lane_privacy":{lane}"#));
+        json
+    }
+
     fn json_byte_array(bytes: &[u8]) -> String {
         format!(
             "[{}]",
@@ -29930,8 +29751,7 @@ mod accel_tests {
             let json = format!(
                 r#"{{"backend":"groth16","proof_b64":"AA==","vk_ref":{{"backend":"groth16","name":"vk1"}},"{field}":{{"backend":"groth16","bytes_b64":"AQID"}}}}"#
             );
-            let value: JsonValue = norito::json::from_str(&json).expect("json");
-            let err = parse_proof_attachment_value(&value)
+            let err = parse_proof_attachment_test_json(&json)
                 .expect_err("legacy inline verifying-key field rejected");
             assert!(matches!(err, BridgeError::ProofAttachment));
         }
@@ -29941,9 +29761,8 @@ mod accel_tests {
     fn proof_attachment_json_accepts_matching_envelope_hash() {
         let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
         let json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        let value: JsonValue = norito::json::from_str(&json).expect("json");
         let attachment =
-            parse_proof_attachment_value(&value).expect("matching envelope hash should parse");
+            parse_proof_attachment_test_json(&json).expect("matching envelope hash should parse");
         assert_eq!(attachment.envelope_hash, Some(Hash::new([0_u8]).into()));
     }
 
@@ -29953,8 +29772,7 @@ mod accel_tests {
         let lane = lane_privacy_json(1, &[Some(vec![0x22; 32]), Some(vec![0x44; 32])]);
         let mut json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
         json.insert_str(json.len() - 1, &format!(r#", "lane_privacy":{lane}"#));
-        let value: JsonValue = norito::json::from_str(&json).expect("json");
-        let attachment = parse_proof_attachment_value(&value).expect("typed lane privacy");
+        let attachment = parse_proof_attachment_test_json(&json).expect("typed lane privacy");
         let lane = attachment.lane_privacy.expect("lane privacy attachment");
         let iroha_data_model::nexus::LanePrivacyWitness::Merkle(witness) = lane.witness;
         assert_eq!(witness.proof.leaf_index(), 1);
@@ -29986,9 +29804,9 @@ mod accel_tests {
                 1,
             ),
         ];
-        for json in cases {
-            let value: JsonValue = norito::json::from_str(&json).expect("adversarial json");
-            let error = parse_lane_privacy_proof_value(&value)
+        for lane in cases {
+            let json = proof_attachment_json_with_lane(&lane);
+            let error = parse_proof_attachment_test_json(&json)
                 .expect_err("malformed lane privacy path must reject");
             assert!(matches!(error, BridgeError::ProofAttachment));
         }
@@ -30000,7 +29818,18 @@ mod accel_tests {
             decode_canonical_bounded_base64("AA==", 1).expect("canonical one byte"),
             vec![0]
         );
-        for (value, maximum) in [("AAAA", 2), ("AB==", 1), ("AA==\n", 1)] {
+        assert_eq!(
+            decode_canonical_bounded_base64("AAA=", 2).expect("canonical two bytes"),
+            vec![0, 0]
+        );
+        for (value, maximum) in [
+            ("AAAA", 2),
+            ("AB==", 1),
+            ("AAB=", 2),
+            ("AA==\n", 1),
+            ("AA=A", 3),
+            ("AA_-", 3),
+        ] {
             assert!(
                 decode_canonical_bounded_base64(value, maximum).is_err(),
                 "base64 {value:?} with maximum {maximum} must reject"
@@ -30009,13 +29838,161 @@ mod accel_tests {
     }
 
     #[test]
+    fn proof_attachment_json_input_is_bounded_before_parsing() {
+        assert_eq!(
+            PROOF_ATTACHMENT_JSON_MAX_BASE64_BYTES_V1,
+            PROOF_BOX_MAX_ENCODED_BYTES_V1.div_ceil(3) * 4
+        );
+        assert!(!proof_attachment_json_length_is_valid(0));
+        assert!(proof_attachment_json_length_is_valid(
+            PROOF_ATTACHMENT_JSON_MAX_BYTES_V1
+        ));
+        assert!(!proof_attachment_json_length_is_valid(
+            PROOF_ATTACHMENT_JSON_MAX_BYTES_V1
+                .checked_add(1)
+                .expect("JSON limit has a successor")
+        ));
+
+        let byte = b'{';
+        let oversized = c_ulong::try_from(PROOF_ATTACHMENT_JSON_MAX_BYTES_V1 + 1)
+            .expect("proof attachment JSON limit fits the C ABI length");
+        assert!(matches!(
+            parse_proof_attachment_from_json_bytes((&byte as *const u8).cast(), oversized),
+            Err(BridgeError::ProofAttachment)
+        ));
+    }
+
+    #[test]
+    fn proof_attachment_json_small_schema_strings_are_prebounded() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        let oversized_identifier = "a".repeat(VERIFYING_KEY_ID_MAX_FIELD_BYTES + 1);
+        let oversized_kind = "m".repeat(17);
+        let lane = lane_privacy_json(0, &[Some(vec![0x22; 32])]);
+
+        let cases = [
+            proof_attachment_json(&oversized_identifier, "AA==", &envelope_hash_hex),
+            format!(
+                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"{oversized_identifier}"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
+            ),
+            proof_attachment_json("halo2/ipa", "AA==", &format!("{envelope_hash_hex}0")),
+            proof_attachment_json_with_lane(&lane.replacen("merkle", &oversized_kind, 1)),
+        ];
+
+        for json in cases {
+            assert!(
+                parse_proof_attachment_test_json(&json).is_err(),
+                "oversized semantic string must reject before retention"
+            );
+        }
+    }
+
+    #[test]
+    fn proof_attachment_json_streaming_parser_rejects_types_duplicates_and_nulls() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        let numeric_payload = "0,".repeat(16_384);
+        let cases = [
+            format!(
+                r#"{{"backend":"halo2/ipa","proof_b64":[{numeric_payload}0],"vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
+            ),
+            format!(
+                r#"{{"backend":"halo2/ipa","backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
+            ),
+            format!(
+                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
+            ),
+            format!(
+                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}","lane_privacy":null}}"#
+            ),
+        ];
+        for json in cases {
+            assert!(
+                parse_proof_attachment_test_json(&json).is_err(),
+                "adversarial JSON must reject"
+            );
+        }
+    }
+
+    #[test]
+    fn proof_attachment_json_streaming_parser_rejects_trailing_commas_at_every_object_depth() {
+        fn insert_before_closing_brace(value: &str, closing_from_end: usize) -> String {
+            let position = value
+                .char_indices()
+                .rev()
+                .filter_map(|(index, character)| (character == '}').then_some(index))
+                .nth(closing_from_end - 1)
+                .expect("requested object depth exists");
+            let mut mutated = value.to_owned();
+            mutated.insert(position, ',');
+            mutated
+        }
+
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        let plain = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
+        let sibling = Some(vec![0x22; 32]);
+        let lane = lane_privacy_json(0, std::slice::from_ref(&sibling));
+
+        let mut cases = vec![
+            insert_before_closing_brace(&plain, 1),
+            plain.replacen(r#""name":"vk1"}"#, r#""name":"vk1",}"#, 1),
+        ];
+        // From the end of the isolated lane object these are respectively the
+        // lane, witness, payload, and Merkle-proof object boundaries.
+        for closing_from_end in 1..=4 {
+            let malformed_lane = insert_before_closing_brace(&lane, closing_from_end);
+            cases.push(proof_attachment_json_with_lane(&malformed_lane));
+        }
+
+        for json in cases {
+            assert!(
+                parse_proof_attachment_test_json(&json).is_err(),
+                "trailing object comma must reject: {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn proof_attachment_json_streaming_parser_is_order_independent_and_path_bounded() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        let reordered = format!(
+            r#"{{"envelope_hash_hex":"{envelope_hash_hex}","vk_ref":{{"name":"vk1","backend":"halo2/ipa"}},"proof_b64":"AA==","backend":"halo2/ipa"}}"#
+        );
+        parse_proof_attachment_test_json(&reordered).expect("field order is not semantic");
+
+        let sibling = Some(vec![0x22; 32]);
+        let maximum_path = vec![sibling.clone(); LANE_PRIVACY_MAX_MERKLE_DEPTH_V1];
+        let maximum_lane = lane_privacy_json(0, &maximum_path);
+        parse_proof_attachment_test_json(&proof_attachment_json_with_lane(&maximum_lane))
+            .expect("maximum-depth complete path must parse");
+
+        let oversized_path = vec![sibling; LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 + 1];
+        let oversized_lane = lane_privacy_json(0, &oversized_path);
+        assert!(
+            parse_proof_attachment_test_json(&proof_attachment_json_with_lane(&oversized_lane))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn proof_attachment_jni_proof_json_is_bounded_before_copy() {
+        let source = include_str!("lib.rs");
+        let implementation = source
+            .split_once("fn java_native_encode_unshield_signed_transaction(")
+            .expect("unshield JNI helper remains present")
+            .1
+            .split_once("\n}\n\n#[cfg(")
+            .expect("unshield JNI helper remains discrete")
+            .0;
+        assert!(implementation.contains("read_java_byte_array_bounded("));
+        assert!(implementation.contains("PROOF_ATTACHMENT_JSON_MAX_BYTES_V1"));
+        assert!(!implementation.contains("read_java_byte_array(env, &proof_json"));
+    }
+
+    #[test]
     fn proof_attachment_json_rejects_missing_envelope_hash() {
-        let value: JsonValue = norito::json::from_str(
+        let err = parse_proof_attachment_test_json(
             r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
         )
-        .expect("json");
-        let err =
-            parse_proof_attachment_value(&value).expect_err("envelope_hash_hex must be present");
+        .expect_err("envelope_hash_hex must be present");
         assert!(matches!(err, BridgeError::ProofAttachment));
     }
 
@@ -30023,8 +30000,7 @@ mod accel_tests {
     fn proof_attachment_json_rejects_forged_envelope_hash() {
         let forged_hash = hex::encode([0x11_u8; 32]);
         let json = proof_attachment_json("halo2/ipa", "AA==", &forged_hash);
-        let value: JsonValue = norito::json::from_str(&json).expect("json");
-        let err = parse_proof_attachment_value(&value)
+        let err = parse_proof_attachment_test_json(&json)
             .expect_err("envelope_hash_hex must match proof bytes");
         assert!(matches!(err, BridgeError::ProofAttachment));
     }
@@ -30038,8 +30014,7 @@ mod accel_tests {
             format!(" {envelope_hash_hex}"),
         ] {
             let json = proof_attachment_json("halo2/ipa", "AA==", &noncanonical);
-            let value: JsonValue = norito::json::from_str(&json).expect("json");
-            let err = parse_proof_attachment_value(&value)
+            let err = parse_proof_attachment_test_json(&json)
                 .expect_err("envelope_hash_hex must be exact lowercase hex");
             assert!(matches!(err, BridgeError::ProofAttachment));
         }
@@ -30053,8 +30028,8 @@ mod accel_tests {
             json.len() - 1,
             r#","vk_commitment_hex":"0000000000000000000000000000000000000000000000000000000000000000""#,
         );
-        let value: JsonValue = norito::json::from_str(&json).expect("json");
-        let err = parse_proof_attachment_value(&value).expect_err("zero vk commitment must reject");
+        let err =
+            parse_proof_attachment_test_json(&json).expect_err("zero vk commitment must reject");
         assert!(matches!(err, BridgeError::ProofAttachment));
     }
 
@@ -30062,74 +30037,75 @@ mod accel_tests {
     fn proof_attachment_json_rejects_empty_proof_bytes() {
         let envelope_hash_hex = proof_bytes_hash_hex(&[]);
         let json = proof_attachment_json("halo2/ipa", "", &envelope_hash_hex);
-        let value: JsonValue = norito::json::from_str(&json).expect("json");
-        let err = parse_proof_attachment_value(&value).expect_err("empty proof bytes must reject");
+        let err =
+            parse_proof_attachment_test_json(&json).expect_err("empty proof bytes must reject");
         assert!(matches!(err, BridgeError::ProofAttachment));
     }
 
     #[test]
     fn proof_attachment_json_rejects_retired_proof_backend_field() {
-        let value: JsonValue = norito::json::from_str(
+        let err = parse_proof_attachment_test_json(
             r#"{"backend":"halo2/ipa","proof_backend":"stark/fri","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
         )
-        .expect("json");
-        let err = parse_proof_attachment_value(&value)
-            .expect_err("retired proof_backend field should be rejected by bridge parser");
+        .expect_err("retired proof_backend field should be rejected by bridge parser");
         assert!(matches!(err, BridgeError::ProofAttachment));
     }
 
     #[test]
     fn proof_attachment_json_rejects_bad_fixed_hash_lengths() {
-        let value: JsonValue = norito::json::from_str(
+        let err = parse_proof_attachment_test_json(
             r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"},"vk_commitment_hex":"abcd"}"#,
         )
-        .expect("json");
-        let err = parse_proof_attachment_value(&value)
-            .expect_err("short vk_commitment_hex should be rejected");
+        .expect_err("short vk_commitment_hex should be rejected");
         assert!(matches!(err, BridgeError::ProofAttachment));
     }
 
     #[test]
+    fn proof_attachment_json_rejects_non_string_vk_commitment() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        for non_string in ["null", "false", "0", "[]", "{}"] {
+            let json = format!(
+                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"vk_commitment_hex":{non_string},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
+            );
+            let err = parse_proof_attachment_test_json(&json)
+                .expect_err("a present vk commitment must be canonical lowercase hex");
+            assert!(matches!(err, BridgeError::ProofAttachment));
+        }
+    }
+
+    #[test]
     fn proof_attachment_json_rejects_vk_ref_backend_mismatch() {
-        let value: JsonValue = norito::json::from_str(
+        let err = parse_proof_attachment_test_json(
             r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"stark/fri","name":"vk1"}}"#,
         )
-        .expect("json");
-        let err = parse_proof_attachment_value(&value)
-            .expect_err("vk_ref backend mismatch should be rejected");
+        .expect_err("vk_ref backend mismatch should be rejected");
         assert!(matches!(err, BridgeError::ProofAttachment));
     }
 
     #[test]
     fn proof_attachment_json_rejects_vk_reference_shadow_field() {
-        let value: JsonValue = norito::json::from_str(
+        let err = parse_proof_attachment_test_json(
             r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"},"vk_reference":{"backend":"halo2/ipa","name":"shadow"}}"#,
         )
-        .expect("json");
-        let err = parse_proof_attachment_value(&value)
-            .expect_err("vk_reference shadow field should be rejected");
+        .expect_err("vk_reference shadow field should be rejected");
         assert!(matches!(err, BridgeError::ProofAttachment));
     }
 
     #[test]
     fn proof_attachment_json_rejects_nested_vk_ref_shadow_field() {
-        let value: JsonValue = norito::json::from_str(
+        let err = parse_proof_attachment_test_json(
             r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1","vk_reference":"shadow"}}"#,
         )
-        .expect("json");
-        let err = parse_proof_attachment_value(&value)
-            .expect_err("nested vk_ref shadow field should be rejected");
+        .expect_err("nested vk_ref shadow field should be rejected");
         assert!(matches!(err, BridgeError::ProofAttachment));
     }
 
     #[test]
     fn proof_attachment_json_rejects_blank_vk_ref_name() {
-        let value: JsonValue = norito::json::from_str(
+        let err = parse_proof_attachment_test_json(
             r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"   "}}"#,
         )
-        .expect("json");
-        let err =
-            parse_proof_attachment_value(&value).expect_err("blank vk_ref name should be rejected");
+        .expect_err("blank vk_ref name should be rejected");
         assert!(matches!(err, BridgeError::ProofAttachment));
     }
 
@@ -30139,8 +30115,7 @@ mod accel_tests {
             r#"{"backend":"   ","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
             r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"   ","name":"vk1"}}"#,
         ] {
-            let value: JsonValue = norito::json::from_str(json).expect("json");
-            let err = parse_proof_attachment_value(&value)
+            let err = parse_proof_attachment_test_json(json)
                 .expect_err("blank backend field should be rejected");
             assert!(matches!(err, BridgeError::ProofAttachment));
         }
@@ -33527,8 +33502,13 @@ fn java_native_encode_unshield_signed_transaction(
             .ok_or_else(|| "invalid outputs".to_owned())?;
         let inputs = java_fixed_32_chunks(&inputs_bytes, true, "inputs")?;
         let outputs = java_fixed_32_chunks(&outputs_bytes, false, "outputs")?;
-        let proof_bytes = read_java_byte_array(env, &proof_json, "proofJson")
-            .ok_or_else(|| "invalid proofJson".to_owned())?;
+        let proof_bytes = read_java_byte_array_bounded(
+            env,
+            &proof_json,
+            "proofJson",
+            PROOF_ATTACHMENT_JSON_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "invalid proofJson".to_owned())?;
         let proof = parse_proof_attachment_from_json_slice(&proof_bytes)
             .map_err(|_| "invalid proof attachment".to_owned())?;
         let root_hint_bytes = read_java_byte_array(env, &root_hint, "rootHint")

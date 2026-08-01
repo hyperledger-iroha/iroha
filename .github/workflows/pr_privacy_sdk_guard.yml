@@ -107,6 +107,7 @@ on:
       - "python/iroha_python/src/iroha_python/__init__.py"
       - "python/iroha_python/src/iroha_python/crypto.py"
       - "python/iroha_python/src/iroha_python/privacy_catalog.py"
+      - "python/iroha_python/src/iroha_python/privacy_exact12.py"
       - "python/iroha_python/src/iroha_python/anonymous_pgc.py"
       - "python/iroha_python/src/iroha_python/jindo.py"
       - "python/iroha_python/src/iroha_python/silent_threshold.py"
@@ -117,6 +118,7 @@ on:
       - "python/iroha_python/src/iroha_python/zk_x509.py"
       - "python/iroha_python/src/iroha_python/zkat.py"
       - "python/iroha_python/tests/privacy_catalog_test.py"
+      - "python/iroha_python/tests/privacy_exact12_fixture_test.py"
       - "python/iroha_python/tests/package_import_fallback_test.py"
       - "python/iroha_python/tests/privacy_native_registry_test.py"
       - "python/iroha_python/tests/crypto_algorithms_test.py"
@@ -134,9 +136,11 @@ on:
       - "IrohaSwift/README.md"
       - "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
       - "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"
+      - "IrohaSwift/Sources/IrohaSwift/PrivacyExact12FixtureBundle.swift"
       - "IrohaSwift/Sources/IrohaSwift/ProofAttachment.swift"
       - "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/PrivacyExact12FixtureBundleTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/ProofAttachmentNoritoTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift"
       - "java/iroha_android/README.md"
@@ -174,10 +178,13 @@ on:
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyExact12FixtureCodecV1Test.kt"
       - "csharp/README.md"
       - "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureCodecV1.cs"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureModelsV1.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Zk/VerifyingKeyBackendTag.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs"
+      - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyExact12FixtureCodecV1Tests.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/VerifyingKeyBackendTagTests.cs"
       - "specs/offline_kagemusha.md"
       - "roadmap.md"
@@ -533,7 +540,7 @@ jobs:
           ci/check_privacy_sdk_guard.sh --negative-control-public-wrapper-isolation-coverage
           ci/check_privacy_sdk_guard.sh --negative-control-public-archive-wrapper-norito-coverage
           ci/check_privacy_sdk_guard.sh --negative-control-backend-alias-fail-closed-coverage
-          ci/check_privacy_sdk_guard.sh --negative-control-required-pending-backend-parity-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-canonical-backend-alias-rejection-coverage
           ci/check_privacy_sdk_guard.sh --negative-control-chain-backend-allowlist-coverage
           ci/check_privacy_sdk_guard.sh --negative-control-required-production-allowlist-backend-coverage
           ci/check_privacy_sdk_guard.sh --negative-control-required-production-allowlist-rust-backend-mapping

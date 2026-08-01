@@ -2345,12 +2345,12 @@ mod tests {
         name::Name,
         privacy::{
             BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
-            BootleLanternDisclosedAttributeV1, BootleLanternIssuerPublicMatrixV1,
-            BootleLanternPolynomialV1, IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
-            IrohaZkAmsProofV1, PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1,
-            PrivacyChallengeV1, PrivacyCredentialDocumentTypeV1, PrivacyEncryptionKeyV1,
-            PrivacyEngineIdV1, PrivacyFcmpInputPublicV1, PrivacyFcmpKeyImageV1,
-            PrivacyFcmpPoolBootstrapV1, PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1,
+            BootleLanternDisclosedAttributeV1,
+            IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1, IrohaZkAmsProofV1,
+            PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyChallengeV1,
+            PrivacyCredentialDocumentTypeV1, PrivacyEncryptionKeyV1, PrivacyEngineIdV1,
+            PrivacyFcmpInputPublicV1, PrivacyFcmpKeyImageV1, PrivacyFcmpPoolBootstrapV1,
+            PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1,
             PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyJindoFieldElementV1,
             PrivacyNamespaceScopeV1, PrivacyNoteEncryptionKeyDigestV1, PrivacyOrchardActionV1,
             PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
@@ -2396,18 +2396,13 @@ mod tests {
                 },
             },
             bootle_lantern::{
-                application_relation_digest_v1,
                 codec::PROOF_BYTES_V1 as BOOTLE_LANTERN_PROOF_BYTES_V1,
-                proof::prove_presentation_v1,
-                relation::{
-                    BootleLanternPresentationWitnessV1, compile_application_relation_v1,
-                    validate_presentation_witness_v1,
+                issuer::{
+                    BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
+                    holder_finalize_blind_issuance_v1,
+                    holder_prepare_blind_issuance_with_rng_v1, issuer_blind_issue_with_rng_v1,
                 },
-                ring::ApplicationPolynomialV1,
-                transcript::{
-                    MatrixRoleV1, PresentationChallengeBindingV1, PresentationTranscriptV1,
-                    expand_application_matrix_v1, matrix_seed_v1,
-                },
+                prove_bound_presentation_v1,
             },
             fcmp_plus_plus::{
                 FcmpInputRerandomizationV1, FcmpProverInputV1, FcmpWalletNoteV1,
@@ -2947,48 +2942,7 @@ mod tests {
             ));
             let chain_id = ChainId::from("taira-privacy-bootle-lantern-test");
             let genesis_hash = [0xA7; 32];
-            let matrix_seed =
-                matrix_seed_v1(*compiled.parameter_digest.as_bytes()).expect("matrix seed");
-            let attribute_matrix =
-                expand_application_matrix_v1(matrix_seed, MatrixRoleV1::ApplicationAttributes)
-                    .expect("application attribute matrix");
-            let issuer_public_matrix = BootleLanternIssuerPublicMatrixV1 {
-                entries: attribute_matrix
-                    .entries()
-                    .iter()
-                    .map(|polynomial| BootleLanternPolynomialV1 {
-                        coefficients: polynomial.coefficients().to_vec(),
-                    })
-                    .collect(),
-            };
-            let mut policy = BootleLanternIssuerPolicyV1 {
-                issuer_id: PrivacyIssuerIdV1::new([0xB1; 32]),
-                policy_id: PrivacyPolicyIdV1::new([0xB2; 32]),
-                epoch: 1,
-                lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
-                issuer_parameter_id: PrivacyParameterIdV1::new([0xB3; 32]),
-                issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
-                issuer_public_matrix,
-                required_disclosure_bitmap: 0b0000_0010,
-                allowed_values: (0..8)
-                    .map(|index| BootleLanternAllowedAttributeValuesV1 {
-                        values: if index == 1 {
-                            vec![BootleLanternAttributeValueV1::new([1; 8])]
-                        } else {
-                            Vec::new()
-                        },
-                    })
-                    .collect(),
-                record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),
-            };
-            policy.issuer_parameter_digest = policy
-                .computed_issuer_parameter_digest()
-                .expect("issuer parameter digest");
-            policy.record_digest = policy.computed_record_digest().expect("policy digest");
-            policy.validate_initial().expect("canonical initial policy");
-
-            let statement = IrohaBootleLanternAnoncredStatementV1 {
-                context: PrivacyStatementContextV1 {
+            let context = PrivacyStatementContextV1 {
                     chain_id: chain_id.clone(),
                     action_index: 0,
                     transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0xB4; 32]),
@@ -2997,7 +2951,66 @@ mod tests {
                     verifier_digest: compiled.verifier_digest,
                     statement_schema_digest: compiled.statement_schema_digest,
                     engine_manifest_digest: compiled.engine_manifest_digest,
-                },
+                };
+            let mut keygen_rng = KatRng::new([0xB3; 32]);
+            let issuer_key_pair = BootleLanternIssuerKeyPairV1::generate_with_rng_v1(
+                PrivacyParameterIdV1::new([0xB3; 32]),
+                &mut keygen_rng,
+            )
+            .expect("native issuer key generation");
+            let policy = issuer_key_pair
+                .active_policy_v1(BootleLanternIssuerPolicyMetadataV1 {
+                    issuer_id: PrivacyIssuerIdV1::new([0xB1; 32]),
+                    policy_id: PrivacyPolicyIdV1::new([0xB2; 32]),
+                    epoch: 1,
+                    required_disclosure_bitmap: 0b0000_0010,
+                    allowed_values: (0..8)
+                        .map(|index| BootleLanternAllowedAttributeValuesV1 {
+                            values: if index == 1 {
+                                vec![BootleLanternAttributeValueV1::new([1; 8])]
+                            } else {
+                                Vec::new()
+                            },
+                        })
+                        .collect(),
+                })
+                .expect("canonical initial native issuer policy");
+            let mut attributes = [[0_u8; 8]; 8];
+            attributes[1] = [1; 8];
+            let mut holder_mask_rng = KatRng::new([0xB4; 32]);
+            let mut holder_proof_rng = KatRng::new([0xB5; 32]);
+            let (issuance_request, issuance_state) =
+                holder_prepare_blind_issuance_with_rng_v1(
+                    &context,
+                    genesis_hash,
+                    &policy,
+                    attributes,
+                    &mut holder_mask_rng,
+                    &mut holder_proof_rng,
+                )
+                .expect("holder blind-issuance request");
+            let mut tag_rng = KatRng::new([0xB6; 32]);
+            let mut preimage_rng = KatRng::new([0xB7; 32]);
+            let issuance_response = issuer_blind_issue_with_rng_v1(
+                &issuer_key_pair,
+                &context,
+                genesis_hash,
+                &policy,
+                &issuance_request,
+                &mut tag_rng,
+                &mut preimage_rng,
+            )
+            .expect("native blind issuance");
+            let credential = holder_finalize_blind_issuance_v1(
+                issuance_state,
+                &context,
+                genesis_hash,
+                &policy,
+                issuance_response,
+            )
+            .expect("holder issuance finalization");
+            let statement = IrohaBootleLanternAnoncredStatementV1 {
+                context,
                 issuer_id: policy.issuer_id,
                 policy_id: policy.policy_id,
                 issuer_policy_epoch: policy.epoch,
@@ -3014,46 +3027,15 @@ mod tests {
             let statement_digest = typed_statement
                 .digest()
                 .expect("Bootle/Lantern statement digest");
-            let relation = compile_application_relation_v1(&statement, &policy, matrix_seed)
-                .expect("Bootle/Lantern application relation");
-
-            // The fixture sets B=A_m. With all other secret components zero,
-            // direct attributes are a valid short s2 preimage.
-            let mut attributes = [[0_u8; 8]; 8];
-            attributes[1] = [1; 8];
-            let mut signature_two = [ApplicationPolynomialV1::ZERO; 8];
-            for (output, attribute) in signature_two.iter_mut().zip(attributes) {
-                *output = ApplicationPolynomialV1::from_direct_attribute(attribute);
-            }
-            let witness = BootleLanternPresentationWitnessV1 {
-                randomness: [ApplicationPolynomialV1::ZERO; 16],
-                tag: [ApplicationPolynomialV1::ZERO; 8],
-                signature_one: [ApplicationPolynomialV1::ZERO; 8],
-                signature_two,
-                attributes,
-            };
-            validate_presentation_witness_v1(&relation, &witness)
-                .expect("valid Bootle/Lantern witness");
-            let transcript = PresentationTranscriptV1::new(
-                PresentationChallengeBindingV1 {
-                    parameter_digest: *compiled.parameter_digest.as_bytes(),
-                    genesis_hash,
-                    statement_digest: *statement_digest.as_bytes(),
-                    issuer_policy_record_digest: *policy.record_digest.as_bytes(),
-                    transaction_intent_digest: *statement
-                        .context
-                        .transaction_intent_digest
-                        .as_bytes(),
-                },
-                matrix_seed,
-                application_relation_digest_v1(&relation),
-            )
-            .expect("fully bound Bootle/Lantern transcript");
-            let proof = prove_presentation_v1(
-                &relation,
+            let witness = credential
+                .presentation_witness_v1(&statement, &policy, genesis_hash)
+                .expect("issued Bootle/Lantern witness");
+            let proof = prove_bound_presentation_v1(
+                &statement,
+                &policy,
+                genesis_hash,
                 &witness,
-                transcript,
-                &mut KatRng::new([0xB5; 32]),
+                &mut KatRng::new([0xB8; 32]),
             )
             .expect("Bootle/Lantern proof")
             .encode();

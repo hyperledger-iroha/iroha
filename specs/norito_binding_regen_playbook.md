@@ -1,27 +1,29 @@
 <!--
-  Norito binding regeneration playbook covering Python, Java, and Android SDKs.
+  Norito binding regeneration playbook covering Python, Java, Android, and Swift SDKs.
 -->
 
 # Norito Binding Regeneration Playbook
 
 Norito is developed in Rust, but the canonical fixtures and SDK bindings in this
-repository must stay in lockstep so that Python, Java, and Android clients emit
-the exact same payloads. This playbook captures the repeatable steps for
-regenerating those bindings whenever `crates/norito`, the data model, or the
-fixture exporter change.
+repository must stay in lockstep. `fixtures/norito_rpc/` is the sole fixture
+source. The owner command publishes that corpus and its managed mirrors together:
+
+```bash
+cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
+```
+
+Python and Swift receive descriptor-only mirrors. Java receives a generated
+descriptor-and-blob mirror. None of those SDK directories is an input or an
+independent fixture owner.
 
 - **Cadence:** Follow the twice-weekly Tuesday & Friday (09:00 UTC) rotations
   agreed with Android/Python/Swift maintainers. Emergency runs are allowed when
   a Norito discriminator or ABI hash lands outside that window.
-- **SLA:** Publish regenerated artifacts, update the changelog/state files, and
-  land parity evidence within 48 h of a required change.
-- **State files:** Rotation metadata is written to
-  `artifacts/android_fixture_regen_state.json` and
-  `artifacts/python_fixture_regen_state.json`. Keep both under version control
-  so governance can audit cadence adherence.
+- **SLA:** Publish the regenerated corpus and mirrors and land parity evidence
+  within 48 h of a required change.
 - **JDK posture:** Follow the policy captured in
   `specs/android_fixture_changelog.md#jdk-upgrade-policy` (JDK 21 LTS +
-  quarterly CPU review) so rotations and exporter builds remain deterministic.
+  quarterly CPU review) so Java mirror validation remains deterministic.
 
 ## Shared Preparation
 
@@ -36,13 +38,12 @@ fixture exporter change.
    `ci/check_norito_bindings_sync.sh`. Ordinary Cargo builds skip this
    multi-SDK guard; set `NORITO_CHECK_BINDINGS_SYNC=1` only when you explicitly
    want `cargo build -p norito` to run the same check locally.
-2. **Update Rust fixtures if needed:** If the change depends on new Norito JSON
-   goldens, regenerate them with `scripts/norito_regen.sh` before touching the
-   SDKs.
-3. **Confirm exporter inputs:** The Android fixture rotation relies on
-   `scripts/export_norito_fixtures`. Verify the manifest referenced by
-   `scripts/android_fixture_regen.sh` contains the new schemas.
-4. **Validate cadence alignment:** Run the cross-SDK cadence checker to confirm
+2. **Regenerate from the canonical descriptor:** Update
+   `fixtures/norito_rpc/transaction_payloads.json` when an authoritative fixture
+   descriptor changes, then run the owner command shown above. It regenerates
+   canonical payload blobs, the manifest, schema and compact-hash data, and all
+   managed SDK mirrors. Do not run a language-specific generator first.
+3. **Validate cadence alignment:** Run the cross-SDK cadence checker to confirm
    the latest Android/Python (and optional Swift/JS) rotations happened within
    the agreed skew/age limits before asking governance to sign off:
    ```bash
@@ -58,54 +59,39 @@ fixture exporter change.
    fixture regeneration cron (Android & Python maintainers)” has determinism
    evidence ready for governance reviews.
 
-## Android (Canonical Fixtures)
+## Canonical Norito RPC fixtures
 
-Android resources in `java/iroha_android/src/test/resources` act as the
-canonical Norito fixture set consumed by the other SDKs.
+The authoritative inputs and outputs live under `fixtures/norito_rpc/`.
+`transaction_payloads.json` is the structured descriptor input; the same owner
+regenerates `transaction_fixtures.manifest.json`, `schema_hashes.json`, the
+compact-hash vector, and every owned `.norito` payload.
 
-1. Regenerate fixtures and update the cadence metadata:
+1. Regenerate the complete publication:
    ```bash
-   ANDROID_FIXTURE_ROTATION_OWNER="<name>" \
-   ANDROID_FIXTURE_CADENCE="twice-weekly-tue-fri-0900utc" \
-   make android-fixtures
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
    ```
-   This wraps `scripts/android_fixture_regen.sh`, runs the Rust exporter, and
-   refreshes `artifacts/android_fixture_regen_state.json`.
-2. Validate the manifest/hash metadata:
+   `scripts/android_fixture_regen.sh`, `scripts/python_fixture_regen.sh`, and
+   `scripts/swift_fixture_regen.sh` delegate to this exact owner; they do not
+   define alternate modes.
+2. Validate canonical and mirror parity:
    ```bash
-   make android-fixtures-check
-   # executes scripts/check_android_fixtures.py
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
+   scripts/check_norito_bindings_sync.sh
    ```
-3. Run the full Android test harness (covers the Norito codec, keystore stubs,
-   and REST client) to ensure the regenerated payloads stay in sync:
-   ```bash
-   make android-tests
-   # calls ci/run_android_tests.sh
-   ```
-4. Record the rotation in `specs/android_fixture_changelog.md`
-   (timestamp, owner, reference commit/PR, and notes).
-5. Commit the refreshed fixtures plus
-   `artifacts/android_fixture_regen_state.json`. Include any updated generated
-   docs under `specs/sdk/android/generated/` if the exporter produced new
-   summaries.
+3. Review the canonical and generated mirror diffs as one publication. Never
+   hand-edit a generated manifest, hash, or SDK mirror to make a check pass.
 
 ## Python (`norito_py` and `iroha_python`)
 
-Python fixtures mirror the canonical Android set, and parity is enforced via the
-same scripts referenced by CI.
+`python/iroha_python/tests/fixtures/` mirrors only
+`transaction_payloads.json` and `transaction_fixtures.manifest.json` from the
+canonical directory. Canonical `.norito` blobs are deliberately absent.
 
-1. Sync fixtures from Android resources:
+1. Run the canonical owner command; `scripts/python_fixture_regen.sh` is only a
+   convenience delegate.
+2. Re-run descriptor parity checks:
    ```bash
-   PYTHON_FIXTURE_ROTATION_OWNER="<name>" \
-   PYTHON_FIXTURE_CADENCE="twice-weekly-tue-fri-0900utc" \
-   make python-fixtures
-   ```
-   This calls `scripts/python_fixture_regen.sh`, copies the `.norito` payloads,
-   and updates `artifacts/python_fixture_regen_state.json`.
-2. Re-run the parity checks:
-   ```bash
-   make python-fixtures-check
-   # executes scripts/check_python_fixtures.py
+   python3 scripts/check_python_fixtures.py
    ```
 3. Execute the Python SDK test/linters to catch API regressions:
    ```bash
@@ -114,14 +100,31 @@ same scripts referenced by CI.
 4. Update `python/norito_py` or `python/iroha_python` sources as required,
    keeping `python/norito_py/CHANGELOG.md` and `python/iroha_python/README.md`
    notes in sync with the regenerated fixtures.
-5. Commit the refreshed `python/iroha_python/tests/fixtures/` contents,
-   `artifacts/python_fixture_regen_state.json`, and any code changes needed to
-   satisfy parity.
+5. Commit the refreshed descriptor pair with its canonical publication and any
+   code changes needed to satisfy parity.
+
+## Swift (`IrohaSwift`)
+
+`IrohaSwift/Fixtures/` is also descriptor-only. The canonical owner writes the
+payload descriptor and manifest there while preserving Swift-owned fixtures;
+canonical `.norito` blobs must not be copied into this directory.
+
+1. Run the canonical owner command; `scripts/swift_fixture_regen.sh` delegates
+   to it without archive or compatibility modes.
+2. Verify the descriptor mirror:
+   ```bash
+   python3 scripts/check_swift_fixtures.py
+   ```
+3. Run the Swift parity suite with the required native bridge according to the
+   Swift SDK playbook.
 
 ## Java (`norito_java`)
 
 Java is the second pure-language implementation of Norito. Changes typically
-require mirror edits under `java/norito_java` plus the Android library.
+require codec edits under `java/norito_java` plus the Android library. Fixture
+resources under `java/iroha_android/src/test/resources/` are generated outputs:
+the canonical owner publishes both descriptors and canonical `.norito` blobs
+there. Never use this directory as a regeneration input.
 
 1. Apply any schema or codec updates to `java/norito_java/src/main/java`.
 2. Run the bundled test harness with assertions enabled:
@@ -131,7 +134,7 @@ require mirror edits under `java/norito_java` plus the Android library.
    The script re-compiles the codec and executes round-trip tests covering the
    new schema hash.
 3. If the change also touches the Android bindings, re-run
-   `make android-tests` after the fixture regeneration step above so
+   `make android-tests` after the canonical fixture regeneration step so
    `ci/run_android_tests.sh` exercises the keystore, HTTP client, and Norito
    serializer together.
 4. Update `java/norito_java/CHANGELOG.md` with a short note describing the sync
@@ -142,12 +145,10 @@ require mirror edits under `java/norito_java` plus the Android library.
 Before merging a Norito change that impacts SDK bindings:
 
 1. ✅ Run `scripts/check_norito_bindings_sync.sh` and ensure it passes locally.
-2. ✅ Regenerate Android fixtures (`make android-fixtures && make android-fixtures-check`),
-   update `specs/android_fixture_changelog.md`, and commit the resources +
-   `artifacts/android_fixture_regen_state.json`.
-3. ✅ Mirror fixtures into Python (`make python-fixtures && make python-fixtures-check`)
-   and run `python/iroha_python/scripts/run_checks.sh`; commit the fixture and
-   state-file updates.
+2. ✅ Run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures` once
+   and review the canonical, Java, Python, and Swift outputs together.
+3. ✅ Verify the Python and Swift descriptor-only mirrors, the Java generated
+   mirror, and the canonical Norito RPC publication; run the SDK test suites.
 4. ✅ Rebuild/test `java/norito_java` (and `java/iroha_android` when applicable)
    so Java bindings capture the Rust codec delta.
 5. ✅ Ensure CI jobs (`ci/check_norito_bindings_sync.sh`,

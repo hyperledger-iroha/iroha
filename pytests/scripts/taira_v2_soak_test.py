@@ -58,9 +58,9 @@ def _install_source_bound_fake_localnet_binaries(
     if attestation.is_file():
         return program_target, hashlib.sha256(attestation.read_bytes()).hexdigest()
     binaries = {
-        "irohad": program_target / "release" / "iroha3d",
+        "irohad": program_target / "release" / "irohad",
         "irohad_message_control": (
-            program_target / "message-control" / "release" / "iroha3d"
+            program_target / "message-control" / "release" / "irohad"
         ),
         "iroha": program_target / "release" / "iroha",
         "kagami": program_target / "release" / "kagami",
@@ -95,8 +95,8 @@ def _install_source_bound_fake_localnet_binaries(
         ("bundle_dir", str(program_target)),
     ]
     for label, relative in (
-        ("irohad", "release/iroha3d"),
-        ("irohad_message_control", "message-control/release/iroha3d"),
+        ("irohad", "release/irohad"),
+        ("irohad_message_control", "message-control/release/irohad"),
         ("iroha", "release/iroha"),
         ("kagami", "release/kagami"),
     ):
@@ -346,9 +346,9 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
 ) -> None:
     env, capture = _stubbed_environment(tmp_path)
     env.update({name: "inherited-malicious-override" for name in PINNED_ENV})
-    env["TEST_NETWORK_BIN_IROHAD"] = "/tmp/malicious-iroha3d"
+    env["TEST_NETWORK_BIN_IROHAD"] = "/tmp/malicious-irohad"
     env["KAGAMI_BIN"] = "/tmp/malicious-kagami"
-    env["TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL"] = "/tmp/malicious-controlled-iroha3d"
+    env["TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL"] = "/tmp/malicious-controlled-irohad"
     env["TEST_NETWORK_BIN_IROHA"] = "/tmp/malicious-iroha"
     env["TEST_NETWORK_IROHAD_FEATURES"] = "malicious-feature"
     env["CARGO_BIN_EXE_iroha"] = "/tmp/malicious-cargo-iroha"
@@ -427,7 +427,7 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     program_target = PROGRAM_TARGET
     assert (
         captured.count(
-            f"TEST_NETWORK_BIN_IROHAD={program_target / 'release' / 'iroha3d'}\n"
+            f"TEST_NETWORK_BIN_IROHAD={program_target / 'release' / 'irohad'}\n"
         )
         == 2
     )
@@ -438,7 +438,7 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     assert (
         captured.count(
             "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="
-            f"{program_target / 'message-control' / 'release' / 'iroha3d'}\n"
+            f"{program_target / 'message-control' / 'release' / 'irohad'}\n"
         )
         == 2
     )
@@ -486,7 +486,7 @@ def test_launcher_rejects_bundle_tampering_before_completion(
         run_mode="tamper-bundle",
         program_target=program_target,
     )
-    binary = program_target / "release" / "iroha3d"
+    binary = program_target / "release" / "irohad"
     original = binary.read_bytes()
     env["TAIRA_TAMPER_BINARY"] = str(binary)
     completion_pointer = tmp_path / "taira-completion-path"

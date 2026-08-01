@@ -1,11 +1,13 @@
 [package]
 name = "fastpq_prover"
+autobins = false
 version.workspace = true
 edition = "2024"
 publish = false
 
 [features]
 default = []
+dev-tools = []
 bench = []
 fastpq-gpu = ["dep:block", "dep:metal"]
 
@@ -42,11 +44,22 @@ harness = false
 [[bin]]
 name = "fastpq_metal_bench"
 path = "src/bin/fastpq_metal_bench.rs"
-required-features = ["fastpq-gpu"]
+required-features = ["dev-tools", "fastpq-gpu"]
 
 [[bin]]
 name = "fastpq_cuda_bench"
 path = "src/bin/fastpq_cuda_bench.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "fastpq_fixture_rebind"
+path = "src/bin/fastpq_fixture_rebind.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "fastpq_json"
+path = "src/bin/fastpq_json.rs"
+required-features = ["dev-tools"]
 
 [[test]]
 name = "transcript_replay"

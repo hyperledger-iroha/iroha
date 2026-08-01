@@ -901,15 +901,15 @@ mod tests {
         },
         prelude::*,
         privacy::{
-            BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
-            BOOTLE_LANTERN_RING_DEGREE_V1, BootleLanternAllowedAttributeValuesV1,
-            BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPolicyV1,
-            BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
-            PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyCredentialDocumentTypeV1,
-            PrivacyIssuerIdV1, PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
-            PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyRootV1,
-            PrivacyVegaIssuerRecordDigestV1, PrivacyVegaIssuerRecordLifecycleV1,
-            PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+            BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_RING_DEGREE_V1,
+            BootleLanternAllowedAttributeValuesV1, BootleLanternIssuerPolicyLifecycleV1,
+            BootleLanternIssuerPolicyV1, BootleLanternIssuerPublicMatrixV1,
+            BootleLanternPolynomialV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+            PrivacyCredentialDocumentTypeV1, PrivacyIssuerIdV1, PrivacyP256PointV1,
+            PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyDigestV1,
+            PrivacyPolicyIdV1, PrivacyRootV1, PrivacyVegaIssuerRecordDigestV1,
+            PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1,
+            PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
             PrivacyVegaMdlSignatureAlgorithmV1, PrivacyX509CrlDerDigestV1,
             PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1,
             PrivacyX509KeyUsageRequirementV1, PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
@@ -939,10 +939,20 @@ mod tests {
             .expect("visitor issuer policy encodes");
     }
 
+    fn bootle_visitor_public_matrix(seed: u16) -> BootleLanternIssuerPublicMatrixV1 {
+        let first_column = core::array::from_fn(|block| BootleLanternPolynomialV1 {
+            coefficients: (0..BOOTLE_LANTERN_RING_DEGREE_V1)
+                .map(|coefficient| {
+                    seed + u16::try_from(block * BOOTLE_LANTERN_RING_DEGREE_V1 + coefficient)
+                        .expect("degree-512 coefficient index fits u16")
+                })
+                .collect(),
+        });
+        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+            .expect("canonical visitor degree-512 multiplication matrix")
+    }
+
     fn bootle_visitor_policy() -> BootleLanternIssuerPolicyV1 {
-        let polynomial = BootleLanternPolynomialV1 {
-            coefficients: vec![1; BOOTLE_LANTERN_RING_DEGREE_V1],
-        };
         let mut policy = BootleLanternIssuerPolicyV1 {
             issuer_id: PrivacyIssuerIdV1::new([0x21; 32]),
             policy_id: PrivacyPolicyIdV1::new([0x22; 32]),
@@ -950,13 +960,7 @@ mod tests {
             lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
             issuer_parameter_id: PrivacyParameterIdV1::new([0x23; 32]),
             issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
-            issuer_public_matrix: BootleLanternIssuerPublicMatrixV1 {
-                entries: vec![
-                    polynomial;
-                    BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1
-                        * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1
-                ],
-            },
+            issuer_public_matrix: bootle_visitor_public_matrix(1),
             required_disclosure_bitmap: 0,
             allowed_values: vec![
                 BootleLanternAllowedAttributeValuesV1 { values: Vec::new() };
@@ -1101,7 +1105,8 @@ mod tests {
         let current = bootle_visitor_policy();
         let mut rotated = current.clone();
         rotated.epoch += 1;
-        rotated.issuer_public_matrix.entries[0].coefficients[0] = 2;
+        rotated.issuer_parameter_id.0[0] ^= 1;
+        rotated.issuer_public_matrix = bootle_visitor_public_matrix(701);
         redigest_bootle_visitor_policy(&mut rotated);
         rotated
             .validate_rotation_successor(&current)

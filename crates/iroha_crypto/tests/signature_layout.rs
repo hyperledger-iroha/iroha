@@ -119,7 +119,7 @@ fn signature_bare_compat_is_len_prefixed_then_payload() {
     let sig = Signature::from_bytes(&[1, 2, 3]);
     let _fg = core::DecodeFlagsGuard::enter(0);
     let mut out = Vec::new();
-    norito::NoritoSerialize::serialize(&sig, &mut out).expect("serialize");
+    norito::core::serialize_to_buffer(&sig, &mut out).expect("serialize");
 
     assert!(out.len() > sig.payload().len());
 
@@ -154,9 +154,9 @@ fn signature_of_delegates_to_signature_layout() {
     // Compat path also the same shape
     let _fg = core::DecodeFlagsGuard::enter(0);
     let mut s1 = Vec::new();
-    norito::NoritoSerialize::serialize(&base, &mut s1).expect("serialize sig");
+    norito::core::serialize_to_buffer(&base, &mut s1).expect("serialize sig");
     let mut s2 = Vec::new();
-    norito::NoritoSerialize::serialize(&wrapped, &mut s2).expect("serialize sigof");
+    norito::core::serialize_to_buffer(&wrapped, &mut s2).expect("serialize sigof");
     assert_eq!(s1, s2);
 }
 

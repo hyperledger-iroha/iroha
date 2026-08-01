@@ -85,16 +85,30 @@ fn note(
         .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)
 }
 
+fn release_asset_definition_id_v1() -> Result<AssetDefinitionId, IvmPrivateNoteReleaseFixtureErrorV1>
+{
+    Ok(AssetDefinitionId::new(
+        DomainId::try_new("privacy", "universal")
+            .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?,
+        iroha_data_model::name::Name::from_str("ivmnote")
+            .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?,
+    ))
+}
+
 fn build_fixture<R: RngCore + CryptoRng>(
     maximum: bool,
     invalid_path: bool,
+    canonical_bootstrap: bool,
+    pool_id: PrivacyPoolIdV1,
+    asset_definition_id: AssetDefinitionId,
     randomness: &mut R,
 ) -> Result<IvmPrivateNoteReleaseFixtureV1, IvmPrivateNoteReleaseFixtureErrorV1> {
+    if canonical_bootstrap && (maximum || invalid_path) {
+        return Err(IvmPrivateNoteReleaseFixtureErrorV1);
+    }
     let program = conservation_program()?;
     let program_id =
         derive_private_program_id_v1(&program).map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?;
-    let pool_id = PrivacyPoolIdV1::new(bytes(0x61));
-
     let first_spending_secret = bytes(0x41);
     let first_input = note(
         10,
@@ -117,12 +131,6 @@ fn build_fixture<R: RngCore + CryptoRng>(
     )
     .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?;
 
-    let asset_definition_id = AssetDefinitionId::new(
-        DomainId::try_new("privacy", "universal")
-            .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?,
-        iroha_data_model::name::Name::from_str("ivmnote")
-            .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?,
-    );
     let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
         context: context()?,
         asset_definition_id,
@@ -141,8 +149,30 @@ fn build_fixture<R: RngCore + CryptoRng>(
     let mut input_notes = vec![(first_input, first_spending_secret)];
     let mut output_notes = vec![first_output];
     let mut input_commitments = vec![first_input_commitment];
+    let mut paths = Vec::with_capacity(input_notes.len());
+    let mut positions = Vec::with_capacity(input_notes.len());
 
-    if maximum {
+    if canonical_bootstrap {
+        let path = crate::privacy_engines::proof_managed_accumulator::canonical_single_leaf_authentication_path_v1();
+        let mut root = accumulator_leaf_invocation_v1(&statement, 0, input_commitments[0])
+            .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?
+            .digest;
+        for (level, sibling) in path.iter().enumerate() {
+            root = accumulator_node_invocation_v1(
+                0,
+                u8::try_from(level).map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?,
+                &root,
+                sibling,
+            )
+            .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?
+            .digest;
+        }
+        statement.state_root = PrivacyRootV1::new(root);
+        statement.root_epoch = 1;
+        statement.execution_epoch = 1;
+        paths.push(path);
+        positions.push(0);
+    } else if maximum {
         let second_spending_secret = bytes(0x81);
         let second_input = note(
             10,
@@ -173,8 +203,6 @@ fn build_fixture<R: RngCore + CryptoRng>(
         input_commitments.push(second_input_commitment);
     }
 
-    let mut paths = Vec::with_capacity(input_notes.len());
-    let mut positions = Vec::with_capacity(input_notes.len());
     if maximum {
         let first_leaf = accumulator_leaf_invocation_v1(&statement, 0, input_commitments[0])
             .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?
@@ -209,7 +237,7 @@ fn build_fixture<R: RngCore + CryptoRng>(
         statement.state_root = PrivacyRootV1::new(root);
         paths.extend([first_path, second_path]);
         positions.extend([0, 1]);
-    } else {
+    } else if !canonical_bootstrap {
         let path =
             core::array::from_fn(|level| [u8::try_from(level).expect("depth 32 fits u8") + 1; 32]);
         let position = 0x89ab_cdef;
@@ -274,14 +302,38 @@ pub(crate) fn ivm_private_note_release_fixture_v1<R: RngCore + CryptoRng>(
     maximum: bool,
     randomness: &mut R,
 ) -> Result<IvmPrivateNoteReleaseFixtureV1, IvmPrivateNoteReleaseFixtureErrorV1> {
-    build_fixture(maximum, false, randomness)
+    build_fixture(
+        maximum,
+        false,
+        false,
+        PrivacyPoolIdV1::new(bytes(0x61)),
+        release_asset_definition_id_v1()?,
+        randomness,
+    )
 }
 
 /// Construct a normal fixture whose nonzero authentication path misses the root.
 pub(crate) fn ivm_private_note_release_invalid_path_fixture_v1<R: RngCore + CryptoRng>(
     randomness: &mut R,
 ) -> Result<IvmPrivateNoteReleaseFixtureV1, IvmPrivateNoteReleaseFixtureErrorV1> {
-    build_fixture(false, true, randomness)
+    build_fixture(
+        false,
+        true,
+        false,
+        PrivacyPoolIdV1::new(bytes(0x61)),
+        release_asset_definition_id_v1()?,
+        randomness,
+    )
+}
+
+/// Construct the complete one-input/one-output fixture whose membership path
+/// exactly matches a one-leaf authoritative proof-managed pool bootstrap.
+pub(crate) fn ivm_private_note_network_fixture_v1<R: RngCore + CryptoRng>(
+    pool_id: PrivacyPoolIdV1,
+    asset_definition_id: AssetDefinitionId,
+    randomness: &mut R,
+) -> Result<IvmPrivateNoteReleaseFixtureV1, IvmPrivateNoteReleaseFixtureErrorV1> {
+    build_fixture(false, false, true, pool_id, asset_definition_id, randomness)
 }
 
 #[cfg(test)]
@@ -341,5 +393,23 @@ mod tests {
         let invalid = ivm_private_note_release_invalid_path_fixture_v1(&mut invalid_rng)
             .expect("invalid-path fixture");
         assert!(validate_private_note_relation_v1(&invalid.statement, &invalid.witness).is_err());
+
+        let pool_id = PrivacyPoolIdV1::new(bytes(0xb1));
+        let asset_definition_id = release_asset_definition_id_v1().expect("asset definition");
+        let mut network_rng = StdRng::seed_from_u64(0x49_50_4e_45_04);
+        let network = ivm_private_note_network_fixture_v1(
+            pool_id,
+            asset_definition_id.clone(),
+            &mut network_rng,
+        )
+        .expect("network fixture");
+        validate_private_note_relation_v1(&network.statement, &network.witness)
+            .expect("network relation");
+        assert_eq!(network.statement.pool_id, pool_id);
+        assert_eq!(network.statement.asset_definition_id, asset_definition_id);
+        assert_eq!(network.statement.root_epoch, 1);
+        assert_eq!(network.statement.execution_epoch, 1);
+        assert_eq!(network.witness.inputs().len(), 1);
+        assert_eq!(network.witness.outputs().len(), 1);
     }
 }

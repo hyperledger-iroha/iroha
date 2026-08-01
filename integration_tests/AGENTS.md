@@ -3,7 +3,7 @@
 These guidelines apply to the `integration_tests/` crate.
 
 ## Layout
-- `src/` hosts reusable harness code (metrics parsing, sandbox helpers, SoraFS gateway coverage) plus the `sorafs_gateway_fixtures` binary (`cargo run -p integration_tests --bin sorafs-gateway-fixtures`) that regenerates gateway fixtures.
+- `src/` hosts reusable harness code (metrics parsing, sandbox helpers, SoraFS gateway coverage) plus the `sorafs_gateway_fixtures` binary (`cargo run -p integration_tests --features dev-tools --bin sorafs-gateway-fixtures`) that regenerates gateway fixtures.
 - `tests/` is the primary suite of Rust integration tests (genesis, Sumeragi, permissions, Norito streaming, triggers, telemetry, SoraFS, etc.). Cargo now exposes six explicit harness crates:
   - `core_api`
   - `events_and_triggers`

@@ -408,7 +408,7 @@ export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-never}"
 export CARGO_NET_OFFLINE="${CARGO_NET_OFFLINE:-true}"
 
 echo "[sorafs-fixtures] verifying chunker fixtures + signatures"
-cargo run --locked -p sorafs_chunker --bin export_vectors
+cargo run --locked -p sorafs_chunker --features dev-tools --bin export_vectors
 
 if ! git diff --quiet -- fixtures/sorafs_chunker; then
   echo "[sorafs-fixtures] error: chunker fixtures changed; regenerate with a council key before committing" >&2
@@ -417,7 +417,7 @@ if ! git diff --quiet -- fixtures/sorafs_chunker; then
 fi
 
 echo "[sorafs-fixtures] regenerating provider admission fixtures"
-NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked -p sorafs_car --features cli --bin provider_admission_fixtures
+NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked -p sorafs_car --features cli,dev-tools --bin provider_admission_fixtures
 
 if ! git diff --quiet -- fixtures/sorafs_manifest/provider_admission; then
   echo "[sorafs-fixtures] error: provider admission fixtures changed; rerun generator with the council keys" >&2
@@ -456,17 +456,19 @@ for fixture_regeneration_pass in 1 2; do
   copy_manifest_tree "${pass_root}"
   NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked \
     -p iroha_data_model \
-    --features test-fixtures \
+    --features dev-tools,test-fixtures \
     --bin cancel_asset_lock_fixtures \
     -- \
     --output-dir "${pass_root}/appeal_finance"
   NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked \
     -p sorafs_manifest \
+    --features dev-tools \
     --bin generate_pdp_fixtures \
     -- \
     --output-dir "${pass_root}/pdp"
   NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked \
     -p sorafs_manifest \
+    --features dev-tools \
     --bin generate_por_fixtures \
     -- \
     --output-dir "${pass_root}"

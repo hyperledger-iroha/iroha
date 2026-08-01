@@ -126,7 +126,10 @@ mod candidate {
     }
 
     impl norito::core::NoritoSerialize for Trigger {
-        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
             let candidate = TriggerCandidate {
                 id: self.id.clone(),
                 action: self.action.clone(),
@@ -983,7 +986,10 @@ pub mod action {
         }
 
         impl norito::core::NoritoSerialize for Action {
-            fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+            fn serialize(
+                &self,
+                writer: &mut norito::core::Encoder<'_>,
+            ) -> Result<(), norito::core::Error> {
                 let candidate = ActionCandidate {
                     executable: self.executable.clone(),
                     repeats: self.repeats,

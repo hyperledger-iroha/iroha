@@ -1104,6 +1104,50 @@ fn independently_resigned_governance_tamper(
     Ok(tampered)
 }
 
+fn independently_resigned_vega_proof_corruption(
+    transaction: &SignedTransaction,
+    client: &Client,
+) -> Result<SignedTransaction> {
+    let (intent, submission) = transaction
+        .privacy_transaction_intent_binding_if_present_v1()
+        .wrap_err("scan canonical Vega transaction before proof corruption")?
+        .ok_or_else(|| eyre!("canonical Vega transaction omitted its direct submission"))?;
+    let mut envelope = submission.envelope.clone();
+    let PrivacyProofV1::VegaExistingCredentialZkV0(proof) = &mut envelope.proof else {
+        return Err(eyre!(
+            "Vega proof corruption reached a different proof suite"
+        ));
+    };
+    let mut corrupt = proof.as_bytes().to_vec();
+    let interior_index = corrupt
+        .len()
+        .checked_div(2)
+        .ok_or_else(|| eyre!("Vega proof length cannot select an interior byte"))?;
+    let interior = corrupt
+        .get_mut(interior_index)
+        .ok_or_else(|| eyre!("canonical Vega proof unexpectedly has no interior byte"))?;
+    *interior ^= 0x01;
+    *proof = PrivacyProofBytesV1::new(corrupt);
+
+    let mut payload: TransactionPayload = transaction.payload().clone();
+    payload.instructions = direct_submission_executable(envelope);
+    let observed_intent = payload
+        .validate_privacy_transaction_intent_binding_v1()
+        .wrap_err("proof-corrupted Vega payload lost its transaction-intent binding")?;
+    ensure!(
+        observed_intent == intent,
+        "proof corruption changed the proof-independent Vega transaction intent"
+    );
+    let corrupt = TransactionBuilder::from_payload(payload)
+        .wrap_err("re-open proof-corrupted Vega payload")?
+        .try_sign(client.key_pair.private_key())
+        .wrap_err("independently sign proof-corrupted Vega payload")?;
+    corrupt
+        .verify_signature()
+        .wrap_err("verify proof-corrupted Vega transaction signature")?;
+    Ok(corrupt)
+}
+
 async fn assert_rejected_with(
     client: &Client,
     transaction: &SignedTransaction,
@@ -1121,7 +1165,6 @@ async fn assert_rejected_with(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "release gate: proves four full native ZK-AMS/Vega actions across 300 activation blocks"]
 async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_replay_and_restart()
 -> Result<()> {
     init_instruction_registry();
@@ -1258,6 +1301,30 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             "register canonical Vega issuer while protocol is Proposed",
         )
         .await?;
+        let aliased_vega_issuer = PrivacyVegaIssuerRecordV1::new(
+            PrivacyIssuerIdV1::new([0x4F; 32]),
+            1,
+            vega_issuer_record.issuer_public_key,
+            vega_issuer_record.document_type,
+            vega_issuer_record.namespace,
+            vega_issuer_record.digest_algorithm,
+            vega_issuer_record.issuer_authentication_algorithm,
+            vega_issuer_record.device_authentication_algorithm,
+            None,
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        )
+        .wrap_err("construct cross-lineage Vega issuer-key alias")?;
+        let alias_error = submit_instruction(
+            &client,
+            RegisterPrivacyVegaIssuerV1::new(aliased_vega_issuer),
+            "cross-lineage Vega issuer-key alias must reject",
+        )
+        .await
+        .expect_err("one Vega P-256 key was registered under two issuer identities");
+        ensure!(
+            error_chain_contains(&alias_error, "permanently owned"),
+            "cross-lineage Vega key alias rejected for wrong reason: {alias_error:?}"
+        );
         let bootstrap_error = submit_instruction(
             &client,
             BootstrapPrivacyZkAmsRegistryV1::new(zk_fixture.bootstrap),
@@ -1390,6 +1457,7 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             GovernanceTamper::VegaIssuerRecord,
             &client,
         )?;
+        let corrupt_vega = independently_resigned_vega_proof_corruption(&vega_final, &client)?;
         assert_rejected_with(
             &client,
             &stale_zk,
@@ -1427,6 +1495,16 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
                 "IssuerRecordDigestMismatch",
                 "issuer record digest",
                 "trusted Vega issuer state",
+            ],
+        )
+        .await?;
+        assert_rejected_with(
+            &client,
+            &corrupt_vega,
+            "independently signed Vega proof corruption",
+            &[
+                "native Vega verification failed",
+                "Vega proof verification failed",
             ],
         )
         .await?;

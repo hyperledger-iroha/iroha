@@ -55,6 +55,13 @@ pub const PQ_MASP_MAX_AUTHORIZATION_PROOF_BYTES_V1: usize =
 pub const PQ_MASP_MAX_STARK_PROOF_BYTES_V1: usize =
     PQ_MASP_MAX_AUTHORIZATION_PROOF_BYTES_V1 - PQ_MASP_AUTHORIZATION_HEADER_BYTES_V1;
 
+/// Exact wallet-visible encrypted-output, plaintext, and AAD schema.
+///
+/// Keep this descriptor beside the codec: the compiled governance profile
+/// commits to these bytes and must not describe a stale or alternate wallet
+/// layout.
+pub(crate) const PQ_MASP_WALLET_CIPHERTEXT_SCHEMA_V1: &[u8] = b"typed-output:recipient-id32+encapsulation-digest32+output-commitment32+ciphertext[PQE1+mlkem768-ciphertext1088+nonce24+xchacha20poly1305[PQN1+value-u128be+authorization-key-digest32+recipient-id32+nullifier-key-digest32+rho32+blinding32+memo-digest32]+tag16]|mlkem768-domain-kdf|aad:domain+asset-definition-id-u64be-length+norito+pool-id32+output-commitment32+recipient-id32+encapsulation-digest32";
+
 pub(crate) const AUTHORIZATION_MAGIC_V1: &[u8; 4] = b"PQA1";
 pub(crate) const ENCRYPTED_OUTPUT_MAGIC_V1: &[u8; 4] = b"PQE1";
 const NOTE_PLAINTEXT_MAGIC_V1: &[u8; 4] = b"PQN1";
@@ -821,6 +828,88 @@ mod tests {
         assert_eq!(
             MlKemSuite::MlKem768.ciphertext_len(),
             ML_KEM_768_CIPHERTEXT_BYTES_V1
+        );
+    }
+
+    #[test]
+    fn wallet_schema_matches_the_exact_plaintext_and_aad_layout() {
+        assert_eq!(
+            PQ_MASP_WALLET_CIPHERTEXT_SCHEMA_V1,
+            b"typed-output:recipient-id32+encapsulation-digest32+output-commitment32+ciphertext[PQE1+mlkem768-ciphertext1088+nonce24+xchacha20poly1305[PQN1+value-u128be+authorization-key-digest32+recipient-id32+nullifier-key-digest32+rho32+blinding32+memo-digest32]+tag16]|mlkem768-domain-kdf|aad:domain+asset-definition-id-u64be-length+norito+pool-id32+output-commitment32+recipient-id32+encapsulation-digest32"
+        );
+
+        let statement = statement_shell();
+        let value = u128::from_be_bytes([
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+            0x0f, 0x10,
+        ]);
+        let note = PqMaspNotePlaintextV1 {
+            value,
+            authorization_key_digest: PrivacyAuthorizationKeyDigestV1::new(raw(0x21)),
+            recipient_key_digest: PrivacyRecipientIdV1::new(raw(0x32)),
+            nullifier_key_digest: raw(0x43),
+            rho: raw(0x54),
+            blinding: raw(0x65),
+            memo_digest: raw(0x76),
+        };
+        let plaintext = note_plaintext_bytes_v1(&note);
+        assert_eq!(plaintext.len(), PQ_MASP_NOTE_PLAINTEXT_BYTES_V1);
+        assert_eq!(&plaintext[0..4], NOTE_PLAINTEXT_MAGIC_V1);
+        assert_eq!(&plaintext[4..20], &value.to_be_bytes());
+        assert_eq!(&plaintext[20..52], note.authorization_key_digest.as_bytes());
+        assert_eq!(&plaintext[52..84], note.recipient_key_digest.as_bytes());
+        assert_eq!(&plaintext[84..116], &note.nullifier_key_digest);
+        assert_eq!(&plaintext[116..148], &note.rho);
+        assert_eq!(&plaintext[148..180], &note.blinding);
+        assert_eq!(&plaintext[180..212], &note.memo_digest);
+        assert_eq!(
+            decode_note_plaintext_v1(&plaintext).expect("canonical plaintext"),
+            note
+        );
+
+        let mut stale_little_endian = plaintext.to_vec();
+        stale_little_endian[4..20].copy_from_slice(&value.to_le_bytes());
+        let stale_note = decode_note_plaintext_v1(&stale_little_endian)
+            .expect("the byte string canonically denotes a different value");
+        assert_ne!(stale_note, note);
+        assert_ne!(
+            derive_pq_masp_note_commitment_v1(&statement, &stale_note)
+                .expect("stale layout still forms a distinct note"),
+            derive_pq_masp_note_commitment_v1(&statement, &note)
+                .expect("canonical note commitment"),
+            "a stale little-endian wallet layout must not alias the canonical note"
+        );
+
+        let commitment = PrivacyCommitmentV1::new(raw(0x87));
+        let recipient = PrivacyRecipientIdV1::new(raw(0x98));
+        let encapsulation_digest = PrivacyEncryptionKeyV1::new(raw(0xa9));
+        let aad = note_aad_v1(&statement, commitment, recipient, encapsulation_digest)
+            .expect("canonical note AAD");
+        let asset = norito::to_bytes(&statement.asset_definition_id).expect("canonical asset");
+        let mut expected_aad = Vec::new();
+        expected_aad.extend_from_slice(NOTE_AAD_DOMAIN_V1);
+        expected_aad.extend_from_slice(
+            &u64::try_from(asset.len())
+                .expect("asset length fits u64")
+                .to_be_bytes(),
+        );
+        expected_aad.extend_from_slice(&asset);
+        expected_aad.extend_from_slice(statement.pool_id.as_bytes());
+        expected_aad.extend_from_slice(commitment.as_bytes());
+        expected_aad.extend_from_slice(recipient.as_bytes());
+        expected_aad.extend_from_slice(encapsulation_digest.as_bytes());
+        assert_eq!(aad, expected_aad);
+
+        let reordered = note_aad_v1(
+            &statement,
+            commitment,
+            PrivacyRecipientIdV1::new(raw(0xa9)),
+            PrivacyEncryptionKeyV1::new(raw(0x98)),
+        )
+        .expect("structurally valid but substituted AAD");
+        assert_ne!(
+            aad, reordered,
+            "recipient and encapsulation roles must not alias"
         );
     }
 

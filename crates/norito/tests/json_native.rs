@@ -193,6 +193,130 @@ fn map_visitor_manual_defaults() {
 }
 
 #[test]
+fn map_visitor_rejects_trailing_object_commas() {
+    for input in [r#"{"threshold":10,}"#, "{\"threshold\":10, \n }"] {
+        let error = json::from_json::<ManualConfig>(input)
+            .expect_err("typed map visitor must reject a trailing object comma");
+        assert!(error.to_string().contains("trailing comma"));
+    }
+
+    let mut parser = json::Parser::new(r#"{"threshold":10,}"#);
+    let mut map = MapVisitor::new(&mut parser).expect("map visitor");
+    let key = map.next_key().expect("first key").expect("threshold key");
+    assert_eq!(key.as_str(), "threshold");
+    assert_eq!(map.parse_value::<u64>().expect("threshold value"), 10);
+    let error = map
+        .finish()
+        .expect_err("finish must not bypass trailing-comma validation");
+    assert!(error.to_string().contains("trailing comma"));
+}
+
+#[test]
+fn parser_skip_string_bounded_counts_exact_decoded_utf8_bytes() {
+    for (input, expected) in [
+        (r#""""#, 0),
+        (r#""abc""#, 3),
+        (r#""¢""#, 2),
+        (r#""€""#, 3),
+        (r#""😀""#, 4),
+        (r#""\"\\\/\b\f\n\r\t""#, 8),
+        (r#""\u007F""#, 1),
+        (r#""\u0080""#, 2),
+        (r#""\u07FF""#, 2),
+        (r#""\u0800""#, 3),
+        (r#""\uD7FF""#, 3),
+        (r#""\uE000""#, 3),
+        (r#""\uFFFF""#, 3),
+        (r#""\uD83D\uDE00""#, 4),
+        (r#""\u0061é""#, 3),
+    ] {
+        let mut bounded = json::Parser::new(input);
+        assert_eq!(
+            bounded
+                .skip_string_bounded(expected)
+                .expect("bounded string must parse"),
+            expected
+        );
+        assert_eq!(bounded.position(), input.len());
+
+        let mut owned = json::Parser::new(input);
+        let decoded = owned.parse_string().expect("ordinary string parser");
+        assert_eq!(decoded.len(), expected);
+        assert_eq!(owned.position(), bounded.position());
+
+        if expected > 0 {
+            let mut one_under = json::Parser::new(input);
+            let error = one_under
+                .skip_string_bounded(expected - 1)
+                .expect_err("one byte below the exact decoded length must reject");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("{}-byte limit", expected - 1))
+            );
+            let _remaining = one_under.input_from_pos();
+        }
+    }
+}
+
+#[test]
+fn parser_skip_string_bounded_matches_malformed_string_rejection() {
+    for input in [
+        "\"\\",
+        r#""\u12""#,
+        r#""\u00G0""#,
+        r#""\uDC00""#,
+        r#""\uD800""#,
+        r#""\uD800\u0041""#,
+        "\"a\nb\"",
+    ] {
+        let mut bounded = json::Parser::new(input);
+        assert!(
+            bounded.skip_string_bounded(usize::MAX).is_err(),
+            "bounded parser must reject malformed input {input:?}"
+        );
+
+        let mut owned = json::Parser::new(input);
+        assert!(
+            owned.parse_string().is_err(),
+            "ordinary parser must reject malformed input {input:?}"
+        );
+    }
+}
+
+#[test]
+fn parser_bounded_string_error_preserves_utf8_boundary() {
+    for (input, maximum) in [(r#""€""#, 0), (r#""\uD83D\uDE00""#, 3)] {
+        let mut parser = json::Parser::new(input);
+        parser
+            .skip_string_bounded(maximum)
+            .expect_err("the decoded scalar exceeds the byte limit");
+        assert_eq!(parser.input_from_pos(), r#"""#);
+    }
+}
+
+#[test]
+#[should_panic(expected = "JSON parser start must be a UTF-8 character boundary")]
+fn parser_new_at_rejects_mid_scalar_offsets() {
+    let _ = json::Parser::new_at("€", 1);
+}
+
+#[test]
+#[should_panic(expected = "JSON parser start must be a UTF-8 character boundary")]
+fn parser_new_at_rejects_out_of_range_offsets() {
+    let _ = json::Parser::new_at("x", 2);
+}
+
+#[test]
+fn parser_bump_at_eof_is_stable() {
+    let mut parser = json::Parser::new("");
+    assert_eq!(parser.bump(), None);
+    assert_eq!(parser.bump(), None);
+    assert_eq!(parser.position(), 0);
+    assert_eq!(parser.input_from_pos(), "");
+}
+
+#[test]
 fn generic_json_value_rejects_duplicate_object_fields() {
     let err = json::from_json::<json::Value>(r#"{"encrypted_input":"a","encrypted_input":"b"}"#)
         .expect_err("generic Value parsing must reject duplicate object fields");
@@ -250,6 +374,25 @@ fn sum_array(input: &str) -> Result<u64, json::Error> {
 fn seq_visitor_accumulates() {
     let total = sum_array("[1,2,3,4]").expect("sum array");
     assert_eq!(total, 10);
+}
+
+#[test]
+fn seq_visitor_rejects_trailing_array_commas() {
+    for input in ["[1,]", "[1, \n ]"] {
+        let error = sum_array(input).expect_err("typed sequence must reject a trailing comma");
+        assert!(error.to_string().contains("trailing comma"));
+    }
+
+    let mut parser = json::Parser::new("[1, \n ]");
+    let mut sequence = SeqVisitor::new(&mut parser).expect("sequence visitor");
+    assert_eq!(
+        sequence.next_element::<u64>().expect("first element"),
+        Some(1)
+    );
+    let error = sequence
+        .finish()
+        .expect_err("finish must not bypass trailing-comma validation");
+    assert!(error.to_string().contains("trailing comma"));
 }
 
 #[test]

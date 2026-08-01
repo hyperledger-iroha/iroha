@@ -103,7 +103,7 @@ To reproduce the run, build the Metal kernels and execute:
 ```bash
 FASTPQ_METAL_LIB=target/release/build/fastpq_prover-*/out/fastpq.metallib \
 FASTPQ_METAL_TRACE_CHILD=1 \
-cargo run -p fastpq_prover --features fastpq-gpu --bin fastpq_metal_bench --release \
+cargo run -p fastpq_prover --features fastpq-gpu,dev-tools --bin fastpq_metal_bench --release \
   -- --rows 20000 --iterations 5 --output fastpq_metal_bench_20k.json
 ```
 
@@ -202,7 +202,7 @@ per-lane improvements alongside the main bench. Reproduce the run with:
 ```bash
 FASTPQ_METAL_LIB=target/release/build/fastpq_prover-*/out/fastpq.metallib \
 FASTPQ_METAL_TRACE_CHILD=1 \
-cargo run -p fastpq_prover --features fastpq-gpu --bin fastpq_metal_bench --release \
+cargo run -p fastpq_prover --features fastpq-gpu,dev-tools --bin fastpq_metal_bench --release \
   -- --rows 20000 --iterations 5 \
   --output fastpq_metal_bench_20k_release_macos14_arm64.json
 ```

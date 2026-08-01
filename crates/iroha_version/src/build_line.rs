@@ -34,22 +34,16 @@ impl BuildLine {
         }
     }
 
-    /// Default CLI binary name associated with this line.
+    /// Canonical first-release CLI binary name.
     #[must_use]
     pub const fn cli_bin(self) -> &'static str {
-        match self {
-            Self::Iroha2 => "iroha2",
-            Self::Iroha3 => "iroha3",
-        }
+        "iroha"
     }
 
-    /// Default daemon binary name associated with this line.
+    /// Canonical first-release daemon binary name.
     #[must_use]
     pub const fn daemon_bin(self) -> &'static str {
-        match self {
-            Self::Iroha2 => "iroha2d",
-            Self::Iroha3 => "iroha3d",
-        }
+        "irohad"
     }
 
     /// Whether this selector targets the Iroha 2 line.
@@ -96,10 +90,10 @@ mod tests {
 
         assert_eq!(i2.as_str(), "iroha2");
         assert_eq!(i3.as_str(), "iroha3");
-        assert_eq!(i2.cli_bin(), "iroha2");
-        assert_eq!(i3.cli_bin(), "iroha3");
-        assert_eq!(i2.daemon_bin(), "iroha2d");
-        assert_eq!(i3.daemon_bin(), "iroha3d");
+        assert_eq!(i2.cli_bin(), "iroha");
+        assert_eq!(i3.cli_bin(), "iroha");
+        assert_eq!(i2.daemon_bin(), "irohad");
+        assert_eq!(i3.daemon_bin(), "irohad");
         assert!(i2.is_iroha2());
         assert!(i3.is_iroha3());
     }

@@ -18,6 +18,6 @@ fn generated_syscalls_section_is_up_to_date() {
     let expected = format!("{BEGIN}\n{table}{END}");
     assert_eq!(
         section, expected,
-        "docs/syscalls.md out of date; run: cargo run -p ivm --bin gen_syscalls_doc -- --write"
+        "docs/syscalls.md out of date; run: cargo run -p ivm --features dev-tools --bin gen_syscalls_doc -- --write"
     );
 }

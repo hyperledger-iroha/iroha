@@ -42,9 +42,9 @@ Regenerate the payloads from the typed Rust model, then reseal the signed
 reference-SDK inventory:
 
 ```sh
-cargo run --locked -p iroha_data_model --features test-fixtures \
+cargo run --locked -p iroha_data_model --features test-fixtures,dev-tools \
   --bin cancel_asset_lock_fixtures
-cargo run --locked -p sorafs_manifest --bin generate_por_fixtures -- --write
+cargo run --locked -p sorafs_manifest --features dev-tools --bin generate_por_fixtures -- --write
 python3 scripts/check_sorafs_reference_sdk_fixtures.py
 ```
 

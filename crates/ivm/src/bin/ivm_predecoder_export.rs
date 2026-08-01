@@ -11,8 +11,8 @@
 //! - `artifacts/*.to`           — header + code artifacts for selected variants
 //!
 //! Usage:
-//!   cargo run -p ivm --bin ivm_predecoder_export
-//!   cargo run -p ivm --bin ivm_predecoder_export -- --out-dir /tmp/predecoder-fixtures
+//!   cargo run -p ivm --features dev-tools --bin ivm_predecoder_export
+//!   cargo run -p ivm --features dev-tools --bin ivm_predecoder_export -- --out-dir /tmp/predecoder-fixtures
 //!
 //! Notes:
 //! - The decoded op list is invariant across the header variants emitted here.
@@ -37,7 +37,7 @@ fn parse_options_from(
                 let value = arguments
                     .next()
                     .ok_or("--out-dir requires a directory path")?;
-                if value.is_empty() || value.starts_with("--") {
+                if value.is_empty() || value.starts_with('-') {
                     return Err("--out-dir requires a non-empty directory path".into());
                 }
                 output_dir = Some(PathBuf::from(value));
@@ -101,6 +101,7 @@ mod tests {
             vec!["--out-dir".to_owned()],
             vec!["--out-dir".to_owned(), String::new()],
             vec!["--out-dir".to_owned(), "--unknown".to_owned()],
+            vec!["--out-dir".to_owned(), "-h".to_owned()],
             vec![
                 "--out-dir".to_owned(),
                 "/first".to_owned(),

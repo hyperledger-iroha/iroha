@@ -42,7 +42,7 @@ fn frame_with_flags<T: norito::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8>
     let mut payload = Vec::new();
     {
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
-        value.serialize(&mut payload).expect("encode bare payload");
+        norito::core::serialize_to_buffer(value, &mut payload).expect("encode bare payload");
     }
     norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame payload")
 }
@@ -630,8 +630,7 @@ fn parallel_workers_inherit_the_active_limit_for_nested_sequences() {
     use norito::{NoritoSerialize as _, SequencePlan, SequenceSpan};
 
     let mut encoded_element = Vec::new();
-    vec![0xA5_u8; 1025]
-        .serialize(&mut encoded_element)
+    norito::core::serialize_to_buffer(&vec![0xA5_u8; 1025], &mut encoded_element)
         .expect("encode nested byte sequence");
     let mut bytes = Vec::new();
     let mut spans = Vec::new();

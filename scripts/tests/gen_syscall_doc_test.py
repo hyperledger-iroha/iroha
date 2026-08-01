@@ -131,6 +131,7 @@ class PublicationTests(unittest.TestCase):
             ("--write", "--output"),
             ("--write", "--output", ""),
             ("--write", "--output", "--check"),
+            ("--write", "--output", "-h"),
             ("--write", "--output", "first.md", "--output", "second.md"),
             ("--unknown",),
         ):

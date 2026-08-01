@@ -14,6 +14,7 @@ workspace = true
 
 [features]
 default = ["application-model"]
+dev-tools = []
 # Public application model; node-only additions are requested by node crates.
 application-model = ["governance", "json", "pqc"]
 bridge = []
@@ -140,26 +141,27 @@ required-features = ["trybuild-tests"]
 [[bin]]
 name = "axt_fixtures"
 path = "src/bin/axt_fixtures.rs"
-required-features = ["test-fixtures"]
+required-features = ["dev-tools", "test-fixtures"]
 
 [[bin]]
 name = "qr_stream_fixtures"
 path = "src/bin/qr_stream_fixtures.rs"
-required-features = ["test-fixtures"]
+required-features = ["dev-tools", "test-fixtures"]
 
 [[bin]]
 name = "sumeragi_v2_wire_fixtures"
 path = "src/bin/sumeragi_v2_wire_fixtures.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "cbsi_offline_vectors"
 path = "src/bin/cbsi_offline_vectors.rs"
-required-features = ["test-fixtures", "transparent_api"]
+required-features = ["dev-tools", "test-fixtures", "transparent_api"]
 
 [[bin]]
 name = "cancel_asset_lock_fixtures"
 path = "src/bin/cancel_asset_lock_fixtures.rs"
-required-features = ["test-fixtures", "json"]
+required-features = ["dev-tools", "test-fixtures", "json"]
 
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 

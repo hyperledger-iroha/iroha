@@ -49,19 +49,17 @@ impl SoracloudHostRequestEnvelopeV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the schema version is unsupported.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORACLOUD_HOST_REQUEST_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "soracloud host request envelope",
-                expected: SORACLOUD_HOST_REQUEST_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "soracloud host request envelope",
+            self.schema_version,
+            SORACLOUD_HOST_REQUEST_VERSION_V1,
+        )?;
         if self.operation != self.payload.operation() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "soracloud host request envelope",
-                field: "operation",
-                reason: "must match payload type".to_string(),
-            });
+            return Err(invalid_field(
+                "soracloud host request envelope",
+                "operation",
+                "must match payload type",
+            ));
         }
         self.payload.validate()?;
         Ok(())
@@ -158,19 +156,17 @@ impl SoracloudHostResponseEnvelopeV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the schema version is unsupported.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORACLOUD_HOST_RESPONSE_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "soracloud host response envelope",
-                expected: SORACLOUD_HOST_RESPONSE_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "soracloud host response envelope",
+            self.schema_version,
+            SORACLOUD_HOST_RESPONSE_VERSION_V1,
+        )?;
         if self.operation != self.payload.operation() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "soracloud host response envelope",
-                field: "operation",
-                reason: "must match payload type".to_string(),
-            });
+            return Err(invalid_field(
+                "soracloud host response envelope",
+                "operation",
+                "must match payload type",
+            ));
         }
         self.payload.validate()?;
         Ok(())
@@ -342,20 +338,20 @@ impl SoracloudEmitStateMutationRequestV1 {
             if let Some(payload_bytes) = self.payload_bytes
                 && payload_bytes != payload.len() as u64
             {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "soracloud emit state mutation request",
-                    field: "payload_bytes",
-                    reason: "must match payload length".to_string(),
-                });
+                return Err(invalid_field(
+                    "soracloud emit state mutation request",
+                    "payload_bytes",
+                    "must match payload length",
+                ));
             }
             if let Some(payload_commitment) = self.payload_commitment
                 && payload_commitment != Hash::new(payload)
             {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "soracloud emit state mutation request",
-                    field: "payload_commitment",
-                    reason: "must match the canonical payload hash".to_string(),
-                });
+                return Err(invalid_field(
+                    "soracloud emit state mutation request",
+                    "payload_commitment",
+                    "must match the canonical payload hash",
+                ));
             }
         }
         if self.operation == SoraStateMutationOperationV1::Delete
@@ -363,11 +359,11 @@ impl SoracloudEmitStateMutationRequestV1 {
                 || self.payload_bytes.is_some()
                 || self.payload_commitment.is_some())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "soracloud emit state mutation request",
-                field: "payload",
-                reason: "delete mutations must not carry payload material".to_string(),
-            });
+            return Err(invalid_field(
+                "soracloud emit state mutation request",
+                "payload",
+                "delete mutations must not carry payload material",
+            ));
         }
         Ok(())
     }
@@ -426,21 +422,21 @@ impl SoracloudEmitMailboxMessageRequestV1 {
     /// Returns [`SoracloudManifestError`] when mailbox sequence bounds are malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         if self.available_after_sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "soracloud emit mailbox message request",
-                field: "available_after_sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "soracloud emit mailbox message request",
+                "available_after_sequence",
+                "must be greater than zero",
+            ));
         }
         if self
             .expires_at_sequence
             .is_some_and(|expires_at| expires_at <= self.available_after_sequence)
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "soracloud emit mailbox message request",
-                field: "expires_at_sequence",
-                reason: "must be greater than available_after_sequence".to_string(),
-            });
+            return Err(invalid_field(
+                "soracloud emit mailbox message request",
+                "expires_at_sequence",
+                "must be greater than available_after_sequence",
+            ));
         }
         Ok(())
     }
@@ -600,7 +596,7 @@ impl SoracloudReadConfigRequestV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the config name is empty.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_soracloud_host_name(
+        validate_nonblank_field(
             "soracloud read config request",
             "config_name",
             &self.config_name,
@@ -653,7 +649,7 @@ impl SoracloudReadSecretEnvelopeRequestV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the secret name is empty.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_soracloud_host_name(
+        validate_nonblank_field(
             "soracloud read secret envelope request",
             "secret_name",
             &self.secret_name,
@@ -703,7 +699,7 @@ impl SoracloudReadSecretRequestV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the secret name is empty.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_soracloud_host_name(
+        validate_nonblank_field(
             "soracloud read secret request",
             "secret_name",
             &self.secret_name,
@@ -756,7 +752,7 @@ impl SoracloudReadCredentialRequestV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the credential name is empty.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_soracloud_host_name(
+        validate_nonblank_field(
             "soracloud read credential request",
             "credential_name",
             &self.credential_name,
@@ -817,11 +813,11 @@ impl SoracloudEgressFetchRequestV1 {
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_public_url("soracloud egress fetch request", "url", &self.url)?;
         if self.max_bytes == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "soracloud egress fetch request",
-                field: "max_bytes",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "soracloud egress fetch request",
+                "max_bytes",
+                "must be greater than zero",
+            ));
         }
         if let Some(expected_hash) = self.expected_hash {
             validate_soracloud_digest_hash(
@@ -866,22 +862,22 @@ impl SoracloudEgressFetchResponseV1 {
             self.body_hash,
         )?;
         if self.body_hash != Hash::new(&self.body) {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "soracloud egress fetch response",
-                field: "body_hash",
-                reason: "must match the canonical response body hash".to_string(),
-            });
+            return Err(invalid_field(
+                "soracloud egress fetch response",
+                "body_hash",
+                "must match the canonical response body hash",
+            ));
         }
         if self
             .content_type
             .as_ref()
             .is_some_and(|content_type| content_type.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "soracloud egress fetch response",
-                field: "content_type",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "soracloud egress fetch response",
+                "content_type",
+                "must not be empty when provided",
+            ));
         }
         Ok(())
     }
@@ -891,18 +887,9 @@ fn validate_soracloud_host_state_key(
     manifest: &'static str,
     state_key: &str,
 ) -> Result<(), SoracloudManifestError> {
-    if state_key.trim().is_empty() {
-        return Err(SoracloudManifestError::EmptyField {
-            manifest,
-            field: "state_key",
-        });
-    }
+    validate_nonblank_field(manifest, "state_key", state_key)?;
     if !state_key.starts_with('/') {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest,
-            field: "state_key",
-            reason: "must start with '/'".to_string(),
-        });
+        return Err(invalid_field(manifest, "state_key", "must start with '/'"));
     }
     Ok(())
 }
@@ -911,29 +898,13 @@ fn validate_soracloud_host_artifact_path(
     manifest: &'static str,
     artifact_path: &str,
 ) -> Result<(), SoracloudManifestError> {
-    if artifact_path.trim().is_empty() {
-        return Err(SoracloudManifestError::EmptyField {
-            manifest,
-            field: "artifact_path",
-        });
-    }
+    validate_nonblank_field(manifest, "artifact_path", artifact_path)?;
     if !artifact_path.starts_with('/') {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
-            field: "artifact_path",
-            reason: "must start with '/'".to_string(),
-        });
-    }
-    Ok(())
-}
-
-fn validate_soracloud_host_name(
-    manifest: &'static str,
-    field: &'static str,
-    value: &str,
-) -> Result<(), SoracloudManifestError> {
-    if value.trim().is_empty() {
-        return Err(SoracloudManifestError::EmptyField { manifest, field });
+            "artifact_path",
+            "must start with '/'",
+        ));
     }
     Ok(())
 }
@@ -950,11 +921,11 @@ fn validate_soracloud_host_found_payload(
         });
     }
     if !found && !payload_bytes.is_empty() {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
-            field: "payload_bytes",
-            reason: "must be empty when found is false".to_string(),
-        });
+            "payload_bytes",
+            "must be empty when found is false",
+        ));
     }
     Ok(())
 }
@@ -2063,4 +2034,3 @@ pub fn encode_ciphertext_query_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(query)
 }
-

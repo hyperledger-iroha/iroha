@@ -2489,11 +2489,10 @@ impl FairV2IngressOwnershipEvidence {
                 == Some(self.occurrence_count)
             && self.action_counts[self.latest.action.index()] != 0
             && self.first.physical_admission_ordinal != 0
-            && self.first.physical_admission_ordinal
-                == self.latest.physical_admission_ordinal
-            && self.runtime_physical_cut.is_none_or(|cut| {
-                u128::from(self.first.physical_admission_ordinal) < cut
-            })
+            && self.first.physical_admission_ordinal == self.latest.physical_admission_ordinal
+            && self
+                .runtime_physical_cut
+                .is_none_or(|cut| u128::from(self.first.physical_admission_ordinal) < cut)
             && self.first.lifecycle_ordinal == self.latest.lifecycle_ordinal
             && self
                 .first

@@ -10066,7 +10066,7 @@ fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod zkparse {
     use std::{
-        convert::{TryFrom, TryInto},
+        convert::TryFrom,
         io::{Cursor, Read},
     };
 

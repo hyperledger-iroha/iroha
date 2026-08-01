@@ -842,11 +842,14 @@ mod tests {
                     builder.build_with_signature(signature)
                 }
                 TestSignOutput::AttachProofSidecar => {
-                    let attachments = ProofAttachmentList(vec![ProofAttachment::new_ref(
-                        "halo2/ipa".into(),
-                        ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
-                        VerifyingKeyId::new("halo2/ipa", "native-signer-sidecar-vk"),
-                    )]);
+                    let attachments = ProofAttachmentList::try_from(vec![
+                        ProofAttachment::new_ref(
+                            "halo2/ipa".into(),
+                            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+                            VerifyingKeyId::new("halo2/ipa", "native-signer-sidecar-vk"),
+                        ),
+                    ])
+                    .expect("one attachment is a valid bounded proof list");
                     TransactionBuilder::from_payload(payload)
                         .map_err(|_| ())?
                         .with_attachments(attachments)

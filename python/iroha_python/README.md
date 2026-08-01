@@ -110,11 +110,14 @@ query, and privacy primitives.
 
 ## Native Privacy Bridge
 
-The first-release native surface is capability-only:
-`is_privacy_native_available()` and `privacy_capabilities_v1()`. The latter
-returns the canonical Norito `PrivacyCapabilitySnapshotV1` archive. The Torii
-client method with the same name strictly parses the JSON snapshot. There is no
-generic request/build/verify dispatcher and no legacy algorithm alias.
+The first-release native metadata surface is
+`is_privacy_native_available()` and
+`privacy_compiled_profile_catalog_v1()`. The latter returns this binary's
+canonical Norito `PrivacyCompiledProfileCatalogV1` archive and intentionally
+contains no committed height, policy, activation, or readiness projection. The
+separate Torii client method `privacy_capabilities_v1()` strictly parses the
+authoritative live `PrivacyCapabilitySnapshotV1` JSON. There is no generic
+request/build/verify dispatcher and no legacy algorithm alias.
 
 `PRIVACY_PROTOCOL_IDS_V1` contains exactly twelve identities in wire order:
 `zk-ace-pq-authorization-v0`, `anonymous-pgc-k-out-of-n-v1`,
@@ -126,6 +129,32 @@ generic request/build/verify dispatcher and no legacy algorithm alias.
 `pq-masp-stark-v0`. The parser rejects unknown fields, duplicate JSON keys,
 non-finite numbers, aliases, reordered or duplicate rows, normalized labels,
 and malformed nested policy or profile data.
+
+### Exact12 typed fixture bundles
+
+`PrivacyExact12FixtureCodecV1` is the native-independent strict codec for
+`fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64`. It validates the
+outer Norito frame and canonical Base64, bounded compact lengths and row order,
+and every nested statement, proof envelope, submission instruction, intent
+projection, unsigned payload, signed payload, and pipeline-hash binding. The
+decoded models are frozen and snapshot mutable byte inputs.
+
+```python
+from pathlib import Path
+from iroha_python import PrivacyExact12FixtureCodecV1
+
+fixture_text = Path(
+    "fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64"
+).read_text(encoding="ascii")
+bundle = PrivacyExact12FixtureCodecV1.decode_canonical_base64_file(fixture_text)
+assert PrivacyExact12FixtureCodecV1.encode_canonical_base64(bundle) == fixture_text[:-1]
+```
+
+Structural validation cannot authenticate a different well-formed signature
+or opaque native proof. At release and test boundaries, call
+`PrivacyExact12FixtureCodecV1.require_trusted_canonical(candidate, trusted)`
+with an independently supplied Rust-derived archive; it validates both inputs
+and then requires constant-time byte identity.
 
 ## Account addresses
 
@@ -1834,46 +1863,36 @@ stay aligned with Torii.
 
 ## Norito fixtures
 
-Android remains the canonical source of Norito fixtures. To keep the Python copy
-in sync, mirror the artifacts with:
+The Rust xtask is the sole owner of the shared Norito RPC fixtures in
+`fixtures/norito_rpc`. Python does not own or copy shared `.norito` payload blobs;
+`python/iroha_python/tests/fixtures` is a generated descriptor-only mirror containing
+`transaction_payloads.json` and `transaction_fixtures.manifest.json`.
+
+Regenerate the canonical corpus and every SDK mirror with:
 
 ```bash
-./scripts/python_fixture_regen.sh
+cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
 ```
 
-This script copies `.norito` payloads and supporting JSON manifests from
-`java/iroha_android/src/test/resources` into
-`python/iroha_python/tests/fixtures`. CI (and local workflows) can verify parity
-via:
+`./scripts/python_fixture_regen.sh` and `make python-fixtures` are convenience
+wrappers around that same owner; they do not select an Android or alternate fixture
+source. Verify both the owner and Python mirror with:
 
 ```bash
+cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
 python3 scripts/check_python_fixtures.py --quiet
 ```
 
-Both scripts accept `PYTHON_FIXTURE_SOURCE`/`PYTHON_FIXTURE_OUT` (regen) and
-`--source`/`--target` (check) to point at alternate directories during local
-iterations.
-A `make python-fixtures` target runs the regeneration and parity check in one step.
-
-The regeneration script also writes cadence metadata to
-`artifacts/python_fixture_regen_state.json`, mirroring the Swift/Android fixture
-rotation. Override `PYTHON_FIXTURE_STATE_FILE`, `PYTHON_FIXTURE_ROTATION_OWNER`,
-and `PYTHON_FIXTURE_CADENCE` to point at alternate paths or update the rotation
-labels when wiring Cron jobs. A weekly automation run can chain the regen and
-parity check:
-
-```bash
-PYTHON_FIXTURE_ROTATION_OWNER=sdk-python \
-PYTHON_FIXTURE_CADENCE=weekly-wed-1700utc \
-  ./scripts/python_fixture_regen.sh
-python3 scripts/check_python_fixtures.py --quiet
-```
+The Python checker compares those two JSON files directly with the canonical
+directory and rejects any shared `.norito` blob in the Python mirror. Its optional
+`--source` and `--target` arguments are test/check inputs only; they do not create a
+second fixture owner.
 
 **Fixture regen SLA (<48h)**
 
-1. When the Android SDK updates the canonical fixtures, pull the changes (or rebuild via `scripts/export_norito_fixtures`) and run `./scripts/python_fixture_regen.sh`.
-2. Verify parity with `python3 scripts/check_python_fixtures.py --quiet` (also covered by `make python-fixtures`).
-3. Commit the regenerated files under `python/iroha_python/tests/fixtures/` alongside the updated manifest.
+1. When the Rust schema or fixture declarations change, run the canonical xtask owner.
+2. Run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify` and `python3 scripts/check_python_fixtures.py --quiet`.
+3. Commit the canonical outputs and all generated SDK mirrors together; the Python slice contains descriptors only.
 4. Before opening a PR, execute `./python/iroha_python/scripts/run_checks.sh` so lint/type/tests and the fixture parity guard all pass.
 
 ### Release smoke test

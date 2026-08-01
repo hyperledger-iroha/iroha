@@ -198,10 +198,12 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "python3 scripts/rust_ci.py validate",
             "python3 -m pytest -q pytests/scripts/rust_ci_test.py",
             "pytests/scripts/check_cargo_feature_hygiene_test.py",
+            "pytests/scripts/check_workspace_target_inventory_test.py",
             "scripts/tests/check_source_file_budget_test.py",
             "scripts/tests/check_compile_unit_budget_test.py",
             "scripts/tests/check_generated_artifacts_test.py",
             "python3 scripts/check_cargo_feature_hygiene.py",
+            "python3 scripts/check_workspace_target_inventory.py",
             "python3 scripts/check_source_file_budget.py",
             "python3 scripts/check_generated_artifacts.py",
             'FULL_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, '
@@ -477,6 +479,15 @@ def test_release_workflow_guard_rejects_weakening(
                 "rust_changes",
                 "python3 scripts/check_cargo_feature_hygiene.py",
                 "true # Cargo feature guard removed",
+            ),
+            "PR Rust classifier is missing required behavior",
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                "python3 scripts/check_workspace_target_inventory.py",
+                "true # Cargo target guard removed",
             ),
             "PR Rust classifier is missing required behavior",
         ),

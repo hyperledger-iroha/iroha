@@ -169,7 +169,7 @@ advert_args=(
   --issued-at=1700000000
 )
 
-cargo run -p sorafs_car --bin sorafs_provider_advert -- \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_provider_advert -- \
   --prepare "${advert_args[@]}" \
   --public-key-file=provider.pub \
   --public-key-fingerprint-sha256="$REVIEWED_PROVIDER_KEY_SHA256" \
@@ -177,7 +177,7 @@ cargo run -p sorafs_car --bin sorafs_provider_advert -- \
 
 # Sign provider-advert.signing-payload with the governed external HSM.
 
-cargo run -p sorafs_car --bin sorafs_provider_advert -- \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_provider_advert -- \
   --emit "${advert_args[@]}" \
   --public-key-file=provider.pub \
   --public-key-fingerprint-sha256="$REVIEWED_PROVIDER_KEY_SHA256" \

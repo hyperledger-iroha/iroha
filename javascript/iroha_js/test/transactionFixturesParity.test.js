@@ -4,20 +4,77 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { blake2b256 } from "../src/blake2b.js";
+import { parseStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), "..", "..", "..");
 
 function loadJsonRelative(relativePath) {
   const absolutePath = path.join(repoRoot, relativePath);
-  return JSON.parse(fs.readFileSync(absolutePath, "utf8"));
+  return parseStrictLosslessIntegerJson(
+    fs.readFileSync(absolutePath, "utf8"),
+    relativePath,
+  );
 }
+
+const sourceFixtureFields = new Set([
+  "authority",
+  "chain",
+  "creation_time_ms",
+  "name",
+  "nonce",
+  "payload",
+  "payload_base64",
+  "payload_hash",
+  "signed_base64",
+  "signed_hash",
+  "time_to_live_ms",
+]);
+const payloadFields = new Set([
+  "authority",
+  "chain",
+  "creation_time_ms",
+  "executable",
+  "fee_payment",
+  "metadata",
+  "nonce",
+  "time_to_live_ms",
+]);
+const executableVariants = new Set([
+  "Batch",
+  "ContractCall",
+  "Instructions",
+  "Ivm",
+]);
+const instructionFields = new Set(["payload_base64", "wire_name"]);
+const contractCallFields = new Set([
+  "arguments",
+  "contract_address",
+  "entrypoint",
+  "expected_code_hash",
+]);
+const manifestFields = new Set(["fixtures"]);
+const manifestFixtureFields = new Set([
+  "authority",
+  "chain",
+  "creation_time_ms",
+  "encoded_file",
+  "encoded_len",
+  "name",
+  "nonce",
+  "payload_base64",
+  "payload_hash",
+  "signed_base64",
+  "signed_hash",
+  "signed_len",
+  "time_to_live_ms",
+]);
 
 const canonicalManifest = loadJsonRelative(
   "fixtures/norito_rpc/transaction_fixtures.manifest.json",
 );
 const sourcePayloadFixtures = loadJsonRelative(
-  "java/iroha_android/src/test/resources/transaction_payloads.json",
+  "fixtures/norito_rpc/transaction_payloads.json",
 );
 
 function decodeCanonicalBase64(value, context) {
@@ -33,6 +90,212 @@ function decodeCanonicalBase64(value, context) {
     throw new Error(`${context} is non-canonical base64`);
   }
   return decoded;
+}
+
+function requireRecord(value, context) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+}
+
+function requireExactFields(record, expected, context) {
+  requireRecord(record, context);
+  const actual = new Set(Object.keys(record));
+  const missing = [...expected].filter((field) => !actual.has(field)).sort();
+  const unexpected = [...actual]
+    .filter((field) => !expected.has(field))
+    .sort();
+  if (missing.length !== 0 || unexpected.length !== 0) {
+    throw new Error(
+      `${context} has invalid fields: missing=${JSON.stringify(missing)}, unexpected=${JSON.stringify(unexpected)}`,
+    );
+  }
+}
+
+function validateTransactionMetadata(record, context) {
+  if (typeof record.chain !== "string" || record.chain.length === 0) {
+    throw new Error(`${context}.chain must be a non-empty string`);
+  }
+  if (typeof record.authority !== "string" || record.authority.length === 0) {
+    throw new Error(`${context}.authority must be a non-empty string`);
+  }
+  if (
+    !Number.isSafeInteger(record.creation_time_ms) ||
+    record.creation_time_ms < 0
+  ) {
+    throw new Error(`${context}.creation_time_ms must be non-negative`);
+  }
+  requirePositiveFixtureTtl(record, context);
+  if (
+    record.nonce !== null &&
+    (!Number.isSafeInteger(record.nonce) ||
+      record.nonce < 1 ||
+      record.nonce > 0xffff_ffff)
+  ) {
+    throw new Error(`${context}.nonce must be null or a non-zero u32`);
+  }
+}
+
+function validateExecutable(executable, context) {
+  requireRecord(executable, context);
+  const variants = Object.keys(executable);
+  if (variants.length !== 1) {
+    throw new Error(`${context} must contain exactly one executable variant`);
+  }
+  const variant = variants[0];
+  if (!executableVariants.has(variant)) {
+    throw new Error(`${context} has unknown variant '${variant}'`);
+  }
+  const body = executable[variant];
+  if (variant === "Ivm") {
+    decodeCanonicalBase64(body, `${context}.Ivm`);
+    return;
+  }
+  if (variant === "Instructions") {
+    if (!Array.isArray(body)) {
+      throw new Error(`${context}.Instructions must be an array`);
+    }
+    for (const [index, instruction] of body.entries()) {
+      validateInstruction(instruction, `${context}.Instructions[${index}]`);
+    }
+    return;
+  }
+  if (variant === "ContractCall") {
+    validateContractCall(body, `${context}.ContractCall`);
+    return;
+  }
+  if (!Array.isArray(body)) {
+    throw new Error(`${context}.Batch must be an array`);
+  }
+  if (body.length === 0) {
+    throw new Error(`${context}.Batch must contain at least one item`);
+  }
+  for (const [index, item] of body.entries()) {
+    const itemContext = `${context}.Batch[${index}]`;
+    requireRecord(item, itemContext);
+    const itemVariants = Object.keys(item);
+    if (itemVariants.length !== 1) {
+      throw new Error(`${itemContext} must contain exactly one variant`);
+    }
+    const itemVariant = itemVariants[0];
+    if (itemVariant === "Instruction") {
+      validateInstruction(item.Instruction, `${itemContext}.Instruction`);
+    } else if (itemVariant === "ContractCall") {
+      validateContractCall(item.ContractCall, `${itemContext}.ContractCall`);
+    } else {
+      throw new Error(`${itemContext} has unknown variant '${itemVariant}'`);
+    }
+  }
+}
+
+function validateInstruction(instruction, context) {
+  requireExactFields(instruction, instructionFields, context);
+  if (
+    typeof instruction.wire_name !== "string" ||
+    instruction.wire_name.length === 0
+  ) {
+    throw new Error(`${context}.wire_name must be a non-empty string`);
+  }
+  const payload = decodeCanonicalBase64(
+    instruction.payload_base64,
+    `${context}.payload_base64`,
+  );
+  if (payload.length === 0) {
+    throw new Error(`${context}.payload_base64 must encode non-empty bytes`);
+  }
+}
+
+function validateContractCall(contractCall, context) {
+  requireExactFields(contractCall, contractCallFields, context);
+  for (const field of [
+    "contract_address",
+    "expected_code_hash",
+    "entrypoint",
+  ]) {
+    if (
+      typeof contractCall[field] !== "string" ||
+      contractCall[field].length === 0
+    ) {
+      throw new Error(`${context}.${field} must be a non-empty string`);
+    }
+  }
+  if (contractCall.arguments === null) {
+    return;
+  }
+  if (
+    !Array.isArray(contractCall.arguments) ||
+    contractCall.arguments.some(
+      (byte) => !Number.isInteger(byte) || byte < 0 || byte > 0xff,
+    )
+  ) {
+    throw new Error(`${context}.arguments must be null or an array of bytes`);
+  }
+}
+
+function validateSourceFixtureSchema(fixture, context) {
+  requireRecord(fixture, context);
+  if (Object.prototype.hasOwnProperty.call(fixture, "encoded")) {
+    throw new Error(`${context}: encoded alias is retired; use payload_base64`);
+  }
+  requireExactFields(fixture, sourceFixtureFields, context);
+  if (typeof fixture.name !== "string" || fixture.name.length === 0) {
+    throw new Error(`${context}.name must be a non-empty string`);
+  }
+  validateTransactionMetadata(fixture, context);
+  requireExactFields(fixture.payload, payloadFields, `${context}.payload`);
+  validateTransactionMetadata(fixture.payload, `${context}.payload`);
+  validateExecutable(fixture.payload.executable, `${context}.payload.executable`);
+  requireRecord(fixture.payload.fee_payment, `${context}.payload.fee_payment`);
+  requireRecord(fixture.payload.metadata, `${context}.payload.metadata`);
+  for (const field of [
+    "authority",
+    "chain",
+    "creation_time_ms",
+    "nonce",
+    "time_to_live_ms",
+  ]) {
+    if (fixture.payload[field] !== fixture[field]) {
+      throw new Error(`${context}: payload.${field} must match ${field}`);
+    }
+  }
+}
+
+function validateEncodedFile(name, encodedFile, context) {
+  const expected = `${name}.norito`;
+  if (encodedFile !== expected) {
+    throw new Error(`${context}.encoded_file must be exactly '${expected}'`);
+  }
+  if (
+    name.length === 0 ||
+    name === "." ||
+    name === ".." ||
+    name.includes("/") ||
+    name.includes("\\") ||
+    path.basename(encodedFile) !== encodedFile
+  ) {
+    throw new Error(`${context}.encoded_file must not traverse directories`);
+  }
+}
+
+function validateManifestFixtureSchema(fixture, context) {
+  requireExactFields(fixture, manifestFixtureFields, context);
+  if (typeof fixture.name !== "string") {
+    throw new Error(`${context}.name must be a string`);
+  }
+  if (typeof fixture.encoded_file !== "string") {
+    throw new Error(`${context}.encoded_file must be a string`);
+  }
+  validateEncodedFile(fixture.name, fixture.encoded_file, context);
+  validateTransactionMetadata(fixture, context);
+  for (const [field, value] of [
+    ["encoded_len", fixture.encoded_len],
+    ["creation_time_ms", fixture.creation_time_ms],
+    ["signed_len", fixture.signed_len],
+  ]) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error(`${context}.${field} must be a non-negative integer`);
+    }
+  }
 }
 
 function selectFixture(fixtures, name) {
@@ -59,7 +322,12 @@ function requirePositiveFixtureTtl(record, context) {
 
 function assertUniqueFixtureIdentities(
   fixtures,
-  { requireEncodedFile = false } = {},
+  {
+    requireEncodedFile = false,
+    requirePayload = false,
+    rejectEncodedAlias = false,
+    schema = null,
+  } = {},
 ) {
   assert.ok(Array.isArray(fixtures), "fixture collection must be an array");
   const names = new Set();
@@ -68,7 +336,12 @@ function assertUniqueFixtureIdentities(
   const payloadBytesValues = new Set();
   const signedHashes = new Set();
   const signedBytesValues = new Set();
-  for (const fixture of fixtures) {
+  for (const [index, fixture] of fixtures.entries()) {
+    if (schema === "source") {
+      validateSourceFixtureSchema(fixture, `source fixture[${index}]`);
+    } else if (schema === "manifest") {
+      validateManifestFixtureSchema(fixture, `manifest fixture[${index}]`);
+    }
     assert.equal(
       typeof fixture?.name,
       "string",
@@ -79,6 +352,20 @@ function assertUniqueFixtureIdentities(
       `duplicate fixture name: ${fixture.name}`,
     );
     names.add(fixture.name);
+    if (rejectEncodedAlias) {
+      assert.ok(
+        !Object.prototype.hasOwnProperty.call(fixture, "encoded"),
+        `${fixture.name}: encoded alias is retired; use payload_base64`,
+      );
+    }
+    if (requirePayload) {
+      assert.ok(
+        fixture.payload !== null &&
+          typeof fixture.payload === "object" &&
+          !Array.isArray(fixture.payload),
+        `${fixture.name}.payload must be an object`,
+      );
+    }
     const descriptorTtl = requirePositiveFixtureTtl(fixture, fixture.name);
     if (fixture.payload != null) {
       const payloadTtl = requirePositiveFixtureTtl(
@@ -157,9 +444,15 @@ function assertUniqueFixtureIdentities(
 }
 
 function validateLoadedFixtureCollections() {
-  assertUniqueFixtureIdentities(sourcePayloadFixtures);
+  requireExactFields(canonicalManifest, manifestFields, "fixture manifest");
+  assertUniqueFixtureIdentities(sourcePayloadFixtures, {
+    requirePayload: true,
+    rejectEncodedAlias: true,
+    schema: "source",
+  });
   assertUniqueFixtureIdentities(canonicalManifest.fixtures, {
     requireEncodedFile: true,
+    schema: "manifest",
   });
   assert.deepEqual(
     sourcePayloadFixtures.map(({ name }) => name).sort(),
@@ -199,6 +492,248 @@ function externalTransactionEntrypointHashHex(canonicalPayload) {
     ]),
   );
 }
+
+function makeSourceFixture(name = "alpha") {
+  const common = {
+    authority: "sorau-example",
+    chain: "00000002",
+    creation_time_ms: 1,
+    nonce: null,
+    time_to_live_ms: 100_000,
+  };
+  return {
+    ...common,
+    name,
+    payload: {
+      ...common,
+      executable: { Instructions: [] },
+      fee_payment: {
+        payer: "authority",
+        value: { charge_limits: [] },
+      },
+      metadata: {},
+    },
+    payload_base64: "AA==",
+    payload_hash: "payload-hash",
+    signed_base64: "AQ==",
+    signed_hash: "signed-hash",
+  };
+}
+
+function makeManifestFixture(name = "alpha") {
+  return {
+    authority: "sorau-example",
+    chain: "00000002",
+    creation_time_ms: 1,
+    encoded_file: `${name}.norito`,
+    encoded_len: 1,
+    name,
+    nonce: null,
+    payload_base64: "AA==",
+    payload_hash: "payload-hash",
+    signed_base64: "AQ==",
+    signed_hash: "signed-hash",
+    signed_len: 1,
+    time_to_live_ms: 100_000,
+  };
+}
+
+test("strict native JSON parsing rejects duplicate object keys", () => {
+  assert.throws(
+    () =>
+      parseStrictLosslessIntegerJson(
+        '{"name":"first","na\\u006de":"second"}',
+        "duplicate fixture",
+      ),
+    /duplicate object key "name"/,
+  );
+  const parsed = parseStrictLosslessIntegerJson(
+    '{"nested":{"name":"first"}}',
+    "valid fixture",
+  );
+  assert.equal(parsed.nested.name, "first");
+});
+
+test("source descriptors require exact fields and one executable variant", () => {
+  const fixture = makeSourceFixture();
+  assert.doesNotThrow(() => validateSourceFixtureSchema(fixture, fixture.name));
+
+  assert.throws(
+    () =>
+      validateSourceFixtureSchema(
+        { ...fixture, unexpected: true },
+        fixture.name,
+      ),
+    /unexpected=\["unexpected"\]/,
+  );
+  assert.throws(
+    () =>
+      validateSourceFixtureSchema(
+        {
+          ...fixture,
+          payload: { ...fixture.payload, unexpected: true },
+        },
+        fixture.name,
+      ),
+    /unexpected=\["unexpected"\]/,
+  );
+  assert.throws(
+    () =>
+      validateSourceFixtureSchema(
+        {
+          ...fixture,
+          payload: {
+            ...fixture.payload,
+            executable: { Instructions: [], ContractCall: {} },
+          },
+        },
+        fixture.name,
+      ),
+    /exactly one executable variant/,
+  );
+
+  const directCall = {
+    ...fixture,
+    payload: {
+      ...fixture.payload,
+      executable: {
+        ContractCall: {
+          contract_address: "tairac1example",
+          expected_code_hash: "hash:example",
+          entrypoint: "main",
+          arguments: [],
+        },
+      },
+    },
+  };
+  assert.doesNotThrow(() =>
+    validateSourceFixtureSchema(directCall, directCall.name),
+  );
+});
+
+test("executable variant bodies use the exact first-release schema", () => {
+  const instruction = {
+    wire_name: "iroha.test",
+    payload_base64: "AQ==",
+  };
+  const contractCall = {
+    contract_address: "tairac1example",
+    expected_code_hash: "hash:example",
+    entrypoint: "main",
+    arguments: [0, 255],
+  };
+  for (const executable of [
+    { Ivm: "AQ==" },
+    { Instructions: [instruction] },
+    { ContractCall: { ...contractCall, arguments: null } },
+    {
+      Batch: [
+        { Instruction: instruction },
+        { ContractCall: contractCall },
+      ],
+    },
+  ]) {
+    assert.doesNotThrow(() => validateExecutable(executable, "executable"));
+  }
+
+  for (const [executable, diagnostic] of [
+    [{ Ivm: 1 }, /Ivm is invalid base64/],
+    [{ Ivm: "YR==" }, /Ivm is non-canonical base64/],
+    [{ Instructions: {} }, /Instructions must be an array/],
+    [
+      { Instructions: [{ ...instruction, unexpected: true }] },
+      /unexpected=\["unexpected"\]/,
+    ],
+    [
+      { Instructions: [{ ...instruction, wire_name: "" }] },
+      /wire_name must be a non-empty string/,
+    ],
+    [
+      { Instructions: [{ ...instruction, payload_base64: "" }] },
+      /payload_base64 must encode non-empty bytes/,
+    ],
+    [
+      { Instructions: [{ ...instruction, payload_base64: "YR==" }] },
+      /payload_base64 is non-canonical base64/,
+    ],
+    [
+      { ContractCall: { ...contractCall, unexpected: true } },
+      /unexpected=\["unexpected"\]/,
+    ],
+    [
+      {
+        ContractCall: {
+          contract_address: contractCall.contract_address,
+          entrypoint: contractCall.entrypoint,
+          arguments: null,
+        },
+      },
+      /missing=\["expected_code_hash"\]/,
+    ],
+    [
+      { ContractCall: { ...contractCall, arguments: [256] } },
+      /arguments must be null or an array of bytes/,
+    ],
+    [{ Batch: [] }, /Batch must contain at least one item/],
+    [{ Batch: {} }, /Batch must be an array/],
+    [
+      {
+        Batch: [
+          {
+            Instruction: instruction,
+            ContractCall: contractCall,
+          },
+        ],
+      },
+      /must contain exactly one variant/,
+    ],
+    [
+      { Batch: [{ Instruction: { ...instruction, unexpected: true } }] },
+      /unexpected=\["unexpected"\]/,
+    ],
+  ]) {
+    assert.throws(() => validateExecutable(executable, "executable"), diagnostic);
+  }
+});
+
+test("manifest requires exact fields and canonical encoded filenames", () => {
+  const fixture = makeManifestFixture();
+  assert.doesNotThrow(() =>
+    validateManifestFixtureSchema(fixture, fixture.name),
+  );
+  assert.throws(
+    () =>
+      validateManifestFixtureSchema(
+        { ...fixture, unexpected: true },
+        fixture.name,
+      ),
+    /unexpected=\["unexpected"\]/,
+  );
+  assert.throws(
+    () =>
+      validateManifestFixtureSchema(
+        { ...fixture, encoded_file: "renamed.norito" },
+        fixture.name,
+      ),
+    /must be exactly 'alpha\.norito'/,
+  );
+  assert.throws(
+    () => {
+      const traversing = makeManifestFixture("../alpha");
+      validateManifestFixtureSchema(traversing, traversing.name);
+    },
+    /must not traverse directories/,
+  );
+  assert.throws(
+    () =>
+      requireExactFields(
+        { fixtures: [], unexpected: true },
+        manifestFields,
+        "manifest",
+      ),
+    /unexpected=\["unexpected"\]/,
+  );
+});
 
 test("fixture collections reject duplicate names and encoded files before lookup", () => {
   const fixture = {
@@ -294,6 +829,44 @@ test("fixture descriptors require explicit matching positive TTL", () => {
   );
 });
 
+test("source fixture descriptors require payload fields without encoded alias", () => {
+  const fixture = {
+    name: "source-fixture",
+    time_to_live_ms: 100_000,
+    payload: { time_to_live_ms: 100_000 },
+    payload_hash: "payload-hash",
+    payload_base64: "AA==",
+    signed_hash: "signed-hash",
+    signed_base64: "AQ==",
+  };
+  const options = { requirePayload: true, rejectEncodedAlias: true };
+
+  assert.doesNotThrow(() => assertUniqueFixtureIdentities([fixture], options));
+
+  const missingPayload = { ...fixture };
+  delete missingPayload.payload;
+  assert.throws(
+    () => assertUniqueFixtureIdentities([missingPayload], options),
+    /payload must be an object/,
+  );
+
+  const missingPayloadBase64 = { ...fixture };
+  delete missingPayloadBase64.payload_base64;
+  assert.throws(
+    () => assertUniqueFixtureIdentities([missingPayloadBase64], options),
+    /payload_base64 must be a string/,
+  );
+
+  assert.throws(
+    () =>
+      assertUniqueFixtureIdentities(
+        [{ ...fixture, encoded: fixture.payload_base64 }],
+        options,
+      ),
+    /encoded alias is retired/,
+  );
+});
+
 test("fixture collections reject invalid and non-canonical base64", () => {
   for (const encoded of ["YQ!!", "Y Q==", "YQ=", "YQ===", "YR=="]) {
     assert.throws(
@@ -346,7 +919,7 @@ test("source payload metadata matches canonical manifest metadata", () => {
   for (const fixture of canonicalManifest.fixtures) {
     const sourceFixture = selectFixture(sourcePayloadFixtures, fixture.name);
     assert.equal(
-      sourceFixture.encoded,
+      sourceFixture.payload_base64,
       fixture.payload_base64,
       `${fixture.name}: source payload base64 drifted from manifest`,
     );

@@ -3263,11 +3263,12 @@ mod tests {
             )
             .with_instructions([InstructionBox::from(drawdown_operation())])
         };
-        let attachments = ProofAttachmentList(vec![ProofAttachment::new_ref(
+        let attachments = ProofAttachmentList::try_from(vec![ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
             VerifyingKeyId::new("halo2/ipa", "appeal-sidecar-vk"),
-        )]);
+        )])
+        .expect("one attachment is a valid bounded proof list");
         let attached = transaction_builder()
             .with_attachments(attachments)
             .try_sign(signer.private_key())

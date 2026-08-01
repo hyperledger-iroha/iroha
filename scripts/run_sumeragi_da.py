@@ -213,6 +213,8 @@ def _render_markdown_report(
         "run",
         "-p",
         "build-support",
+        "--features",
+        "build-support/dev-tools",
         "--bin",
         "sumeragi_da_report",
         "--",

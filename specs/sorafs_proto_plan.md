@@ -119,11 +119,11 @@ Committed fixtures live under:
 Use the active fixture generators:
 
 ```sh
-cargo run --locked -p sorafs_car --features manifest --bin provider_admission_fixtures
+cargo run --locked -p sorafs_car --features manifest,dev-tools --bin provider_admission_fixtures
 cargo run --locked -p sorafs_car --bin sorafs_manifest_builder -- \
   capacity replication-order --spec fixtures/sorafs_manifest/replication_order/order_v1.json
-cargo run --locked -p sorafs_manifest --bin generate_orderbook_fixtures
-cargo run --locked -p sorafs_manifest --bin generate_por_fixtures -- --write
+cargo run --locked -p sorafs_manifest --features dev-tools --bin generate_orderbook_fixtures
+cargo run --locked -p sorafs_manifest --features dev-tools --bin generate_por_fixtures -- --write
 ```
 
 Do not document retired generator names as required workflow. When a schema

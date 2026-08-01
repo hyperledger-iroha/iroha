@@ -28,7 +28,7 @@ canonical pretty serialization for object-returning APIs).
 Regenerate the fixtures with:
 
 ```sh
-cargo run --locked -p sorafs_manifest --bin generate_orderbook_fixtures
+cargo run --locked -p sorafs_manifest --features dev-tools --bin generate_orderbook_fixtures
 ```
 
 The fixture-directory bundle validator discovers all of these `.to` files when

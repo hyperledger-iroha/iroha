@@ -35,8 +35,8 @@ export const SM2_PRIVATE_KEY_LENGTH = 32;
 export const SM2_PUBLIC_KEY_LENGTH = 65;
 export const SM2_SIGNATURE_LENGTH = 64;
 export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 21;
-export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024;
-export const PRIVACY_CAPABILITY_VALIDATION_STATUS_V1 = Object.freeze({
+export const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES = 256 * 1024;
+export const PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1 = Object.freeze({
   VALID: 0,
   NULL_POINTER: 1,
   EMPTY: 2,
@@ -45,7 +45,7 @@ export const PRIVACY_CAPABILITY_VALIDATION_STATUS_V1 = Object.freeze({
   SCHEMA_MISMATCH: 5,
   NON_CANONICAL: 6,
   MALFORMED_ARCHIVE: 7,
-  INVALID_SNAPSHOT: 8,
+  INVALID_CATALOG: 8,
 });
 const PRIVACY_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff;
 const U64_MAX = (1n << 64n) - 1n;
@@ -807,15 +807,15 @@ function hasPrivacyNativeSurface(native) {
     native &&
     Number.isInteger(abiVersion) &&
     abiVersion === PRIVACY_REQUIRED_BRIDGE_ABI_VERSION &&
-    typeof native.privacyCapabilitiesV1 === "function" &&
-    typeof native.privacyValidateCapabilitiesV1 === "function"
+    typeof native.privacyCompiledProfileCatalogV1 === "function" &&
+    typeof native.privacyValidateCompiledProfileCatalogV1 === "function"
   );
 }
 
 function hasPrivacyNative(native) {
   return (
     hasPrivacyNativeSurface(native) &&
-    privacyNativeProbeReturnsBytes(native, "privacyCapabilitiesV1")
+    privacyNativeProbeReturnsBytes(native, "privacyCompiledProfileCatalogV1")
   );
 }
 
@@ -890,20 +890,20 @@ function privacyNativeOutputToBuffer(native, result, operation, options = {}) {
     if (output.length === 0) {
       throw new Error(`native ${operation} returned empty output`);
     }
-    if (output.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
+    if (output.length > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES) {
       throw new Error(`native ${operation} returned oversized output`);
     }
     const validationStatus = invokePrivacyNative(
       native,
-      "privacyValidateCapabilitiesV1",
+      "privacyValidateCompiledProfileCatalogV1",
       output,
     );
     if (
       validationStatus !==
-      PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.VALID
+      PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.VALID
     ) {
       throw new Error(
-        `native ${operation} returned an invalid typed privacy capability archive`,
+        `native ${operation} returned an invalid local compiled-profile catalog archive`,
       );
     }
     return Buffer.from(output);
@@ -930,10 +930,23 @@ export function isPrivacyNativeAvailable() {
   }
 }
 
-export function privacyCapabilitiesV1() {
-  const native = ensurePrivacyNative(resolveNativeBinding(), "privacyCapabilitiesV1");
-  const result = invokePrivacyNative(native, "privacyCapabilitiesV1");
-  return privacyNativeOutputToBuffer(native, result, "privacyCapabilitiesV1");
+/**
+ * Return this binary's canonical Norito V1 compiled-profile catalog.
+ * This is local build metadata; obtain activation and readiness from Torii's
+ * live privacy capability endpoint.
+ * @returns {Buffer}
+ */
+export function privacyCompiledProfileCatalogV1() {
+  const native = ensurePrivacyNative(
+    resolveNativeBinding(),
+    "privacyCompiledProfileCatalogV1",
+  );
+  const result = invokePrivacyNative(native, "privacyCompiledProfileCatalogV1");
+  return privacyNativeOutputToBuffer(
+    native,
+    result,
+    "privacyCompiledProfileCatalogV1",
+  );
 }
 
 /**

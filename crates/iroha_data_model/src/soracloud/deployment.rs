@@ -100,108 +100,104 @@ impl SoraServiceRolloutStateV1 {
     /// Returns [`SoracloudManifestError`] when version, traffic, or handle
     /// invariants are violated.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_SERVICE_ROLLOUT_STATE_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora service rollout state",
-                expected: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora service rollout state",
+            self.schema_version,
+            SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+        )?;
 
-        if self.rollout_handle.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora service rollout state",
-                field: "rollout_handle",
-            });
-        }
+        validate_nonblank_field(
+            "sora service rollout state",
+            "rollout_handle",
+            &self.rollout_handle,
+        )?;
 
-        if self.candidate_version.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora service rollout state",
-                field: "candidate_version",
-            });
-        }
+        validate_nonblank_field(
+            "sora service rollout state",
+            "candidate_version",
+            &self.candidate_version,
+        )?;
 
         if self
             .baseline_version
             .as_ref()
             .is_some_and(|version| version.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service rollout state",
-                field: "baseline_version",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service rollout state",
+                "baseline_version",
+                "must not be empty when provided",
+            ));
         }
 
         if self.canary_percent > 100 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service rollout state",
-                field: "canary_percent",
-                reason: "must be within 0..=100".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service rollout state",
+                "canary_percent",
+                "must be within 0..=100",
+            ));
         }
 
         if self.traffic_percent > 100 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service rollout state",
-                field: "traffic_percent",
-                reason: "must be within 0..=100".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service rollout state",
+                "traffic_percent",
+                "must be within 0..=100",
+            ));
         }
 
         match self.stage {
             SoraRolloutStageV1::Canary => {
                 if self.traffic_percent < self.canary_percent {
-                    return Err(SoracloudManifestError::InvalidField {
-                        manifest: "sora service rollout state",
-                        field: "traffic_percent",
-                        reason: "canary traffic must stay at or above canary_percent".to_string(),
-                    });
+                    return Err(invalid_field(
+                        "sora service rollout state",
+                        "traffic_percent",
+                        "canary traffic must stay at or above canary_percent",
+                    ));
                 }
             }
             SoraRolloutStageV1::Promoted => {
                 if self.traffic_percent != 100 {
-                    return Err(SoracloudManifestError::InvalidField {
-                        manifest: "sora service rollout state",
-                        field: "traffic_percent",
-                        reason: "promoted rollouts must serve 100 percent of traffic".to_string(),
-                    });
+                    return Err(invalid_field(
+                        "sora service rollout state",
+                        "traffic_percent",
+                        "promoted rollouts must serve 100 percent of traffic",
+                    ));
                 }
             }
             SoraRolloutStageV1::RolledBack => {
                 if self.traffic_percent != 0 {
-                    return Err(SoracloudManifestError::InvalidField {
-                        manifest: "sora service rollout state",
-                        field: "traffic_percent",
-                        reason: "rolled-back rollouts must serve 0 percent of traffic".to_string(),
-                    });
+                    return Err(invalid_field(
+                        "sora service rollout state",
+                        "traffic_percent",
+                        "rolled-back rollouts must serve 0 percent of traffic",
+                    ));
                 }
             }
         }
 
         if self.max_health_failures == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service rollout state",
-                field: "max_health_failures",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service rollout state",
+                "max_health_failures",
+                "must be greater than zero",
+            ));
         }
 
         if self.health_window_secs == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service rollout state",
-                field: "health_window_secs",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service rollout state",
+                "health_window_secs",
+                "must be greater than zero",
+            ));
         }
 
         if self.updated_sequence < self.created_sequence {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service rollout state",
-                field: "updated_sequence",
-                reason: "must be greater than or equal to created_sequence".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service rollout state",
+                "updated_sequence",
+                "must be greater than or equal to created_sequence",
+            ));
         }
 
         Ok(())
@@ -265,20 +261,17 @@ impl SoraServiceDeploymentStateV1 {
     /// Returns [`SoracloudManifestError`] when version, sequence, or rollout
     /// invariants are violated.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora service deployment state",
-                expected: SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora service deployment state",
+            self.schema_version,
+            SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+        )?;
 
-        if self.current_service_version.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora service deployment state",
-                field: "current_service_version",
-            });
-        }
+        validate_nonblank_field(
+            "sora service deployment state",
+            "current_service_version",
+            &self.current_service_version,
+        )?;
         validate_soracloud_digest_hash(
             "sora service deployment state",
             "current_service_manifest_hash",
@@ -296,11 +289,11 @@ impl SoraServiceDeploymentStateV1 {
             ("process_started_sequence", self.process_started_sequence),
         ] {
             if value == 0 {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora service deployment state",
+                return Err(invalid_field(
+                    "sora service deployment state",
                     field,
-                    reason: "must be greater than zero".to_string(),
-                });
+                    "must be greater than zero",
+                ));
             }
         }
 
@@ -335,11 +328,11 @@ impl SoraServiceDeploymentStateV1 {
         if let Some(active_rollout) = self.active_rollout.as_ref() {
             active_rollout.validate()?;
             if active_rollout.stage != SoraRolloutStageV1::Canary {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora service deployment state",
-                    field: "active_rollout.stage",
-                    reason: "active_rollout may only track canary progress".to_string(),
-                });
+                return Err(invalid_field(
+                    "sora service deployment state",
+                    "active_rollout.stage",
+                    "active_rollout may only track canary progress",
+                ));
             }
         }
 
@@ -360,12 +353,11 @@ impl SoraServiceDeploymentStateV1 {
             }
         }
         if self.service_lease.is_none() && !self.lease_volume_states.is_empty() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service deployment state",
-                field: "lease_volume_states",
-                reason: "lease-backed volume state requires an active hosted-service lease"
-                    .to_string(),
-            });
+            return Err(invalid_field(
+                "sora service deployment state",
+                "lease_volume_states",
+                "lease-backed volume state requires an active hosted-service lease",
+            ));
         }
 
         Ok(())
@@ -430,43 +422,33 @@ fn validate_service_material_name(
     value: &str,
 ) -> Result<(), SoracloudManifestError> {
     let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(SoracloudManifestError::EmptyField { manifest, field });
-    }
+    validate_nonblank_field(manifest, field, trimmed)?;
     if trimmed.len() != value.len() {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "must not include leading or trailing whitespace".to_string(),
-        });
+            "must not include leading or trailing whitespace",
+        ));
     }
     if value.starts_with('/') {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest,
-            field,
-            reason: "must not start with '/'".to_string(),
-        });
+        return Err(invalid_field(manifest, field, "must not start with '/'"));
     }
     if value.contains("..") {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "must not contain '..' path traversal segments".to_string(),
-        });
+            "must not contain '..' path traversal segments",
+        ));
     }
     if value.len() > 256 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest,
-            field,
-            reason: "must not exceed 256 bytes".to_string(),
-        });
+        return Err(invalid_field(manifest, field, "must not exceed 256 bytes"));
     }
     if value.chars().any(char::is_control) {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "must not contain control characters".to_string(),
-        });
+            "must not contain control characters",
+        ));
     }
     Ok(())
 }
@@ -480,22 +462,20 @@ fn validate_nonempty_no_control(
     field: &'static str,
     value: &str,
 ) -> Result<(), SoracloudManifestError> {
-    if value.trim().is_empty() {
-        return Err(SoracloudManifestError::EmptyField { manifest, field });
-    }
+    validate_nonblank_field(manifest, field, value)?;
     if value.trim() != value {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "must not include surrounding whitespace".to_string(),
-        });
+            "must not include surrounding whitespace",
+        ));
     }
     if value.chars().any(char::is_control) {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "must not contain control characters".to_string(),
-        });
+            "must not contain control characters",
+        ));
     }
     Ok(())
 }
@@ -507,18 +487,18 @@ fn validate_distribution_geography_tag(
 ) -> Result<(), SoracloudManifestError> {
     validate_nonempty_no_control(manifest, field, value)?;
     if value.len() > 128 {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "geography tags must not exceed 128 bytes".to_string(),
-        });
+            "geography tags must not exceed 128 bytes",
+        ));
     }
     if value.chars().any(char::is_whitespace) {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "geography tags must not contain whitespace".to_string(),
-        });
+            "geography tags must not contain whitespace",
+        ));
     }
     Ok(())
 }
@@ -528,15 +508,13 @@ fn validate_environment_variable_name(
     value: &str,
 ) -> Result<(), SoracloudManifestError> {
     let manifest = "sora container manifest";
-    if value.trim().is_empty() {
-        return Err(SoracloudManifestError::EmptyField { manifest, field });
-    }
+    validate_nonblank_field(manifest, field, value)?;
     if value.trim() != value {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "environment variable name must not include surrounding whitespace".to_string(),
-        });
+            "environment variable name must not include surrounding whitespace",
+        ));
     }
     let mut chars = value.chars();
     let Some(first) = chars.next() else {
@@ -567,15 +545,13 @@ fn validate_config_export_relative_path(value: &str) -> Result<(), SoracloudMani
     let manifest = "sora container manifest";
     let field = "config_exports";
     let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(SoracloudManifestError::EmptyField { manifest, field });
-    }
+    validate_nonblank_field(manifest, field, trimmed)?;
     if trimmed != value {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "config export file path must not include surrounding whitespace".to_string(),
-        });
+            "config export file path must not include surrounding whitespace",
+        ));
     }
     if value.starts_with('/') || value.ends_with('/') {
         return Err(SoracloudManifestError::InvalidField {
@@ -594,18 +570,18 @@ fn validate_config_export_relative_path(value: &str) -> Result<(), SoracloudMani
         });
     }
     if value.len() > 512 {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "config export file path must not exceed 512 bytes".to_string(),
-        });
+            "config export file path must not exceed 512 bytes",
+        ));
     }
     if value.chars().any(char::is_control) {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "config export file path must not contain control characters".to_string(),
-        });
+            "config export file path must not contain control characters",
+        ));
     }
     for segment in value.split('/') {
         if segment.is_empty() || segment == "." || segment == ".." {
@@ -640,11 +616,11 @@ fn validate_canonical_lower_hex_32(
         .bytes()
         .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "must use canonical lowercase hexadecimal".to_string(),
-        });
+            "must use canonical lowercase hexadecimal",
+        ));
     }
     let bytes = hex::decode(value).map_err(|error| SoracloudManifestError::InvalidField {
         manifest,
@@ -676,11 +652,11 @@ fn validate_canonical_sorafs_content_cid(
         });
     }
     let bytes = decode_lowercase_multibase_base32(value).ok_or_else(|| {
-        SoracloudManifestError::InvalidField {
+        invalid_field(
             manifest,
             field,
-            reason: "must use canonical lowercase multibase base32 without padding".to_string(),
-        }
+            "must use canonical lowercase multibase base32 without padding",
+        )
     })?;
     ManifestRootCid::try_from_slice(&bytes).map_err(|error| {
         SoracloudManifestError::InvalidField {
@@ -690,11 +666,11 @@ fn validate_canonical_sorafs_content_cid(
         }
     })?;
     if encode_lowercase_multibase_base32(&bytes) != value {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "must use the exact canonical lowercase multibase base32 spelling".to_string(),
-        });
+            "must use the exact canonical lowercase multibase base32 spelling",
+        ));
     }
     Ok(())
 }
@@ -763,32 +739,28 @@ fn validate_inrou_image_member_path(
         return Err(SoracloudManifestError::EmptyField { manifest, field });
     }
     if value.trim() != value {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "must not include surrounding whitespace".to_string(),
-        });
+            "must not include surrounding whitespace",
+        ));
     }
     if value.len() > 512 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest,
-            field,
-            reason: "must not exceed 512 bytes".to_string(),
-        });
+        return Err(invalid_field(manifest, field, "must not exceed 512 bytes"));
     }
     let Some(relative_path) = value.strip_prefix("/inrou/") else {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "must be a canonical absolute member path below `/inrou/`".to_string(),
-        });
+            "must be a canonical absolute member path below `/inrou/`",
+        ));
     };
     if relative_path.is_empty() || value.ends_with('/') || value.contains('\\') {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "must use canonical `/`-separated portable path components".to_string(),
-        });
+            "must use canonical `/`-separated portable path components",
+        ));
     }
     for component in relative_path.split('/') {
         if !is_portable_inrou_path_component(component) {
@@ -841,36 +813,34 @@ fn validate_bundle_absolute_path(
     value: &str,
 ) -> Result<(), SoracloudManifestError> {
     let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(SoracloudManifestError::EmptyField { manifest, field });
-    }
+    validate_nonblank_field(manifest, field, trimmed)?;
     if trimmed != value {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "must not include surrounding whitespace".to_string(),
-        });
+            "must not include surrounding whitespace",
+        ));
     }
     if value.len() > 256 {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "must not exceed 256 bytes including its leading slash".to_string(),
-        });
+            "must not exceed 256 bytes including its leading slash",
+        ));
     }
     let Some(relative_path) = value.strip_prefix('/') else {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "must be an absolute path within the signed Soracloud bundle".to_string(),
-        });
+            "must be an absolute path within the signed Soracloud bundle",
+        ));
     };
     if relative_path.is_empty() || value.ends_with('/') || value.contains('\\') {
-        return Err(SoracloudManifestError::InvalidField {
+        return Err(invalid_field(
             manifest,
             field,
-            reason: "must use a canonical nonempty `/`-separated path".to_string(),
-        });
+            "must use a canonical nonempty `/`-separated path",
+        ));
     }
     for component in relative_path.split('/') {
         if !is_portable_inrou_path_component(component) {
@@ -919,32 +889,30 @@ impl SoraServiceConfigEntryV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or the
     /// canonical JSON value hash does not match the stored commitment.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_SERVICE_CONFIG_ENTRY_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora service config entry",
-                expected: SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora service config entry",
+            self.schema_version,
+            SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
+        )?;
         validate_service_material_name(
             "sora service config entry",
             "config_name",
             &self.config_name,
         )?;
         if self.last_update_sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service config entry",
-                field: "last_update_sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service config entry",
+                "last_update_sequence",
+                "must be greater than zero",
+            ));
         }
         let expected = self.canonical_value_hash()?;
         if self.value_hash != expected {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service config entry",
-                field: "value_hash",
-                reason: "must equal the canonical hash of value_json".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service config entry",
+                "value_hash",
+                "must equal the canonical hash of value_json",
+            ));
         }
         Ok(())
     }
@@ -961,11 +929,11 @@ fn canonical_service_config_json_payload(
         }
     })?;
     if canonical.get() != value_json.get() {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "sora service config entry",
-            field: "value_json",
-            reason: "must use canonical Norito JSON encoding".to_string(),
-        });
+        return Err(invalid_field(
+            "sora service config entry",
+            "value_json",
+            "must use canonical Norito JSON encoding",
+        ));
     }
     Ok(canonical.get().as_bytes().to_vec())
 }
@@ -994,24 +962,22 @@ impl SoraServiceSecretEntryV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or the
     /// embedded secret envelope fails validation.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_SERVICE_SECRET_ENTRY_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora service secret entry",
-                expected: SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora service secret entry",
+            self.schema_version,
+            SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
+        )?;
         validate_service_material_name(
             "sora service secret entry",
             "secret_name",
             &self.secret_name,
         )?;
         if self.last_update_sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service secret entry",
-                field: "last_update_sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service secret entry",
+                "last_update_sequence",
+                "must be greater than zero",
+            ));
         }
         self.envelope.validate()
     }
@@ -1074,45 +1040,37 @@ impl SoraServiceStateEntryV1 {
     /// state key is malformed, or plaintext state is exposed through the
     /// ciphertext projection surface.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_SERVICE_STATE_ENTRY_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora service state entry",
-                expected: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
-        if self.service_version.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora service state entry",
-                field: "service_version",
-            });
-        }
-        if self.state_key.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora service state entry",
-                field: "state_key",
-            });
-        }
+        validate_schema_version(
+            "sora service state entry",
+            self.schema_version,
+            SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+        )?;
+        validate_nonblank_field(
+            "sora service state entry",
+            "service_version",
+            &self.service_version,
+        )?;
+        validate_nonblank_field("sora service state entry", "state_key", &self.state_key)?;
         if !self.state_key.starts_with('/') {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service state entry",
-                field: "state_key",
-                reason: "must start with '/'".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service state entry",
+                "state_key",
+                "must start with '/'",
+            ));
         }
         if self.last_update_sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service state entry",
-                field: "last_update_sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service state entry",
+                "last_update_sequence",
+                "must be greater than zero",
+            ));
         }
         let payload_len = u64::try_from(self.payload.len()).map_err(|_| {
-            SoracloudManifestError::InvalidField {
-                manifest: "sora service state entry",
-                field: "payload",
-                reason: "payload length exceeds supported u64 range".to_string(),
-            }
+            invalid_field(
+                "sora service state entry",
+                "payload",
+                "payload length exceeds supported u64 range",
+            )
         })?;
         if self.payload_bytes.get() != payload_len {
             return Err(SoracloudManifestError::InvalidField {
@@ -1125,11 +1083,11 @@ impl SoraServiceStateEntryV1 {
             });
         }
         if self.payload_commitment != Hash::new(&self.payload) {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service state entry",
-                field: "payload_commitment",
-                reason: "must equal the hash of payload bytes".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service state entry",
+                "payload_commitment",
+                "must equal the hash of payload bytes",
+            ));
         }
         validate_soracloud_digest_hash(
             "sora service state entry",
@@ -1146,11 +1104,11 @@ impl SoraServiceStateEntryV1 {
             self.source_action,
             SoraServiceLifecycleActionV1::StateMutation | SoraServiceLifecycleActionV1::FheJobRun
         ) {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service state entry",
-                field: "source_action",
-                reason: "must be StateMutation or FheJobRun".to_string(),
-            });
+            return Err(invalid_field(
+                "sora service state entry",
+                "source_action",
+                "must be StateMutation or FheJobRun",
+            ));
         }
         Ok(())
     }
@@ -1163,25 +1121,25 @@ fn validate_service_state_fhe_bound_metadata(
     public_key_digest: Option<Hash>,
 ) -> Result<(), SoracloudManifestError> {
     if encryption != SoraStateEncryptionV1::FheCiphertext && bound.is_some() {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "sora service state entry",
-            field: "fhe_residual_multiple_bound",
-            reason: "requires FHE ciphertext encryption".to_string(),
-        });
+        return Err(invalid_field(
+            "sora service state entry",
+            "fhe_residual_multiple_bound",
+            "requires FHE ciphertext encryption",
+        ));
     }
     if encryption != SoraStateEncryptionV1::FheCiphertext && bound_mode.is_some() {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "sora service state entry",
-            field: "fhe_bound_mode",
-            reason: "requires FHE ciphertext encryption".to_string(),
-        });
+        return Err(invalid_field(
+            "sora service state entry",
+            "fhe_bound_mode",
+            "requires FHE ciphertext encryption",
+        ));
     }
     if encryption != SoraStateEncryptionV1::FheCiphertext && public_key_digest.is_some() {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "sora service state entry",
-            field: "fhe_public_key_digest",
-            reason: "requires FHE ciphertext encryption".to_string(),
-        });
+        return Err(invalid_field(
+            "sora service state entry",
+            "fhe_public_key_digest",
+            "requires FHE ciphertext encryption",
+        ));
     }
     if let Some(public_key_digest) = public_key_digest {
         validate_soracloud_digest_hash(
@@ -1192,29 +1150,26 @@ fn validate_service_state_fhe_bound_metadata(
     }
     if encryption == SoraStateEncryptionV1::FheCiphertext && bound_mode.is_some() && bound.is_none()
     {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "sora service state entry",
-            field: "fhe_bound_mode",
-            reason: "requires fhe_residual_multiple_bound".to_string(),
-        });
+        return Err(invalid_field(
+            "sora service state entry",
+            "fhe_bound_mode",
+            "requires fhe_residual_multiple_bound",
+        ));
     }
     if let Some(bound) = bound {
         if public_key_digest.is_none() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service state entry",
-                field: "fhe_public_key_digest",
-                reason: "requires admitted FHE public-key digest when bound metadata is present"
-                    .to_string(),
-            });
+            return Err(invalid_field(
+                "sora service state entry",
+                "fhe_public_key_digest",
+                "requires admitted FHE public-key digest when bound metadata is present",
+            ));
         }
         let Some(bound_mode) = bound_mode else {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service state entry",
-                field: "fhe_bound_mode",
-                reason:
-                    "requires explicit bound semantics when fhe_residual_multiple_bound is present"
-                        .to_string(),
-            });
+            return Err(invalid_field(
+                "sora service state entry",
+                "fhe_bound_mode",
+                "requires explicit bound semantics when fhe_residual_multiple_bound is present",
+            ));
         };
         validate_soracloud_bfv_ciphertext_bound_capacity(
             bound,
@@ -1258,25 +1213,22 @@ impl SoraDecryptionRequestRecordV1 {
     /// service version is empty, the sequence is invalid, or the request does
     /// not satisfy the attached policy snapshot.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora decryption request record",
-                expected: SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
-        if self.service_version.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora decryption request record",
-                field: "service_version",
-            });
-        }
+        validate_schema_version(
+            "sora decryption request record",
+            self.schema_version,
+            SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
+        )?;
+        validate_nonblank_field(
+            "sora decryption request record",
+            "service_version",
+            &self.service_version,
+        )?;
         if self.sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora decryption request record",
-                field: "sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora decryption request record",
+                "sequence",
+                "must be greater than zero",
+            ));
         }
         self.request.validate_for_policy(&self.policy)?;
         Ok(())
@@ -1396,136 +1348,122 @@ impl SoraTrainingJobRecordV1 {
     }
 
     fn validate_identity_fields(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_TRAINING_JOB_RECORD_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora training job record",
-                expected: SORA_TRAINING_JOB_RECORD_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
-        if self.service_version.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora training job record",
-                field: "service_version",
-            });
-        }
-        if self.model_name.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora training job record",
-                field: "model_name",
-            });
-        }
-        if self.job_id.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora training job record",
-                field: "job_id",
-            });
-        }
+        validate_schema_version(
+            "sora training job record",
+            self.schema_version,
+            SORA_TRAINING_JOB_RECORD_VERSION_V1,
+        )?;
+        validate_nonblank_field(
+            "sora training job record",
+            "service_version",
+            &self.service_version,
+        )?;
+        validate_nonblank_field("sora training job record", "model_name", &self.model_name)?;
+        validate_nonblank_field("sora training job record", "job_id", &self.job_id)?;
         Ok(())
     }
 
     fn validate_progress_fields(&self) -> Result<(), SoracloudManifestError> {
         if self.worker_group_size == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora training job record",
-                field: "worker_group_size",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora training job record",
+                "worker_group_size",
+                "must be greater than zero",
+            ));
         }
         if self.target_steps == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora training job record",
-                field: "target_steps",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora training job record",
+                "target_steps",
+                "must be greater than zero",
+            ));
         }
         if self.checkpoint_interval_steps == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora training job record",
-                field: "checkpoint_interval_steps",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora training job record",
+                "checkpoint_interval_steps",
+                "must be greater than zero",
+            ));
         }
         if self.checkpoint_interval_steps > self.target_steps {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora training job record",
-                field: "checkpoint_interval_steps",
-                reason: "must not exceed target_steps".to_string(),
-            });
+            return Err(invalid_field(
+                "sora training job record",
+                "checkpoint_interval_steps",
+                "must not exceed target_steps",
+            ));
         }
         if self.completed_steps > self.target_steps {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora training job record",
-                field: "completed_steps",
-                reason: "must not exceed target_steps".to_string(),
-            });
+            return Err(invalid_field(
+                "sora training job record",
+                "completed_steps",
+                "must not exceed target_steps",
+            ));
         }
         if self.step_compute_units == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora training job record",
-                field: "step_compute_units",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora training job record",
+                "step_compute_units",
+                "must be greater than zero",
+            ));
         }
         if self.compute_budget_units == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora training job record",
-                field: "compute_budget_units",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora training job record",
+                "compute_budget_units",
+                "must be greater than zero",
+            ));
         }
         if self.compute_consumed_units > self.compute_budget_units {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora training job record",
-                field: "compute_consumed_units",
-                reason: "must not exceed compute_budget_units".to_string(),
-            });
+            return Err(invalid_field(
+                "sora training job record",
+                "compute_consumed_units",
+                "must not exceed compute_budget_units",
+            ));
         }
         if let Some(last_checkpoint_step) = self.last_checkpoint_step
             && (last_checkpoint_step == 0 || last_checkpoint_step > self.completed_steps)
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora training job record",
-                field: "last_checkpoint_step",
-                reason: "must be within 1..=completed_steps".to_string(),
-            });
+            return Err(invalid_field(
+                "sora training job record",
+                "last_checkpoint_step",
+                "must be within 1..=completed_steps",
+            ));
         }
         Ok(())
     }
 
     fn validate_storage_fields(&self) -> Result<(), SoracloudManifestError> {
         if self.storage_budget_bytes == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora training job record",
-                field: "storage_budget_bytes",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora training job record",
+                "storage_budget_bytes",
+                "must be greater than zero",
+            ));
         }
         if self.storage_consumed_bytes > self.storage_budget_bytes {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora training job record",
-                field: "storage_consumed_bytes",
-                reason: "must not exceed storage_budget_bytes".to_string(),
-            });
+            return Err(invalid_field(
+                "sora training job record",
+                "storage_consumed_bytes",
+                "must not exceed storage_budget_bytes",
+            ));
         }
         Ok(())
     }
 
     fn validate_sequence_fields(&self) -> Result<(), SoracloudManifestError> {
         if self.created_sequence == 0 || self.updated_sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora training job record",
-                field: "sequence",
-                reason: "created_sequence and updated_sequence must be greater than zero"
-                    .to_string(),
-            });
+            return Err(invalid_field(
+                "sora training job record",
+                "sequence",
+                "created_sequence and updated_sequence must be greater than zero",
+            ));
         }
         if self.updated_sequence < self.created_sequence {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora training job record",
-                field: "updated_sequence",
-                reason: "must be >= created_sequence".to_string(),
-            });
+            return Err(invalid_field(
+                "sora training job record",
+                "updated_sequence",
+                "must be >= created_sequence",
+            ));
         }
         Ok(())
     }
@@ -1595,38 +1533,29 @@ impl SoraTrainingJobAuditEventV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// required identifiers are empty.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora training job audit event",
-                expected: SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora training job audit event",
+            self.schema_version,
+            SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1,
+        )?;
         if self.sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora training job audit event",
-                field: "sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora training job audit event",
+                "sequence",
+                "must be greater than zero",
+            ));
         }
-        if self.service_version.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora training job audit event",
-                field: "service_version",
-            });
-        }
-        if self.model_name.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora training job audit event",
-                field: "model_name",
-            });
-        }
-        if self.job_id.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora training job audit event",
-                field: "job_id",
-            });
-        }
+        validate_nonblank_field(
+            "sora training job audit event",
+            "service_version",
+            &self.service_version,
+        )?;
+        validate_nonblank_field(
+            "sora training job audit event",
+            "model_name",
+            &self.model_name,
+        )?;
+        validate_nonblank_field("sora training job audit event", "job_id", &self.job_id)?;
         if let Some(latest_metrics_hash) = self.latest_metrics_hash {
             validate_soracloud_digest_hash(
                 "sora training job audit event",
@@ -1667,42 +1596,34 @@ impl SoraModelRegistryV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch, the
     /// identifiers are empty, or sequencing is invalid.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_MODEL_REGISTRY_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora model registry",
-                expected: SORA_MODEL_REGISTRY_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
-        if self.service_version.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora model registry",
-                field: "service_version",
-            });
-        }
-        if self.model_name.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora model registry",
-                field: "model_name",
-            });
-        }
+        validate_schema_version(
+            "sora model registry",
+            self.schema_version,
+            SORA_MODEL_REGISTRY_VERSION_V1,
+        )?;
+        validate_nonblank_field(
+            "sora model registry",
+            "service_version",
+            &self.service_version,
+        )?;
+        validate_nonblank_field("sora model registry", "model_name", &self.model_name)?;
         if self
             .current_version
             .as_ref()
             .is_some_and(|version| version.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model registry",
-                field: "current_version",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model registry",
+                "current_version",
+                "must not be empty when provided",
+            ));
         }
         if self.updated_sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model registry",
-                field: "updated_sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model registry",
+                "updated_sequence",
+                "must be greater than zero",
+            ));
         }
         Ok(())
     }
@@ -1759,12 +1680,7 @@ impl SoraModelProvenanceRefV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the referenced identifier is empty.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.id.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora model provenance ref",
-                field: "id",
-            });
-        }
+        validate_nonblank_field("sora model provenance ref", "id", &self.id)?;
         Ok(())
     }
 }
@@ -1879,19 +1795,16 @@ impl SoraUploadedModelEncryptionRecipientV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the recipient metadata is empty or malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora uploaded model encryption recipient",
-                expected: SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
-        if self.key_id.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora uploaded model encryption recipient",
-                field: "key_id",
-            });
-        }
+        validate_schema_version(
+            "sora uploaded model encryption recipient",
+            self.schema_version,
+            SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
+        )?;
+        validate_nonblank_field(
+            "sora uploaded model encryption recipient",
+            "key_id",
+            &self.key_id,
+        )?;
         if self.public_key_bytes.is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "sora uploaded model encryption recipient",
@@ -1924,11 +1837,11 @@ impl SoraUploadedModelEncryptionRecipientV1 {
             self.public_key_fingerprint,
         )?;
         if Hash::new(self.public_key_bytes.as_slice()) != self.public_key_fingerprint {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model encryption recipient",
-                field: "public_key_fingerprint",
-                reason: "must match the advertised public_key_bytes".to_string(),
-            });
+            return Err(invalid_field(
+                "sora uploaded model encryption recipient",
+                "public_key_fingerprint",
+                "must match the advertised public_key_bytes",
+            ));
         }
         Ok(())
     }
@@ -1976,19 +1889,16 @@ impl SoraUploadedModelWrappedKeyV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the wrapped-key envelope is empty or malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora uploaded model wrapped key",
-                expected: SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
-        if self.recipient_key_id.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora uploaded model wrapped key",
-                field: "recipient_key_id",
-            });
-        }
+        validate_schema_version(
+            "sora uploaded model wrapped key",
+            self.schema_version,
+            SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
+        )?;
+        validate_nonblank_field(
+            "sora uploaded model wrapped key",
+            "recipient_key_id",
+            &self.recipient_key_id,
+        )?;
         if self.ephemeral_public_key.is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "sora uploaded model wrapped key",
@@ -2060,11 +1970,11 @@ impl SoraUploadedModelWrappedKeyV1 {
             self.aad_digest,
         )?;
         if Hash::new(self.wrapped_key_ciphertext.as_slice()) != self.ciphertext_hash {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model wrapped key",
-                field: "ciphertext_hash",
-                reason: "must match the wrapped_key_ciphertext bytes".to_string(),
-            });
+            return Err(invalid_field(
+                "sora uploaded model wrapped key",
+                "ciphertext_hash",
+                "must match the wrapped_key_ciphertext bytes",
+            ));
         }
         Ok(())
     }
@@ -2159,25 +2069,18 @@ impl SoraUploadedModelBundleV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when required identifiers are empty or sizes are invalid.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora uploaded model bundle",
-                expected: SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora uploaded model bundle",
+            self.schema_version,
+            SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
+        )?;
         for (field, value) in [
             ("model_id", self.model_id.as_str()),
             ("weight_version", self.weight_version.as_str()),
             ("family", self.family.as_str()),
             ("decryption_policy_ref", self.decryption_policy_ref.as_str()),
         ] {
-            if value.trim().is_empty() {
-                return Err(SoracloudManifestError::EmptyField {
-                    manifest: "sora uploaded model bundle",
-                    field,
-                });
-            }
+            validate_nonblank_field("sora uploaded model bundle", field, value)?;
         }
         if self.modalities.is_empty() {
             return Err(SoracloudManifestError::EmptyField {
@@ -2188,32 +2091,27 @@ impl SoraUploadedModelBundleV1 {
         let mut seen_modalities = BTreeSet::new();
         for modality in &self.modalities {
             let normalized = modality.trim();
-            if normalized.is_empty() {
-                return Err(SoracloudManifestError::EmptyField {
-                    manifest: "sora uploaded model bundle",
-                    field: "modalities",
-                });
-            }
+            validate_nonblank_field("sora uploaded model bundle", "modalities", normalized)?;
             if normalized != modality {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora uploaded model bundle",
-                    field: "modalities",
-                    reason: "entries must be canonical without surrounding whitespace".to_string(),
-                });
+                return Err(invalid_field(
+                    "sora uploaded model bundle",
+                    "modalities",
+                    "entries must be canonical without surrounding whitespace",
+                ));
             }
             if modality.chars().any(char::is_control) {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora uploaded model bundle",
-                    field: "modalities",
-                    reason: "entries must not contain control characters".to_string(),
-                });
+                return Err(invalid_field(
+                    "sora uploaded model bundle",
+                    "modalities",
+                    "entries must not contain control characters",
+                ));
             }
             if !seen_modalities.insert(modality.as_str()) {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora uploaded model bundle",
-                    field: "modalities",
-                    reason: "entries must be unique".to_string(),
-                });
+                return Err(invalid_field(
+                    "sora uploaded model bundle",
+                    "modalities",
+                    "entries must be unique",
+                ));
             }
         }
         self.upload_recipient.validate()?;
@@ -2230,13 +2128,11 @@ impl SoraUploadedModelBundleV1 {
             validate_soracloud_digest_hash("sora uploaded model bundle", field, hash)?;
         }
         if self.chunk_count == 0 || self.plaintext_bytes == 0 || self.ciphertext_bytes == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model bundle",
-                field: "chunk_count",
-                reason:
-                    "chunk_count, plaintext_bytes, and ciphertext_bytes must be greater than zero"
-                        .to_string(),
-            });
+            return Err(invalid_field(
+                "sora uploaded model bundle",
+                "chunk_count",
+                "chunk_count, plaintext_bytes, and ciphertext_bytes must be greater than zero",
+            ));
         }
         Ok(())
     }
@@ -2267,38 +2163,31 @@ impl SoraPrivateModelArtifactRefV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when artifact metadata is malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora private model artifact ref",
-                expected: SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora private model artifact ref",
+            self.schema_version,
+            SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+        )?;
         validate_soracloud_digest_hash(
             "sora private model artifact ref",
             "artifact_hash",
             self.artifact_hash,
         )?;
         if self.ciphertext_bytes == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora private model artifact ref",
-                field: "ciphertext_bytes",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora private model artifact ref",
+                "ciphertext_bytes",
+                "must be greater than zero",
+            ));
         }
         let role = self.artifact_role.trim();
-        if role.is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "sora private model artifact ref",
-                field: "artifact_role",
-            });
-        }
+        validate_nonblank_field("sora private model artifact ref", "artifact_role", role)?;
         if role != self.artifact_role || role.chars().any(char::is_control) {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora private model artifact ref",
-                field: "artifact_role",
-                reason: "must be canonical and free of control characters".to_string(),
-            });
+            return Err(invalid_field(
+                "sora private model artifact ref",
+                "artifact_role",
+                "must be canonical and free of control characters",
+            ));
         }
         Ok(())
     }
@@ -2355,31 +2244,28 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the receipt is malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora private uploaded model execution receipt",
-                expected: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora private uploaded model execution receipt",
+            self.schema_version,
+            SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+        )?;
         for (field, value) in [
             ("model_id", self.model_id.as_str()),
             ("weight_version", self.weight_version.as_str()),
             ("runtime_version", self.runtime_version.as_str()),
             ("policy_id", self.policy_id.as_str()),
         ] {
-            if value.trim().is_empty() {
-                return Err(SoracloudManifestError::EmptyField {
-                    manifest: "sora private uploaded model execution receipt",
-                    field,
-                });
-            }
+            validate_nonblank_field(
+                "sora private uploaded model execution receipt",
+                field,
+                value,
+            )?;
             if value.trim() != value || value.chars().any(char::is_control) {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora private uploaded model execution receipt",
+                return Err(invalid_field(
+                    "sora private uploaded model execution receipt",
                     field,
-                    reason: "must be canonical and free of control characters".to_string(),
-                });
+                    "must be canonical and free of control characters",
+                ));
             }
         }
         for (field, digest) in [
@@ -2397,27 +2283,27 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
             )?;
         }
         if self.emitted_sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora private uploaded model execution receipt",
-                field: "emitted_sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "emitted_sequence",
+                "must be greater than zero",
+            ));
         }
         self.input_artifact.validate()?;
         self.output_artifact.validate()?;
         if self.input_artifact.artifact_role != "input" {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora private uploaded model execution receipt",
-                field: "input_artifact.artifact_role",
-                reason: "must be `input`".to_string(),
-            });
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "input_artifact.artifact_role",
+                "must be `input`",
+            ));
         }
         if self.output_artifact.artifact_role != "output" {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora private uploaded model execution receipt",
-                field: "output_artifact.artifact_role",
-                reason: "must be `output`".to_string(),
-            });
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "output_artifact.artifact_role",
+                "must be `output`",
+            ));
         }
         Ok(())
     }
@@ -2479,43 +2365,36 @@ impl SoraModelWeightVersionRecordV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch,
     /// identifiers are empty, or promotion metadata is inconsistent.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora model weight version record",
-                expected: SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora model weight version record",
+            self.schema_version,
+            SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
+        )?;
         for (field, value) in [
             ("service_version", self.service_version.as_str()),
             ("model_name", self.model_name.as_str()),
             ("weight_version", self.weight_version.as_str()),
             ("dataset_ref", self.dataset_ref.as_str()),
         ] {
-            if value.trim().is_empty() {
-                return Err(SoracloudManifestError::EmptyField {
-                    manifest: "sora model weight version record",
-                    field,
-                });
-            }
+            validate_nonblank_field("sora model weight version record", field, value)?;
         }
         if self.training_job_id.trim().is_empty() && self.source_provenance.is_none() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model weight version record",
-                field: "source_provenance",
-                reason: "training_job_id or source_provenance must be populated".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model weight version record",
+                "source_provenance",
+                "training_job_id or source_provenance must be populated",
+            ));
         }
         if self
             .parent_version
             .as_ref()
             .is_some_and(|version| version.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model weight version record",
-                field: "parent_version",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model weight version record",
+                "parent_version",
+                "must not be empty when provided",
+            ));
         }
         if let Some(source_provenance) = &self.source_provenance {
             source_provenance.validate()?;
@@ -2539,29 +2418,29 @@ impl SoraModelWeightVersionRecordV1 {
             )?;
         }
         if self.registered_sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model weight version record",
-                field: "registered_sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model weight version record",
+                "registered_sequence",
+                "must be greater than zero",
+            ));
         }
         if self.promoted_sequence.is_some() != self.gate_report_hash.is_some()
             || self.promoted_sequence.is_some() != self.promoted_by.is_some()
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model weight version record",
-                field: "promotion_metadata",
-                reason: "promoted_sequence, gate_report_hash, and promoted_by must be populated together".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model weight version record",
+                "promotion_metadata",
+                "promoted_sequence, gate_report_hash, and promoted_by must be populated together",
+            ));
         }
         if let Some(promoted_sequence) = self.promoted_sequence
             && promoted_sequence < self.registered_sequence
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model weight version record",
-                field: "promoted_sequence",
-                reason: "must be >= registered_sequence".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model weight version record",
+                "promoted_sequence",
+                "must be >= registered_sequence",
+            ));
         }
         Ok(())
     }
@@ -2611,42 +2490,35 @@ impl SoraModelWeightAuditEventV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// required identifiers are empty.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora model weight audit event",
-                expected: SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora model weight audit event",
+            self.schema_version,
+            SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1,
+        )?;
         if self.sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model weight audit event",
-                field: "sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model weight audit event",
+                "sequence",
+                "must be greater than zero",
+            ));
         }
         for (field, value) in [
             ("service_version", self.service_version.as_str()),
             ("model_name", self.model_name.as_str()),
             ("target_version", self.target_version.as_str()),
         ] {
-            if value.trim().is_empty() {
-                return Err(SoracloudManifestError::EmptyField {
-                    manifest: "sora model weight audit event",
-                    field,
-                });
-            }
+            validate_nonblank_field("sora model weight audit event", field, value)?;
         }
         if self
             .rollback_reason
             .as_ref()
             .is_some_and(|reason| reason.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model weight audit event",
-                field: "rollback_reason",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model weight audit event",
+                "rollback_reason",
+                "must not be empty when provided",
+            ));
         }
         Ok(())
     }
@@ -2717,54 +2589,47 @@ impl SoraModelArtifactRecordV1 {
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// required identifiers are empty.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORA_MODEL_ARTIFACT_RECORD_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "sora model artifact record",
-                expected: SORA_MODEL_ARTIFACT_RECORD_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
+        validate_schema_version(
+            "sora model artifact record",
+            self.schema_version,
+            SORA_MODEL_ARTIFACT_RECORD_VERSION_V1,
+        )?;
         for (field, value) in [
             ("service_version", self.service_version.as_str()),
             ("model_name", self.model_name.as_str()),
             ("artifact_id", self.artifact_id.as_str()),
             ("dataset_ref", self.dataset_ref.as_str()),
         ] {
-            if value.trim().is_empty() {
-                return Err(SoracloudManifestError::EmptyField {
-                    manifest: "sora model artifact record",
-                    field,
-                });
-            }
+            validate_nonblank_field("sora model artifact record", field, value)?;
         }
         if self.training_job_id.trim().is_empty() && self.source_provenance.is_none() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model artifact record",
-                field: "source_provenance",
-                reason: "training_job_id or source_provenance must be populated".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model artifact record",
+                "source_provenance",
+                "training_job_id or source_provenance must be populated",
+            ));
         }
         if self
             .weight_version
             .as_ref()
             .is_some_and(|version| version.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model artifact record",
-                field: "weight_version",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model artifact record",
+                "weight_version",
+                "must not be empty when provided",
+            ));
         }
         if self
             .consumed_by_version
             .as_ref()
             .is_some_and(|version| version.trim().is_empty())
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model artifact record",
-                field: "consumed_by_version",
-                reason: "must not be empty when provided".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model artifact record",
+                "consumed_by_version",
+                "must not be empty when provided",
+            ));
         }
         if let Some(source_provenance) = &self.source_provenance {
             source_provenance.validate()?;
@@ -2793,21 +2658,19 @@ impl SoraModelArtifactRecordV1 {
             .is_some_and(|source| source.kind == SoraModelProvenanceKindV1::UserUpload)
             && self.chunk_manifest_root.is_none()
         {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model artifact record",
-                field: "chunk_manifest_root",
-                reason: "user-upload artifacts must carry uploaded-model storage metadata"
-                    .to_string(),
-            });
+            return Err(invalid_field(
+                "sora model artifact record",
+                "chunk_manifest_root",
+                "user-upload artifacts must carry uploaded-model storage metadata",
+            ));
         }
         if self.registered_sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora model artifact record",
-                field: "registered_sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+            return Err(invalid_field(
+                "sora model artifact record",
+                "registered_sequence",
+                "must be greater than zero",
+            ));
         }
         Ok(())
     }
 }
-

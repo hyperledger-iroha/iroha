@@ -7,9 +7,14 @@
 use std::io::{self, Write};
 
 use iroha_crypto::Hash;
+#[cfg(test)]
+use norito::core::serialize_to_buffer;
 use norito::{
     Decode, Encode,
-    core::{Archived, DecodeFromSlice, Error as NoritoError, NoritoDeserialize, NoritoSerialize},
+    core::{
+        Archived, DecodeFromSlice, Error as NoritoError, NoritoDeserialize, NoritoSerialize,
+        serialize_to_writer,
+    },
 };
 
 use crate::pointer_abi::PointerType;
@@ -478,7 +483,7 @@ fn encode_state_value_schema_payload(schema: &StateValueSchemaV1) -> Result<Vec<
         "StateValueSchemaV1",
     )?;
     payload.write_all(&STATE_VALUE_SCHEMA_PAYLOAD_MAGIC_V1)?;
-    node_count.serialize(&mut payload)?;
+    serialize_to_writer(&node_count, &mut payload)?;
 
     let mut cursors = Vec::<Option<Cursor<'_>>>::new();
     let mut free_cursors = Vec::new();
@@ -521,30 +526,27 @@ fn encode_state_value_schema_payload(schema: &StateValueSchemaV1) -> Result<Vec<
                 encoded_nodes = encoded_nodes
                     .checked_add(1)
                     .ok_or(NoritoError::LengthMismatch)?;
-                u8::try_from(node.tag())
-                    .map_err(|_| {
-                        state_value_schema_codec_error(
-                            "StateValueSchemaV1 node tag exceeds one byte",
-                        )
-                    })?
-                    .serialize(&mut payload)?;
+                let node_tag = u8::try_from(node.tag()).map_err(|_| {
+                    state_value_schema_codec_error("StateValueSchemaV1 node tag exceeds one byte")
+                })?;
+                serialize_to_writer(&node_tag, &mut payload)?;
                 match node {
                     StateValueNodeV1::Struct { name, fields } => {
                         payload.ensure_additional(
                             name.encoded_len_exact()
                                 .ok_or(NoritoError::LengthMismatch)?,
                         )?;
-                        name.serialize(&mut payload)?;
+                        serialize_to_writer(name, &mut payload)?;
                         payload.ensure_additional(
                             fields
                                 .encoded_len_exact()
                                 .ok_or(NoritoError::LengthMismatch)?,
                         )?;
-                        fields.serialize(&mut payload)?;
+                        serialize_to_writer(fields, &mut payload)?;
                         pending.extend((0..fields.len()).map(|_| Pending::Visit(cursor)));
                     }
                     StateValueNodeV1::Tuple { arity } => {
-                        arity.serialize(&mut payload)?;
+                        serialize_to_writer(arity, &mut payload)?;
                         pending.extend((0..usize::from(*arity)).map(|_| Pending::Visit(cursor)));
                     }
                     StateValueNodeV1::Option => {
@@ -555,17 +557,16 @@ fn encode_state_value_schema_payload(schema: &StateValueSchemaV1) -> Result<Vec<
                         pending.push(Pending::Visit(cursor));
                     }
                     StateValueNodeV1::List { element, capacity } => {
-                        capacity.serialize(&mut payload)?;
+                        serialize_to_writer(capacity, &mut payload)?;
                         pending.push(Pending::Start(&element.nodes));
                     }
                     StateValueNodeV1::Leaf(kind) => {
-                        u8::try_from(kind.tag())
-                            .map_err(|_| {
-                                state_value_schema_codec_error(
-                                    "StateValueSchemaV1 leaf tag exceeds one byte",
-                                )
-                            })?
-                            .serialize(&mut payload)?;
+                        let kind_tag = u8::try_from(kind.tag()).map_err(|_| {
+                            state_value_schema_codec_error(
+                                "StateValueSchemaV1 leaf tag exceeds one byte",
+                            )
+                        })?;
+                        serialize_to_writer(&kind_tag, &mut payload)?;
                     }
                 }
             }
@@ -887,8 +888,8 @@ impl NoritoSerialize for StateValueSchemaV1 {
         norito::core::schema_hash_for_name(STATE_VALUE_SCHEMA_NAME_V1)
     }
 
-    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), NoritoError> {
-        encode_state_value_schema_payload(self)?.serialize(&mut writer)
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
+        encode_state_value_schema_payload(self)?.serialize(writer)
     }
 }
 
@@ -2328,8 +2329,8 @@ impl NoritoSerialize for StateValueRecordV1 {
         norito::core::schema_hash_for_name(STATE_VALUE_RECORD_NAME_V1)
     }
 
-    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), NoritoError> {
-        encode_state_value_record_payload(self)?.serialize(&mut writer)
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
+        encode_state_value_record_payload(self)?.serialize(writer)
     }
 }
 
@@ -2470,23 +2471,14 @@ mod tests {
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let mut payload = Vec::new();
         payload.extend_from_slice(&STATE_VALUE_SCHEMA_PAYLOAD_MAGIC_V1);
-        2_u16
-            .serialize(&mut payload)
-            .expect("serialize schema node count");
-        (StateValueNodeV1::STRUCT_TAG as u8)
-            .serialize(&mut payload)
+        serialize_to_buffer(&2_u16, &mut payload).expect("serialize schema node count");
+        serialize_to_buffer(&(StateValueNodeV1::STRUCT_TAG as u8), &mut payload)
             .expect("serialize Struct tag");
-        "n".repeat(name_len)
-            .serialize(&mut payload)
-            .expect("serialize schema name");
-        vec!["x".to_owned()]
-            .serialize(&mut payload)
-            .expect("serialize schema fields");
-        (StateValueNodeV1::LEAF_TAG as u8)
-            .serialize(&mut payload)
+        serialize_to_buffer(&"n".repeat(name_len), &mut payload).expect("serialize schema name");
+        serialize_to_buffer(&vec!["x".to_owned()], &mut payload).expect("serialize schema fields");
+        serialize_to_buffer(&(StateValueNodeV1::LEAF_TAG as u8), &mut payload)
             .expect("serialize Leaf tag");
-        (StateValueKindV1::Bool.tag() as u8)
-            .serialize(&mut payload)
+        serialize_to_buffer(&(StateValueKindV1::Bool.tag() as u8), &mut payload)
             .expect("serialize leaf kind");
         payload
     }
@@ -2756,9 +2748,7 @@ mod tests {
             let payload =
                 encode_state_value_record_payload(&record).expect("encode alternate KRV1 payload");
             let mut wrapped = Vec::new();
-            payload
-                .serialize(&mut wrapped)
-                .expect("wrap alternate KRV1 payload");
+            serialize_to_buffer(&payload, &mut wrapped).expect("wrap alternate KRV1 payload");
             wrapped
         };
         let alternate = norito::core::frame_bare_with_header_flags::<StateValueRecordV1>(
@@ -2777,9 +2767,7 @@ mod tests {
         {
             let _canonical =
                 norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-            payload
-                .serialize(&mut wrapped)
-                .expect("wrap canonical KRV1 payload");
+            serialize_to_buffer(&payload, &mut wrapped).expect("wrap canonical KRV1 payload");
         }
         wrapped.push(0);
         let tailed = norito::core::frame_bare_with_header_flags::<StateValueRecordV1>(
@@ -3033,9 +3021,7 @@ mod tests {
         );
         assert!(decode_state_value_schema_payload(&oversized_payload).is_err());
         let mut wrapped = Vec::new();
-        oversized_payload
-            .serialize(&mut wrapped)
-            .expect("wrap oversized KSV1 payload");
+        serialize_to_buffer(&oversized_payload, &mut wrapped).expect("wrap oversized KSV1 payload");
         assert!(StateValueSchemaV1::decode_from_slice(&wrapped).is_err());
         let oversized_frame = norito::core::frame_bare_with_header_flags::<StateValueSchemaV1>(
             &wrapped,
@@ -3103,8 +3089,7 @@ mod tests {
         forged_fields.extend_from_slice(&STATE_VALUE_SCHEMA_PAYLOAD_MAGIC_V1);
         forged_fields.extend_from_slice(&1_u16.to_le_bytes());
         forged_fields.push(StateValueNodeV1::STRUCT_TAG as u8);
-        "S".to_owned()
-            .serialize(&mut forged_fields)
+        serialize_to_buffer(&"S".to_owned(), &mut forged_fields)
             .expect("serialize forged Struct name");
         forged_fields.extend_from_slice(&u64::MAX.to_le_bytes());
         assert!(
@@ -3204,9 +3189,7 @@ mod tests {
         );
         assert!(decode_state_value_record_payload(&oversized_payload).is_err());
         let mut wrapped = Vec::new();
-        oversized_payload
-            .serialize(&mut wrapped)
-            .expect("wrap oversized KRV1 payload");
+        serialize_to_buffer(&oversized_payload, &mut wrapped).expect("wrap oversized KRV1 payload");
         assert!(StateValueRecordV1::decode_from_slice(&wrapped).is_err());
         let oversized_frame = norito::core::frame_bare_with_header_flags::<StateValueRecordV1>(
             &wrapped,

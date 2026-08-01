@@ -75,7 +75,7 @@ dashboards can alert on replay spikes or issuer/relay mismatches.
 
 The puzzle service reuses these values and automatically reloads the Norito
 JSON revocation file at runtime. Use the `soranet-admission-token` CLI
-(`cargo run -p soranet-relay --bin soranet_admission_token`) to mint and inspect
+(`cargo run -p soranet-relay --features dev-tools --bin soranet_admission_token`) to mint and inspect
 tokens offline, append `token_id_hex` entries to the revocation file, and audit
 existing credentials before pushing updates to production.
 

@@ -83,7 +83,7 @@ invoked (e.g., delayed rotation due to governance directives).
 3. Validate the upcoming `epoch_id` (no gaps, strictly greater than the last published value).
 4. Run a dry-run generation:
    ```bash
-   cargo run -p soranet-handshake-harness -- salt \
+   cargo run -p soranet-handshake-harness --features dev-tools -- salt \
      --epoch-id <epoch> \
      --valid-after "$(date -u -d '@<epoch_start>' +%FT%TZ)" \
      --valid-until "$(date -u -d '@<epoch_end>' +%FT%TZ)" \
@@ -96,7 +96,7 @@ invoked (e.g., delayed rotation due to governance directives).
 1. Salt Council members sign the Norito payload, producing `SignedSaltAnnouncementV1`.
 2. Directory authority applies the Ed25519 witness signature and verifies the signature set via:
    ```bash
-   cargo run -p soranet-handshake-harness -- salt-verify \
+   cargo run -p soranet-handshake-harness --features dev-tools -- salt-verify \
      --vector fixtures/soranet_handshake/salt/epoch-<epoch>.norito.json
    ```
 3. Upload the signed payload to the governance staging bucket and prepare the IPNS publish command.
@@ -135,7 +135,7 @@ invoked (e.g., delayed rotation due to governance directives).
 - **Rollback guardrails:** The Salt Council must never reuse an `epoch_id`. If a malformed payload is published, governance issues an `EmergencyRollback` referencing the bad epoch and publishes a new announcement with an incremented `epoch_id`. Clients mark the rolled-back epoch as forever invalid.
 - **Recovery drills:** Use the harness to simulate outages:
   ```bash
-  cargo run -p soranet-handshake-harness -- salt \
+  cargo run -p soranet-handshake-harness --features dev-tools -- salt \
     --epoch-id <epoch> --valid-after <...> --valid-until <...> --salt-hex <...>
   ```
   CI enforces verification of `fixtures/soranet_handshake/salt/epoch-*.norito.json` and ensures the recovery loop tolerates at least seven missed days.
@@ -147,9 +147,9 @@ invoked (e.g., delayed rotation due to governance directives).
 - **Quarterly verification:** Observability replays historical announcements through the harness to confirm signature validity, retention completeness, and that the SLO alerts still fire under simulated drift.
 
 ## Tooling & Automation
-- `cargo run -p soranet-handshake-harness -- salt ...` - render draft announcements.
-- `cargo run -p soranet-handshake-harness -- salt-verify --vector <path>` - validate signed fixtures.
-- `cargo run -p soranet-handshake-harness -- simulate --only-salt` - exercise client recovery scenarios.
+- `cargo run -p soranet-handshake-harness --features dev-tools -- salt ...` - render draft announcements.
+- `cargo run -p soranet-handshake-harness --features dev-tools -- salt-verify --vector <path>` - validate signed fixtures.
+- `cargo run -p soranet-handshake-harness --features dev-tools -- simulate --only-salt` - exercise client recovery scenarios.
 - `xtask soranet-fixtures --salt` - regenerate reference fixtures for CI.
 - `scripts/telemetry/check_soranet_salt_skew.sh` - automated skew tester used in staging (runs hourly).
 

@@ -2,6 +2,7 @@
 name = "integration_tests"
 version.workspace = true
 edition = "2024"
+autobins = false
 autotests = false
 
 [lints]
@@ -10,6 +11,12 @@ workspace = true
 [[bin]]
 name = "sorafs-gateway-fixtures"
 path = "src/bin/sorafs_gateway_fixtures.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "refresh_nexus_streaming_fixtures"
+path = "src/bin/refresh_nexus_streaming_fixtures.rs"
+required-features = ["dev-tools"]
 
 [[test]]
 name = "core_api"
@@ -49,12 +56,16 @@ path = "tests/torii_load_profile.rs"
 
 [features]
 default = ["telemetry"]
+dev-tools = []
 fault_injection = []
 telemetry = ["iroha_core/telemetry"]
 norito_streaming_fec = ["reed-solomon-erasure"]
 quic = ["iroha_core/quic", "iroha_p2p/quic"]
 js_host_parity = []
 zk-stark = ["iroha_core/zk-stark", "iroha_torii/zk-stark", "dep:zk_ace_prover"]
+# Non-shipping native exact-12 fixture builders used only by explicit
+# four-peer privacy release gates.
+privacy-release-evidence = ["iroha_core/privacy-release-evidence"]
 
 [dependencies]
 tokio = { workspace = true, features = ["fs", "io-util", "process", "rt-multi-thread", "time"] }

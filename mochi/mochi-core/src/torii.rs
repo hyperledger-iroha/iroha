@@ -4274,6 +4274,15 @@ fn asset_event_summary(event: &AssetEvent) -> (String, String) {
             "Asset balance decreased".to_owned(),
             format!("asset={} amount={}", change.asset(), change.amount()),
         ),
+        AssetEvent::Transferred(transfer) => (
+            "Asset transferred".to_owned(),
+            format!(
+                "source={} destination={} amount={}",
+                transfer.source(),
+                transfer.destination(),
+                transfer.amount()
+            ),
+        ),
         AssetEvent::MetadataInserted(change) => (
             "Asset metadata inserted".to_owned(),
             format!("asset={} key={}", change.target(), change.key()),
@@ -4281,6 +4290,18 @@ fn asset_event_summary(event: &AssetEvent) -> (String, String) {
         AssetEvent::MetadataRemoved(change) => (
             "Asset metadata removed".to_owned(),
             format!("asset={} key={}", change.target(), change.key()),
+        ),
+        AssetEvent::BatchTransferOutcome(outcome) => (
+            "Asset batch transfer leg".to_owned(),
+            format!(
+                "leg_index={} leg_id={} asset={} destination={} amount={} status={:?}",
+                outcome.leg_index,
+                outcome.leg_id,
+                outcome.asset,
+                outcome.destination,
+                outcome.amount,
+                outcome.status
+            ),
         ),
     }
 }
@@ -5219,6 +5240,7 @@ mod tests {
     use iroha_data_model::{
         ChainId,
         account::AccountId,
+        asset::{AssetDefinitionId, AssetId},
         block::consensus::{ExecWitness, ExecWitnessMsg},
         events::{
             EventBox, SharedDataEvent,
@@ -5236,6 +5258,7 @@ mod tests {
         isi::InstructionBox,
         nexus::{LaneCatalog, LaneLifecyclePlan, LaneLifecycleStatusV1},
         peer::PeerId,
+        prelude::Quantity,
         query::{
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
             executor::FindExecutorDataModel, prelude::SingularQueryBox,
@@ -9730,6 +9753,45 @@ state_tiered_cold_entries 2
             detail.contains(&alice_literal),
             "detail `{detail}` should mention {alice_literal}"
         );
+    }
+
+    #[test]
+    fn asset_transfer_summaries_cover_direct_and_batch_events() {
+        let definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("valid domain"),
+            "rose".parse().expect("valid asset name"),
+        );
+        let source = AssetId::new(definition.clone(), ALICE_ID.clone());
+        let destination = AssetId::new(definition, BOB_ID.clone());
+        let amount = Quantity::from(5_u32);
+
+        let direct = AssetEvent::Transferred(AssetTransferred {
+            source: source.clone(),
+            destination: destination.clone(),
+            amount: amount.clone(),
+        });
+        let (label, detail) = asset_event_summary(&direct);
+        assert_eq!(label, "Asset transferred");
+        assert!(detail.contains(&source.to_string()));
+        assert!(detail.contains(&destination.to_string()));
+        assert!(detail.contains(&amount.to_string()));
+
+        let batch = AssetEvent::BatchTransferOutcome(AssetBatchTransferOutcome {
+            leg_index: 2,
+            leg_id: "leg-2".to_owned(),
+            asset: source.clone(),
+            destination: BOB_ID.clone(),
+            amount: amount.clone(),
+            status: AssetBatchTransferLegStatus::Applied,
+        });
+        let (label, detail) = asset_event_summary(&batch);
+        assert_eq!(label, "Asset batch transfer leg");
+        assert!(detail.contains("leg_index=2"));
+        assert!(detail.contains("leg_id=leg-2"));
+        assert!(detail.contains(&source.to_string()));
+        assert!(detail.contains(&BOB_ID.to_string()));
+        assert!(detail.contains(&amount.to_string()));
+        assert!(detail.contains("status=Applied"));
     }
 
     #[test]

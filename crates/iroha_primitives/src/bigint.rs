@@ -11,8 +11,6 @@
 //! only; the decimal scale is carried separately in `Numeric`.
 
 use core::fmt;
-use std::io::Write;
-
 use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::{
     Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize,
@@ -280,7 +278,7 @@ impl Ord for BigInt {
 }
 
 impl NoritoSerialize for BigInt {
-    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), NoritoError> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         let bytes = self.to_twos_bytes();
         let len: u32 = bytes
             .len()

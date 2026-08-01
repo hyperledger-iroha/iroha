@@ -16,7 +16,7 @@ Generate an explicitly unsigned first-release artifact, synchronize the
 
 ```bash
 NORITO_SKIP_BINDINGS_SYNC=1 \
-  cargo run --locked --offline -p xtask --bin xtask -- \
+  cargo run --locked --offline -p xtask --features dev-tools --bin xtask -- \
   openapi --output artifacts/openapi/torii.json --unsigned-manifest
 
 npm --prefix tools/openapi run sync-openapi -- --allow-unsigned
@@ -37,7 +37,7 @@ emit the deterministic signing payload:
 
 ```bash
 NORITO_SKIP_BINDINGS_SYNC=1 \
-  cargo run --locked --offline -p xtask --bin xtask -- \
+  cargo run --locked --offline -p xtask --features dev-tools --bin xtask -- \
   openapi --output artifacts/openapi/torii.json \
   --unsigned-manifest \
   --signing-payload <operator-staging>/openapi-manifest-v2.payload
@@ -48,7 +48,7 @@ source state and attach it:
 
 ```bash
 NORITO_SKIP_BINDINGS_SYNC=1 \
-  cargo run --locked --offline -p xtask --bin xtask -- \
+  cargo run --locked --offline -p xtask --features dev-tools --bin xtask -- \
   openapi --output artifacts/openapi/torii.json \
   --signature-envelope <operator-staging>/openapi-manifest-v2.signature.json
 

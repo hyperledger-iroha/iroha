@@ -1,5 +1,6 @@
 [package]
 name = "build-support"
+autobins = false
 edition.workspace = true
 version.workspace = true
 authors.workspace = true
@@ -13,6 +14,7 @@ norito = { workspace = true, optional = true, default-features = false, features
 
 [features]
 default = ["norito-json"]
+dev-tools = []
 norito-json = ["dep:norito"]
 
 [lib]
@@ -21,14 +23,14 @@ bench = false
 [[bin]]
 name = "clippy-inventory"
 path = "src/bin/clippy_inventory.rs"
-required-features = ["norito-json"]
+required-features = ["dev-tools", "norito-json"]
 
 [[bin]]
 name = "sumeragi_baseline_report"
 path = "src/bin/sumeragi_baseline_report.rs"
-required-features = ["norito-json"]
+required-features = ["dev-tools", "norito-json"]
 
 [[bin]]
 name = "sumeragi_da_report"
 path = "src/bin/sumeragi_da_report.rs"
-required-features = ["norito-json"]
+required-features = ["dev-tools", "norito-json"]

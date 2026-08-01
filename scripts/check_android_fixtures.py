@@ -19,6 +19,210 @@ DEFAULT_MANIFEST_PATH = DEFAULT_RESOURCES_DIR / "transaction_fixtures.manifest.j
 DEFAULT_STATE_PATH = Path("artifacts/android_fixture_regen_state.json")
 MAX_TRANSACTION_NONCE = 0xFFFF_FFFF
 
+PAYLOAD_FIXTURE_FIELDS = frozenset(
+    {
+        "authority",
+        "chain",
+        "creation_time_ms",
+        "name",
+        "nonce",
+        "payload",
+        "payload_base64",
+        "payload_hash",
+        "signed_base64",
+        "signed_hash",
+        "time_to_live_ms",
+    }
+)
+PAYLOAD_FIELDS = frozenset(
+    {
+        "authority",
+        "chain",
+        "creation_time_ms",
+        "executable",
+        "fee_payment",
+        "metadata",
+        "nonce",
+        "time_to_live_ms",
+    }
+)
+EXECUTABLE_VARIANTS = frozenset({"Batch", "ContractCall", "Instructions", "Ivm"})
+INSTRUCTION_FIELDS = frozenset({"payload_base64", "wire_name"})
+CONTRACT_CALL_FIELDS = frozenset(
+    {"arguments", "contract_address", "entrypoint", "expected_code_hash"}
+)
+MANIFEST_FIELDS = frozenset({"fixtures"})
+MANIFEST_FIXTURE_FIELDS = frozenset(
+    {
+        "authority",
+        "chain",
+        "creation_time_ms",
+        "encoded_file",
+        "encoded_len",
+        "name",
+        "nonce",
+        "payload_base64",
+        "payload_hash",
+        "signed_base64",
+        "signed_hash",
+        "signed_len",
+        "time_to_live_ms",
+    }
+)
+
+
+class DuplicateJsonKeyError(ValueError):
+    """Raised when native JSON contains two equivalent object keys."""
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict:
+    result: dict = {}
+    for key, value in pairs:
+        if key in result:
+            raise DuplicateJsonKeyError(f"duplicate JSON object key {key!r}")
+        result[key] = value
+    return result
+
+
+def parse_json_strict(raw: str, context: str) -> object:
+    """Decode native JSON while rejecting duplicate object keys."""
+    try:
+        return json.loads(raw, object_pairs_hook=_reject_duplicate_json_keys)
+    except DuplicateJsonKeyError as exc:
+        raise ValueError(f"invalid JSON in {context}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid JSON in {context}: {exc}") from exc
+
+
+def require_exact_fields(
+    record: dict, expected: frozenset[str], context: str
+) -> None:
+    actual = set(record)
+    missing = sorted(expected - actual)
+    unexpected = sorted(actual - expected)
+    if missing or unexpected:
+        raise ValueError(
+            f"{context} has invalid fields: missing={missing}, unexpected={unexpected}"
+        )
+
+
+def validate_executable(executable: object, context: str) -> None:
+    if not isinstance(executable, dict):
+        raise ValueError(f"{context} must be an object")
+    variants = list(executable)
+    if len(variants) != 1:
+        raise ValueError(f"{context} must contain exactly one executable variant")
+    variant = variants[0]
+    if variant not in EXECUTABLE_VARIANTS:
+        raise ValueError(f"{context} has unknown variant {variant!r}")
+    body = executable[variant]
+    if variant == "Ivm":
+        if not isinstance(body, str):
+            raise ValueError(f"{context}.Ivm must be a base64 string")
+        decode_base64(body, f"{context}.Ivm")
+        return
+    if variant == "Instructions":
+        if not isinstance(body, list):
+            raise ValueError(f"{context}.Instructions must be an array")
+        for index, instruction in enumerate(body):
+            validate_instruction(instruction, f"{context}.Instructions[{index}]")
+        return
+    if variant == "ContractCall":
+        validate_contract_call(body, f"{context}.ContractCall")
+        return
+    if not isinstance(body, list):
+        raise ValueError(f"{context}.Batch must be an array")
+    if not body:
+        raise ValueError(f"{context}.Batch must contain at least one item")
+    for index, item in enumerate(body):
+        item_context = f"{context}.Batch[{index}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"{item_context} must be an object")
+        item_variants = list(item)
+        if len(item_variants) != 1:
+            raise ValueError(f"{item_context} must contain exactly one variant")
+        item_variant = item_variants[0]
+        if item_variant == "Instruction":
+            validate_instruction(item[item_variant], f"{item_context}.Instruction")
+        elif item_variant == "ContractCall":
+            validate_contract_call(item[item_variant], f"{item_context}.ContractCall")
+        else:
+            raise ValueError(f"{item_context} has unknown variant {item_variant!r}")
+
+
+def validate_instruction(instruction: object, context: str) -> None:
+    if not isinstance(instruction, dict):
+        raise ValueError(f"{context} must be an object")
+    require_exact_fields(instruction, INSTRUCTION_FIELDS, context)
+    wire_name = instruction["wire_name"]
+    if not isinstance(wire_name, str) or not wire_name:
+        raise ValueError(f"{context}.wire_name must be a non-empty string")
+    payload_base64 = instruction["payload_base64"]
+    if not isinstance(payload_base64, str):
+        raise ValueError(f"{context}.payload_base64 must be a base64 string")
+    if not decode_base64(payload_base64, f"{context}.payload_base64"):
+        raise ValueError(f"{context}.payload_base64 must encode non-empty bytes")
+
+
+def validate_contract_call(contract_call: object, context: str) -> None:
+    if not isinstance(contract_call, dict):
+        raise ValueError(f"{context} must be an object")
+    require_exact_fields(contract_call, CONTRACT_CALL_FIELDS, context)
+    for field in ("contract_address", "expected_code_hash", "entrypoint"):
+        value = contract_call[field]
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"{context}.{field} must be a non-empty string")
+    arguments = contract_call["arguments"]
+    if arguments is None:
+        return
+    if not isinstance(arguments, list) or any(
+        not isinstance(byte, int)
+        or isinstance(byte, bool)
+        or byte < 0
+        or byte > 0xFF
+        for byte in arguments
+    ):
+        raise ValueError(f"{context}.arguments must be null or an array of bytes")
+
+
+def validate_payload_descriptor(entry: dict, name: str, path: Path) -> None:
+    payload = entry.get("payload")
+    if not isinstance(payload, dict):
+        raise ValueError(f"fixture entry {name} in {path} missing payload object")
+    require_exact_fields(payload, PAYLOAD_FIELDS, f"fixture entry {name} payload in {path}")
+    validate_transaction_metadata(entry, f"fixture entry {name} in {path}")
+    validate_transaction_metadata(payload, f"fixture entry {name} payload in {path}")
+    validate_executable(payload["executable"], f"fixture entry {name} executable")
+    if not isinstance(payload["fee_payment"], dict):
+        raise ValueError(f"fixture entry {name} fee_payment must be an object")
+    if not isinstance(payload["metadata"], dict):
+        raise ValueError(f"fixture entry {name} metadata must be an object")
+    for field in (
+        "authority",
+        "chain",
+        "creation_time_ms",
+        "nonce",
+        "time_to_live_ms",
+    ):
+        if payload[field] != entry[field]:
+            raise ValueError(
+                f"fixture entry {name} in {path} has mismatched payload {field}"
+            )
+
+
+def validate_encoded_file(name: str, encoded_file: str, context: str) -> None:
+    expected = f"{name}.norito"
+    if encoded_file != expected:
+        raise ValueError(f"{context} encoded_file must be exactly {expected!r}")
+    if (
+        not name
+        or name in {".", ".."}
+        or "/" in name
+        or "\\" in name
+        or Path(encoded_file).name != encoded_file
+    ):
+        raise ValueError(f"{context} encoded_file must not traverse directories")
+
 
 def is_valid_transaction_ttl(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
@@ -30,6 +234,26 @@ def is_valid_transaction_nonce(value: object) -> bool:
         and not isinstance(value, bool)
         and 1 <= value <= MAX_TRANSACTION_NONCE
     )
+
+
+def validate_transaction_metadata(record: dict, context: str) -> None:
+    chain = record.get("chain")
+    authority = record.get("authority")
+    creation_time_ms = record.get("creation_time_ms")
+    if not isinstance(chain, str) or not chain.strip():
+        raise ValueError(f"{context} has invalid chain")
+    if not isinstance(authority, str) or not authority.strip():
+        raise ValueError(f"{context} has invalid authority")
+    if (
+        not isinstance(creation_time_ms, int)
+        or isinstance(creation_time_ms, bool)
+        or creation_time_ms < 0
+    ):
+        raise ValueError(f"{context} has invalid creation_time_ms")
+    if not is_valid_transaction_ttl(record.get("time_to_live_ms")):
+        raise ValueError(f"{context} has invalid time_to_live_ms")
+    if not is_valid_transaction_nonce(record.get("nonce")):
+        raise ValueError(f"{context} has invalid nonce")
 
 
 def decode_base64(value: str, context: str) -> bytes:
@@ -121,7 +345,7 @@ def normalize_authority(value: str) -> str:
 
 @dataclass(frozen=True)
 class PayloadFixture:
-    encoded: str
+    payload_base64: str
     payload_hash: str
     signed_base64: str
     signed_hash: str
@@ -133,17 +357,14 @@ class PayloadFixture:
 
 
 def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
-    try:
-        payloads = json.loads(path.read_text())
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid JSON in {path}: {exc}") from exc
+    payloads = parse_json_strict(path.read_text(), str(path))
 
     if not isinstance(payloads, list):
         raise ValueError(f"fixtures JSON at {path} must be a list")
 
     mapping: Dict[str, PayloadFixture] = {}
     seen_names: Set[str] = set()
-    seen_encoded_payloads: Set[bytes] = set()
+    seen_payloads: Set[bytes] = set()
     seen_payload_hashes: Set[str] = set()
     seen_signed_payloads: Set[bytes] = set()
     seen_signed_hashes: Set[str] = set()
@@ -151,99 +372,102 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
         if not isinstance(entry, dict):
             raise ValueError(f"fixture entry in {path} is not an object")
         name = entry.get("name")
-        encoded = entry.get("encoded")
-        if not isinstance(name, str):
+        if not isinstance(name, str) or not name:
             raise ValueError(f"fixture entry in {path} missing name string: {entry!r}")
+        if "encoded" in entry:
+            raise ValueError(
+                f"fixture entry {name} in {path} contains retired encoded alias"
+            )
+        if "time_to_live_ms" not in entry:
+            raise ValueError(
+                f"fixture entry {name} in {path} missing time_to_live_ms field"
+            )
+        if "nonce" not in entry:
+            raise ValueError(f"fixture entry {name} in {path} missing nonce field")
+        require_exact_fields(
+            entry, PAYLOAD_FIXTURE_FIELDS, f"fixture entry {name} in {path}"
+        )
+        validate_payload_descriptor(entry, name, path)
         if name in seen_names:
             raise ValueError(f"duplicate fixture name {name!r} in {path}")
         seen_names.add(name)
-        if isinstance(encoded, str):
-            encoded_bytes = decode_base64(encoded, f"{name} encoded payload")
-            if encoded_bytes in seen_encoded_payloads:
-                raise ValueError(f"duplicate fixture payload bytes for {name!r} in {path}")
-            seen_encoded_payloads.add(encoded_bytes)
-            payload_base64 = entry.get("payload_base64")
-            payload_hash = entry.get("payload_hash")
-            signed_base64 = entry.get("signed_base64")
-            signed_hash = entry.get("signed_hash")
-            if payload_base64 != encoded:
-                raise ValueError(f"fixture entry {name} in {path} payload_base64 differs from encoded")
-            if not isinstance(payload_hash, str):
-                raise ValueError(f"fixture entry {name} in {path} missing payload_hash string")
-            if not isinstance(signed_base64, str):
-                raise ValueError(f"fixture entry {name} in {path} missing signed_base64 string")
-            if not isinstance(signed_hash, str):
-                raise ValueError(f"fixture entry {name} in {path} missing signed_hash string")
-            if payload_hash != iroha_hash(encoded_bytes):
-                raise ValueError(f"fixture entry {name} in {path} payload_hash mismatch")
-            signed_bytes = decode_base64(signed_base64, f"{name} signed payload")
-            if signed_hash != signed_transaction_entrypoint_hash(signed_bytes):
-                raise ValueError(f"fixture entry {name} in {path} signed_hash mismatch")
-            if payload_hash in seen_payload_hashes:
-                raise ValueError(f"duplicate fixture payload_hash {payload_hash!r} in {path}")
-            seen_payload_hashes.add(payload_hash)
-            if signed_bytes in seen_signed_payloads:
-                raise ValueError(f"duplicate fixture signed bytes for {name!r} in {path}")
-            seen_signed_payloads.add(signed_bytes)
-            if signed_hash in seen_signed_hashes:
-                raise ValueError(f"duplicate fixture signed_hash {signed_hash!r} in {path}")
-            seen_signed_hashes.add(signed_hash)
-            chain = entry.get("chain")
-            authority = entry.get("authority")
-            creation_time_ms = entry.get("creation_time_ms")
-            if "time_to_live_ms" not in entry:
-                raise ValueError(
-                    f"fixture entry {name} in {path} missing time_to_live_ms field"
-                )
-            if "nonce" not in entry:
-                raise ValueError(
-                    f"fixture entry {name} in {path} missing nonce field"
-                )
-            time_to_live_ms = entry.get("time_to_live_ms")
-            nonce = entry.get("nonce")
-            if not isinstance(chain, str) or not chain.strip():
-                raise ValueError(
-                    f"fixture entry {name} in {path} missing chain string"
-                )
-            if not isinstance(authority, str) or not authority.strip():
-                raise ValueError(
-                    f"fixture entry {name} in {path} missing authority string"
-                )
-            if not isinstance(creation_time_ms, int) or isinstance(creation_time_ms, bool):
-                raise ValueError(
-                    f"fixture entry {name} in {path} missing creation_time_ms integer"
-                )
-            if not is_valid_transaction_ttl(time_to_live_ms):
-                raise ValueError(
-                    f"fixture entry {name} in {path} has invalid time_to_live_ms"
-                )
-            if not is_valid_transaction_nonce(nonce):
-                raise ValueError(f"fixture entry {name} in {path} has invalid nonce")
-            mapping[name] = PayloadFixture(
-                encoded=encoded,
-                payload_hash=payload_hash,
-                signed_base64=signed_base64,
-                signed_hash=signed_hash,
-                chain=chain,
-                authority=authority,
-                creation_time_ms=creation_time_ms,
-                time_to_live_ms=time_to_live_ms,
-                nonce=nonce,
+        payload_base64 = entry.get("payload_base64")
+        if not isinstance(payload_base64, str):
+            raise ValueError(
+                f"fixture entry {name} in {path} missing payload_base64 string"
             )
-            continue
-        # Some fixtures intentionally embed raw payload JSON for doc/test coverage.
-        # Skip them because they do not participate in the canonical manifest.
-        if "payload" in entry:
-            continue
-        raise ValueError(f"fixture entry in {path} missing encoded string: {entry!r}")
+        payload_bytes = decode_base64(payload_base64, f"{name} payload")
+        if payload_bytes in seen_payloads:
+            raise ValueError(f"duplicate fixture payload bytes for {name!r} in {path}")
+        seen_payloads.add(payload_bytes)
+        payload_hash = entry.get("payload_hash")
+        signed_base64 = entry.get("signed_base64")
+        signed_hash = entry.get("signed_hash")
+        if not isinstance(payload_hash, str):
+            raise ValueError(f"fixture entry {name} in {path} missing payload_hash string")
+        if not isinstance(signed_base64, str):
+            raise ValueError(f"fixture entry {name} in {path} missing signed_base64 string")
+        if not isinstance(signed_hash, str):
+            raise ValueError(f"fixture entry {name} in {path} missing signed_hash string")
+        if payload_hash != iroha_hash(payload_bytes):
+            raise ValueError(f"fixture entry {name} in {path} payload_hash mismatch")
+        signed_bytes = decode_base64(signed_base64, f"{name} signed payload")
+        if signed_hash != signed_transaction_entrypoint_hash(signed_bytes):
+            raise ValueError(f"fixture entry {name} in {path} signed_hash mismatch")
+        if payload_hash in seen_payload_hashes:
+            raise ValueError(f"duplicate fixture payload_hash {payload_hash!r} in {path}")
+        seen_payload_hashes.add(payload_hash)
+        if signed_bytes in seen_signed_payloads:
+            raise ValueError(f"duplicate fixture signed bytes for {name!r} in {path}")
+        seen_signed_payloads.add(signed_bytes)
+        if signed_hash in seen_signed_hashes:
+            raise ValueError(f"duplicate fixture signed_hash {signed_hash!r} in {path}")
+        seen_signed_hashes.add(signed_hash)
+        chain = entry.get("chain")
+        authority = entry.get("authority")
+        creation_time_ms = entry.get("creation_time_ms")
+        if "time_to_live_ms" not in entry:
+            raise ValueError(
+                f"fixture entry {name} in {path} missing time_to_live_ms field"
+            )
+        if "nonce" not in entry:
+            raise ValueError(f"fixture entry {name} in {path} missing nonce field")
+        time_to_live_ms = entry.get("time_to_live_ms")
+        nonce = entry.get("nonce")
+        if not isinstance(chain, str) or not chain.strip():
+            raise ValueError(f"fixture entry {name} in {path} missing chain string")
+        if not isinstance(authority, str) or not authority.strip():
+            raise ValueError(f"fixture entry {name} in {path} missing authority string")
+        if not isinstance(creation_time_ms, int) or isinstance(creation_time_ms, bool):
+            raise ValueError(
+                f"fixture entry {name} in {path} missing creation_time_ms integer"
+            )
+        if not is_valid_transaction_ttl(time_to_live_ms):
+            raise ValueError(
+                f"fixture entry {name} in {path} has invalid time_to_live_ms"
+            )
+        if not is_valid_transaction_nonce(nonce):
+            raise ValueError(f"fixture entry {name} in {path} has invalid nonce")
+        mapping[name] = PayloadFixture(
+            payload_base64=payload_base64,
+            payload_hash=payload_hash,
+            signed_base64=signed_base64,
+            signed_hash=signed_hash,
+            chain=chain,
+            authority=authority,
+            creation_time_ms=creation_time_ms,
+            time_to_live_ms=time_to_live_ms,
+            nonce=nonce,
+        )
     return mapping
 
 
 def load_manifest(path: Path) -> Dict[str, object]:
-    try:
-        return json.loads(path.read_text())
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid JSON in {path}: {exc}") from exc
+    payload = parse_json_strict(path.read_text(), str(path))
+    if not isinstance(payload, dict):
+        raise ValueError(f"manifest at {path} must be an object")
+    require_exact_fields(payload, MANIFEST_FIELDS, f"manifest at {path}")
+    return payload
 
 
 def compare(
@@ -252,6 +476,12 @@ def compare(
     payload_map: Dict[str, PayloadFixture],
 ) -> List[str]:
     errors: List[str] = []
+
+    try:
+        require_exact_fields(manifest, MANIFEST_FIELDS, "manifest")
+    except ValueError as exc:
+        errors.append(str(exc))
+        return errors
 
     fixtures = manifest.get("fixtures")
     if not isinstance(fixtures, list):
@@ -268,6 +498,19 @@ def compare(
     for entry in fixtures:
         if not isinstance(entry, dict):
             errors.append(f"manifest fixture entry is not an object: {entry!r}")
+            continue
+
+        if "time_to_live_ms" not in entry:
+            errors.append(f"manifest fixture missing time_to_live_ms field: {entry}")
+            continue
+        if "nonce" not in entry:
+            errors.append(f"manifest fixture missing nonce field: {entry}")
+            continue
+
+        try:
+            require_exact_fields(entry, MANIFEST_FIXTURE_FIELDS, "manifest fixture")
+        except ValueError as exc:
+            errors.append(str(exc))
             continue
 
         name = entry.get("name")
@@ -305,7 +548,14 @@ def compare(
         ):
             errors.append(f"manifest fixture missing required string fields: {entry}")
             continue
-        if not isinstance(encoded_len, int) or not isinstance(signed_len, int):
+        if (
+            not isinstance(encoded_len, int)
+            or isinstance(encoded_len, bool)
+            or encoded_len < 0
+            or not isinstance(signed_len, int)
+            or isinstance(signed_len, bool)
+            or signed_len < 0
+        ):
             errors.append(f"manifest fixture missing encoded_len/signed_len integers: {entry}")
             continue
         if not isinstance(creation_time_ms, int) or isinstance(creation_time_ms, bool):
@@ -316,6 +566,14 @@ def compare(
             continue
         if not is_valid_transaction_nonce(nonce):
             errors.append(f"manifest fixture has invalid nonce: {entry}")
+            continue
+        if not isinstance(name, str) or not isinstance(encoded_file, str):
+            errors.append(f"manifest fixture missing name or encoded_file string: {entry}")
+            continue
+        try:
+            validate_encoded_file(name, encoded_file, f"manifest fixture {name}")
+        except ValueError as exc:
+            errors.append(str(exc))
             continue
 
         if name in seen_names:
@@ -356,7 +614,7 @@ def compare(
         if payload_entry is None:
             errors.append(f"fixtures JSON missing entry for {name}")
         else:
-            if payload_entry.encoded != payload_base64:
+            if payload_entry.payload_base64 != payload_base64:
                 errors.append(
                     f"payload JSON for {name} does not match manifest payload_base64"
                 )
@@ -482,11 +740,9 @@ def load_state_metadata(path: Path) -> Optional[dict]:
     if not path:
         return None
     try:
-        payload = json.loads(path.read_text())
+        payload = parse_json_strict(path.read_text(), f"state file {path}")
     except FileNotFoundError:
         return None
-    except json.JSONDecodeError as exc:  # pragma: no cover - defensive guard
-        raise ValueError(f"invalid JSON in state file {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError(f"state file {path} must contain a JSON object")
     return payload
@@ -515,13 +771,9 @@ def load_pipeline_metadata(
         if not raw.strip():
             raise ValueError("pipeline metadata from stdin was empty")
         source_label = "<stdin>"
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        location = source_label if isinstance(source_label, str) else str(source_label)
-        raise ValueError(f"invalid JSON in pipeline metadata file {location}: {exc}") from exc
+    location = source_label if isinstance(source_label, str) else str(source_label)
+    payload = parse_json_strict(raw, f"pipeline metadata file {location}")
     if not isinstance(payload, dict):
-        location = source_label if isinstance(source_label, str) else str(source_label)
         raise ValueError(f"pipeline metadata in {location} must be a JSON object")
     return payload
 

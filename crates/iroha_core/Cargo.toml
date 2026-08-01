@@ -20,20 +20,22 @@ categories.workspace = true
 [[bin]]
 name = "fastpq_fixture_capture"
 path = "src/bin/fastpq_fixture_capture.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "kagemusha_recursive_spend_v4_bundle"
 path = "src/bin/kagemusha_recursive_spend_v4_bundle.rs"
-required-features = ["zk-halo2-ipa"]
+required-features = ["dev-tools", "zk-halo2-ipa"]
 
 [[bin]]
 name = "kagemusha_recursive_spend_v4_memory_benchmark"
 path = "src/bin/kagemusha_recursive_spend_v4_memory_benchmark.rs"
-required-features = ["zk-halo2-ipa", "kagemusha-generation-memory-lab"]
+required-features = ["dev-tools", "zk-halo2-ipa", "kagemusha-generation-memory-lab"]
 
 [[bin]]
 name = "pk2_bridge_finality_verify"
 path = "src/bin/pk2_bridge_finality_verify.rs"
+required-features = ["dev-tools"]
 
 [lints]
 workspace = true
@@ -43,6 +45,7 @@ workspace = true
 # the mandatory first-release Halo2/IPA policy intact; STARK support remains a
 # named proof aggregate rather than workspace-wide inheritance.
 default = ["node"]
+dev-tools = []
 runtime = ["json", "bls", "bls-multi-pairing", "fast_dsl", "proofs-halo2"]
 node = ["runtime", "proofs-stark"]
 proofs-halo2 = ["zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params"]
@@ -88,9 +91,10 @@ zk-halo2 = ["dep:kaigi_zk"]
 zk-groth16 = []
 zk-stark = []
 # Non-shipping native privacy release evidence. This is deliberately not a
-# default feature and is forwarded only by `iroha_test_network`; it enables
-# only the exact-12 conformance generator, never the data model's general
-# fixture constructors or block-tampering helpers.
+# default feature and is forwarded only by explicit release runners and
+# integration gates; it enables only the exact-12 conformance generator and
+# sealed canonical-action builders, never the data model's general fixture
+# constructors or block-tampering helpers.
 privacy-release-evidence = [
     "zk-stark",
     "json",

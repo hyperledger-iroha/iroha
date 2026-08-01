@@ -11,7 +11,7 @@
     `cargo test -p iroha_crypto --features gost` (see `crates/iroha_crypto/tests/gost_wycheproof.rs`).
   - `cargo bench -p iroha_crypto --bench gost_sign --features gost`
     exercises Ed25519/Secp256k1 alongside every TC26 curve with the current dependency.
-  - `cargo run -p iroha_crypto --bin gost_perf_check --features gost`
+  - `cargo run -p iroha_crypto --bin gost_perf_check --features gost,dev-tools`
     compares the fresher measurements against the checked-in medians (use `--summary-only` in CI, add
     `--write-baseline crates/iroha_crypto/benches/gost_perf_baseline.json` when rebaselining).
   - `scripts/gost_bench.sh` wraps the bench + check flow; pass `--write-baseline` to update the JSON.

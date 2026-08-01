@@ -18,7 +18,7 @@ The guidance assumes the gateway embeds the generic automation controller in
 `AcmeClient` implementation at runtime, and that the repository
 `scripts/sorafs_gateway_self_cert.sh` wrapper is available on the bastion host.
 The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
-`cargo run -p xtask --bin xtask -- ...` when `cargo xtask` is not installed.
+`cargo run -p xtask --features dev-tools --bin xtask -- ...` when `cargo xtask` is not installed.
 
 > **Runtime ACME boundary (V1):** the repository does not ship a production
 > ACME client, DNS-provider adapter, account credential loader, or self-signed

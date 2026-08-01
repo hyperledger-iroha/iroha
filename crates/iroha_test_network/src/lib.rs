@@ -969,11 +969,11 @@ impl Program {
     fn spec(&self) -> ProgramSpec {
         match self {
             Self::Irohad => ProgramSpec {
-                name: "iroha3d",
+                name: "irohad",
                 env: PROGRAM_IROHAD_ENV,
                 pkg: "irohad",
                 build_args: {
-                    let mut args: Vec<OsString> = ["--bin", "iroha3d"]
+                    let mut args: Vec<OsString> = ["--bin", "irohad"]
                         .into_iter()
                         .map(OsString::from)
                         .collect();
@@ -989,12 +989,12 @@ impl Program {
                 isolated_target_subdir: None,
             },
             Self::IrohadMessageControl => ProgramSpec {
-                name: "iroha3d",
+                name: "irohad",
                 env: PROGRAM_IROHAD_MESSAGE_CONTROL_ENV,
                 pkg: "irohad",
                 build_args: [
                     "--bin",
-                    "iroha3d",
+                    "irohad",
                     "--features",
                     "test-network-message-control",
                 ]
@@ -1077,8 +1077,8 @@ impl ReleasePrebuiltBinary {
 
     const fn relative_path(self) -> &'static str {
         match self {
-            Self::Irohad => "release/iroha3d",
-            Self::IrohadMessageControl => "message-control/release/iroha3d",
+            Self::Irohad => "release/irohad",
+            Self::IrohadMessageControl => "message-control/release/irohad",
             Self::Iroha => "release/iroha",
             Self::Kagami => "release/kagami",
         }
@@ -12402,8 +12402,8 @@ mod tests {
         let path_fixture = create_release_prebuilt_fixture();
         let path_manifest_sha256 = rewrite_release_manifest(
             &path_fixture,
-            "irohad_relative_path\trelease/iroha3d",
-            "irohad_relative_path\trelease/not-iroha3d",
+            "irohad_relative_path\trelease/irohad",
+            "irohad_relative_path\trelease/not-irohad",
         );
         {
             let _env = release_prebuilt_env(&path_fixture, &path_manifest_sha256, "0");
@@ -12432,7 +12432,7 @@ mod tests {
             validate_release_program_candidate(
                 &contract,
                 ReleasePrebuiltBinary::Irohad,
-                hash_fixture.target.join("release/iroha3d")
+                hash_fixture.target.join("release/irohad")
             )
             .is_err(),
             "forged binary digest must fail independent hashing"
@@ -12450,8 +12450,8 @@ mod tests {
         let contract = release_program_contract(&fixture.repo)
             .expect("parse release manifest")
             .expect("release contract active");
-        let binary = fixture.target.join("release/iroha3d");
-        let replacement = fixture.repo.join("replacement-iroha3d");
+        let binary = fixture.target.join("release/irohad");
+        let replacement = fixture.repo.join("replacement-irohad");
         fs::write(&replacement, b"irohad release executable\n").expect("write replacement");
         set_mode(&replacement, RELEASE_BINARY_MODE);
         let parent = binary.parent().expect("binary parent");
@@ -12474,7 +12474,7 @@ mod tests {
         let contract = release_program_contract(&fixture.repo)
             .expect("parse release manifest")
             .expect("release contract active");
-        let binary = fixture.target.join("release/iroha3d");
+        let binary = fixture.target.join("release/irohad");
         validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, &binary)
             .expect("initial resolution");
 
@@ -12494,7 +12494,7 @@ mod tests {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
 
         let mode_fixture = create_release_prebuilt_fixture();
-        let binary = mode_fixture.target.join("release/iroha3d");
+        let binary = mode_fixture.target.join("release/irohad");
         set_mode(&binary, 0o700);
         {
             let _env = release_prebuilt_env(&mode_fixture, &mode_fixture.manifest_sha256, "0");
@@ -12513,8 +12513,8 @@ mod tests {
         }
 
         let link_fixture = create_release_prebuilt_fixture();
-        let binary = link_fixture.target.join("release/iroha3d");
-        let extra_link = link_fixture.repo.join("iroha3d-hard-link");
+        let binary = link_fixture.target.join("release/irohad");
+        let extra_link = link_fixture.repo.join("irohad-hard-link");
         fs::hard_link(&binary, &extra_link).expect("create adversarial hard link");
         let _env = release_prebuilt_env(&link_fixture, &link_fixture.manifest_sha256, "0");
         let contract = release_program_contract(&link_fixture.repo)
@@ -12569,7 +12569,7 @@ mod tests {
 
     #[test]
     fn profile_hint_from_exe_path_detects_non_deps_profile_dir() {
-        let hint = profile_hint_from_exe_path(Path::new("/tmp/iroha-target/ci/iroha3d"));
+        let hint = profile_hint_from_exe_path(Path::new("/tmp/iroha-target/ci/irohad"));
         assert_eq!(hint.as_deref(), Some("ci"));
     }
 
@@ -12581,7 +12581,7 @@ mod tests {
         fs::write(
             &stamp_path,
             format!(
-                r#"{{"version":{wrapped_version},"fingerprint":7,"profile":"debug","binary":"iroha3d"}}"#
+                r#"{{"version":{wrapped_version},"fingerprint":7,"profile":"debug","binary":"irohad"}}"#
             ),
         )
         .expect("write wrapped-version stamp");
@@ -12596,7 +12596,7 @@ mod tests {
         fs::write(
             &stamp_path,
             format!(
-                r#"{{"version":{BUILD_STAMP_VERSION},"fingerprint":7,"profile":"debug","binary":"iroha3d"}}"#
+                r#"{{"version":{BUILD_STAMP_VERSION},"fingerprint":7,"profile":"debug","binary":"irohad"}}"#
             ),
         )
         .expect("write supported-version stamp");
@@ -12605,7 +12605,7 @@ mod tests {
             .expect("supported version should load");
         assert_eq!(stamp.fingerprint, 7);
         assert_eq!(stamp.profile, "debug");
-        assert_eq!(stamp.binary, PathBuf::from("iroha3d"));
+        assert_eq!(stamp.binary, PathBuf::from("irohad"));
     }
 
     #[cfg(unix)]
@@ -13012,13 +13012,13 @@ exit 0
     fn colocated_binary_candidate_for_resolves_sibling_binary() {
         let temp = tempdir().expect("temporary workspace");
         let current_exe = temp.path().join("release/izanami");
-        let sibling = temp.path().join("release/iroha3d");
+        let sibling = temp.path().join("release/irohad");
         fs::create_dir_all(current_exe.parent().expect("current exe parent"))
             .expect("create release dir");
         fs::write(&current_exe, b"izanami").expect("write current exe");
-        fs::write(&sibling, b"iroha3d").expect("write sibling binary");
+        fs::write(&sibling, b"irohad").expect("write sibling binary");
 
-        let resolved = colocated_binary_candidate_for(&current_exe, "iroha3d")
+        let resolved = colocated_binary_candidate_for(&current_exe, "irohad")
             .expect("sibling binary should resolve");
 
         assert_eq!(resolved, sibling.canonicalize().expect("canonical sibling"));
@@ -13033,7 +13033,7 @@ exit 0
         fs::write(&current_exe, b"izanami").expect("write current exe");
 
         assert!(
-            colocated_binary_candidate_for(&current_exe, "iroha3d").is_none(),
+            colocated_binary_candidate_for(&current_exe, "irohad").is_none(),
             "missing sibling binary should not resolve"
         );
     }
@@ -15436,7 +15436,7 @@ exit 0
             .map(|arg| arg.to_string_lossy().to_string())
             .collect();
         assert!(args.contains(&"--bin".to_string()));
-        assert!(args.contains(&"iroha3d".to_string()));
+        assert!(args.contains(&"irohad".to_string()));
         assert!(!args.contains(&"--features".to_string()));
         assert!(spec.isolated_target_subdir.is_none());
         assert_ne!(spec.env, PROGRAM_IROHAD_MESSAGE_CONTROL_ENV);

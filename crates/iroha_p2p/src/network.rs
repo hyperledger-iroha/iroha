@@ -1168,7 +1168,7 @@ enum SubscriberProgressClass {
 pub enum ReliableProgressClass {
     /// Votes, quorum certificates, timeout evidence, and proposals.
     Safety,
-    /// Small consensus-control and authenticated bootstrap requests.
+    /// Small consensus-control messages.
     Lane,
     /// Payload chunks, certified bodies, and block-sync responses.
     Bulk,
@@ -1182,51 +1182,17 @@ pub enum ReliableProgressClass {
 /// independently maintained assumption.
 pub const RELIABLE_PROGRESS_LANE_RELAY_OWNER_CAPACITY: usize = 64;
 
-/// Number of simultaneously active genesis request fanouts permitted by the
-/// bootstrap runtime.
-pub const RELIABLE_PROGRESS_GENESIS_FETCH_PRODUCERS_PER_SOURCE: usize = 1;
-
-/// Number of genesis reply listeners permitted to own a per-source retry
-/// queue concurrently.
-pub const RELIABLE_PROGRESS_GENESIS_REPLY_LISTENER_PRODUCERS: usize = 1;
-
 /// Maximum number of exact-output actor calls exposed for one target and
 /// scheduling class by the Sumeragi worker at a time.
 pub const RELIABLE_PROGRESS_EXACT_OUTPUT_PRODUCERS_PER_SOURCE: usize = 1;
 
-const RELIABLE_PROGRESS_GENESIS_REPLY_SOURCE_DIVISOR: usize = 4;
-
-/// Derive the bounded genesis reply-retry share for one authenticated source.
+/// Complete local-producer waiter reserve for one authenticated target and
+/// actor scheduling class.
 ///
-/// `subscriber_queue_capacity` is the configured aggregate subscriber queue.
-/// The source share is one quarter of that aggregate rounded up, while a small
-/// non-zero queue still grants each observed source one slot. Zero and every
-/// arithmetic overflow fail closed.
-#[must_use]
-pub fn genesis_reply_waiters_per_source(subscriber_queue_capacity: usize) -> Option<usize> {
-    let adjusted = subscriber_queue_capacity.checked_sub(1)?;
-    adjusted
-        .checked_div(RELIABLE_PROGRESS_GENESIS_REPLY_SOURCE_DIVISOR)?
-        .checked_add(1)
-}
-
-/// Derive the complete local-producer waiter reserve for one authenticated
-/// target and actor scheduling class.
-///
-/// The sum covers every production owner which can call reliable admission
-/// concurrently: the bounded lane-relay queue, one genesis reply listener's
-/// per-source retry share, one genesis request fanout, and the Sumeragi
-/// exact-output scheduler. Callers must reject configuration when this returns
-/// `None`.
-#[must_use]
-pub fn reliable_progress_waiters_per_source(subscriber_queue_capacity: usize) -> Option<usize> {
-    let genesis_reply_waiters = genesis_reply_waiters_per_source(subscriber_queue_capacity)?
-        .checked_mul(RELIABLE_PROGRESS_GENESIS_REPLY_LISTENER_PRODUCERS)?;
-    RELIABLE_PROGRESS_LANE_RELAY_OWNER_CAPACITY
-        .checked_add(genesis_reply_waiters)?
-        .checked_add(RELIABLE_PROGRESS_GENESIS_FETCH_PRODUCERS_PER_SOURCE)?
-        .checked_add(RELIABLE_PROGRESS_EXACT_OUTPUT_PRODUCERS_PER_SOURCE)
-}
+/// The bound covers the lane-relay owner queue and the Sumeragi exact-output
+/// scheduler. Both producer families have fixed, code-owned geometry.
+const RELIABLE_PROGRESS_WAITERS_PER_SOURCE: usize = RELIABLE_PROGRESS_LANE_RELAY_OWNER_CAPACITY
+    + RELIABLE_PROGRESS_EXACT_OUTPUT_PRODUCERS_PER_SOURCE;
 
 fn subscriber_progress_class(
     topic: message::Topic,
@@ -1234,9 +1200,6 @@ fn subscriber_progress_class(
 ) -> Option<SubscriberProgressClass> {
     match (topic, route) {
         (message::Topic::Consensus, _) => Some(SubscriberProgressClass::Lane),
-        (message::Topic::Control, message::SubscriberRoute::GenesisBootstrap) => {
-            Some(SubscriberProgressClass::Lane)
-        }
         (
             message::Topic::ConsensusPayload
             | message::Topic::ConsensusChunk
@@ -6935,8 +6898,7 @@ pub enum SubscriberFilter {
     All,
     /// Receive messages whose topic matches one of the listed entries.
     ///
-    /// Topic-only subscriptions own the general application route and do not
-    /// overlap specialized bootstrap delivery.
+    /// Topic-only subscriptions own the general application route.
     Topics(Vec<message::Topic>),
     /// Receive the listed topics on one explicit application delivery route.
     TopicsForRoute {
@@ -6990,9 +6952,8 @@ impl SubscriberFilter {
             message::Topic::BlockSync,
             message::Topic::Control,
         ];
-        const ROUTES: [message::SubscriberRoute; 4] = [
+        const ROUTES: [message::SubscriberRoute; 3] = [
             message::SubscriberRoute::General,
-            message::SubscriberRoute::GenesisBootstrap,
             message::SubscriberRoute::ToriiProxy,
             message::SubscriberRoute::Connect,
         ];
@@ -7485,12 +7446,9 @@ fn network_actor_progress_source_capacity(max_total_connections: usize) -> Optio
         .checked_mul(ActorProgressClass::COUNT)
 }
 
-fn network_actor_progress_waiter_capacity(
-    max_total_connections: usize,
-    subscriber_queue_capacity: usize,
-) -> Option<usize> {
-    let waiters_per_source = reliable_progress_waiters_per_source(subscriber_queue_capacity)?;
-    network_actor_progress_source_capacity(max_total_connections)?.checked_mul(waiters_per_source)
+fn network_actor_progress_waiter_capacity(max_total_connections: usize) -> Option<usize> {
+    network_actor_progress_source_capacity(max_total_connections)?
+        .checked_mul(RELIABLE_PROGRESS_WAITERS_PER_SOURCE)
 }
 
 fn inbound_source_credit_capacity(
@@ -7514,12 +7472,10 @@ fn inbound_source_credit_capacity(
 mod inbound_source_memory_bound_tests {
     use super::{
         RELIABLE_PROGRESS_EXACT_OUTPUT_PRODUCERS_PER_SOURCE,
-        RELIABLE_PROGRESS_GENESIS_FETCH_PRODUCERS_PER_SOURCE,
-        RELIABLE_PROGRESS_GENESIS_REPLY_LISTENER_PRODUCERS,
-        RELIABLE_PROGRESS_LANE_RELAY_OWNER_CAPACITY, genesis_reply_waiters_per_source,
+        RELIABLE_PROGRESS_LANE_RELAY_OWNER_CAPACITY, RELIABLE_PROGRESS_WAITERS_PER_SOURCE,
         inbound_source_credit_capacity, inbound_source_memory_bound,
         network_actor_progress_source_capacity, network_actor_progress_target_capacity,
-        network_actor_progress_waiter_capacity, reliable_progress_waiters_per_source,
+        network_actor_progress_waiter_capacity,
     };
 
     #[test]
@@ -7546,21 +7502,11 @@ mod inbound_source_memory_bound_tests {
     fn reliable_actor_source_geometry_counts_targets_broadcasts_and_classes() {
         assert_eq!(network_actor_progress_target_capacity(4), Some(8));
         assert_eq!(network_actor_progress_source_capacity(4), Some(24));
-        assert_eq!(genesis_reply_waiters_per_source(1), Some(1));
-        assert_eq!(genesis_reply_waiters_per_source(4), Some(1));
-        assert_eq!(genesis_reply_waiters_per_source(5), Some(2));
-        assert_eq!(genesis_reply_waiters_per_source(0), None);
         let configured_per_source = RELIABLE_PROGRESS_LANE_RELAY_OWNER_CAPACITY
-            + genesis_reply_waiters_per_source(8).expect("non-zero subscriber geometry")
-                * RELIABLE_PROGRESS_GENESIS_REPLY_LISTENER_PRODUCERS
-            + RELIABLE_PROGRESS_GENESIS_FETCH_PRODUCERS_PER_SOURCE
             + RELIABLE_PROGRESS_EXACT_OUTPUT_PRODUCERS_PER_SOURCE;
+        assert_eq!(RELIABLE_PROGRESS_WAITERS_PER_SOURCE, configured_per_source);
         assert_eq!(
-            reliable_progress_waiters_per_source(8),
-            Some(configured_per_source)
-        );
-        assert_eq!(
-            network_actor_progress_waiter_capacity(4, 8),
+            network_actor_progress_waiter_capacity(4),
             Some(24 * configured_per_source)
         );
         assert_eq!(network_actor_progress_target_capacity(usize::MAX), None);
@@ -7572,13 +7518,11 @@ mod inbound_source_memory_bound_tests {
     }
 
     #[test]
-    fn reliable_actor_waiter_geometry_rejects_zero_and_combined_overflow() {
-        assert_eq!(network_actor_progress_waiter_capacity(usize::MAX, 8), None);
-        assert_eq!(network_actor_progress_waiter_capacity(4, 0), None);
+    fn reliable_actor_waiter_geometry_rejects_source_overflow() {
         assert_eq!(
-            network_actor_progress_waiter_capacity(usize::MAX / 8, usize::MAX),
+            network_actor_progress_waiter_capacity(usize::MAX),
             None,
-            "combined configured producer/source multiplication must fail closed"
+            "configured producer/source multiplication must fail closed"
         );
     }
 
@@ -8093,13 +8037,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             p2p_outbound_frame_queue_max_high_bytes.get(),
             safety_reserve_bytes,
         )?;
-        let network_actor_progress_waiters = network_actor_progress_waiter_capacity(
-            max_total_connections,
-            p2p_subscriber_queue_cap.get(),
-        )
-        .ok_or_else(|| {
+        let network_actor_progress_waiters =
+            network_actor_progress_waiter_capacity(max_total_connections).ok_or_else(|| {
                 invalid_transport_geometry(
-                    "network.max_total_connections and network.p2p_subscriber_queue_cap overflow the reliable actor producer/source waiter geometry",
+                    "network.max_total_connections overflows the reliable actor producer/source waiter geometry",
                 )
             })?;
         let network_actor_progress_targets =
@@ -9978,7 +9919,7 @@ mod handle_update_tests {
     struct BadLengthHintPayload;
 
     impl ncore::NoritoSerialize for BadLengthHintPayload {
-        fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             writer.write_all(&[1, 2, 3, 4])?;
             Ok(())
         }
@@ -10009,7 +9950,7 @@ mod handle_update_tests {
     struct FailingSerializerPayload;
 
     impl ncore::NoritoSerialize for FailingSerializerPayload {
-        fn serialize<W: std::io::Write>(&self, _writer: W) -> Result<(), ncore::Error> {
+        fn serialize(&self, _writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             Err(ncore::Error::Message(
                 "intentional actor-admission serialization failure".to_owned(),
             ))
@@ -10046,8 +9987,8 @@ mod handle_update_tests {
     enum RoutedActorDummy {
         Safety,
         Control,
-        GenesisControl,
-        GenesisControlAlternate,
+        Lane,
+        LaneAlternate,
         BlockSync,
     }
 
@@ -10055,19 +9996,9 @@ mod handle_update_tests {
         fn topic(&self) -> message::Topic {
             match self {
                 Self::Safety => message::Topic::ConsensusSafety,
-                Self::Control | Self::GenesisControl | Self::GenesisControlAlternate => {
-                    message::Topic::Control
-                }
+                Self::Control => message::Topic::Control,
+                Self::Lane | Self::LaneAlternate => message::Topic::Consensus,
                 Self::BlockSync => message::Topic::BlockSync,
-            }
-        }
-
-        fn subscriber_route(&self) -> message::SubscriberRoute {
-            match self {
-                Self::GenesisControl | Self::GenesisControlAlternate => {
-                    message::SubscriberRoute::GenesisBootstrap
-                }
-                Self::Safety | Self::Control | Self::BlockSync => message::SubscriberRoute::General,
             }
         }
 
@@ -10282,9 +10213,7 @@ mod handle_update_tests {
 
     #[test]
     fn configured_producer_geometry_gives_six_same_source_waiters_decreasing_ranks() {
-        let subscriber_queue_capacity = 8;
-        let waiters_per_source = reliable_progress_waiters_per_source(subscriber_queue_capacity)
-            .expect("non-zero configured producer geometry");
+        let waiters_per_source = RELIABLE_PROGRESS_WAITERS_PER_SOURCE;
         assert!(
             waiters_per_source >= 6,
             "the complete production geometry must cover the adversarial waiter set"
@@ -11857,13 +11786,13 @@ mod handle_update_tests {
         handle
             .post_recoverable(
                 Post {
-                    data: RoutedActorDummy::GenesisControl,
+                    data: RoutedActorDummy::Lane,
                     peer_id: peer_id.clone(),
                     priority: Priority::Low,
                 },
                 None,
             )
-            .expect("genesis progress must enter its source-isolated lane");
+            .expect("lane progress must enter its source-isolated queue");
         handle
             .post_recoverable(
                 Post {
@@ -11897,7 +11826,7 @@ mod handle_update_tests {
                 .try_recv()
                 .map(AdmittedNetworkMessage::into_inner),
             Ok(NetworkMessage::Post(Post {
-                data: RoutedActorDummy::GenesisControl,
+                data: RoutedActorDummy::Lane,
                 priority: Priority::High,
                 ..
             }))
@@ -11909,16 +11838,13 @@ mod handle_update_tests {
     }
 
     #[test]
-    fn genesis_control_and_block_sync_use_progress_and_canonical_high() {
+    fn consensus_lane_and_block_sync_use_progress_and_canonical_high() {
         let (handle, _safety_rx, mut progress_rx, mut high_rx, mut low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
         accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
 
-        for data in [
-            RoutedActorDummy::GenesisControl,
-            RoutedActorDummy::BlockSync,
-        ] {
+        for data in [RoutedActorDummy::Lane, RoutedActorDummy::BlockSync] {
             handle
                 .post_recoverable(
                     Post {
@@ -11956,7 +11882,7 @@ mod handle_update_tests {
         let (handle, _safety_rx, _progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
         handle.post(Post {
-            data: RoutedActorDummy::GenesisControl,
+            data: RoutedActorDummy::Lane,
             peer_id: PeerId::from(KeyPair::random().public_key().clone()),
             priority: Priority::High,
         });
@@ -11968,7 +11894,7 @@ mod handle_update_tests {
         let (handle, _safety_rx, _progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
         handle.broadcast(Broadcast {
-            data: RoutedActorDummy::GenesisControl,
+            data: RoutedActorDummy::Lane,
             priority: Priority::High,
         });
     }
@@ -11980,17 +11906,17 @@ mod handle_update_tests {
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
         accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
         let post = || Post {
-            data: RoutedActorDummy::GenesisControl,
+            data: RoutedActorDummy::Lane,
             peer_id: peer_id.clone(),
             priority: Priority::Low,
         };
         let fixture = NetworkMessage::Post(post());
         let plaintext_frame_bytes =
             outbound_actor_message_wire_bytes(&fixture, &handle.self_id, handle.relay_ttl)
-                .expect("count exact genesis-control actor fixture");
+                .expect("count exact consensus-lane actor fixture");
         let stream_wire_bytes = crate::frame_queue_charge(plaintext_frame_bytes)
-            .expect("small genesis-control fixture must have a stream charge");
-        handle.topic_frame_caps.control = plaintext_frame_bytes;
+            .expect("small consensus-lane fixture must have a stream charge");
+        handle.topic_frame_caps.consensus = plaintext_frame_bytes;
         handle.network_actor_progress_budget =
             NetworkActorProgressBudget::new(stream_wire_bytes, 4, 4)
                 .expect("small progress budget");
@@ -12012,7 +11938,7 @@ mod handle_update_tests {
             }) => (message, ticket),
             other => panic!("expected rank-one recoverable pressure, got {other:?}"),
         };
-        assert_eq!(second.data, RoutedActorDummy::GenesisControl);
+        assert_eq!(second.data, RoutedActorDummy::Lane);
         assert_eq!(second.peer_id, peer_id);
         assert_eq!(second.priority, Priority::Low);
 
@@ -12062,7 +11988,7 @@ mod handle_update_tests {
         assert!(matches!(
             admitted,
             NetworkMessage::Post(Post {
-                data: RoutedActorDummy::GenesisControl,
+                data: RoutedActorDummy::Lane,
                 priority: Priority::High,
                 ..
             })
@@ -12078,7 +12004,7 @@ mod handle_update_tests {
         assert!(matches!(
             admitted,
             NetworkMessage::Post(Post {
-                data: RoutedActorDummy::GenesisControl,
+                data: RoutedActorDummy::Lane,
                 priority: Priority::High,
                 ..
             })
@@ -12097,22 +12023,22 @@ mod handle_update_tests {
             peer_id: peer_id.clone(),
             priority: Priority::Low,
         };
-        let fixture = NetworkMessage::Post(post(RoutedActorDummy::GenesisControl));
+        let fixture = NetworkMessage::Post(post(RoutedActorDummy::Lane));
         let plaintext_frame_bytes =
             outbound_actor_message_wire_bytes(&fixture, &handle.self_id, handle.relay_ttl)
                 .expect("count exact ticket-identity fixture");
         let stream_wire_bytes = crate::frame_queue_charge(plaintext_frame_bytes)
             .expect("small ticket-identity fixture must have a stream charge");
-        handle.topic_frame_caps.control = plaintext_frame_bytes;
+        handle.topic_frame_caps.consensus = plaintext_frame_bytes;
         handle.network_actor_progress_budget =
             NetworkActorProgressBudget::new(stream_wire_bytes, 1, 2)
                 .expect("one source with two bounded waiters");
         handle.network_message_progress_deferred_permits = Arc::new(Semaphore::new(0));
 
         handle
-            .post_recoverable(post(RoutedActorDummy::GenesisControl), None)
+            .post_recoverable(post(RoutedActorDummy::Lane), None)
             .expect("first exact request fills the retained source slot");
-        let ticket = match handle.post_recoverable(post(RoutedActorDummy::GenesisControl), None) {
+        let ticket = match handle.post_recoverable(post(RoutedActorDummy::Lane), None) {
             Err(NetworkActorAdmissionError::Backpressured {
                 ticket: Some(ticket),
                 rank: 1,
@@ -12120,7 +12046,7 @@ mod handle_update_tests {
             }) => ticket,
             other => panic!("expected an identity-bound rank-one ticket, got {other:?}"),
         };
-        let different = post(RoutedActorDummy::GenesisControlAlternate);
+        let different = post(RoutedActorDummy::LaneAlternate);
         assert_eq!(
             outbound_actor_message_wire_bytes(
                 &NetworkMessage::Post(different.clone()),
@@ -12134,7 +12060,7 @@ mod handle_update_tests {
         match handle.post_recoverable(different, Some(ticket)) {
             Err(NetworkActorAdmissionError::Rejected { message, reason }) => {
                 assert_eq!(reason, NetworkActorAdmissionRejection::InvalidTicket);
-                assert_eq!(message.data, RoutedActorDummy::GenesisControlAlternate);
+                assert_eq!(message.data, RoutedActorDummy::LaneAlternate);
                 assert_eq!(message.peer_id, peer_id);
                 assert_eq!(message.priority, Priority::Low);
             }
@@ -12160,8 +12086,8 @@ mod handle_update_tests {
             peer_id: peer_id.clone(),
             priority: Priority::Low,
         };
-        let first = post(RoutedActorDummy::GenesisControl);
-        let second = post(RoutedActorDummy::GenesisControlAlternate);
+        let first = post(RoutedActorDummy::Lane);
+        let second = post(RoutedActorDummy::LaneAlternate);
         let first_wire = outbound_actor_message_wire_bytes(
             &NetworkMessage::Post(first.clone()),
             &handle.self_id,
@@ -12180,7 +12106,7 @@ mod handle_update_tests {
         );
         let stream_wire_bytes = crate::frame_queue_charge(first_wire)
             .expect("small direct progress fixture must have a stream charge");
-        handle.topic_frame_caps.control = first_wire;
+        handle.topic_frame_caps.consensus = first_wire;
         handle.network_actor_progress_budget =
             NetworkActorProgressBudget::new(stream_wire_bytes, 1, 2)
                 .expect("one exact target source and one waiter must fit");
@@ -12197,7 +12123,7 @@ mod handle_update_tests {
             }) => (message, ticket),
             other => panic!("distinct direct request must remain exact: {other:?}"),
         };
-        assert_eq!(second.data, RoutedActorDummy::GenesisControlAlternate);
+        assert_eq!(second.data, RoutedActorDummy::LaneAlternate);
         assert_eq!(second.peer_id, peer_id);
         assert_eq!(second.priority, Priority::Low);
 
@@ -12216,7 +12142,7 @@ mod handle_update_tests {
         assert!(matches!(
             admitted,
             NetworkMessage::Post(Post {
-                data: RoutedActorDummy::GenesisControlAlternate,
+                data: RoutedActorDummy::LaneAlternate,
                 priority: Priority::High,
                 ..
             })
@@ -12235,7 +12161,7 @@ mod handle_update_tests {
             HashSet::from([blocked_peer.clone(), responsive_peer.clone()]),
         );
         let post = |peer_id| Post {
-            data: RoutedActorDummy::GenesisControl,
+            data: RoutedActorDummy::Lane,
             peer_id,
             priority: Priority::Low,
         };
@@ -12245,7 +12171,7 @@ mod handle_update_tests {
                 .expect("count exact source-isolation fixture");
         let stream_wire_bytes = crate::frame_queue_charge(plaintext_frame_bytes)
             .expect("small source-isolation fixture must have a stream charge");
-        handle.topic_frame_caps.control = plaintext_frame_bytes;
+        handle.topic_frame_caps.consensus = plaintext_frame_bytes;
         handle.network_actor_progress_budget =
             NetworkActorProgressBudget::new(stream_wire_bytes, 4, 4)
                 .expect("small progress budget");
@@ -12285,7 +12211,7 @@ mod handle_update_tests {
             handle_with_network_receivers::<RoutedActorDummy>();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
         let post = || Post {
-            data: RoutedActorDummy::GenesisControl,
+            data: RoutedActorDummy::Lane,
             peer_id: peer_id.clone(),
             priority: Priority::Low,
         };
@@ -12295,7 +12221,7 @@ mod handle_update_tests {
                 .expect("count exact close fixture");
         let stream_wire_bytes = crate::frame_queue_charge(plaintext_frame_bytes)
             .expect("small close fixture must have a stream charge");
-        handle.topic_frame_caps.control = plaintext_frame_bytes;
+        handle.topic_frame_caps.consensus = plaintext_frame_bytes;
         handle.network_actor_progress_budget =
             NetworkActorProgressBudget::new(stream_wire_bytes, 1, 1)
                 .expect("small progress budget");
@@ -12308,7 +12234,7 @@ mod handle_update_tests {
             closed,
             NetworkActorAdmissionError::Closed {
                 message: Post {
-                    data: RoutedActorDummy::GenesisControl,
+                    data: RoutedActorDummy::Lane,
                     priority: Priority::Low,
                     ..
                 }
@@ -12316,7 +12242,7 @@ mod handle_update_tests {
         ));
         assert_eq!(handle.network_actor_progress_budget.retained(), 0);
 
-        handle.topic_frame_caps.control = plaintext_frame_bytes - 1;
+        handle.topic_frame_caps.consensus = plaintext_frame_bytes - 1;
         let rejected = handle
             .post_recoverable(post(), None)
             .expect_err("one byte over the topic cap must be permanently rejected");
@@ -17246,7 +17172,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         if matches!(topic, message::Topic::Control) && !is_progress {
             iroha_logger::warn!(
                 peer = %peer_id,
-                "Peer session is missing; dropping non-bootstrap control frame"
+                "Peer session is missing; dropping non-progress control frame"
             );
             return false;
         }
@@ -19684,26 +19610,22 @@ mod tests {
 
     #[derive(Clone, Copy, Debug, Decode, Encode, PartialEq, Eq)]
     enum RouteMsg {
-        General,
-        Bootstrap,
+        Control,
+        Lane,
     }
 
     impl message::ClassifyTopic for RouteMsg {
         fn topic(&self) -> message::Topic {
-            message::Topic::Control
-        }
-
-        fn subscriber_route(&self) -> message::SubscriberRoute {
             match self {
-                Self::General => message::SubscriberRoute::General,
-                Self::Bootstrap => message::SubscriberRoute::GenesisBootstrap,
+                Self::Control => message::Topic::Control,
+                Self::Lane => message::Topic::Consensus,
             }
         }
 
         fn progress_reconstruction(&self) -> message::ProgressReconstruction {
             match self {
-                Self::Bootstrap => message::ProgressReconstruction::Retransmit,
-                Self::General => message::ProgressReconstruction::Exact,
+                Self::Lane => message::ProgressReconstruction::Retransmit,
+                Self::Control => message::ProgressReconstruction::Exact,
             }
         }
     }
@@ -19721,11 +19643,6 @@ mod tests {
             (
                 Topic::Consensus,
                 Route::General,
-                Some(ReliableProgressClass::Lane),
-            ),
-            (
-                Topic::Control,
-                Route::GenesisBootstrap,
                 Some(ReliableProgressClass::Lane),
             ),
             (
@@ -19943,46 +19860,6 @@ mod tests {
         network.dispatch_to_subscribers(PeerMessage::new(peer, TopicMsg::Peer, 1));
         assert!(matches!(peer_rx.try_recv(), Ok(msg) if matches!(msg.payload, TopicMsg::Peer)));
         assert!(matches!(trust_rx.try_recv(), Err(TryRecvError::Empty)));
-    }
-
-    #[test]
-    fn specialized_bootstrap_route_is_disjoint_from_generic_topic_subscriber() {
-        let Some(mut network) = bare_network_with::<RouteMsg>() else {
-            return;
-        };
-        let (generic_tx, mut generic_rx) = mpsc::channel(2);
-        let (bootstrap_tx, mut bootstrap_rx) = mpsc::channel(2);
-        network.subscribe_to_peers_messages(Subscriber::new(
-            generic_tx,
-            SubscriberFilter::topics([message::Topic::Control]),
-            2,
-        ));
-        network.subscribe_to_peers_messages(Subscriber::new(
-            bootstrap_tx,
-            SubscriberFilter::topics_for_route(
-                [message::Topic::Control],
-                message::SubscriberRoute::GenesisBootstrap,
-            ),
-            2,
-        ));
-        let peer = Peer::new(
-            socket_addr!(127.0.0.1:204),
-            KeyPair::random().public_key().clone(),
-        );
-
-        network.dispatch_to_subscribers(PeerMessage::new(peer.clone(), RouteMsg::Bootstrap, 1));
-        assert!(matches!(
-            bootstrap_rx.try_recv(),
-            Ok(msg) if msg.payload == RouteMsg::Bootstrap
-        ));
-        assert!(matches!(generic_rx.try_recv(), Err(TryRecvError::Empty)));
-
-        network.dispatch_to_subscribers(PeerMessage::new(peer, RouteMsg::General, 1));
-        assert!(matches!(
-            generic_rx.try_recv(),
-            Ok(msg) if msg.payload == RouteMsg::General
-        ));
-        assert!(matches!(bootstrap_rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
     #[test]
@@ -24568,7 +24445,7 @@ mod tests {
                 RelayTarget::Direct(peer_id.clone()),
                 DEFAULT_RELAY_TTL,
                 Priority::High,
-                RouteMsg::Bootstrap,
+                RouteMsg::Lane,
             )
         };
 
@@ -24583,7 +24460,7 @@ mod tests {
             let outcome = queue.enqueue(
                 peer_id.clone(),
                 frame(),
-                message::Topic::Control,
+                message::Topic::Consensus,
                 Some(connection_id),
                 now + Duration::from_millis(connection_id),
             );
@@ -24605,7 +24482,7 @@ mod tests {
             let outcome = queue.enqueue(
                 peer_id.clone(),
                 frame(),
-                message::Topic::Control,
+                message::Topic::Consensus,
                 Some(connection_id),
                 now + Duration::from_millis(20 + connection_id),
             );
@@ -24637,7 +24514,7 @@ mod tests {
                 RelayTarget::Direct(peer_id.clone()),
                 DEFAULT_RELAY_TTL,
                 Priority::High,
-                RouteMsg::Bootstrap,
+                RouteMsg::Lane,
             )
         };
 
@@ -24660,7 +24537,7 @@ mod tests {
                 .enqueue(
                     peer_id.clone(),
                     frame(),
-                    message::Topic::Control,
+                    message::Topic::Consensus,
                     Some(100),
                     now + Duration::from_millis(100),
                 )
@@ -25082,14 +24959,14 @@ mod tests {
             RelayTarget::Direct(peer_id.clone()),
             DEFAULT_RELAY_TTL,
             Priority::High,
-            RouteMsg::Bootstrap,
+            RouteMsg::Lane,
         );
         assert!(
             queue
                 .enqueue(
                     peer_id.clone(),
                     frame,
-                    message::Topic::Control,
+                    message::Topic::Consensus,
                     Some(7),
                     now,
                 )
@@ -25664,7 +25541,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_session_defers_only_bootstrap_control_progress() {
+    fn missing_session_defers_consensus_but_not_control() {
         let _guard = deferred_send_test_guard();
         let Some(mut network) = bare_network_with::<RouteMsg>() else {
             return;
@@ -25685,38 +25562,38 @@ mod tests {
             )]),
         );
 
-        let bootstrap = RelayMessage::new(
+        let lane = RelayMessage::new(
             network.self_id.clone(),
             RelayTarget::Direct(peer_id.clone()),
             DEFAULT_RELAY_TTL,
             Priority::High,
-            RouteMsg::Bootstrap,
+            RouteMsg::Lane,
         );
         assert!(
-            network.send_frame_to_peer(&peer_id, bootstrap, message::Topic::Control),
-            "genesis-bootstrap control is route-qualified progress"
+            network.send_frame_to_peer(&peer_id, lane, message::Topic::Consensus),
+            "consensus traffic is reliable progress"
         );
 
-        let general = RelayMessage::new(
+        let control = RelayMessage::new(
             network.self_id.clone(),
             RelayTarget::Direct(peer_id.clone()),
             DEFAULT_RELAY_TTL,
             Priority::High,
-            RouteMsg::General,
+            RouteMsg::Control,
         );
         assert!(
-            !network.send_frame_to_peer(&peer_id, general, message::Topic::Control),
+            !network.send_frame_to_peer(&peer_id, control, message::Topic::Control),
             "general control must stay lossy when no authenticated session exists"
         );
         let entries = network
             .deferred_send_queue
             .by_peer
             .get(&peer_id)
-            .expect("bootstrap frame should remain retained");
+            .expect("consensus frame should remain retained");
         assert_eq!(entries.len(), 1);
         assert!(matches!(
             entries.front().map(|entry| entry.frame.payload),
-            Some(RouteMsg::Bootstrap)
+            Some(RouteMsg::Lane)
         ));
     }
 
@@ -30469,7 +30346,7 @@ mod tests {
     }
 
     #[test]
-    fn progress_subscriber_full_retains_genesis_route_but_general_control_stays_lossy() {
+    fn progress_subscriber_full_retains_consensus_but_control_stays_lossy() {
         let Some(mut network) = bare_network_with::<RouteMsg>() else {
             return;
         };
@@ -30479,25 +30356,25 @@ mod tests {
         );
         network.current_topology.insert(peer.id().clone());
         let (tx, mut rx) = mpsc::channel(1);
-        tx.try_send(PeerMessage::new(peer.clone(), RouteMsg::General, 1))
+        tx.try_send(PeerMessage::new(peer.clone(), RouteMsg::Control, 1))
             .expect("prefill subscriber channel");
         network.subscribe_to_peers_messages(Subscriber::new(tx, SubscriberFilter::All, 2));
 
-        network.dispatch_to_subscribers(PeerMessage::new(peer.clone(), RouteMsg::Bootstrap, 1));
-        network.dispatch_to_subscribers(PeerMessage::new(peer.clone(), RouteMsg::General, 1));
+        network.dispatch_to_subscribers(PeerMessage::new(peer.clone(), RouteMsg::Lane, 1));
+        network.dispatch_to_subscribers(PeerMessage::new(peer.clone(), RouteMsg::Control, 1));
         assert_eq!(
             network.subscribers_to_peers_messages[0].progress_pending_len, 1,
-            "only route-qualified control may occupy the bounded progress backlog"
+            "only consensus progress may occupy the bounded progress backlog"
         );
 
         assert_eq!(
             rx.try_recv().expect("prefilled delivery").payload,
-            RouteMsg::General
+            RouteMsg::Control
         );
         network.flush_safety_subscribers();
         assert_eq!(
-            rx.try_recv().expect("retained genesis progress").payload,
-            RouteMsg::Bootstrap
+            rx.try_recv().expect("retained consensus progress").payload,
+            RouteMsg::Lane
         );
         assert_eq!(
             network.subscribers_to_peers_messages[0].progress_pending_len,
@@ -30871,15 +30748,13 @@ pub mod message {
 
     /// Variant-disjoint application route for subscriber fan-out.
     ///
-    /// Topics remain transport scheduling classes.  Routes prevent a generic
+    /// Topics remain transport scheduling classes. Routes prevent a generic
     /// topic consumer from competing for the only owned delivery of a message
-    /// that belongs to a specialized bootstrap protocol.
+    /// that belongs to a specialized application protocol.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub enum SubscriberRoute {
         /// Ordinary daemon/core message processing.
         General,
-        /// Genesis request/response bootstrap protocol.
-        GenesisBootstrap,
         /// Torii and `SoraCloud` request/response proxy protocol.
         ToriiProxy,
         /// Torii websocket Connect relay protocol.

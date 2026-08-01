@@ -17,10 +17,6 @@ categories = ["cryptography::cryptocurrencies"]
 docker_bins = [
     "iroha",
     "irohad",
-    "iroha3",
-    "iroha3d",
-    "iroha2",
-    "iroha2d",
     "kagami",
     "attachment_sanitizer",
 ]
@@ -380,7 +376,8 @@ codegen-units = 256
 # above does not apply to it. Its very large generated/derived surface otherwise
 # uses 256 incremental dev CGUs. Keep enough partitions to prevent its derived
 # decoder IR from coalescing into memory-heavy LLVM modules while avoiding the
-# full incremental default; Cargo's jobs=1 does not control this partitioning.
+# full incremental default. Cargo's native jobserver controls process-level
+# parallelism; constrained workflows apply their own memory limits explicitly.
 [profile.dev.package.iroha_data_model]
 codegen-units = 8
 

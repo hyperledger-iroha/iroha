@@ -37,10 +37,10 @@ Handy CLI helpers:
 
 ```bash
 # JSON listing of all registered descriptors (ids, handles, aliases, multihash)
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- --list-profiles
 
 # Emit metadata for a candidate default profile (canonical handle + aliases)
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- \
   --promote-profile=sorafs.sf1@1.0.0 --json-out=-
 ```
 
@@ -92,7 +92,7 @@ so reviewers can reproduce them verbatim.
 
 1. **Regenerate fixtures**
    ```bash
-   cargo run --locked -p sorafs_chunker --bin export_vectors \
+   cargo run --locked -p sorafs_chunker --features dev-tools --bin export_vectors \
      --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
    ```
 2. **Run the parity suite** – `cargo test -p sorafs_chunker` and the
@@ -118,7 +118,7 @@ metadata and PoR proofs remain consistent:
 
 ```bash
 # Validate chunk metadata + PoR with the new profile
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- \
   --profile=sorafs.sf2@1.0.0 \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 

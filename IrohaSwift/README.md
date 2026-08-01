@@ -1145,6 +1145,19 @@ the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form selectors are absent; proofs use
 protocol-specific typed APIs.
 
+`PrivacyExact12FixtureCodecV1` is the native-independent counterpart for the
+Rust-derived bundle in
+`fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64`. It exposes typed
+outer rows and strictly decodes or encodes the canonical compact-length Norito
+archive without loading `NoritoBridge`. The codec enforces the closed protocol
+order, exact submit route, byte and allocation ceilings, canonical STANDARD
+Base64, schema-specific frame padding, statement/envelope/proof discriminants,
+instruction and transaction bindings, signed-payload identity, and the pipeline
+transaction hash. Use `requireCanonicalArchive(_:expectedCanonicalArchive:)`
+with the independently supplied Rust fixture to close the BLAKE3-derived
+statement and transaction-intent bindings; Swift does not substitute a
+different digest algorithm for those fields.
+
 The enum contains exactly twelve IDs: `zk-ace-pq-authorization-v0`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
 `iroha-zk-ams-v1`, `vega-existing-credential-zk-v0`,
@@ -1310,6 +1323,10 @@ try await sdk.submit(unshield: request, keypair: keypair)
 
 `ProofAttachment` emits registry-bound envelopes (`backend`, `proof_b64`, `vk_ref`, optional
 `vk_commitment_hex`/`envelope_hash_hex`); embedded key bytes are not accepted by the Swift builder.
+The complete canonical nested `ProofBox`, including compact field prefixes and
+the fixed V1 vector count, is capped at 64 MiB. Call
+`ProofAttachment.maximumProofByteCountV1(forBackend:)` to preflight a backend's
+exact proof-vector ceiling without allocating proof storage.
 
 ### Multisig spec builder
 
@@ -1656,18 +1673,25 @@ symbols are unavailable, matching the behaviour of the setter.
 
 ### Norito fixtures & parity
 
-Swift shares the canonical Norito fixtures with Android. Mirror them into
-`IrohaSwift/Fixtures` before updating tests or dashboards:
+The Rust xtask is the sole owner of the shared Norito RPC fixtures in
+`fixtures/norito_rpc`. For that shared corpus, `IrohaSwift/Fixtures` is a generated
+descriptor-only mirror containing `transaction_payloads.json` and
+`transaction_fixtures.manifest.json`; shared `.norito` payload blobs remain in the
+canonical directory. Swift-owned `swift_*` test artifacts are separate and are not
+copies of the shared corpus.
+
+Regenerate the canonical outputs and every SDK mirror before updating tests or
+dashboards:
 
 ```bash
-make swift-fixtures
-# or:
-scripts/swift_fixture_regen.sh
+cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
 ```
 
-Verify the copied fixtures remain byte-identical to the Android source:
+`scripts/swift_fixture_regen.sh` and `make swift-fixtures` are convenience wrappers
+around the same xtask owner. Verify the owner and Swift descriptor mirror with:
 
 ```bash
+cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
 make swift-fixtures-check
 ```
 
@@ -1677,17 +1701,10 @@ Run both the fixture parity check and dashboard validation in one shot:
 make swift-ci
 ```
 
-The script copies `.norito` artifacts plus supporting JSON manifests from
-`java/iroha_android/src/test/resources` (override with
-`SWIFT_FIXTURE_SOURCE`/`SWIFT_FIXTURE_OUT`). Keeping the synced directory committed lets
-dashboards and regression tests diff Swift fixtures independently of the Android tree.
-
-When the Rust exporter publishes the canonical archive, set
-`SWIFT_FIXTURE_ARCHIVE=/path/to/norito-fixtures.tar.gz` (or `.zip`) before running
-`make swift-fixtures`. The regeneration script extracts the archive to a temporary
-directory, mirrors the contents into `IrohaSwift/Fixtures`, and records the archive
-path, digest, and `source_kind=archive` in `artifacts/swift_fixture_regen_state.json`
-so CI cadence checks and dashboards continue to track ownership.
+The parity checker compares the two generated JSON files directly with
+`fixtures/norito_rpc` and rejects copied shared payload blobs. Commit the canonical
+outputs and all generated SDK mirrors together; never use Java resources, an archive,
+or a retained historical payload as an alternate Swift fixture source.
 
 ### Connect (WalletConnect-style relay)
 

@@ -113,8 +113,7 @@ fn fresh_commitment_roundtrip_preserves_explicit_hash_algorithm_tag() {
     assert_eq!(decoded, commitment);
 
     let mut algorithm_payload = Vec::new();
-    HashAlgorithmV1::Blake3_256
-        .serialize(&mut algorithm_payload)
+    norito::core::serialize_to_buffer(&HashAlgorithmV1::Blake3_256, &mut algorithm_payload)
         .expect("encode bare hash algorithm");
     assert_eq!(algorithm_payload, 1_u32.to_le_bytes());
     assert_eq!(

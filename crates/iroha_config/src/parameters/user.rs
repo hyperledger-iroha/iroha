@@ -33,8 +33,10 @@ use std::{
 };
 
 use error_stack::{Report, ResultExt};
+#[cfg(test)]
+use iroha_config_base::ParameterId;
 use iroha_config_base::{
-    ParameterId, ParameterOrigin, ReadConfig, WithOrigin,
+    ParameterOrigin, ReadConfig, WithOrigin,
     attach::ConfigValueAndOrigin,
     env::FromEnvStr,
     read::{ConfigReader, FinalWrap, ReadConfig as ReadConfigTrait},
@@ -5575,41 +5577,18 @@ pub struct Genesis {
     /// Public key expected to sign the genesis block payload.
     #[config(env = "GENESIS_PUBLIC_KEY")]
     pub public_key: WithOrigin<PublicKey>,
-    /// Optional path to the genesis block payload (`.json` or `.norito`).
+    /// Optional path to the operator-provisioned signed genesis block payload.
     #[config(env = "GENESIS")]
     pub file: Option<WithOrigin<PathBuf>>,
     /// Optional path to genesis manifest JSON for startup validation.
     #[config(env = "GENESIS_MANIFEST_JSON")]
     pub manifest_json: Option<WithOrigin<PathBuf>>,
-    /// Exact genesis block hash required for remote bootstrap.
+    /// Exact genesis consensus-header hash used as a normal-startup trust anchor.
     ///
-    /// This may be omitted when a local signed genesis file is configured.
+    /// This may be omitted when a local signed genesis file is configured. When both are present,
+    /// they must identify the same signed genesis instance.
     #[config(env = "GENESIS_EXPECTED_HASH")]
     pub expected_hash: Option<WithOrigin<HashOf<BlockHeader>>>,
-    /// Optional explicit peer allowlist that may serve genesis during bootstrap. Defaults to trusted peers.
-    #[config(default)]
-    pub bootstrap_allowlist: Vec<PeerId>,
-    /// Maximum genesis payload size accepted from peers during bootstrap.
-    #[config(default = "defaults::genesis::BOOTSTRAP_MAX_BYTES")]
-    pub bootstrap_max_bytes: Bytes<u64>,
-    /// Minimum interval between serving bootstrap responses to avoid abuse.
-    #[config(default = "defaults::genesis::BOOTSTRAP_RESPONSE_THROTTLE.into()")]
-    pub bootstrap_response_throttle_ms: DurationMs,
-    /// Timeout per bootstrap round-trip (preflight or payload).
-    #[config(default = "defaults::genesis::BOOTSTRAP_REQUEST_TIMEOUT.into()")]
-    pub bootstrap_request_timeout_ms: DurationMs,
-    /// Retry/backoff interval between bootstrap attempts.
-    #[config(default = "defaults::genesis::BOOTSTRAP_RETRY_INTERVAL.into()")]
-    pub bootstrap_retry_interval_ms: DurationMs,
-    /// Request windows per retry cycle before backoff resets and a warning is emitted.
-    /// Enabled bootstrap continues across cycles until success or a permanent validation error.
-    #[config(default = "defaults::genesis::BOOTSTRAP_MAX_ATTEMPTS")]
-    pub bootstrap_max_attempts: u32,
-    /// Whether to attempt network bootstrap when local genesis is missing.
-    ///
-    /// Enabling this without a local file requires `expected_hash`.
-    #[config(default = "true")]
-    pub bootstrap_enabled: bool,
 }
 
 impl From<Genesis> for actual::Genesis {
@@ -5619,13 +5598,6 @@ impl From<Genesis> for actual::Genesis {
             file: genesis.file,
             manifest_json: genesis.manifest_json,
             expected_hash: genesis.expected_hash.map(WithOrigin::into_value),
-            bootstrap_allowlist: genesis.bootstrap_allowlist,
-            bootstrap_max_bytes: genesis.bootstrap_max_bytes.get(),
-            bootstrap_response_throttle: genesis.bootstrap_response_throttle_ms.get(),
-            bootstrap_request_timeout: genesis.bootstrap_request_timeout_ms.get(),
-            bootstrap_retry_interval: genesis.bootstrap_retry_interval_ms.get(),
-            bootstrap_max_attempts: genesis.bootstrap_max_attempts,
-            bootstrap_enabled: genesis.bootstrap_enabled,
         }
     }
 }
@@ -9426,19 +9398,13 @@ impl Default for Nexus {
 }
 
 /// User-level configuration container for Nexus storage budgets.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct NexusStorage {
     /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
     ///
-    /// When set, this overrides the legacy `max_disk_usage_bytes` alias and becomes the
-    /// node-local budget automatically split across Kura, tiered-state cold storage, SoraFS, and
-    /// streaming spools.
+    /// When omitted, `irohad` derives a filesystem-aware budget at runtime without modifying the
+    /// operator configuration.
     pub local_budget_bytes: Option<Bytes<u64>>,
-    /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
-    #[config(default = "defaults::nexus::storage::MAX_DISK_USAGE_BYTES")]
-    pub max_disk_usage_bytes: WithOrigin<Bytes<u64>>,
-    /// Internal persisted metadata backing auto-derived per-filesystem budget defaults.
-    pub auto_default: Option<NexusStorageAutoDefault>,
     /// Block interval between disk budget enforcement scans (0 = every block).
     #[config(default = "defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS")]
     pub budget_enforce_interval_blocks: u64,
@@ -9454,15 +9420,6 @@ impl Default for NexusStorage {
     fn default() -> Self {
         Self {
             local_budget_bytes: None,
-            max_disk_usage_bytes: WithOrigin::new(
-                defaults::nexus::storage::MAX_DISK_USAGE_BYTES,
-                ParameterOrigin::default(ParameterId::from([
-                    "nexus",
-                    "storage",
-                    "max_disk_usage_bytes",
-                ])),
-            ),
-            auto_default: None,
             budget_enforce_interval_blocks:
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
@@ -9474,131 +9431,23 @@ impl Default for NexusStorage {
 impl NexusStorage {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorage> {
         let weights = self.disk_budget_weights.parse(emitter)?;
-        let (legacy_budget, legacy_origin) = self.max_disk_usage_bytes.into_tuple();
-        let legacy_budget_explicit = !matches!(legacy_origin, ParameterOrigin::Default { .. });
-        let local_budget_bytes = self.local_budget_bytes.map(Bytes::get);
-        let auto_default = self
-            .auto_default
-            .and_then(|auto_default| auto_default.parse(emitter));
-        let max_disk_usage_bytes = Bytes(local_budget_bytes.unwrap_or_else(|| legacy_budget.get()));
-        let budget_source = if legacy_budget_explicit {
-            actual::NexusStorageBudgetSource::OperatorExplicit
-        } else if let Some(local_budget_bytes) = local_budget_bytes {
-            if auto_default.as_ref().is_some_and(|auto_default| {
-                auto_default.matches_aggregate_budget(local_budget_bytes)
-            }) {
-                actual::NexusStorageBudgetSource::AutoDerived
-            } else {
-                actual::NexusStorageBudgetSource::OperatorExplicit
-            }
-        } else {
-            actual::NexusStorageBudgetSource::Unset
-        };
+        if self
+            .local_budget_bytes
+            .is_some_and(|budget| budget.get() == 0)
+        {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.storage.local_budget_bytes must be greater than zero when configured",
+            ));
+            return None;
+        }
+        let local_budget_bytes = self.local_budget_bytes;
         Some(actual::NexusStorage {
-            max_disk_usage_bytes,
-            budget_source,
-            auto_default,
+            local_budget_bytes,
+            effective_local_budget_bytes: local_budget_bytes,
             budget_enforce_interval_blocks: self.budget_enforce_interval_blocks,
             max_wsv_memory_bytes: self.max_wsv_memory_bytes,
             disk_budget_weights: weights,
             configured_component_caps: None,
-        })
-    }
-}
-
-/// Internal persisted auto-derived Nexus storage metadata.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
-pub struct NexusStorageAutoDefault {
-    /// Metadata schema version.
-    pub version: u32,
-    /// Aggregate budget derived across all filesystem groups.
-    pub aggregate_budget_bytes: Bytes<u64>,
-    /// Persisted filesystem groups in deterministic order.
-    pub filesystem_groups: Vec<NexusStorageAutoDefaultFilesystemGroup>,
-}
-
-impl NexusStorageAutoDefault {
-    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorageAutoDefault> {
-        let mut filesystem_groups = Vec::with_capacity(self.filesystem_groups.len());
-        let mut seen_components = BTreeSet::new();
-        for filesystem_group in self.filesystem_groups {
-            let filesystem_group = filesystem_group.parse(emitter)?;
-            for component in &filesystem_group.components {
-                if !seen_components.insert(*component) {
-                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                        "nexus.storage.auto_default reuses component `{}` across filesystem groups",
-                        component.as_str()
-                    )));
-                    return None;
-                }
-            }
-            filesystem_groups.push(filesystem_group);
-        }
-
-        Some(actual::NexusStorageAutoDefault {
-            version: self.version,
-            aggregate_budget_bytes: self.aggregate_budget_bytes.get(),
-            filesystem_groups,
-        })
-    }
-}
-
-/// Internal persisted auto-derived filesystem group metadata.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
-pub struct NexusStorageAutoDefaultFilesystemGroup {
-    /// Stable filesystem identity recorded when the budget was derived.
-    pub filesystem_id: String,
-    /// Budget derived for the filesystem group.
-    pub budget_bytes: Bytes<u64>,
-    /// Components assigned to the filesystem group.
-    pub components: Vec<String>,
-}
-
-impl NexusStorageAutoDefaultFilesystemGroup {
-    fn parse(
-        self,
-        emitter: &mut Emitter<ParseError>,
-    ) -> Option<actual::NexusStorageAutoDefaultFilesystemGroup> {
-        if self.filesystem_id.trim().is_empty() {
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                "nexus.storage.auto_default.filesystem_groups[].filesystem_id must not be empty",
-            ));
-            return None;
-        }
-
-        if self.components.is_empty() {
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                "nexus.storage.auto_default.filesystem_groups[].components must not be empty",
-            ));
-            return None;
-        }
-
-        let mut components = Vec::with_capacity(self.components.len());
-        let mut seen_components = BTreeSet::new();
-        for component_label in self.components {
-            let Ok(component) = component_label.parse::<actual::NexusStorageBudgetComponent>()
-            else {
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "unknown nexus.storage.auto_default component `{component_label}`"
-                )));
-                return None;
-            };
-            if !seen_components.insert(component) {
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.storage.auto_default filesystem `{}` repeats component `{}`",
-                    self.filesystem_id,
-                    component.as_str()
-                )));
-                return None;
-            }
-            components.push(component);
-        }
-        components.sort_unstable();
-
-        Some(actual::NexusStorageAutoDefaultFilesystemGroup {
-            filesystem_id: self.filesystem_id,
-            budget_bytes: self.budget_bytes.get(),
-            components,
         })
     }
 }
@@ -9646,6 +9495,21 @@ impl NexusStorageWeights {
     }
 
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorageWeights> {
+        if let Some((field, _)) = [
+            ("kura_blocks_bps", self.kura_blocks_bps),
+            ("wsv_snapshots_bps", self.wsv_snapshots_bps),
+            ("sorafs_bps", self.sorafs_bps),
+            ("soranet_spool_bps", self.soranet_spool_bps),
+            ("soravpn_spool_bps", self.soravpn_spool_bps),
+        ]
+        .into_iter()
+        .find(|(_, weight)| *weight == 0)
+        {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.storage.disk_budget_weights entries must all be greater than zero; `{field}` is zero"
+            )));
+            return None;
+        }
         let total = self.total_bps();
         if total != u32::from(defaults::nexus::storage::BPS_TOTAL) {
             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
@@ -14701,6 +14565,21 @@ impl Torii {
             &self.operator_auth.mtls_trusted_proxy_cidrs,
             false,
         );
+        if self.zk_prover_max_scan_bytes < defaults::torii::ZK_PROVER_ATTACHMENT_BODY_MAX_BYTES_V1 {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.zk_prover_max_scan_bytes must be at least {} so one maximum-size first-release body can make progress",
+                    defaults::torii::ZK_PROVER_ATTACHMENT_BODY_MAX_BYTES_V1
+                ),
+            );
+        }
+        if self.zk_prover_max_scan_millis == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.zk_prover_max_scan_millis must be greater than zero so pending work can make progress",
+            );
+        }
         if let Some(preauth_allow_cidrs) = self.preauth_allow_cidrs.as_ref() {
             validate_explicit_trust_cidrs(
                 emitter,
@@ -31723,8 +31602,8 @@ mod offline_cfg_tests {
 
         assert!(parsed.enabled);
         assert_eq!(
-            parsed.max_body_bytes,
-            defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES
+            parsed.max_body_bytes.get(),
+            defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES.get()
         );
         assert_eq!(parsed.dedupe_ttl_secs, 120);
         assert_eq!(parsed.default_profile, "swift-cbpr-plus");
@@ -32340,6 +32219,61 @@ policy_digest_hex = "{policy_digest_hex}"
         let report = format!("{error:?}");
         assert!(
             report.contains("settlement.offline.enabled=false forbids torii.kagemusha_commands"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn zk_prover_scan_budget_must_fit_one_maximum_body() {
+        let mut table = base_table();
+        let torii = table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table");
+        let minimum = defaults::torii::ZK_PROVER_ATTACHMENT_BODY_MAX_BYTES_V1;
+        torii.insert(
+            "zk_prover_max_scan_bytes".into(),
+            Value::Integer(i64::try_from(minimum - 1).expect("minimum fits TOML integer")),
+        );
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("sub-body scan budget must fail closed");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains("zk_prover_max_scan_bytes must be at least"),
+            "{report}"
+        );
+
+        let mut table = base_table();
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table")
+            .insert(
+                "zk_prover_max_scan_bytes".into(),
+                Value::Integer(i64::try_from(minimum).expect("minimum fits TOML integer")),
+            );
+        assert_eq!(
+            load_root(table).torii.zk_prover_max_scan_bytes,
+            minimum,
+            "the closed minimum scan budget must remain valid"
+        );
+    }
+
+    #[test]
+    fn zk_prover_scan_time_budget_must_allow_progress() {
+        let mut table = base_table();
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table")
+            .insert("zk_prover_max_scan_millis".into(), Value::Integer(0));
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("zero scan time budget must fail closed");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains("zk_prover_max_scan_millis must be greater than zero"),
             "{report}"
         );
     }
@@ -34656,7 +34590,33 @@ publish_delay_seconds = 17
     }
 
     #[test]
-    fn storage_budget_applies_after_parse() {
+    fn retired_peer_genesis_bootstrap_config_is_rejected() {
+        for field in [
+            "bootstrap_allowlist",
+            "bootstrap_max_bytes",
+            "bootstrap_response_throttle",
+            "bootstrap_request_timeout",
+            "bootstrap_retry_interval",
+            "bootstrap_max_attempts",
+            "bootstrap_enabled",
+        ] {
+            let mut table = base_table();
+            let genesis = table
+                .entry("genesis")
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("genesis table");
+            genesis.insert(field.into(), Value::Boolean(true));
+
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "retired genesis.{field} must not be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn storage_legacy_budget_name_is_rejected() {
         let mut table = base_table();
         let nexus = table
             .entry("nexus")
@@ -34665,24 +34625,12 @@ publish_delay_seconds = 17
             .expect("nexus table");
         let mut storage = Table::new();
         storage.insert("max_disk_usage_bytes".into(), Value::Integer(1_000));
-        storage.insert("max_wsv_memory_bytes".into(), Value::Integer(256));
-        let mut weights = Table::new();
-        weights.insert("kura_blocks_bps".into(), Value::Integer(10_000));
-        weights.insert("wsv_snapshots_bps".into(), Value::Integer(0));
-        weights.insert("sorafs_bps".into(), Value::Integer(0));
-        weights.insert("soranet_spool_bps".into(), Value::Integer(0));
-        weights.insert("soravpn_spool_bps".into(), Value::Integer(0));
-        storage.insert("disk_budget_weights".into(), Value::Table(weights));
         nexus.insert("storage".into(), Value::Table(storage));
 
-        let actual = load_root(table);
-        assert_eq!(
-            actual.nexus.storage.budget_source,
-            actual::NexusStorageBudgetSource::OperatorExplicit
+        assert!(
+            actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+            "the pre-release max_disk_usage_bytes alias must not be silently accepted"
         );
-        assert_eq!(actual.kura.max_disk_usage_bytes.get(), 1_000);
-        assert!(actual.tiered_state.enabled);
-        assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 256);
     }
 
     #[test]
@@ -34697,35 +34645,40 @@ publish_delay_seconds = 17
         storage.insert("local_budget_bytes".into(), Value::Integer(1_024));
         storage.insert("max_wsv_memory_bytes".into(), Value::Integer(128));
         let mut weights = Table::new();
-        weights.insert("kura_blocks_bps".into(), Value::Integer(10_000));
-        weights.insert("wsv_snapshots_bps".into(), Value::Integer(0));
-        weights.insert("sorafs_bps".into(), Value::Integer(0));
-        weights.insert("soranet_spool_bps".into(), Value::Integer(0));
-        weights.insert("soravpn_spool_bps".into(), Value::Integer(0));
+        weights.insert("kura_blocks_bps".into(), Value::Integer(3_000));
+        weights.insert("wsv_snapshots_bps".into(), Value::Integer(2_000));
+        weights.insert("sorafs_bps".into(), Value::Integer(4_000));
+        weights.insert("soranet_spool_bps".into(), Value::Integer(500));
+        weights.insert("soravpn_spool_bps".into(), Value::Integer(500));
         storage.insert("disk_budget_weights".into(), Value::Table(weights));
         nexus.insert("storage".into(), Value::Table(storage));
 
         let actual = load_root(table);
         assert_eq!(
-            actual.nexus.storage.budget_source,
-            actual::NexusStorageBudgetSource::OperatorExplicit
+            actual.nexus.storage.local_budget_bytes.map(Bytes::get),
+            Some(1_024)
         );
-        assert_eq!(actual.nexus.storage.max_disk_usage_bytes.get(), 1_024);
-        assert_eq!(actual.kura.max_disk_usage_bytes.get(), 1_024);
+        assert_eq!(
+            actual
+                .nexus
+                .storage
+                .effective_local_budget_bytes
+                .map(Bytes::get),
+            Some(1_024)
+        );
+        assert_eq!(actual.kura.max_disk_usage_bytes.get(), 309);
         assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 128);
     }
 
     #[test]
-    fn storage_budget_is_not_explicit_when_left_unset() {
+    fn storage_budget_requests_runtime_derivation_when_left_unset() {
         let actual = load_root(base_table());
-        assert_eq!(
-            actual.nexus.storage.budget_source,
-            actual::NexusStorageBudgetSource::Unset
-        );
+        assert!(actual.nexus.storage.local_budget_bytes.is_none());
+        assert!(actual.nexus.storage.effective_local_budget_bytes.is_none());
     }
 
     #[test]
-    fn storage_local_budget_with_matching_auto_default_parses_as_auto_derived() {
+    fn storage_zero_local_budget_is_rejected() {
         let mut table = base_table();
         let nexus = table
             .entry("nexus")
@@ -34733,101 +34686,13 @@ publish_delay_seconds = 17
             .as_table_mut()
             .expect("nexus table");
         let mut storage = Table::new();
-        storage.insert("local_budget_bytes".into(), Value::Integer(1_024));
-        storage.insert("max_wsv_memory_bytes".into(), Value::Integer(128));
-        let mut auto_default = Table::new();
-        auto_default.insert(
-            "version".into(),
-            Value::Integer(i64::from(actual::NexusStorageAutoDefault::VERSION)),
-        );
-        auto_default.insert("aggregate_budget_bytes".into(), Value::Integer(1_024));
-        let mut filesystem_group = Table::new();
-        filesystem_group.insert("filesystem_id".into(), Value::String("dev:1".into()));
-        filesystem_group.insert("budget_bytes".into(), Value::Integer(1_024));
-        filesystem_group.insert(
-            "components".into(),
-            Value::Array(vec![
-                Value::String("kura".into()),
-                Value::String("wsv_cold".into()),
-                Value::String("sorafs".into()),
-                Value::String("soranet_spool".into()),
-                Value::String("soravpn_spool".into()),
-            ]),
-        );
-        auto_default.insert(
-            "filesystem_groups".into(),
-            Value::Array(vec![Value::Table(filesystem_group)]),
-        );
-        storage.insert("auto_default".into(), Value::Table(auto_default));
+        storage.insert("local_budget_bytes".into(), Value::Integer(0));
         nexus.insert("storage".into(), Value::Table(storage));
 
-        let actual = load_root(table);
-        assert_eq!(
-            actual.nexus.storage.budget_source,
-            actual::NexusStorageBudgetSource::AutoDerived
-        );
-        assert_eq!(actual.nexus.storage.max_disk_usage_bytes.get(), 1_024);
         assert!(
-            actual.nexus.storage.auto_default.is_some(),
-            "matching metadata should be preserved"
+            actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+            "zero would disable downstream enforcement and must fail parsing"
         );
-    }
-
-    #[test]
-    fn storage_local_budget_without_auto_default_is_operator_explicit() {
-        let mut table = base_table();
-        let nexus = table
-            .entry("nexus")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("nexus table");
-        let mut storage = Table::new();
-        storage.insert("local_budget_bytes".into(), Value::Integer(1_024));
-        nexus.insert("storage".into(), Value::Table(storage));
-
-        let actual = load_root(table);
-        assert_eq!(
-            actual.nexus.storage.budget_source,
-            actual::NexusStorageBudgetSource::OperatorExplicit
-        );
-    }
-
-    #[test]
-    fn storage_local_budget_mismatch_disables_auto_default_reuse() {
-        let mut table = base_table();
-        let nexus = table
-            .entry("nexus")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("nexus table");
-        let mut storage = Table::new();
-        storage.insert("local_budget_bytes".into(), Value::Integer(1_024));
-        let mut auto_default = Table::new();
-        auto_default.insert(
-            "version".into(),
-            Value::Integer(i64::from(actual::NexusStorageAutoDefault::VERSION)),
-        );
-        auto_default.insert("aggregate_budget_bytes".into(), Value::Integer(2_048));
-        let mut filesystem_group = Table::new();
-        filesystem_group.insert("filesystem_id".into(), Value::String("dev:1".into()));
-        filesystem_group.insert("budget_bytes".into(), Value::Integer(2_048));
-        filesystem_group.insert(
-            "components".into(),
-            Value::Array(vec![Value::String("kura".into())]),
-        );
-        auto_default.insert(
-            "filesystem_groups".into(),
-            Value::Array(vec![Value::Table(filesystem_group)]),
-        );
-        storage.insert("auto_default".into(), Value::Table(auto_default));
-        nexus.insert("storage".into(), Value::Table(storage));
-
-        let actual = load_root(table);
-        assert_eq!(
-            actual.nexus.storage.budget_source,
-            actual::NexusStorageBudgetSource::OperatorExplicit
-        );
-        assert_eq!(actual.nexus.storage.max_disk_usage_bytes.get(), 1_024);
     }
 
     #[test]

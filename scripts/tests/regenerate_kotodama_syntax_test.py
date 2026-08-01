@@ -47,6 +47,34 @@ def _marked_body(text: str, marker: str) -> str:
     )[0]
 
 
+def test_cli_rejects_repeated_modes_and_paths() -> None:
+    options = MODULE.parse_args(
+        [
+            "--write",
+            "--root",
+            "/cache/repository",
+            "--policy",
+            "specs/kotodama_syntax_policy.json",
+        ]
+    )
+    assert options.write
+    assert options.root == Path("/cache/repository")
+
+    for arguments in (
+        ["--write", "--write"],
+        ["--check", "--check"],
+        ["--write", "--check"],
+        ["--root", ""],
+        ["--policy", ""],
+        ["--root", "first", "--root", "second"],
+        ["--policy", "first", "--policy", "second"],
+        ["--root=--write"],
+        ["--policy=-h"],
+    ):
+        with pytest.raises(SystemExit):
+            MODULE.parse_args(arguments)
+
+
 def test_policy_fixture_has_no_clock_or_provenance_fields() -> None:
     raw = json.loads(
         (MODULE.REPOSITORY_ROOT / MODULE.DEFAULT_POLICY).read_text(encoding="utf-8")

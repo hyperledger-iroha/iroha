@@ -3374,6 +3374,7 @@ baseTest("proof attachment verifier ids use the exact Rust portable grammar", ()
 baseTest("proof attachment enforces the complete ProofBox budget by arithmetic", () => {
   const backend = "halo2/ipa";
   const maxProofBytes = proofBoxMaxProofBytes(backend);
+  assert.equal(maxProofBytes, PROOF_BOX_MAX_ENCODED_BYTES - 23);
   assert.equal(
     proofBoxEncodedLength(backend, maxProofBytes),
     PROOF_BOX_MAX_ENCODED_BYTES,
@@ -3394,6 +3395,16 @@ baseTest("proof attachment enforces the complete ProofBox budget by arithmetic",
       }),
     /complete 67108864-byte ProofBox limit/,
   );
+});
+
+baseTest("ProofBox accounting follows canonical compact-length transitions", () => {
+  assert.equal(proofBoxEncodedLength("a".repeat(126), 0), 137);
+  assert.equal(proofBoxEncodedLength("a".repeat(127), 0), 139);
+  assert.equal(proofBoxEncodedLength("a".repeat(128), 0), 141);
+  assert.equal(proofBoxEncodedLength("a", 119), 131);
+  assert.equal(proofBoxEncodedLength("a", 120), 133);
+  assert.equal(proofBoxEncodedLength("a", 16_375), 16_388);
+  assert.equal(proofBoxEncodedLength("a", 16_376), 16_390);
 });
 
 baseTest("proof attachment accepts only exact canonical base64 proof text", () => {

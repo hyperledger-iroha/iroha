@@ -45,7 +45,7 @@ impl JsonDeserialize for Format {
 }
 
 impl NoritoSerialize for Format {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let text = self.to_string();
         <String as NoritoSerialize>::serialize(&text, writer)
     }
@@ -146,7 +146,7 @@ impl JsonDeserialize for Directives {
 }
 
 impl NoritoSerialize for Directives {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let text = self.to_string();
         <String as NoritoSerialize>::serialize(&text, writer)
     }

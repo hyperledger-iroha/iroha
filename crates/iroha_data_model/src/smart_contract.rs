@@ -1,6 +1,6 @@
 //! This module contains data and structures related only to smart contract execution
 
-use std::{format, io::Write, str::FromStr, string::String, vec::Vec};
+use std::{format, str::FromStr, string::String, vec::Vec};
 
 use bech32::{Bech32m, Hrp};
 use iroha_data_model_derive::model;
@@ -402,7 +402,7 @@ impl AsRef<str> for ContractAlias {
 }
 
 impl norito::core::NoritoSerialize for ContractAlias {
-    fn serialize<W: Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
     }
 
@@ -581,7 +581,7 @@ impl AsRef<str> for ContractAddress {
 }
 
 impl norito::core::NoritoSerialize for ContractAddress {
-    fn serialize<W: Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
     }
 

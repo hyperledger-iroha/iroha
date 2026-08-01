@@ -10,7 +10,6 @@
 
 use core::{cmp::Ordering, str::FromStr};
 use std::{
-    io::Write,
     string::{String, ToString},
     vec::Vec,
 };
@@ -137,7 +136,7 @@ pub struct NumericSpec {
 }
 
 impl NoritoSerialize for NumericSpec {
-    fn serialize<W: Write>(&self, writer: W) -> Result<(), Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         NoritoSerialize::serialize(&self.scale, writer)
     }
 }
@@ -1867,7 +1866,7 @@ impl From<u128> for Quantity {
 }
 
 impl NoritoSerialize for Quantity {
-    fn serialize<W: Write>(&self, writer: W) -> Result<(), Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.0.serialize(writer)
     }
 
@@ -2191,7 +2190,7 @@ impl From<XorQuantity> for Quantity {
 }
 
 impl NoritoSerialize for XorQuantity {
-    fn serialize<W: Write>(&self, writer: W) -> Result<(), Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.0.serialize(writer)
     }
 
@@ -2656,7 +2655,7 @@ impl Numeric {
 }
 
 impl NoritoSerialize for Numeric {
-    fn serialize<W: Write>(&self, writer: W) -> Result<(), Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         let helper = scale_::NumericScaleHelper {
             mantissa: self.mantissa.clone(),
             scale: self.scale(),
@@ -2957,7 +2956,10 @@ mod scale_ {
             <crate::bigint::BigInt as norito::core::NoritoSerialize>::schema_hash()
         }
 
-        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
             norito::core::NoritoSerialize::serialize(self.0, writer)
         }
 

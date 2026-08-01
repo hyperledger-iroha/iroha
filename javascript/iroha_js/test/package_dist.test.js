@@ -31,11 +31,11 @@ const nexusFixture = JSON.parse(
 );
 
 const {
-  PRIVACY_CAPABILITY_VALIDATION_STATUS_V1,
-  PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
+  PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
+  PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
   isPrivacyNativeAvailable,
-  privacyCapabilitiesV1,
+  privacyCompiledProfileCatalogV1,
 } = packageExports;
 
 function withNativeBinding(binding, fn) {
@@ -107,32 +107,32 @@ function slicedPrivacyView(
   return backing.subarray(prefix.length, prefix.length + archive.length);
 }
 
-const PRIVACY_CAPABILITIES_ARCHIVE = privacyNoritoFrameWithPayload(0x50);
-const VALID_PRIVACY_CAPABILITIES_ARCHIVES = [
-  PRIVACY_CAPABILITIES_ARCHIVE,
+const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE = privacyNoritoFrameWithPayload(0x50);
+const VALID_PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVES = [
+  PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE,
   privacyNoritoFrameWithPadding(0x50, 64),
   privacyNoritoFrameWithFlags(0x50, 0x26),
 ];
 
-function validatePrivacyCapabilitiesFixture(archive) {
+function validatePrivacyCompiledProfileCatalogFixture(archive) {
   const candidate = Buffer.from(archive);
   if (candidate.length === 0) {
-    return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.EMPTY;
+    return PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.EMPTY;
   }
-  if (candidate.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
-    return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.ARCHIVE_TOO_LARGE;
+  if (candidate.length > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES) {
+    return PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.ARCHIVE_TOO_LARGE;
   }
   if (
     candidate.length >= 22 &&
     candidate.subarray(6, 22).some((byte) => byte !== 0x50)
   ) {
-    return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.SCHEMA_MISMATCH;
+    return PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.SCHEMA_MISMATCH;
   }
-  return VALID_PRIVACY_CAPABILITIES_ARCHIVES.some((validArchive) =>
+  return VALID_PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVES.some((validArchive) =>
     candidate.equals(validArchive),
   )
-    ? PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.VALID
-    : PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
+    ? PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.VALID
+    : PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
 }
 
 function malformedPrivacyNativeOutputArchives(schemaByte) {
@@ -180,16 +180,16 @@ function malformedPrivacyNativeOutputArchives(schemaByte) {
   ];
 }
 
-function completePrivacyCapabilitiesBinding(overrides = {}) {
+function completePrivacyCompiledProfileCatalogBinding(overrides = {}) {
   return {
     connectNoritoBridgeAbiVersion() {
       return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
     },
-    privacyCapabilitiesV1() {
-      return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+    privacyCompiledProfileCatalogV1() {
+      return Uint8Array.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
     },
-    privacyValidateCapabilitiesV1(archive) {
-      return validatePrivacyCapabilitiesFixture(archive);
+    privacyValidateCompiledProfileCatalogV1(archive) {
+      return validatePrivacyCompiledProfileCatalogFixture(archive);
     },
     ...overrides,
   };
@@ -247,7 +247,7 @@ test("package dist exposes the current general-purpose SDK entrypoint", () => {
     "computeValidationFeePayoutLifecycleProposalFingerprintV1",
     "computeValidationFeePolicyProposalFingerprintV1",
     "noritoEncodeInstruction",
-    "privacyCapabilitiesV1",
+    "privacyCompiledProfileCatalogV1",
   ]) {
     assert.notEqual(packageExports[name], undefined, `${name} is exported`);
   }
@@ -631,8 +631,8 @@ test("package Nexus browser defaults build, finalize, and submit the shared cano
   assert.equal(submissions.length, 1, "invalid signatures must fail before Torii I/O");
 });
 
-test("package dist entrypoint exports only the canonical privacy capability bridge", () => {
-  for (const name of ["isPrivacyNativeAvailable", "privacyCapabilitiesV1"]) {
+test("package dist entrypoint exports only the canonical privacy compiled-profile catalog bridge", () => {
+  for (const name of ["isPrivacyNativeAvailable", "privacyCompiledProfileCatalogV1"]) {
     assert.equal(typeof packageExports[name], "function", `${name} must be exported`);
   }
   for (const retired of [
@@ -649,17 +649,17 @@ test("package dist entrypoint exports only the canonical privacy capability brid
     assert.equal(retired in packageExports, false, `${retired} must be retired`);
   }
   assert.equal(
-    packageExports.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
+    packageExports.PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
     256 * 1024,
   );
   assert.equal(Number.isInteger(PRIVACY_REQUIRED_BRIDGE_ABI_VERSION), true);
 });
 
 test("package dist privacy native availability clears probed capability output", () => {
-  const acceptedOutput = Buffer.from(PRIVACY_CAPABILITIES_ARCHIVE);
+  const acceptedOutput = Buffer.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
   withNativeBinding(
-    completePrivacyCapabilitiesBinding({
-      privacyCapabilitiesV1() {
+    completePrivacyCompiledProfileCatalogBinding({
+      privacyCompiledProfileCatalogV1() {
         return acceptedOutput;
       },
     }),
@@ -667,40 +667,40 @@ test("package dist privacy native availability clears probed capability output",
   );
   assert.deepEqual(
     acceptedOutput,
-    Buffer.alloc(PRIVACY_CAPABILITIES_ARCHIVE.length),
+    Buffer.alloc(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE.length),
   );
 
-  const rejectedOutput = Buffer.from(PRIVACY_CAPABILITIES_ARCHIVE);
+  const rejectedOutput = Buffer.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
   rejectedOutput[0] = 0x00;
   withNativeBinding(
-    completePrivacyCapabilitiesBinding({
-      privacyCapabilitiesV1() {
+    completePrivacyCompiledProfileCatalogBinding({
+      privacyCompiledProfileCatalogV1() {
         return rejectedOutput;
       },
-      privacyValidateCapabilitiesV1() {
-        return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
+      privacyValidateCompiledProfileCatalogV1() {
+        return PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
       },
     }),
     () => assert.equal(isPrivacyNativeAvailable(), false),
   );
   assert.deepEqual(
     rejectedOutput,
-    Buffer.alloc(PRIVACY_CAPABILITIES_ARCHIVE.length),
+    Buffer.alloc(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE.length),
   );
 });
 
 test("package dist privacy availability admits the capability-snapshot first-release bridge", () => {
   let capabilityCalls = 0;
-  const binding = completePrivacyCapabilitiesBinding({
-    privacyCapabilitiesV1() {
+  const binding = completePrivacyCompiledProfileCatalogBinding({
+    privacyCompiledProfileCatalogV1() {
       capabilityCalls += 1;
-      return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+      return Uint8Array.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
     },
   });
 
   withNativeBinding(binding, () => {
     assert.equal(isPrivacyNativeAvailable(), true);
-    assert.deepEqual(privacyCapabilitiesV1(), PRIVACY_CAPABILITIES_ARCHIVE);
+    assert.deepEqual(privacyCompiledProfileCatalogV1(), PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
   });
   assert.equal(capabilityCalls, 2);
   for (const retired of [
@@ -716,14 +716,14 @@ test("package dist privacy availability admits the capability-snapshot first-rel
 test("package dist privacy capability wrapper sanitizes native exceptions", () => {
   const witness = "package-dist-private-witness-never-echo";
   withNativeBinding(
-    completePrivacyCapabilitiesBinding({
-      privacyCapabilitiesV1() {
+    completePrivacyCompiledProfileCatalogBinding({
+      privacyCompiledProfileCatalogV1() {
         throw new Error("native panic included " + witness);
       },
     }),
     () => {
-      const error = captureThrown(() => privacyCapabilitiesV1());
-      assert.equal(error.message, "native privacyCapabilitiesV1 failed");
+      const error = captureThrown(() => privacyCompiledProfileCatalogV1());
+      assert.equal(error.message, "native privacyCompiledProfileCatalogV1 failed");
       assert.equal(error.cause, undefined);
       assert.equal(String(error).includes(witness), false);
       assert.equal(String(error.stack).includes(witness), false);
@@ -741,19 +741,19 @@ test("package dist privacy capability bridge rejects invalid ABI versions before
   ]) {
     let dispatched = false;
     withNativeBinding(
-      completePrivacyCapabilitiesBinding({
+      completePrivacyCompiledProfileCatalogBinding({
         connectNoritoBridgeAbiVersion() {
           return abiVersion;
         },
-        privacyCapabilitiesV1() {
+        privacyCompiledProfileCatalogV1() {
           dispatched = true;
-          return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+          return Uint8Array.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
         },
       }),
       () => {
         assert.equal(isPrivacyNativeAvailable(), false);
         assert.throws(
-          () => privacyCapabilitiesV1(),
+          () => privacyCompiledProfileCatalogV1(),
           /requires the iroha_js_host native binding built with privacy FFI support/u,
         );
       },
@@ -768,78 +768,78 @@ test("package dist privacy capability wrapper respects sliced native output view
     0xff,
     0x7f,
     0x50,
-    ...PRIVACY_CAPABILITIES_ARCHIVE,
+    ...PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE,
     0x24,
   ]);
   let published;
 
   withNativeBinding(
-    completePrivacyCapabilitiesBinding({
-      privacyCapabilitiesV1() {
+    completePrivacyCompiledProfileCatalogBinding({
+      privacyCompiledProfileCatalogV1() {
         return new DataView(
           backing.buffer,
           prefixLength,
-          PRIVACY_CAPABILITIES_ARCHIVE.length,
+          PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE.length,
         );
       },
     }),
     () => {
-      published = privacyCapabilitiesV1();
+      published = privacyCompiledProfileCatalogV1();
     },
   );
 
-  assert.deepEqual(published, PRIVACY_CAPABILITIES_ARCHIVE);
+  assert.deepEqual(published, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
   assert.equal(backing[0], 0xff);
   assert.equal(backing.at(-1), 0x24);
   backing[prefixLength] = 0x00;
-  assert.deepEqual(published, PRIVACY_CAPABILITIES_ARCHIVE);
+  assert.deepEqual(published, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
 });
 
 test("package dist privacy capability wrapper accepts maximum Norito header padding", () => {
   const paddedArchive = privacyNoritoFrameWithPadding(0x50, 64);
   withNativeBinding(
-    completePrivacyCapabilitiesBinding({
-      privacyCapabilitiesV1() {
+    completePrivacyCompiledProfileCatalogBinding({
+      privacyCompiledProfileCatalogV1() {
         return Buffer.from(paddedArchive);
       },
     }),
-    () => assert.deepEqual(privacyCapabilitiesV1(), paddedArchive),
+    () => assert.deepEqual(privacyCompiledProfileCatalogV1(), paddedArchive),
   );
 });
 
 test("package dist privacy capability wrapper accepts complete field-bitset flags", () => {
   const flaggedArchive = privacyNoritoFrameWithFlags(0x50, 0x26);
   withNativeBinding(
-    completePrivacyCapabilitiesBinding({
-      privacyCapabilitiesV1() {
+    completePrivacyCompiledProfileCatalogBinding({
+      privacyCompiledProfileCatalogV1() {
         return Buffer.from(flaggedArchive);
       },
     }),
-    () => assert.deepEqual(privacyCapabilitiesV1(), flaggedArchive),
+    () => assert.deepEqual(privacyCompiledProfileCatalogV1(), flaggedArchive),
   );
 });
 
 test("package dist privacy capability wrapper defensively copies native output", () => {
-  const nativeOutput = Buffer.from(PRIVACY_CAPABILITIES_ARCHIVE);
+  const nativeOutput = Buffer.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
   let published;
 
   withNativeBinding(
-    completePrivacyCapabilitiesBinding({
-      privacyCapabilitiesV1() {
+    completePrivacyCompiledProfileCatalogBinding({
+      privacyCompiledProfileCatalogV1() {
         return nativeOutput;
       },
     }),
     () => {
-      published = privacyCapabilitiesV1();
+      published = privacyCompiledProfileCatalogV1();
     },
   );
 
   assert.notEqual(published, nativeOutput);
-  assert.deepEqual(published, PRIVACY_CAPABILITIES_ARCHIVE);
+  assert.deepEqual(published, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
   published[0] = 0x7f;
-  assert.deepEqual(nativeOutput, PRIVACY_CAPABILITIES_ARCHIVE);
+  assert.deepEqual(nativeOutput, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
   nativeOutput[1] = 0x7f;
-  assert.equal(published[1], PRIVACY_CAPABILITIES_ARCHIVE[1]);
+  assert.equal(published[1], PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE[1]);
 });
 
 test("package declarations expose readonly snapshot metadata without retired privacy types", () => {
@@ -892,18 +892,18 @@ test("package declarations expose readonly snapshot metadata without retired pri
 test("package dist privacy capability wrapper rejects malformed Norito output archives", () => {
   for (const malformedArchive of malformedPrivacyNativeOutputArchives(0x50)) {
     withNativeBinding(
-      completePrivacyCapabilitiesBinding({
-        privacyCapabilitiesV1() {
+      completePrivacyCompiledProfileCatalogBinding({
+        privacyCompiledProfileCatalogV1() {
           return Buffer.from(malformedArchive);
         },
-        privacyValidateCapabilitiesV1() {
-          return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
+        privacyValidateCompiledProfileCatalogV1() {
+          return PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
         },
       }),
       () => {
         assert.throws(
-          () => privacyCapabilitiesV1(),
-          /native privacyCapabilitiesV1 returned an invalid typed privacy capability archive/u,
+          () => privacyCompiledProfileCatalogV1(),
+          /native privacyCompiledProfileCatalogV1 returned an invalid local compiled-profile catalog archive/u,
         );
       },
     );
@@ -911,17 +911,17 @@ test("package dist privacy capability wrapper rejects malformed Norito output ar
 });
 
 test("package dist privacy capability wrapper rejects oversized native output", () => {
-  const oversized = Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f);
+  const oversized = Buffer.alloc(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES + 1, 0x7f);
   withNativeBinding(
-    completePrivacyCapabilitiesBinding({
-      privacyCapabilitiesV1() {
+    completePrivacyCompiledProfileCatalogBinding({
+      privacyCompiledProfileCatalogV1() {
         return oversized;
       },
     }),
     () => {
       assert.throws(
-        () => privacyCapabilitiesV1(),
-        /native privacyCapabilitiesV1 returned oversized output/u,
+        () => privacyCompiledProfileCatalogV1(),
+        /native privacyCompiledProfileCatalogV1 returned oversized output/u,
       );
     },
   );
@@ -935,17 +935,17 @@ test("package dist privacy native availability rejects every unsafe capability o
     () => new Uint8Array(),
     () => undefined,
     () => [0x50],
-    () => Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f),
+    () => Buffer.alloc(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES + 1, 0x7f),
     ...malformedPrivacyNativeOutputArchives(0x50).map(
       (archive) => () => Buffer.from(archive),
     ),
   ];
-  for (const privacyCapabilitiesOverride of overrides) {
+  for (const privacyCompiledProfileCatalogOverride of overrides) {
     withNativeBinding(
-      completePrivacyCapabilitiesBinding({
-        privacyCapabilitiesV1: privacyCapabilitiesOverride,
-        privacyValidateCapabilitiesV1() {
-          return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
+      completePrivacyCompiledProfileCatalogBinding({
+        privacyCompiledProfileCatalogV1: privacyCompiledProfileCatalogOverride,
+        privacyValidateCompiledProfileCatalogV1() {
+          return PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
         },
       }),
       () => assert.equal(isPrivacyNativeAvailable(), false),
@@ -956,19 +956,19 @@ test("package dist privacy native availability rejects every unsafe capability o
 test("package dist privacy capability wrapper rejects wrong result schemas", () => {
   const wrongSchemaArchive = privacyNoritoFrameWithSchemaOverride(0x50, 21, 0x42);
   withNativeBinding(
-    completePrivacyCapabilitiesBinding({
-      privacyCapabilitiesV1() {
+    completePrivacyCompiledProfileCatalogBinding({
+      privacyCompiledProfileCatalogV1() {
         return Buffer.from(wrongSchemaArchive);
       },
-      privacyValidateCapabilitiesV1() {
-        return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.SCHEMA_MISMATCH;
+      privacyValidateCompiledProfileCatalogV1() {
+        return PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.SCHEMA_MISMATCH;
       },
     }),
     () => {
       assert.equal(isPrivacyNativeAvailable(), false);
       assert.throws(
-        () => privacyCapabilitiesV1(),
-        /native privacyCapabilitiesV1 returned an invalid typed privacy capability archive/u,
+        () => privacyCompiledProfileCatalogV1(),
+        /native privacyCompiledProfileCatalogV1 returned an invalid local compiled-profile catalog archive/u,
       );
     },
   );

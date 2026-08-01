@@ -11,7 +11,7 @@ auditors share a single source of truth.
 
 | Domain | Parameter | Value / Behaviour | Evidence & Tooling |
 |--------|-----------|-------------------|--------------------|
-| Chunking & proofs | CDC profile | Target 256 KiB (64 KiB min, 512 KiB max) with BLAKE3 digests, two-level (64 KiB / 4 KiB) PoR tree per chunk. | `cargo run -p sorafs_chunker --bin export_vectors` and `ci/check_sorafs_fixtures.sh` (see `specs/sorafs/chunker_conformance.md`). `sorafs_car::ChunkStore` emits the PoR tree (`sorafs_car/src/lib.rs`). |
+| Chunking & proofs | CDC profile | Target 256 KiB (64 KiB min, 512 KiB max) with BLAKE3 digests, two-level (64 KiB / 4 KiB) PoR tree per chunk. | `cargo run -p sorafs_chunker --features dev-tools --bin export_vectors` and `ci/check_sorafs_fixtures.sh` (see `specs/sorafs/chunker_conformance.md`). `sorafs_car::ChunkStore` emits the PoR tree (`sorafs_car/src/lib.rs`). |
 | Provider adverts | Refresh/expiry | Providers refresh adverts every 12 h; TTL is 24 h. Payloads are signed `ProviderAdvertBodyV1` envelopes with deterministic nonce/QoS metadata. | Provider advert publishing pipelines plus the admission fixtures enforce cadence/TLV limits. Dashboards: `torii_sorafs_admission_total`, `torii_sorafs_provider_range_capability_total` (see `specs/sorafs/provider_advert_multisource.md`). |
 | Proof cadence | PoR/PDP windows | 1 h epochs, ≤32 samples, 10 m probe window + 2 m grace. Sora-PDP runs on all hot replicas; Sora-PoTR classifies 90 s (hot) / 5 m (warm) deadlines. | `sorafs_cli proof verify` (PoR) and PDP probe harnesses; dashboards `dashboards/grafana/sorafs_capacity_health.json` (`torii_da_pdp_bonus_micro_total`, `torii_da_potr_bonus_micro_total`). HTTP fetches must carry `Sora-PDP` / `Sora-PoTR` headers (`specs/soradns_gateway_content_binding.md`). |
 | Replication orders | Acceptance SLA | Orders expire if not accepted within 5 minutes, require `precommit` plus QA PoR `PASS` before completion, and every artefact lands in the GovernanceLog DAG. | `torii_sorafs_registry_orders_total`, `torii_sorafs_replication_sla_total`, and the DAG fixtures in `specs/sorafs_governance_dag_plan.md`. Regenerate fixtures via `cargo run --locked -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order --spec fixtures/sorafs_manifest/replication_order/order_v1.json`. |
@@ -26,7 +26,7 @@ auditors share a single source of truth.
 - Verification workflow:
 
   ```bash
-  cargo run --locked -p sorafs_chunker --bin export_vectors
+  cargo run --locked -p sorafs_chunker --features dev-tools --bin export_vectors
   ci/check_sorafs_fixtures.sh
   cargo test -p sorafs_car --lib chunk_store::tests::por_tree_smoke
   ```

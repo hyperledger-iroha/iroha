@@ -1006,28 +1006,28 @@ mod tests {
         domain::DomainId,
         name::Name,
         privacy::{
-            BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
-            BOOTLE_LANTERN_RING_DEGREE_V1, BootleLanternAllowedAttributeValuesV1,
-            BootleLanternAttributeValueV1, BootleLanternIssuerPolicyLifecycleV1,
-            BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
-            IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1, IrohaJindoPolynomialCommitmentStatementV1,
-            JindoActivationLimitsV1, PrivacyActiveLifecycleV1, PrivacyAssuranceV1,
-            PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyCommitmentV1,
-            PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1, PrivacyFcmpOutputTupleV1,
-            PrivacyFcmpPoolBootstrapV1, PrivacyIssuerIdV1, PrivacyJindoFieldElementV1,
-            PrivacyJindoLatticeCommitmentV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
-            PrivacyOrchardPoolBootstrapV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
-            PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
-            PrivacyPgcAccountV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-            PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofManagedPoolBootstrapV1,
-            PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
-            PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementContextV1,
-            PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-            PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaMdlDigestAlgorithmV1,
-            PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1,
-            PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1,
-            PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageRequirementV1, PrivacyX509KeyUsageV1,
-            PrivacyX509TrustStoreDigestV1, PrivacyZkAcePolicyLifecycleV1, PrivacyZkAmsRegistryIdV1,
+            BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_RING_DEGREE_V1,
+            BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
+            BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPublicMatrixV1,
+            BootleLanternPolynomialV1, IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1,
+            IrohaJindoPolynomialCommitmentStatementV1, JindoActivationLimitsV1,
+            PrivacyActiveLifecycleV1, PrivacyAssuranceV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+            PrivacyCommitmentV1, PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1,
+            PrivacyFcmpOutputTupleV1, PrivacyFcmpPoolBootstrapV1, PrivacyIssuerIdV1,
+            PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyNamespaceScopeV1,
+            PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapV1, PrivacyP256CiphertextV1,
+            PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+            PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1, PrivacyPolicyDigestV1,
+            PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1,
+            PrivacyProofManagedPoolBootstrapV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
+            PrivacyProtocolActivationLimitsV1, PrivacyRootRoleV1, PrivacyRootV1,
+            PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1, PrivacyStatementV1,
+            PrivacyTransactionIntentDigestV1, PrivacyVegaIssuerRecordLifecycleV1,
+            PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+            PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1, PrivacyX509CrlDerDigestV1,
+            PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1,
+            PrivacyX509KeyUsageRequirementV1, PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
+            PrivacyZkAcePolicyLifecycleV1, PrivacyZkAmsRegistryIdV1,
             PrivacyZkX509RecordLifecycleV1,
         },
     };
@@ -1250,18 +1250,20 @@ mod tests {
         .expect("canonical ZK-ACE policy record")
     }
 
+    fn bootle_lantern_public_matrix(seed: usize) -> BootleLanternIssuerPublicMatrixV1 {
+        let first_column = core::array::from_fn(|block| BootleLanternPolynomialV1 {
+            coefficients: (0..BOOTLE_LANTERN_RING_DEGREE_V1)
+                .map(|coefficient| {
+                    u16::try_from((block * 67 + coefficient + seed) % 12_288)
+                        .expect("test residue fits u16")
+                })
+                .collect(),
+        });
+        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+            .expect("canonical degree-512 multiplication matrix")
+    }
+
     fn bootle_lantern_policy() -> BootleLanternIssuerPolicyV1 {
-        let entries = (0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1
-            * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1)
-            .map(|entry| BootleLanternPolynomialV1 {
-                coefficients: (0..BOOTLE_LANTERN_RING_DEGREE_V1)
-                    .map(|coefficient| {
-                        u16::try_from((entry * 67 + coefficient + 1) % 12_288)
-                            .expect("test residue fits u16")
-                    })
-                    .collect(),
-            })
-            .collect();
         let allowed_values = (0..BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1)
             .map(|index| BootleLanternAllowedAttributeValuesV1 {
                 values: if index == 1 {
@@ -1281,7 +1283,7 @@ mod tests {
             lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
             issuer_parameter_id: PrivacyParameterIdV1::new(digest(173)),
             issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
-            issuer_public_matrix: BootleLanternIssuerPublicMatrixV1 { entries },
+            issuer_public_matrix: bootle_lantern_public_matrix(1),
             required_disclosure_bitmap: 0b0001_0010,
             allowed_values,
             record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),
@@ -1308,7 +1310,8 @@ mod tests {
     ) -> BootleLanternIssuerPolicyV1 {
         let mut successor = current.clone();
         successor.epoch += 1;
-        successor.issuer_public_matrix.entries[0].coefficients[0] += 1;
+        successor.issuer_parameter_id = PrivacyParameterIdV1::new(digest(174));
+        successor.issuer_public_matrix = bootle_lantern_public_matrix(701);
         redigest_bootle_lantern_policy(&mut successor);
         successor
             .validate_rotation_successor(current)

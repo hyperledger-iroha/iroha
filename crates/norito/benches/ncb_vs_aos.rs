@@ -52,7 +52,7 @@ fn bench_encode(c: &mut Criterion) {
             b.iter(|| {
                 let hint = aos_owned.encoded_len_hint().unwrap_or(0);
                 let mut buf = Vec::with_capacity(hint);
-                aos_owned.serialize(&mut buf).unwrap();
+                norito::core::serialize_to_buffer(&aos_owned, &mut buf).unwrap();
                 std::hint::black_box(buf)
             })
         });

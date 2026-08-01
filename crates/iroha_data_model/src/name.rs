@@ -223,7 +223,7 @@ impl Name {
 }
 
 impl norito::core::NoritoSerialize for Name {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
     }
 

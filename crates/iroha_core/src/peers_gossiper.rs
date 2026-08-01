@@ -8,7 +8,6 @@
 #[allow(clippy::disallowed_types)]
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
-    io::Write,
     time::Duration,
 };
 
@@ -1075,7 +1074,7 @@ pub struct SignedPeerTrust {
 }
 
 impl NoritoSerialize for PeersGossip {
-    fn serialize<W: Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         // Serialize peers as Vec to preserve insertion order.
         let wire = PeersGossipWire {
             peers: self.peers.iter().map(Clone::clone).collect(),

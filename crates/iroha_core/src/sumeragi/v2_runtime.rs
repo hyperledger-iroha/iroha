@@ -856,7 +856,10 @@ impl RuntimeIngressOwnershipEvidence {
             });
         let leader_wire_token_is_exact = self.leader_wire_token().is_ok();
         let leader_wire_physical_carrier_is_exact = matches!(
-            (self.leader_wire_token(), self.leader_wire_physical_carrier()),
+            (
+                self.leader_wire_token(),
+                self.leader_wire_physical_carrier()
+            ),
             (Ok(None), Ok(None)) | (Ok(Some(_)), Ok(Some(_)))
         );
         let lifecycle_ordinal_is_exact = self.earliest_lifecycle_ordinal().is_ok();
@@ -1207,7 +1210,7 @@ impl RuntimeCandidateCausalOrigin {
         origin
     }
 
-    pub(crate) fn mint_fresh_root(
+    fn mint_fresh_root(
         tag: EventTag,
         class: CommandClass,
         kind: RuntimeFreshRootKind,
@@ -5403,6 +5406,14 @@ impl RuntimeDeferredLifecycleOwnership {
         &self.owner
     }
 
+    const fn physical_cut(&self) -> u128 {
+        self.physical_cut
+    }
+
+    fn into_owner(self) -> RuntimeLifecycleOwner {
+        self.owner
+    }
+
     fn rebase_deferred_ingress(
         &self,
         lifecycle_ordinal: u128,
@@ -6423,7 +6434,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             if !self
                 .deferred_lifecycle_ownership
                 .values()
-                .any(|deferred| deferred == &owner)
+                .any(|deferred| deferred.owner() == &owner)
             {
                 self.retransmit_owner = Some(owner);
             }
@@ -6519,7 +6530,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         let mut minimum = self
             .ingress
-            .oldest_active_lifecycle_ordinal_before_physical_cut(target.physical_cut)?;
+            .oldest_active_lifecycle_ordinal_before_physical_cut(target.physical_cut())?;
         let mut observe = |owner: &RuntimeLifecycleOwner| -> Result<(), EnqueueError> {
             if !owner.validate_exact() {
                 return Err(EnqueueError::FailClosed);
@@ -7110,7 +7121,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let Some(oldest_deferred_lifecycle) = self
             .deferred_lifecycle_ownership
             .values()
-            .map(RuntimeLifecycleOwner::lifecycle_ordinal)
+            .map(|ownership| ownership.owner().lifecycle_ordinal())
             .min()
         else {
             return Ok(None);
@@ -7125,7 +7136,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let blocked_deferred_owners = self
             .deferred_lifecycle_ownership
             .values()
-            .cloned()
+            .map(|ownership| ownership.owner().clone())
             .collect::<Vec<_>>();
         let blocked_fifo_owners = self
             .ingress
@@ -7536,9 +7547,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                     }
                 }
                 if invalid_cut {
-                    self.latch_fail_closed(
-                        "deferred physical-cut lifecycle ownership was invalid",
-                    );
+                    self.latch_fail_closed("deferred physical-cut lifecycle ownership was invalid");
                     return Err(RuntimeError::FailClosed);
                 }
                 if eligible.is_empty() {
@@ -7581,7 +7590,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let lifecycle_owner = self
             .deferred_lifecycle_ownership
             .remove(&deferred_ordinal)
-            .map(|ownership| ownership.owner);
+            .map(RuntimeDeferredLifecycleOwnership::into_owner);
         #[cfg(test)]
         let lifecycle_owner =
             lifecycle_owner.or_else(|| self.driver.synthetic_deferred_lifecycle_owner(&evidence));
@@ -14858,7 +14867,7 @@ mod tests {
             mutation.earliest_lifecycle_ordinal(),
             Ok(Some(mutation_ordinal))
         );
-        let mut identity_mutated_owner = healthy_owner.clone();
+        let mut identity_mutated_owner = healthy_owner.owner().clone();
         identity_mutated_owner.causal_origin.root_ingress_identity =
             Some(Hash::new(b"mutated Busy-deferred ingress identity"));
         identity_mutated_owner.causal_origin.lifecycle_key =
@@ -14872,9 +14881,14 @@ mod tests {
             identity_mutated_owner.causal_origin().root_ingress_identity,
             healthy_owner.causal_origin().root_ingress_identity
         );
+        let identity_mutated_ownership = RuntimeDeferredLifecycleOwnership::new(
+            identity_mutated_owner,
+            healthy_owner.physical_cut(),
+        )
+        .expect("mutated exact owner retains the deferred physical cut");
         runtime
             .deferred_lifecycle_ownership
-            .insert(deferred_ordinal, identity_mutated_owner);
+            .insert(deferred_ordinal, identity_mutated_ownership);
         let ingress_before_rejection = runtime.deferred_ingress_ownership.clone();
         let lifecycle_before_rejection = runtime.deferred_lifecycle_ownership.clone();
         assert_eq!(
@@ -17269,6 +17283,9 @@ mod tests {
         let lifecycle_owner =
             RuntimeLifecycleOwner::new(tagged.causal_origin.clone(), lifecycle_ordinal)
                 .expect("construct exact deferred lifecycle owner");
+        let lifecycle_ownership =
+            RuntimeDeferredLifecycleOwnership::new(lifecycle_owner, runtime.ingress_physical_cut)
+                .expect("manual deferred owner retains the current physical ingress cut");
         let owner_tag = runtime.round_tag();
         runtime
             .driver
@@ -17287,7 +17304,7 @@ mod tests {
         assert!(
             runtime
                 .deferred_lifecycle_ownership
-                .insert(deferred_ordinal, lifecycle_owner)
+                .insert(deferred_ordinal, lifecycle_ownership)
                 .is_none()
         );
         runtime

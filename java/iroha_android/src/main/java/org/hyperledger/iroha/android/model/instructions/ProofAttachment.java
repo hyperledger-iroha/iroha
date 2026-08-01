@@ -10,7 +10,6 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
 /** JSON-serializable proof attachment accepted by native zk transaction encoders. */
 public final class ProofAttachment {
   public static final long MAXIMUM_ENCODED_PROOF_BOX_BYTES = 64L * 1024L * 1024L;
-  private static final long PROOF_BOX_CANONICAL_FIELD_OVERHEAD = 32L;
 
   private final String backend;
   private final byte[] proofBytes;
@@ -147,13 +146,28 @@ public final class ProofAttachment {
       throw new IllegalArgumentException("ProofBox component lengths must be non-negative");
     }
     try {
-      return Math.addExact(
-          Math.addExact(PROOF_BOX_CANONICAL_FIELD_OVERHEAD, backendUtf8ByteCount),
-          proofByteCount);
+      final long backendValueLength =
+          Math.addExact(compactLengthPrefixBytes(backendUtf8ByteCount), backendUtf8ByteCount);
+      final long backendFieldLength =
+          Math.addExact(compactLengthPrefixBytes(backendValueLength), backendValueLength);
+      final long proofValueLength = Math.addExact(8L, proofByteCount);
+      final long proofFieldLength =
+          Math.addExact(compactLengthPrefixBytes(proofValueLength), proofValueLength);
+      return Math.addExact(backendFieldLength, proofFieldLength);
     } catch (final ArithmeticException error) {
       throw new IllegalArgumentException(
           "encoded ProofBox length overflows the supported range", error);
     }
+  }
+
+  private static long compactLengthPrefixBytes(final long value) {
+    long remaining = value;
+    long bytes = 1L;
+    while (remaining >= 0x80L) {
+      remaining >>>= 7;
+      bytes++;
+    }
+    return bytes;
   }
 
   private static void appendLanePrivacyJson(

@@ -29,9 +29,9 @@ mod model {
 }
 
 impl ncore::NoritoSerialize for Metadata {
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let len = self.0.len();
-        ncore::WriteBytesExt::write_u64::<ncore::LittleEndian>(&mut writer, len as u64)?;
+        ncore::WriteBytesExt::write_u64::<ncore::LittleEndian>(writer, len as u64)?;
 
         if ncore::use_packed_seq() {
             let mut offsets: Vec<u64> = Vec::with_capacity(len + 1);
@@ -52,9 +52,9 @@ impl ncore::NoritoSerialize for Metadata {
             for off in offsets {
                 offs_bytes.extend_from_slice(&off.to_le_bytes());
             }
-            std::io::Write::write_all(&mut writer, &offs_bytes)?;
+            std::io::Write::write_all(writer, &offs_bytes)?;
 
-            std::io::Write::write_all(&mut writer, &data)?;
+            std::io::Write::write_all(writer, &data)?;
             return Ok(());
         }
 
@@ -64,15 +64,15 @@ impl ncore::NoritoSerialize for Metadata {
             serialize_entry(&mut entry_buf, name, json)?;
 
             if ncore::use_compact_len() {
-                ncore::write_len(&mut writer, entry_buf.len() as u64)?;
+                ncore::write_len(writer, entry_buf.len() as u64)?;
             } else {
                 ncore::WriteBytesExt::write_u64::<ncore::LittleEndian>(
-                    &mut writer,
+                    writer,
                     entry_buf.len() as u64,
                 )?;
             }
 
-            std::io::Write::write_all(&mut writer, &entry_buf)?;
+            std::io::Write::write_all(writer, &entry_buf)?;
         }
 
         Ok(())
@@ -167,7 +167,7 @@ fn serialize_entry<W: std::io::Write>(
     let mut buf = ncore::DeriveSmallBuf::new();
 
     buf.clear();
-    <Name as ncore::NoritoSerialize>::serialize(name, &mut buf)?;
+    ncore::serialize_to_writer(name, &mut buf)?;
     if ncore::use_compact_len() {
         ncore::write_len(writer, buf.len() as u64)?;
     } else {
@@ -176,7 +176,7 @@ fn serialize_entry<W: std::io::Write>(
     std::io::Write::write_all(writer, buf.as_slice())?;
 
     buf.clear();
-    <Json as ncore::NoritoSerialize>::serialize(json, &mut buf)?;
+    ncore::serialize_to_writer(json, &mut buf)?;
     if ncore::use_compact_len() {
         ncore::write_len(writer, buf.len() as u64)?;
     } else {
@@ -228,7 +228,7 @@ mod tests {
         );
 
         let mut metadata_bytes = Vec::new();
-        ncore::NoritoSerialize::serialize(&metadata, &mut metadata_bytes).unwrap();
+        ncore::serialize_to_buffer(&metadata, &mut metadata_bytes).unwrap();
 
         let reference: Vec<(Name, Json)> = metadata
             .0
@@ -236,8 +236,7 @@ mod tests {
             .map(|(name, json)| (name.clone(), json.clone()))
             .collect();
         let mut vec_bytes = Vec::new();
-        <Vec<(Name, Json)> as ncore::NoritoSerialize>::serialize(&reference, &mut vec_bytes)
-            .unwrap();
+        ncore::serialize_to_buffer(&reference, &mut vec_bytes).unwrap();
 
         assert_eq!(metadata_bytes, vec_bytes);
         let hint = <Metadata as ncore::NoritoSerialize>::encoded_len_hint(&metadata)

@@ -470,13 +470,30 @@ complete verifying-key record equal the normalized request.
 the closed `PrivacyProtocolIdV1` enum in exact wire order.
 The local catalog contains no governance or readiness state; fetch a fresh
 committed `PrivacyCapabilitySnapshotV1` from live Torii before proof submission.
-`Exact12FixtureBundleV1()` returns the byte-complete Rust-derived statements
-and envelopes for all twelve rows; `ValidateExact12FixtureBundleV1(...)`
-accepts only the canonical bundle and enforces a 2 MiB input ceiling. Native
+`Exact12FixtureBundleV1()` returns the byte-complete Rust-derived statements,
+envelopes, submit instructions, intent projections and digests, unsigned
+payloads, versioned signed transactions, and pipeline hashes for all twelve
+rows; `ValidateExact12FixtureBundleV1(...)` accepts only the canonical bundle
+and enforces a 2 MiB input ceiling. Native
 availability requires ABI 21, both compiled-catalog symbols, both exact-12 fixture
 symbols, the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form algorithm selectors are absent;
 proofs use protocol-specific typed APIs.
+
+`PrivacyExact12FixtureCodecV1` is the native-independent managed conformance
+codec for the checked-in
+`fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64` archive. It accepts
+only schema-bound, checksum-valid, uncompressed canonical Norito with version 1,
+the exact twelve ordered protocol rows, the first-release submit-proof wire ID,
+bounded non-empty opaque fields, and exact 32-byte digests. Its immutable row
+and bundle models defensively copy all byte arrays and lists. Use
+`RequireTrustedCanonical(candidate, trustedArchive)` when the opaque inner bytes
+must be bound to the reviewed Rust fixture: structural decode validates the
+outer format, while the trusted path additionally requires complete byte
+identity and therefore rejects row swaps, cross-row substitutions, and
+checksum-repaired mutations. `DecodeCanonicalBase64` expects a single padded
+standard-Base64 string with no whitespace; remove the fixture file's one final
+LF only after checking that it is the sole line terminator.
 
 The enum contains exactly twelve IDs: `zk-ace-pq-authorization-v0`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,

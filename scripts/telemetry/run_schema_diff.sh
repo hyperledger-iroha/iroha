@@ -207,7 +207,7 @@ if [[ -n "${MARKDOWN_OUT}" ]]; then
   echo "[telemetry-schema] writing markdown summary to ${MARKDOWN_OUT}" >&2
 fi
 
-cmd=(cargo run -p telemetry-schema-diff -- --format json)
+cmd=(cargo run -p telemetry-schema-diff --features dev-tools -- --format json)
 if [[ -n "${ANDROID_CONFIG}" ]]; then
   cmd+=("--android-config" "${ANDROID_CONFIG}" "--rust-config" "${RUST_CONFIG}")
 else

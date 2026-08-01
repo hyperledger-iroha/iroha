@@ -222,8 +222,8 @@ run_xtask() {
   if cargo --list 2>/dev/null | awk '{print $1}' | grep -qx 'xtask'; then
     cargo xtask "${args[@]}"
   else
-    echo "cargo xtask unavailable; falling back to cargo run -p xtask --bin xtask -- ${args[*]}" >&2
-    cargo run -p xtask --bin xtask -- "${args[@]}"
+    echo "cargo xtask unavailable; falling back to cargo run -p xtask --features dev-tools --bin xtask -- ${args[*]}" >&2
+    cargo run -p xtask --features dev-tools --bin xtask -- "${args[@]}"
   fi
 }
 

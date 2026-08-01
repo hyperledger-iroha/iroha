@@ -21,6 +21,7 @@ use iroha_core::{
     smartcontracts::isi::Registrable as _,
     state::{State, World},
     sumeragi::{VotingBlock, network_topology::Topology},
+    telemetry::StateTelemetry,
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey, PublicKey};
 use iroha_data_model::{
@@ -526,11 +527,12 @@ fn staged_sumeragi_v2_context_hashes_on_bounded_stack(
         .map_err(|error| eyre!("initialize isolated Kura for staged genesis: {error}"))?,
         None => Kura::blank_kura_for_testing(),
     };
-    let mut state = State::try_new_with_chain(
+    let mut state = State::try_new_with_chain_with_telemetry(
         world,
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
         genesis.chain_id().clone(),
+        StateTelemetry::default(),
     )
     .map_err(|error| eyre!("initialize isolated State for staged genesis: {error}"))?;
     configure_staged_genesis_state(&mut state, genesis, config)?;
