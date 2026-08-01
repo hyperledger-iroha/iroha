@@ -19450,6 +19450,44 @@ def test_target_local_temporal_closure_operator_contracts_reject_weakening(
     ("symbol", "old", "new"),
     (
         (
+            "ExactDecisionTargetNeutralActiveSnapshotConcreteRankIsInCarrier",
+            "\\in ExactDecisionTargetNeutralFixedClockCarrier",
+            "\\in Nat",
+        ),
+        (
+            "ExactDecisionTargetNeutralSnapshotPredecessorsDoNotReplenishAtFixedClock",
+            (
+                "=> /\\ HistoricalDiscoveryDuePacketsAt(clockValue)'\n"
+                "               \\subseteq snapshot.packets"
+            ),
+            "=> /\\ TRUE",
+        ),
+        (
+            "ExactDecisionTargetNeutralSnapshotRemainsActiveAtFixedClock",
+            (
+                "=> (ExactDecisionTargetNeutralSnapshotActive(\n"
+                "            snapshot, clockValue))'"
+            ),
+            "=> TRUE",
+        ),
+        (
+            "ExactDecisionTargetNeutralSnapshotProducerEpisodeStepIsDescentOrFrame",
+            (
+                "/\\ (ExactDecisionTargetNeutralSnapshotActive(\n"
+                "                   snapshot, clockValue))'"
+            ),
+            "/\\ TRUE",
+        ),
+        (
+            "ExactDecisionTargetNeutralSnapshotProducerEpisodeDoesNotReplenish",
+            (
+                "/\\ ExactDecisionTargetNeutralProducerEpisodeSet(snapshot)'\n"
+                "                  \\subseteq\n"
+                "                    ExactDecisionTargetNeutralProducerEpisodeSet(snapshot)"
+            ),
+            "/\\ TRUE",
+        ),
+        (
             "ExactDecisionTargetNeutralRetainedEpisodesDoNotReplenish",
             (
                 "/\\ ExactDecisionTargetNeutralProducerEpisodeSet(snapshot)'\n"
@@ -19586,6 +19624,26 @@ def test_exact_target_neutral_theorem_statements_reject_weakening(
             "ExactDecisionTargetNeutralFrozenPastCutOriginsCannotReplenish",
         ),
         (
+            "ExactDecisionTargetNeutralActiveSnapshotConcreteRankIsInCarrier",
+            "ExactDecisionTargetNeutralPacketDependencyRankForSnapshotInCarrier",
+        ),
+        (
+            "ExactDecisionTargetNeutralSnapshotPredecessorsDoNotReplenishAtFixedClock",
+            "AsyncCandidateProducerContinuationLaterOrdinalCannotOwnRunnerTurn",
+        ),
+        (
+            "ExactDecisionTargetNeutralSnapshotRemainsActiveAtFixedClock",
+            "ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent",
+        ),
+        (
+            "ExactDecisionTargetNeutralSnapshotProducerEpisodeStepIsDescentOrFrame",
+            "ExactDecisionTargetNeutralSnapshotRemainsActiveAtFixedClock",
+        ),
+        (
+            "ExactDecisionTargetNeutralSnapshotProducerEpisodeDoesNotReplenish",
+            "ExactDecisionTargetNeutralSnapshotProducerEpisodeStepIsDescentOrFrame",
+        ),
+        (
             "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
             "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst",
         ),
@@ -19718,6 +19776,75 @@ def test_exact_target_neutral_proof_dependencies_reject_deletion(
     ), errors
 
 
+def test_leader_wire_frozen_certificate_pins_physical_cut() -> None:
+    """The adequate-leader certificate cannot refresh or omit its physical cut."""
+
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2AdequateLeaderServiceClosureProofs"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+
+    operator_mutations = (
+        (
+            "LeaderWirePhysicalDependencyCertificate",
+            "physicalCuts |-> snapshot.physicalCuts,",
+            "physicalCuts |-> snapshot.schedulerCuts,",
+        ),
+        (
+            "LeaderWirePhysicalFrozenCertificateFrontier",
+            "/\\ certificate.physicalCuts = snapshot.physicalCuts",
+            "/\\ TRUE",
+        ),
+    )
+    for symbol, old, new in operator_mutations:
+        errors = module._proof_obligation_architecture_errors(
+            ledger["obligations"],
+            {
+                target_module: mutate_tla_operator(
+                    source,
+                    symbol,
+                    old,
+                    new,
+                )
+            },
+        )
+        assert any(
+            f"{symbol} must equal only" in error for error in errors
+        ), (symbol, errors)
+
+    theorem = "LeaderWirePhysicalFrozenCertificateRetainsPastCut"
+    weakened = mutate_tla_theorem(
+        source,
+        theorem,
+        (
+            "snapshot.physicalCuts[node]\n"
+            "                <= AsyncNextIngressPhysicalOrdinal(node)'"
+        ),
+        "TRUE",
+    )
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"], {target_module: weakened}
+    )
+    assert any(f"{theorem} must state only" in error for error in errors), errors
+
+    missing_provider = delete_tla_theorem_token(
+        source,
+        theorem,
+        "ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent",
+    )
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"], {target_module: missing_provider}
+    )
+    assert any(
+        f"{theorem} must retain reviewed proof dependencies" in error
+        and "ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent"
+        in error
+        for error in errors
+    ), errors
+
+
 @pytest.mark.parametrize(
     ("target_module", "symbol", "old", "new"),
     (
@@ -19788,6 +19915,26 @@ def test_timeout_and_historical_closure_statements_reject_weakening(
 @pytest.mark.parametrize(
     ("target_module", "symbol", "token"),
     (
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs",
+            "AsyncSpecProvidesAdequateLeaderWirePhysicalFrozenCertificateConvergence",
+            "ExactDecisionTargetNeutralActiveSnapshotConcreteRankIsInCarrier",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs",
+            "AsyncSpecProvidesAdequateLeaderWirePhysicalFrozenCertificateConvergence",
+            "ExactDecisionTargetNeutralSnapshotProducerEpisodeDoesNotReplenish",
+        ),
+        (
+            "SumeragiV2TimeoutViewProgressProofs",
+            "AsyncSpecProvidesTimeoutPhysicalControlTransportKernels",
+            "ExactDecisionTargetNeutralSnapshotProducerEpisodeDoesNotReplenish",
+        ),
+        (
+            "SumeragiV2TimeoutViewProgressProofs",
+            "AsyncSpecProvidesTimeoutPhysicalControlTransportKernels",
+            "CandidateProducerContinuationFrozenSourceFairResolutionStrictlyDescends",
+        ),
         (
             "SumeragiV2TimeoutViewProgressProofs",
             "AsyncLiveTimeoutConcreteOriginContinuation",
@@ -21994,13 +22141,6 @@ def test_async_candidate_producer_continuation_contract_rejects_rank_and_action_
             "record.schedulerOrdinal <= targetOrdinal",
         ),
         (
-            "AsyncCandidateProducerContinuationFrozenCandidateOwners",
-            "\\cup\n"
-            "      AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(\n"
-            "        node, targetOrdinal)",
-            "\\cup\n      {}",
-        ),
-        (
             "AsyncCandidateProducerContinuationFrozenCandidateTokens",
             '<<"Candidate", candidate, token>>',
             '<<"ReplayCandidate", candidate, token>>',
@@ -22065,8 +22205,32 @@ def test_async_candidate_producer_continuation_contract_rejects_rank_and_action_
     leader_wire_theorem_mutations = (
         (
             "CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier",
-            "node, targetOrdinal - 1, 0, \"Logical\")",
-            "node, targetOrdinal, 0, \"Logical\")",
+            "node, targetOrdinal - 1, physicalCut, \"Logical\")",
+            "node, targetOrdinal, physicalCut, \"Logical\")",
+            "exact leader-wire producer statement SHA-256",
+        ),
+        (
+            "CandidateProducerContinuationActionInertDormantHasZeroFrozenStage",
+            "record, barrierMode) = 0",
+            "record, barrierMode) \\in Nat",
+            "exact leader-wire producer statement SHA-256",
+        ),
+        (
+            "CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix",
+            "record.physicalAdmissionOrdinal >= physicalCut",
+            "record.physicalAdmissionOrdinal >= 0",
+            "exact leader-wire producer statement SHA-256",
+        ),
+        (
+            "CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame",
+            "= AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(",
+            "\\subseteq AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(",
+            "exact leader-wire producer statement SHA-256",
+        ),
+        (
+            "CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage",
+            "< AsyncFrozenLeaderWireBarrierStageBudget(",
+            "<= AsyncFrozenLeaderWireBarrierStageBudget(",
             "exact leader-wire producer statement SHA-256",
         ),
         (
@@ -22945,11 +23109,11 @@ def test_adequate_leader_producer_origin_contract_rejects_weakening(
 
     expected_header = (
         "EXTENDS SumeragiV2AsyncCandidateProducerContinuationProofs,\n"
-        "        SumeragiV2AdequateLeaderServiceClosureProofs"
+        "        SumeragiV2AdequateLeaderRetainedProducerClosureProofs"
     )
     header_mutations = (
         (
-            "EXTENDS SumeragiV2AdequateLeaderServiceClosureProofs,\n"
+            "EXTENDS SumeragiV2AdequateLeaderRetainedProducerClosureProofs,\n"
             "        SumeragiV2AsyncCandidateProducerContinuationProofs"
         ),
         expected_header + ", SumeragiV2AsyncNetwork",
@@ -32609,8 +32773,9 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     )
     errors = module._async_source_fidelity_errors(formal_dir)
     assert any(
-        "RuntimeDriver authenticated deferred-owner source, snapshot, and exact "
-        "dispatch methods must be adjacent on the production trait surface" in error
+        "RuntimeDriver authenticated deferred-owner source, snapshots, exact "
+        "occurrence ownership, runtime sealing, and exact dispatch methods must "
+        "be adjacent on the production trait surface" in error
         for error in errors
     ), errors
     runtime.write_text(canonical_runtime, encoding="utf-8")
@@ -32651,6 +32816,61 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             + canonical_runtime[end:]
         )
 
+    runtime_driver_trait_context = (
+        ("pub", "(", "crate", ")", "trait", "RuntimeDriver"),
+    )
+    runtime.write_text(
+        mutate_runtime_item_in_context(
+            "deferred_occurrence_ownership",
+            runtime_driver_trait_context,
+            "fn deferred_occurrence_ownership(",
+            "fn removed_deferred_occurrence_ownership(",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "exact occurrence ownership, runtime sealing, and exact dispatch methods "
+        "must be adjacent" in error
+        for error in errors
+    ), errors
+    runtime.write_text(canonical_runtime, encoding="utf-8")
+
+    trait_occurrence = next(
+        item
+        for item in module.rust_items(
+            canonical_runtime, "deferred_occurrence_ownership"
+        )
+        if item.brace_context == runtime_driver_trait_context
+    )
+    trait_seal = next(
+        item
+        for item in module.rust_items(
+            canonical_runtime, "seal_deferred_runtime_ownership"
+        )
+        if item.brace_context == runtime_driver_trait_context
+    )
+    occurrence_start = canonical_runtime.index(trait_occurrence.source)
+    occurrence_end = occurrence_start + len(trait_occurrence.source)
+    seal_start = canonical_runtime.index(trait_seal.source)
+    seal_end = seal_start + len(trait_seal.source)
+    assert occurrence_end < seal_start
+    runtime.write_text(
+        canonical_runtime[:occurrence_start]
+        + trait_seal.source
+        + canonical_runtime[occurrence_end:seal_start]
+        + trait_occurrence.source
+        + canonical_runtime[seal_end:],
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "exact occurrence ownership, runtime sealing, and exact dispatch methods "
+        "must be adjacent" in error
+        for error in errors
+    ), errors
+    runtime.write_text(canonical_runtime, encoding="utf-8")
+
     runtime_ingress_context = (("impl", "RuntimeIngressOwnershipEvidence"),)
     runtime.write_text(
         mutate_runtime_item_in_context(
@@ -32667,6 +32887,77 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     assert any(
         "canonical ownership validation must include lifecycle and runtime "
         "receipt exactness in its final predicate" in error
+        for error in errors
+    ), errors
+    runtime.write_text(canonical_runtime, encoding="utf-8")
+
+    runtime.write_text(
+        mutate_runtime_item_in_context(
+            "validate_exact",
+            runtime_ingress_context,
+            "            (Ok(None), Ok(None)) | (Ok(Some(_)), Ok(None)) | "
+            "(Ok(Some(_)), Ok(Some(_)))\n",
+            "            (Ok(None), Ok(None)) | (Ok(Some(_)), Ok(Some(_)))\n",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "canonical ownership validation must bind one lifecycle-ordinal domain "
+        "while allowing only the reviewed pre-dequeue leader-wire receipt state"
+        in error
+        for error in errors
+    ), errors
+    runtime.write_text(canonical_runtime, encoding="utf-8")
+
+    runtime.write_text(
+        mutate_runtime_item_in_context(
+            "validate_frozen_physical",
+            runtime_ingress_context,
+            "matches!(self.earliest_physical_carrier(), Ok(Some(_)))",
+            "self.earliest_physical_carrier().is_ok()",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "post-dequeue ownership validation must require a physical carrier and an "
+        "exact token/physical-occurrence/runtime-receipt triple" in error
+        for error in errors
+    ), errors
+    runtime.write_text(canonical_runtime, encoding="utf-8")
+
+    runtime.write_text(
+        mutate_runtime_item_in_context(
+            "matches_authenticated",
+            runtime_ingress_context,
+            "self.validate_frozen_physical()",
+            "self.validate_exact()",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "authenticated dispatch matching must require the frozen physical "
+        "ownership boundary" in error
+        for error in errors
+    ), errors
+    runtime.write_text(canonical_runtime, encoding="utf-8")
+
+    deferred_lifecycle_context = (("impl", "RuntimeDeferredLifecycleOwnership"),)
+    runtime.write_text(
+        mutate_runtime_item_in_context(
+            "validate_active_against_ingress",
+            deferred_lifecycle_context,
+            "self.runtime_seal.still_retained()",
+            "true",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "active deferred lifecycle validation must require a live capability from "
+        "the exact adapter source and its frozen ingress" in error
         for error in errors
     ), errors
     runtime.write_text(canonical_runtime, encoding="utf-8")
@@ -32701,6 +32992,18 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)",
             "Ok(None)",
             "deferred dispatch must retain the selected occurrence and optional producer handoff",
+        ),
+        (
+            "deferred_occurrence_ownership",
+            "SumeragiV2Adapter::deferred_occurrence_ownership(self, admission_ordinal)",
+            "None",
+            "deferred occurrence lookup must preserve the adapter-issued exact occurrence capability",
+        ),
+        (
+            "seal_deferred_runtime_ownership",
+            "if !owner.validate_exact()",
+            "if false",
+            "deferred runtime sealing must validate and bind the exact lifecycle, ingress provenance, physical occurrence, and frozen cut",
         ),
     )
     for item_name, old, new, expected_error in production_driver_mutations:
@@ -32761,6 +33064,37 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "an earlier aggregate carrier must rebase its exact deferred owner before either ownership map is committed",
         ),
         (
+            "reconcile_deferred_runtime_ownership_after_retirement",
+            "self.retire_orphaned_leader_wire_runtime_receipts()",
+            "Ok(())",
+            "adapter-side retirement reconciliation must validate and prune exact runtime wrappers before terminalizing receipts",
+        ),
+        (
+            "complete_driver_dispatch_leader_wire_owners",
+            "self.complete_leader_wire_runtime_owner(parent, handoff)?;",
+            "let _ = (parent, handoff);",
+            "driver retirement must terminalize the selected parent before orphan receipts",
+        ),
+        (
+            "complete_driver_dispatch_leader_wire_owners",
+            "if self.retire_orphaned_leader_wire_runtime_receipts().is_err()",
+            "if false",
+            "driver retirement must terminalize the selected parent before orphan receipts",
+        ),
+        (
+            "complete_driver_dispatch_leader_wire_owners",
+            "        if !retained_parent {\n"
+            "            self.complete_leader_wire_runtime_owner(parent, handoff)?;\n"
+            "        }\n"
+            "        if self.retire_orphaned_leader_wire_runtime_receipts().is_err() {\n",
+            "        let orphaned_invalid = self.retire_orphaned_leader_wire_runtime_receipts().is_err();\n"
+            "        if !retained_parent {\n"
+            "            self.complete_leader_wire_runtime_owner(parent, handoff)?;\n"
+            "        }\n"
+            "        if orphaned_invalid {\n",
+            "driver retirement must terminalize the selected parent before orphan receipts",
+        ),
+        (
             "accept_driver_dispatch",
             ".reconcile_deferred_ingress_ownership(deferred_ingress)\n            .is_err()",
             ".reconcile_deferred_ingress_ownership(deferred_ingress)\n            .is_ok()",
@@ -32771,6 +33105,18 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "                || producer_handoff.is_some())",
             "                || false)",
             "retryable dispatch must not expose effects, deferred ownership, or a producer handoff",
+        ),
+        (
+            "accept_driver_dispatch",
+            "self.driver.seal_deferred_runtime_ownership(",
+            "self.driver.weakened_deferred_runtime_ownership(",
+            "driver acceptance must reconcile carrier ownership, seal and verify the exact adapter occurrence",
+        ),
+        (
+            "eligible_deferred_admission_ordinals",
+            "u128::from(source_physical_ordinal) >= target.physical_cut",
+            "false",
+            "deferred eligibility must globally remove post-cut occurrences before choosing the logical minimum",
         ),
         (
             "enqueue_network_with_ingress_ownership",
@@ -32821,20 +33167,20 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "if token.identity().admission_ordinal() != "
             "effect_parent.lifecycle_ordinal()",
             "if false",
-            "live dispatch must retain successors, acknowledge the exact producer, and publish its terminal before observing effects",
+            "live dispatch must retain successors, acknowledge the exact producer, terminalize the selected parent before adapter-side orphans",
         ),
         (
             "step_recovery",
             "if token.identity().admission_ordinal() != owner.lifecycle_ordinal()",
             "if false",
-            "recovery dispatch must retain successors, acknowledge the exact producer, and publish its terminal before observing effects",
+            "recovery dispatch must retain successors, acknowledge the exact producer, terminalize the selected parent before adapter-side orphans",
         ),
         (
             "dispatch_one_adapter_deferred",
             "if token.identity().admission_ordinal() != "
             "lifecycle_owner.lifecycle_ordinal()",
             "if false",
-            "deferred dispatch must retain successors, acknowledge the exact producer, and publish its terminal before observing effects",
+            "deferred dispatch must retain successors, acknowledge the exact producer, terminalize the selected parent before adapter-side orphans",
         ),
         (
             "later_same_semantic_fair_retry_retains_runtime_lifecycle_root",
@@ -33686,6 +34032,12 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
             "  /\\ GenerationCanIncrement(generation[node])\n",
             "",
             "StrictSameRoundTcUpgrade must equal only",
+        ),
+        (
+            "TimeoutReceiptAdmitted",
+            "  /\\ vote.view <= nodeView[node] + 1\n",
+            "  /\\ vote.view <= nodeView[node] + 2\n",
+            "TimeoutReceiptAdmitted must equal only",
         ),
         (
             "ProposalJustified",

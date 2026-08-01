@@ -17,7 +17,7 @@ use super::{DEGREE, LOG_DEGREE, MODULUS, Trapdoor, comm};
 use comm::PRNG as _;
 use zeroize::{Zeroize, Zeroizing};
 
-const MAX_PARITY_ATTEMPTS_PER_POLYNOMIAL: u32 = 128;
+pub(super) const MAX_PARITY_ATTEMPTS_PER_POLYNOMIAL: u32 = 128;
 
 struct Workspace {
     temporary_u16: Vec<u16>,
@@ -43,7 +43,7 @@ impl Drop for Workspace {
     }
 }
 
-pub(super) fn generate_from_seed(seed: &[u8; 32], max_candidates: u32) -> Option<Trapdoor> {
+pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Trapdoor> {
     if max_candidates == 0 {
         return None;
     }

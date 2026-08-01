@@ -26,6 +26,16 @@ pub(super) const DEGREE: usize = 512;
 pub(super) const LOG_DEGREE: u32 = 9;
 pub(super) const MODULUS: u16 = 12_289;
 pub(super) const SIGNATURE_NORM_SQUARED_BOUND: u32 = 34_034_726;
+pub(crate) const BOOTLE_LANTERN_FALCON512_DEFAULT_KEYGEN_CANDIDATES_V1: u32 = 4_096;
+pub(crate) const BOOTLE_LANTERN_FALCON512_KEYGEN_PARITY_ATTEMPTS_V1: u32 =
+    kgen::MAX_PARITY_ATTEMPTS_PER_POLYNOMIAL;
+pub(crate) const BOOTLE_LANTERN_FALCON512_PREIMAGE_PROPOSALS_PER_COEFFICIENT_V1: u32 =
+    sign::MAX_PROPOSALS_PER_COEFFICIENT;
+pub(crate) const BOOTLE_LANTERN_FALCON512_PREIMAGE_TOTAL_PROPOSALS_V1: u32 =
+    sign::TOTAL_GAUSSIAN_PROPOSAL_BUDGET;
+pub(crate) const BOOTLE_LANTERN_FALCON512_MAPPING_DESCRIPTOR_V1: &[u8] = b"falcon512-ntru-r512-as-r64-rank8-interleaved|H_i[j]=h[8*j+i]|join(v)[i+8*j]=v_i[j]|B[r,c]=H_(r-c)-or-Y*H_(r-c+8)|R512:Z_12289[X]/(X^512+1)|R64:Z_12289[Y]/(Y^64+1),Y=X^8";
+pub(crate) const BOOTLE_LANTERN_FALCON512_PROFILE_DESCRIPTOR_V1: &[u8] = b"lazer-falcon512-concrete-specialization-v1|not-full-blns-main-reduction|one-Falcon-512-NTRU-key|q=12289|degree=512|public=[1|h]|equations:fG-gF=q;f*h=g;s1+h*s2=target|mapping=falcon512-ntru-r512-as-r64-rank8-interleaved|keygen-candidates=4096|parity-attempts=128|preimage-prng=Falcon-ChaCha20-56-byte-word-major-8-block|preimage-proposals-per-coefficient=256|preimage-total-proposals=262144|signature-norm2<=34034726|self-check:exact-equation+norm";
+pub(crate) const BOOTLE_LANTERN_FALCON512_IMPLEMENTATION_PROVENANCE_V1: &[u8] = b"rust-fn-dsa-v0.3-workspace@daf14859b5aa3f8d75c42966ba7de83e6eb59997|license=Unlicense|modules=fn-dsa-comm(mq,shake,ChaCha20-PRNG),fn-dsa-kgen(fxp,gauss,mp31,ntru,poly,vect,zint31),fn-dsa-sign(flr-emulated,poly,sampler)|deltas=scalar-only-no-unsafe-no-SIMD;bounded-keygen-and-gaussian-proposals;raw-trapdoor-output;arbitrary-R512-target;both-preimage-halves;mandatory-equation-and-norm-self-check";
 
 /// A generated Falcon-512 NTRU trapdoor and its public multiplier.
 pub(super) struct Trapdoor {
@@ -72,10 +82,52 @@ pub(super) fn generate_from_seed(
     kgen::generate_from_seed(seed, max_candidates)
 }
 
+#[cfg(test)]
+fn generate_from_seed_slice_for_test(seed: &[u8], max_candidates: u32) -> Option<Trapdoor> {
+    kgen::generate_from_seed(seed, max_candidates)
+}
+
 pub(super) fn sample_preimage_from_seed(
     trapdoor: &Trapdoor,
     target: &[u16; DEGREE],
     seed: &[u8; 56],
 ) -> Option<Preimage> {
     sign::sample_preimage_from_seed(trapdoor, target, seed)
+}
+
+#[cfg(test)]
+mod tests {
+    use sha2::{Digest as _, Sha256};
+    use zeroize::Zeroizing;
+
+    use super::*;
+
+    #[test]
+    fn pinned_upstream_keygen_test0_raw_trapdoor_kat() {
+        let trapdoor = generate_from_seed_slice_for_test(
+            b"test0",
+            BOOTLE_LANTERN_FALCON512_DEFAULT_KEYGEN_CANDIDATES_V1,
+        )
+        .expect("pinned Falcon-512 keygen candidate");
+        let mut encoded = Zeroizing::new(Vec::with_capacity(4 * DEGREE));
+        for polynomial in [
+            trapdoor.f.as_ref(),
+            trapdoor.g.as_ref(),
+            trapdoor.capital_f.as_ref(),
+            trapdoor.capital_g.as_ref(),
+        ] {
+            encoded.extend(polynomial.iter().map(|coefficient| *coefficient as u8));
+        }
+        assert_eq!(encoded.len(), 2_048);
+        assert_eq!(
+            Sha256::digest(encoded.as_slice()).as_slice(),
+            hex::decode("e5b8d48e5ce74c62e3e0ccd40f7ce5762d3a329d5b85bfbb3af88d31bdceb3e6")
+                .expect("hex")
+        );
+    }
+
+    #[test]
+    fn keygen_zero_candidate_budget_is_typed_exhaustion() {
+        assert!(generate_from_seed_slice_for_test(b"test0", 0).is_none());
+    }
 }

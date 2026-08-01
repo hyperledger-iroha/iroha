@@ -13,12 +13,13 @@ aggregate property and it adds no fairness: the selected action is always the
 ordinary `PostGstRunNode` or `PostGstServiceIoWorker` occurrence already named
 by `AsyncFairnessAt`.
 
-The outer rank is `AsyncCausalEpisodeStructuralRank`.  Its immutable shared
-lifecycle cut prevents a later Candidate, causal successor, Control,
-Completion, priority item, or exact retry from joining the predecessor set.
-Its radix-four command weight pays for the complete lower-stage successor
-batch, and its Serve tokens pay for the frozen I/O and per-source ingress
-prefixes.  The inner rank is exactly the existing Ready or capacity rank.
+The outer rank is `AsyncProtectedCandidateIngressEpisodeRank`.  Its immutable
+logical and physical cuts prevent a later Candidate, causal successor,
+Control, Completion, priority item, or retry from joining the predecessor
+set.  A physical ingress stage prepays leader-wire/ordinary carrier transfer;
+the structural tail pays for Candidate fanout and exact Serve prefixes; the
+dependency tail retains the existing mode/capacity/runner/selector/lane/source
+path.  The final component is exactly the existing Ready or capacity rank.
 Thus an action either reaches the caller's exact goal, consumes a finite
 producer episode, or strictly lowers the occurrence rank.  Replenishment is
 never called progress.
@@ -114,42 +115,39 @@ AsyncCapacityRunnerEpisodeRankedKernel(
        candidate.node)
 
 AsyncReadyRunnerEpisodeRank(candidate) ==
-  LET cutoffOrdinal == AsyncCandidateLifecycleOrdinal(candidate)
-  IN <<AsyncCausalEpisodeStructuralRank(
-          candidate.node, cutoffOrdinal),
+  <<AsyncProtectedCandidateIngressEpisodeRank(candidate),
        ReadyRunAuxRank(candidate.node)>>
 
 AsyncReadyRunnerEpisodeRankCarrier ==
-  AsyncCausalEpisodeStructuralRankCarrier \X ReadyRunAuxCarrier
+  AsyncProtectedCandidateIngressEpisodeRankCarrier \X ReadyRunAuxCarrier
 
 AsyncReadyRunnerEpisodeRankOrdering ==
   LexPairOrdering(
-    AsyncCausalEpisodeStructuralRankOrdering,
+    AsyncProtectedCandidateIngressEpisodeRankOrdering,
     ReadyRunAuxOrdering,
-    AsyncCausalEpisodeStructuralRankCarrier,
+    AsyncProtectedCandidateIngressEpisodeRankCarrier,
     ReadyRunAuxCarrier)
 
 AsyncCapacityRunnerEpisodeRank(candidate) ==
-  LET cutoffOrdinal == AsyncCandidateLifecycleOrdinal(candidate)
-  IN <<AsyncCausalEpisodeStructuralRank(
-          candidate.node, cutoffOrdinal),
+  <<AsyncProtectedCandidateIngressEpisodeRank(candidate),
        Stage4CapacityRank(candidate.node)>>
 
 AsyncCapacityRunnerEpisodeRankCarrier ==
-  AsyncCausalEpisodeStructuralRankCarrier \X Stage4CapacityCarrier
+  AsyncProtectedCandidateIngressEpisodeRankCarrier
+    \X Stage4CapacityCarrier
 
 AsyncCapacityRunnerEpisodeRankOrdering ==
   LexPairOrdering(
-    AsyncCausalEpisodeStructuralRankOrdering,
+    AsyncProtectedCandidateIngressEpisodeRankOrdering,
     Stage4CapacityOrdering,
-    AsyncCausalEpisodeStructuralRankCarrier,
+    AsyncProtectedCandidateIngressEpisodeRankCarrier,
     Stage4CapacityCarrier)
 
 THEOREM AsyncReadyRunnerEpisodeRankOrderingIsWellFounded ==
   IsWellFoundedOn(
     AsyncReadyRunnerEpisodeRankOrdering,
     AsyncReadyRunnerEpisodeRankCarrier)
-BY AsyncCausalEpisodeStructuralRankOrderingIsWellFounded,
+BY AsyncProtectedCandidateIngressEpisodeRankOrderingIsWellFounded,
    ReadyRunAuxOrderingIsWellFounded, WFLexPairOrdering
    DEF AsyncReadyRunnerEpisodeRankOrdering,
        AsyncReadyRunnerEpisodeRankCarrier
@@ -158,7 +156,7 @@ THEOREM AsyncCapacityRunnerEpisodeRankOrderingIsWellFounded ==
   IsWellFoundedOn(
     AsyncCapacityRunnerEpisodeRankOrdering,
     AsyncCapacityRunnerEpisodeRankCarrier)
-BY AsyncCausalEpisodeStructuralRankOrderingIsWellFounded,
+BY AsyncProtectedCandidateIngressEpisodeRankOrderingIsWellFounded,
    Stage4CapacityOrderingIsWellFounded, WFLexPairOrdering
    DEF AsyncCapacityRunnerEpisodeRankOrdering,
        AsyncCapacityRunnerEpisodeRankCarrier
@@ -170,7 +168,7 @@ THEOREM AsyncReadyRunnerEpisodeRankInCarrier ==
       kind, candidate, position, baselineRank)
       => AsyncReadyRunnerEpisodeRank(candidate)
            \in AsyncReadyRunnerEpisodeRankCarrier
-BY AsyncCausalEpisodeStructuralRankIsFinite,
+BY AsyncProtectedCandidateIngressEpisodeRankIsFinite,
    ReadyRunAuxRankInCarrier, IsaT(300)
    DEF AsyncReadyRunnerEpisodeKinds,
        AsyncReadyRunnerEpisodeResidual,
@@ -194,7 +192,7 @@ THEOREM AsyncCapacityRunnerEpisodeRankInCarrier ==
       kind, candidate, position, baselineRank)
       => AsyncCapacityRunnerEpisodeRank(candidate)
            \in AsyncCapacityRunnerEpisodeRankCarrier
-BY AsyncCausalEpisodeStructuralRankIsFinite,
+BY AsyncProtectedCandidateIngressEpisodeRankIsFinite,
    Stage4CapacityRankInCarrier, IsaT(300)
    DEF AsyncCapacityRunnerEpisodeKinds,
        AsyncCapacityRunnerEpisodeResidual,
@@ -260,7 +258,7 @@ THEOREM AsyncReadyRunnerEpisodeStepIsGoalDescentOrFrame ==
             kind, candidate, position, baselineRank)'
             /\ AsyncReadyRunnerEpisodeRank(candidate)'
                  = AsyncReadyRunnerEpisodeRank(candidate)
-BY AsyncCausalEpisodeStructuralStepIsDescentOrFrame,
+BY AsyncProtectedCandidateIngressEpisodeStepIsDescentOrFrame,
    Stage3SameNodeRunAuxOutcomeObligation,
    Stage3OtherStepUnlessAuxDescentObligation,
    Stage4SameNodeRunProducesAuxOutcome,
@@ -281,7 +279,7 @@ BY AsyncCausalEpisodeStructuralStepIsDescentOrFrame,
        Stage6PreAdmissionCandidateProducerContinuationReentry,
        AsyncReadyRunnerEpisodeRank,
        AsyncReadyRunnerEpisodeRankOrdering,
-       AsyncCausalEpisodeStructuralRankOrdering,
+       AsyncProtectedCandidateIngressEpisodeRankOrdering,
        ReadyRunAuxOrdering, LexPairOrdering, AsyncAllVars
 
 THEOREM AsyncCapacityRunnerEpisodeStepIsGoalDescentOrFrame ==
@@ -299,7 +297,7 @@ THEOREM AsyncCapacityRunnerEpisodeStepIsGoalDescentOrFrame ==
             kind, candidate, position, baselineRank)'
             /\ AsyncCapacityRunnerEpisodeRank(candidate)'
                  = AsyncCapacityRunnerEpisodeRank(candidate)
-BY AsyncCausalEpisodeStructuralStepIsDescentOrFrame,
+BY AsyncProtectedCandidateIngressEpisodeStepIsDescentOrFrame,
    Stage4CapacitySameNodeRunProducesOutcome,
    Stage4CapacityBlockedStep,
    Stage6NonCompletionCapacitySameNodeRunProducesOutcome,
@@ -314,7 +312,7 @@ BY AsyncCausalEpisodeStructuralStepIsDescentOrFrame,
        Stage6NonCompletionCapacityCandidateProducerContinuationReentry,
        AsyncCapacityRunnerEpisodeRank,
        AsyncCapacityRunnerEpisodeRankOrdering,
-       AsyncCausalEpisodeStructuralRankOrdering,
+       AsyncProtectedCandidateIngressEpisodeRankOrdering,
        Stage4CapacityOrdering, LexPairOrdering, AsyncAllVars
 
 THEOREM AsyncReadyRunnerEpisodeSelectedActionConsumesRankCell ==
@@ -324,16 +322,15 @@ THEOREM AsyncReadyRunnerEpisodeSelectedActionConsumesRankCell ==
          kind, candidate, position, baselineRank)
     /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
     /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
-    /\ <<AsyncCausalEpisodeSelectedFairAction(
-           candidate.node,
-           AsyncCandidateLifecycleOrdinal(candidate))>>_AsyncAllVars
+    /\ <<AsyncProtectedCandidateSelectedFairAction(candidate)>>_AsyncAllVars
     => \/ AsyncReadyRunnerEpisodeGoal(
             kind, candidate, position, baselineRank)'
        \/ <<AsyncReadyRunnerEpisodeRank(candidate)',
              AsyncReadyRunnerEpisodeRank(candidate)>>
             \in AsyncReadyRunnerEpisodeRankOrdering
-BY AsyncCausalEpisodeSelectedOwnerIsConcreteAndEnabled,
-   AsyncCausalEpisodeStructuralStepIsDescentOrFrame,
+BY AsyncProtectedCandidateSelectedOwnerIsConcreteAndEnabled,
+   AsyncProtectedCandidateSelectedServeOwnerGeometryIsComplete,
+   AsyncProtectedCandidateIngressEpisodeStepIsDescentOrFrame,
    Stage3SameNodeRunAuxOutcomeObligation,
    Stage4SameNodeRunProducesAuxOutcome,
    Stage6OwedReadySameNodeRunProducesOutcome,
@@ -351,10 +348,10 @@ BY AsyncCausalEpisodeSelectedOwnerIsConcreteAndEnabled,
        Stage6PreAdmissionCandidateProducerContinuationReentry,
        AsyncReadyRunnerEpisodeRank,
        AsyncReadyRunnerEpisodeRankOrdering,
-       AsyncCausalEpisodeSelectedFairAction,
-       AsyncCausalEpisodeFairAction,
-       AsyncCausalEpisodeFairOwner,
-       AsyncCausalEpisodeIoOwnerRequired,
+       AsyncProtectedCandidateSelectedFairAction,
+       AsyncProtectedCandidateFairAction,
+       AsyncProtectedCandidateFairOwner,
+       AsyncProtectedCandidateIoOwnerRequired,
        LexPairOrdering, AsyncAllVars
 
 THEOREM AsyncCapacityRunnerEpisodeSelectedActionConsumesRankCell ==
@@ -364,16 +361,15 @@ THEOREM AsyncCapacityRunnerEpisodeSelectedActionConsumesRankCell ==
          kind, candidate, position, baselineRank)
     /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
     /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
-    /\ <<AsyncCausalEpisodeSelectedFairAction(
-           candidate.node,
-           AsyncCandidateLifecycleOrdinal(candidate))>>_AsyncAllVars
+    /\ <<AsyncProtectedCandidateSelectedFairAction(candidate)>>_AsyncAllVars
     => \/ AsyncCapacityRunnerEpisodeGoal(
             kind, candidate, position, baselineRank)'
        \/ <<AsyncCapacityRunnerEpisodeRank(candidate)',
              AsyncCapacityRunnerEpisodeRank(candidate)>>
             \in AsyncCapacityRunnerEpisodeRankOrdering
-BY AsyncCausalEpisodeSelectedOwnerIsConcreteAndEnabled,
-   AsyncCausalEpisodeStructuralStepIsDescentOrFrame,
+BY AsyncProtectedCandidateSelectedOwnerIsConcreteAndEnabled,
+   AsyncProtectedCandidateSelectedServeOwnerGeometryIsComplete,
+   AsyncProtectedCandidateIngressEpisodeStepIsDescentOrFrame,
    Stage4CapacitySameNodeRunProducesOutcome,
    Stage6NonCompletionCapacitySameNodeRunProducesOutcome,
    ServiceIoWorkerDropsQueueDepth,
@@ -387,53 +383,64 @@ BY AsyncCausalEpisodeSelectedOwnerIsConcreteAndEnabled,
        Stage6NonCompletionCapacityCandidateProducerContinuationReentry,
        AsyncCapacityRunnerEpisodeRank,
        AsyncCapacityRunnerEpisodeRankOrdering,
-       AsyncCausalEpisodeSelectedFairAction,
-       AsyncCausalEpisodeFairAction,
-       AsyncCausalEpisodeFairOwner,
-       AsyncCausalEpisodeIoOwnerRequired,
+       AsyncProtectedCandidateSelectedFairAction,
+       AsyncProtectedCandidateFairAction,
+       AsyncProtectedCandidateFairOwner,
+       AsyncProtectedCandidateIoOwnerRequired,
        LexPairOrdering, AsyncAllVars
 
 THEOREM AsyncRunnerEpisodeConcreteOwnerPersistsInRankCell ==
   \A candidate \in AsyncCandidateSet:
     LET cutoffOrdinal == AsyncCandidateLifecycleOrdinal(candidate)
-        owner == AsyncCausalEpisodeFairOwner(
-                   candidate.node, cutoffOrdinal)
-        structuralRank == AsyncCausalEpisodeStructuralRank(
-                            candidate.node, cutoffOrdinal)
+        owner == AsyncProtectedCandidateFairOwner(candidate)
+        producerRank ==
+          AsyncProtectedCandidateIngressEpisodeRank(candidate)
     IN /\ AsyncStrongTypeInvariant
        /\ AsyncProgressOwnershipInvariant
+       /\ gst
        /\ ProtectedCandidateOwned(candidate)
        /\ [AsyncNext]_AsyncAllVars
        /\ ProtectedCandidateOwned(candidate)'
-       /\ AsyncCausalEpisodeStructuralRank(
-            candidate.node, cutoffOrdinal)' = structuralRank
-       => AsyncCausalEpisodeFairOwner(
-            candidate.node, cutoffOrdinal)' = owner
+       /\ AsyncProtectedCandidateIngressEpisodeRank(candidate)'
+            = producerRank
+       => AsyncProtectedCandidateFairOwner(candidate)' = owner
 BY AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
+   AsyncProtectedCandidateTargetPhysicalCutPersists,
    AsyncCausalEpisodeFrozenOriginsCannotReplenish,
-   AsyncCausalEpisodeServeCutCannotReplenish,
+   CandidateProducerContinuationFrozenServeCutCannotReplenish,
    AsyncServeQueuedIdentityDepartureInstallsTombstone,
    AsyncServeTombstonedIdentityCannotRequeueAtGst,
    IsaT(900)
-   DEF AsyncCausalEpisodeFairOwner,
-       AsyncCausalEpisodeIoOwnerRequired,
-       AsyncCausalEpisodeStructuralRank,
-       AsyncCausalEpisodeServeWorkBudget,
-       AsyncCausalEpisodeServeWorkTokens,
-       AsyncCausalEpisodeServeIngressIdentities,
+   DEF AsyncProtectedCandidateFairOwner,
+       AsyncProtectedCandidateIoOwnerRequired,
+       AsyncProtectedCandidateIngressEpisodeRank,
+       AsyncProtectedCandidateIngressEpisodeTailRank,
+       AsyncCausalEpisodeFrozenIngressBarrierStageBudget,
+       AsyncFrozenLeaderWireBarrierStageBudget,
+       AsyncFrozenLeaderWireBarrierStageTokens,
+       AsyncCandidateProducerContinuationFrozenPrefixRank,
+       AsyncCandidateProducerContinuationFrozenProducerBudget,
+       AsyncCandidateProducerContinuationFrozenProducerTokens,
+       AsyncCandidateProducerContinuationFrozenCandidateTokens,
+       AsyncCandidateProducerContinuationFrozenCandidateOwners,
+       AsyncCandidateProducerContinuationFrozenStatusTokens,
+       AsyncCandidateProducerContinuationFrozenServeWorkBudget,
+       AsyncCandidateProducerContinuationFrozenServeWorkTokens,
+       AsyncCandidateProducerContinuationFrozenServeIngressIdentities,
        AsyncAllVars
 
 THEOREM AsyncRunnerEpisodeConcreteOwnerUsesExistingFairness ==
   \A initialContext, node, ownerKind:
     /\ node \in AsyncVotersAt(initialContext)
     /\ node \in Responsive
-    /\ ownerKind \in AsyncCausalEpisodeFairOwnerKinds
+    /\ ownerKind \in AsyncProtectedCandidateFairOwnerKinds
     => AsyncSpecAt(initialContext)
          => WF_AsyncAllVars(
-              AsyncCausalEpisodeFairAction(node, ownerKind))
+              AsyncProtectedCandidateFairAction(node, ownerKind))
 BY Isa, PTL
    DEF AsyncSpecAt, AsyncFairnessAt,
-       AsyncCausalEpisodeFairOwnerKinds,
+       AsyncProtectedCandidateFairOwnerKinds,
+       AsyncProtectedCandidateFairAction,
        AsyncCausalEpisodeFairAction
 
 AsyncReadyRunnerEpisodeRankStepProperty(specification) ==
@@ -465,7 +472,7 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
    AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
    AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
    AsyncSpecAlwaysUsesFixedResponsiveVoters,
-   AsyncCausalEpisodeSelectedOwnerIsConcreteAndEnabled,
+   AsyncProtectedCandidateSelectedOwnerIsConcreteAndEnabled,
    AsyncReadyRunnerEpisodeStepIsGoalDescentOrFrame,
    AsyncReadyRunnerEpisodeSelectedActionConsumesRankCell,
    AsyncRunnerEpisodeConcreteOwnerPersistsInRankCell,
@@ -475,8 +482,8 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
        AsyncReadyRunnerEpisodeAtRank,
        AsyncReadyRunnerEpisodeRankGoal,
        AsyncReadyRunnerEpisodeRankedKernel,
-       AsyncCausalEpisodeFairOwner,
-       AsyncCausalEpisodeSelectedFairAction
+       AsyncProtectedCandidateFairOwner,
+       AsyncProtectedCandidateSelectedFairAction
 
 THEOREM AsyncSpecProvidesCapacityRunnerEpisodeRankStep ==
   \A initialContext:
@@ -487,7 +494,7 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
    AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
    AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
    AsyncSpecAlwaysUsesFixedResponsiveVoters,
-   AsyncCausalEpisodeSelectedOwnerIsConcreteAndEnabled,
+   AsyncProtectedCandidateSelectedOwnerIsConcreteAndEnabled,
    AsyncCapacityRunnerEpisodeStepIsGoalDescentOrFrame,
    AsyncCapacityRunnerEpisodeSelectedActionConsumesRankCell,
    AsyncRunnerEpisodeConcreteOwnerPersistsInRankCell,
@@ -497,8 +504,8 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
        AsyncCapacityRunnerEpisodeAtRank,
        AsyncCapacityRunnerEpisodeRankGoal,
        AsyncCapacityRunnerEpisodeRankedKernel,
-       AsyncCausalEpisodeFairOwner,
-       AsyncCausalEpisodeSelectedFairAction
+       AsyncProtectedCandidateFairOwner,
+       AsyncProtectedCandidateSelectedFairAction
 
 AsyncReadyRunnerEpisodeClosureProperty(specification) ==
   specification
@@ -997,7 +1004,8 @@ THEOREM AsyncVoterCandidateProducerContinuationRuntimeDetourReturnsLocal ==
     /\ AsyncCandidateProducerContinuationExactReplayDistance(node) = 1
     /\ RunNodeWork(node)
       => asyncRunnerPhase'[node] = "Local"
-BY AsyncCandidateProducerContinuationRunnerSelectionIsGlobalMinimum,
+BY AsyncStrongTypeProjectsControlServiceStateType,
+   AsyncCandidateProducerContinuationRunnerSelectionIsTwoStageLogicalMinimum,
    AsyncCandidateProducerContinuationReplayDispatchesOnlyExactIdentity,
    AsyncCandidateProducerContinuationExactLocalReplayRetainsReservation,
    AsyncCandidateProducerContinuationStoredCarrierMakesSelectedRecordReady,
@@ -1609,6 +1617,9 @@ BY CertifiedResponseClaimAdmissionFreezesCompletePredecessorSources,
    AsyncSharedSchedulerHighWatermarkIsMonotone,
    AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
    AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncCandidateCausalSuccessorInheritsContinuationPhysicalOwnership,
+   AsyncCandidateProducerContinuationStepPreservesPhysicalCut,
+   OrdinaryIngressLogicalRebasePreservesContinuationPhysicalOwnership,
    PostGstLeaderWireLifecycleRestartIsDisabled,
    AdmitDormantLeaderWireRetainsLifecycleTokenAndFrozenPrefix,
    RetireLeaderWireLifecycleRetainsTerminalTombstone,
@@ -1625,6 +1636,24 @@ BY CertifiedResponseClaimAdmissionFreezesCompletePredecessorSources,
        AsyncCandidateServiceStateAfterReclamation,
        AsyncCandidateServiceStateAfterSuccessfulService,
        AsyncCandidateServiceStateAfterTerminalRetirement,
+       AsyncCandidateProducerContinuationStateAfterDeparture,
+       AsyncCandidateProducerContinuationSourcePhysicalOrdinalIn,
+       AsyncCandidateProducerContinuationPhysicalCutIn,
+       AsyncOrdinaryIngressCarrierStateAfterTransition,
+       AsyncOrdinaryIngressCarrierEvidenceAfterPhysicalTransition,
+       AsyncOrdinaryIngressCarrierAfterPhysicalTransition,
+       AsyncCandidateLifecycleAdmissionsAfterOrdinaryIngressRebase,
+       AsyncCandidateLifecycleAdmissionAfterOrdinaryIngressRebase,
+       AsyncCandidateLifecycleStateAfterCarrierUpdate,
+       AsyncCandidateLifecycleCarrierUpdatedAdmissions,
+       AsyncCandidateLifecycleStateAfterCompaction,
+       AsyncCandidateLifecycleStateAfterLeaderWireAdmission,
+       AsyncCandidateLifecycleStateAfterServeIngressAdmission,
+       AsyncCandidateLifecycleStateAfterAdmission,
+       AsyncCandidateLifecycleSourcePhysicalOrdinalFor,
+       AsyncCandidateLifecyclePhysicalCutFor,
+       AsyncCandidateLifecycleStateAfterTimeoutOwnership,
+       AsyncCandidateLifecycleStateAfterOrdinaryIngressAdmission,
        AsyncLeaderWireLifecycleActive,
        AsyncLeaderWireLifecycleDormant,
        AsyncLeaderWirePotentialOwnerIdentity,
@@ -2046,7 +2075,7 @@ BY CertifiedResponseClaimFrozenCutPersistsWhileOwned,
    CertifiedResponseClaimFrozenLeaderWireStageBudgetCannotIncrease,
    CandidateProducerContinuationFrozenSourcePrefixStepCannotReplenish,
    CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight,
-   CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst,
+   CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge,
    AsyncCandidateProducerContinuationStatusIsMonotone,
    AsyncCandidateProducerSemanticHandoffReservedPersistsWithoutAck,
    AsyncCandidateProducerSemanticHandoffMaterializationRequiresSuccessor,

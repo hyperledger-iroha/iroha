@@ -833,12 +833,13 @@ PROOF
   <1> QED BY <1>1
 
 (***************************************************************************
-The exact-Serve corridor has two serialized-runtime surfaces.  The ordinary
-surface is enabled only without a ticket.  The predecessor interleave uses
-the same Runtime body for one strictly older lifecycle while freezing the
-ticket and every I/O owner.  This union is an action-shape helper only: it
-does not classify the interleave as protocol progress and carries no fairness
-assumption.
+The shared ingress corridor has two serialized-runtime surfaces.  The ordinary
+surface is enabled only without a physical ingress barrier.  The predecessor
+interleave uses the same Runtime body for one strictly older lifecycle while
+freezing every Serve/I/O owner.  Leader-wire and ordinary ingress owners are
+selected by the enclosing shared physical barrier.  This union is an
+action-shape helper only: it does not classify the interleave as protocol
+progress and carries no fairness assumption.
 ***************************************************************************)
 SerializedRunnerRuntimeStep(node) ==
   \/ SerializedRuntimeStep(node)
@@ -858,11 +859,12 @@ THEOREM SerializedRuntimePrecedesServeIngressExactFrame ==
               asyncNextServeIngressOrdinal
          /\ asyncServeIngressAdmissions' =
               asyncServeIngressAdmissions
-         /\ AsyncServeEarliestIngressSchedulerOrdinal(node)' =
-              AsyncServeEarliestIngressSchedulerOrdinal(node)
          /\ AsyncServeIngressLifecycleOwnerIdentities(node)' =
               AsyncServeIngressLifecycleOwnerIdentities(node)
-         /\ AsyncServeIngressLifecycleOwnerIdentities(node)' # {}
+         /\ AsyncIngressSchedulerBarrierActive(node)
+         /\ (AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+               => AsyncServeEarliestIngressSchedulerOrdinal(node)' =
+                    AsyncServeEarliestIngressSchedulerOrdinal(node))
          /\ asyncServeAdmissions' = asyncServeAdmissions
          /\ asyncServeReservations' = asyncServeReservations
          /\ asyncServeTombstones' = asyncServeTombstones
@@ -972,11 +974,11 @@ PROOF
   <1> QED BY <1>1
 
 (***************************************************************************
-`AsyncIoVars` freezes the complete logical/physical Serve ticket.  Candidate
-and timeout lifecycle bookkeeping is updated by the outer control-service
-transition, however, and shares the same scheduler ordinal source.  Monotone
-high-watermark allocation is therefore part of the type frame rather than an
-implicit I/O stutter premise.
+`AsyncIoVars` freezes the complete logical/physical Serve ticket.  Candidate,
+timeout, and periodic retransmit lifecycle bookkeeping is updated by the
+outer control-service transition, however, and shares the same scheduler
+ordinal source.  Monotone high-watermark allocation is therefore part of the
+type frame rather than an implicit I/O stutter premise.
 ***************************************************************************)
 THEOREM FrozenServeStateAndSharedSchedulerTransitionPreservesServeOrdinalType ==
   /\ AsyncSharedSchedulerOrdinalInjectionInvariant
@@ -994,6 +996,8 @@ BY AsyncSharedSchedulerHighWatermarkIsMonotone, IsaT(900)
        AsyncNextCandidateLifecycleOrdinal,
        AsyncCandidateLifecycleAdmissions,
        AsyncTimeoutLifecycleOwned, AsyncTimeoutLifecycleOrdinal,
+       AsyncRetransmitLifecycleOwned,
+       AsyncRetransmitLifecycleOrdinal,
        AsyncServeLifecycleVars,
        AsyncServeIngressAdmissionVars
 

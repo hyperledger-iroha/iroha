@@ -19,11 +19,11 @@ const CONSTANT_WORDS: [u32; 4] = [0x6170_7865, 0x3320_646e, 0x7962_2d32, 0x6b20_
 
 impl ChaCha20Prng {
     fn refill(&mut self) {
-        let mut counter = u64::from_le_bytes(
+        let mut counter = zeroize::Zeroizing::new(u64::from_le_bytes(
             self.state[48..56]
                 .try_into()
                 .expect("fixed ChaCha counter slice"),
-        );
+        ));
         for block in 0..8 {
             let mut working = zeroize::Zeroizing::new([0_u32; 16]);
             working[..4].copy_from_slice(&CONSTANT_WORDS);
@@ -34,8 +34,8 @@ impl ChaCha20Prng {
                         .expect("fixed ChaCha state word"),
                 );
             }
-            working[14] ^= counter as u32;
-            working[15] ^= (counter >> 32) as u32;
+            working[14] ^= *counter as u32;
+            working[15] ^= (*counter >> 32) as u32;
             for _ in 0..10 {
                 quarter_round(&mut working, 0, 4, 8, 12);
                 quarter_round(&mut working, 1, 5, 9, 13);
@@ -58,13 +58,13 @@ impl ChaCha20Prng {
             }
             working[14] = working[14].wrapping_add(
                 u32::from_le_bytes(self.state[40..44].try_into().expect("fixed ChaCha IV word"))
-                    ^ counter as u32,
+                    ^ *counter as u32,
             );
             working[15] = working[15].wrapping_add(
                 u32::from_le_bytes(self.state[44..48].try_into().expect("fixed ChaCha IV word"))
-                    ^ (counter >> 32) as u32,
+                    ^ (*counter >> 32) as u32,
             );
-            counter = counter.wrapping_add(1);
+            *counter = counter.wrapping_add(1);
             for (word, value) in working.iter().copied().enumerate() {
                 let offset = 4 * block + 32 * word;
                 self.buffer[offset..offset + 4].copy_from_slice(&value.to_le_bytes());

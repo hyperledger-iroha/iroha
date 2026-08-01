@@ -348,6 +348,8 @@ static SNAPSHOT_PUBLICATION_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::n
 #[cfg(test)]
 std::thread_local! {
     static SNAPSHOT_GC_FAILURE_STAGE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static SNAPSHOT_HASH_RECONCILIATION_PASSES: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 /// Default chunk size used to derive snapshot Merkle metadata.
 const _DEFAULT_MERKLE_CHUNK_SIZE: NonZeroUsize = defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES;
@@ -1506,6 +1508,9 @@ fn reconcile_snapshot_hashes_with_kura(
     snapshot_hashes: &[HashOf<BlockHeader>],
     kura: &Kura,
 ) -> Result<(), TryReadError> {
+    #[cfg(test)]
+    SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| passes.set(passes.get() + 1));
+
     let kura_height = kura.blocks_count();
     for (idx, snapshot_block_hash) in snapshot_hashes.iter().copied().enumerate() {
         let height = idx + 1;
@@ -1769,7 +1774,6 @@ where
     validate_snapshot_wsv_checkpoint(&state, &snapshot_hashes, kura)?;
     generation.verify_selection_unchanged()?;
     let hash_reconcile_started_at = Instant::now();
-    reconcile_snapshot_hashes_with_kura(&snapshot_hashes, kura)?;
     reconcile_snapshot_hash_height_with_kura(
         &snapshot_hashes,
         block_count,
@@ -4468,6 +4472,7 @@ mod tests {
         try_write_snapshot(&state, &store_dir, &signing_key, TEST_CHUNK_SIZE)
             .expect("complete authenticated commit tuple must permit publication");
         assert_canonical_snapshot_generation(&store_dir);
+        SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| passes.set(0));
         let restored = try_read_snapshot(
             &store_dir,
             &kura,
@@ -4481,6 +4486,13 @@ mod tests {
             StateTelemetry::new(<_>::default(), true),
         )
         .expect("post-height snapshot must remain exactly restart-readable");
+        SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| {
+            assert_eq!(
+                passes.get(),
+                1,
+                "authenticated snapshot restart must reconcile the Kura prefix once"
+            );
+        });
         assert_eq!(
             restored.nexus_snapshot().autoscale.scale_out_window_blocks,
             state.nexus_snapshot().autoscale.scale_out_window_blocks
@@ -7035,6 +7047,7 @@ mod tests {
         let attacker_suffix =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x92; 32]));
 
+        SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| passes.set(0));
         let error = reconcile_snapshot_hash_height_with_kura(
             &[forged_prefix, attacker_suffix],
             1,
@@ -7044,6 +7057,13 @@ mod tests {
         )
         .expect_err("a divergent retained prefix must reject before suffix extension");
 
+        SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| {
+            assert_eq!(
+                passes.get(),
+                1,
+                "forged prefix rejection must complete one fail-before-mutation pass"
+            );
+        });
         assert!(matches!(
             error,
             TryReadError::MismatchedHash { height: 1, .. }

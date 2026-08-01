@@ -82,31 +82,40 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "a6ab663afdf61312dd4da128d54967c262f749f966a953dc63abc77d3751c83d"
     ),
     "freeze_due_clock_owners": (
-        "f097b1ce583dcb9d94293366cab9828f648c376dd586f7af28635b003f92c855"
+        "e3ac13302ebff5862aa5f0832524be2467d7fe79079b0ac43ed5560b7be6327e"
     ),
     "minimum_active_lifecycle_ordinal": (
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
     ),
     "minimum_active_lifecycle_ordinal_excluding": (
-        "204a88b77ef7853327a2313583c25ef32f9bdea705dd57e0fc7bbd17b30afa1a"
+        "61dfb5c5bed49fe8191be06bd09a2e929f70da89b1ff829add86f8966fd90f01"
+    ),
+    "minimum_active_lifecycle_ordinal_for_deferred": (
+        "1d27b616e3804e98006a4353d9c7d1e03005ce9299c2e0b0ccbb7782209210df"
+    ),
+    "minimum_active_lifecycle_ordinal_for_deferred_excluding": (
+        "2707d2e2a3172161c3e68d8bb9779b686c53bb6414001c3827b5141e13c9483d"
+    ),
+    "eligible_deferred_admission_ordinals": (
+        "14a7d45a4ae18b350de195e1ba766874b531c0249f57b8072c02b2b663d55127"
     ),
     "runtime_step": (
-        "82e349d880d8ff39c7438e8c06b301f5abcae332d25265285213a099b7ad8ce3"
+        "1779e7ccc70bf0d62593d1c1b56d34d3d484ac7d0ebec789560f6ffb2f9e0b31"
     ),
     "runtime_step_recovery": (
-        "1e3243e36d27d9d0fb510048485350c2401d56ba02f1ef274b027c63e06847bd"
+        "9ef76f925b9b11d907fb355e0bce611d8f92e0f4baa797ec5d75ce736060b2f3"
     ),
     "dispatch_one_adapter_deferred": (
-        "20d4d698e8566e7df3ba96d0f6cc136ad87c05f10d95931b886aa174ae45b7b9"
+        "30428185a9302b8faf09658e0d122bd407d7309f8679791943c35639bf1d6286"
     ),
     "dispatch_one_fence_dependency": (
-        "1109cb4b250d3115032fc5d5ed196182b53b9020ea4142f0f87e06b197731f00"
+        "048103efd268407f0cd2ad5fd33829d38a8e772c8f67149e558c6ab85e8d9d3c"
     ),
     "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo": (
-        "7f93137f29f8c8afcf06e45935c979dc10ad786b88e87f617415adc67df0d242"
+        "fd73f3acdd805bc9f4f34b6f660e49ef8a3b1b3327589e40d745770abd5ace12"
     ),
     "real_adapter_fence_completion_breaks_pre_and_post_timeout_retransmit_debt": (
-        "89324b884105cbcb609cf18945c41719ff47edeaf315ad3549b316ea0d0744e7"
+        "340a7a261a1d532414e16c6d98b8670c79fc867cdf4a02c5d36571a01e14b59d"
     ),
     "tc_promoted_lock_requires_same_subject_reproposal_before_commit": (
         "4a6ae3cd80c629e1ec63e32eadc6d6cfcb68a9ccc77a15997a4915931818279c"
@@ -136,10 +145,22 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "638d44eae201d3477a987e857d3c9318c7a525347cddb9d5bbce704d9bbc7985"
     ),
     "runtime_ingress_validate_exact": (
-        "5076de66c0c2a3b01f31c65ff4ea3af8177e4bd372861d6e14585087fb6714d3"
+        "87a8e78b3de06372da6678ca45737fa8874d5b9c3aac537d0db55b7848715a41"
+    ),
+    "runtime_ingress_leader_wire_physical_carrier": (
+        "964b47b38e48c18e93b0a4e9d63ac711f5ef14ed89d933ffbe1e93233d59d7c5"
+    ),
+    "runtime_ingress_earliest_physical_carrier": (
+        "aab95bf9cc5928cda4550fa375c56f8958b473940ab865b7527946eb5f235325"
+    ),
+    "runtime_ingress_contains_physical_carrier": (
+        "6554701b2dcc0d85a2006eabf89f0c538526fd99cd9a78456c031d79c5aec1bf"
+    ),
+    "runtime_ingress_validate_frozen_physical": (
+        "51990098b63ed265a79a1617ff4e22c54a1a9eb740efea948df9950ba8f4a1b5"
     ),
     "runtime_ingress_matches_authenticated": (
-        "e9d5c8bfa0cbdc71f42f9858ee00e73f663c2bed53f573c3e06a9144feaad5f8"
+        "3410a728fe3134093e26ff812c98325edf39a6a265fa1d1bf48639ad70710583"
     ),
     "runtime_ingress_can_merge_downstream": (
         "0a9b6424c76b8d53a6e630431e3e9153d20e25d755abbe38384c5f59e9064553"
@@ -153,14 +174,53 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     "runtime_driver_dispatch_deferred": (
         "f80c271a6766106b620e6b0dcbd7fb3a37db63fece634c09818ddb74498202d9"
     ),
+    "runtime_driver_deferred_occurrence_ownership": (
+        "be42df5e4cfeb06f2887a6d713b06c4a0edb4acc15e6f1bafe8e1454bf58ea91"
+    ),
+    "runtime_driver_seal_deferred_runtime_ownership": (
+        "2948fe28ee3912010c5f0628e6688a329de631c8c5c3f9456178c17e7f58358a"
+    ),
+    "runtime_ingress_physical_ownership_validate_exact": (
+        "488ba0d5d7896c09a4966d90d16c831090f516c42ab213c70c62aead6b49f0b5"
+    ),
+    "runtime_deferred_lifecycle_validate_exact": (
+        "df41281db59b26ee4efd086c324d33d9655378f4a2c571335588396db1a71c38"
+    ),
+    "runtime_deferred_lifecycle_validate_against_ingress": (
+        "5584747a03531f1709f299d16b7cd1884becd7cbd5a37c7619777277112b4e30"
+    ),
+    "runtime_deferred_lifecycle_validate_active_against_ingress": (
+        "0ae0c8bde63fd29b4732f301498515f9444a9991f8008aaf3fc23a9a27583918"
+    ),
+    "runtime_deferred_lifecycle_rebase_deferred_ingress": (
+        "b18470839079c4922c39341a62f804bee2119123e05758c55100b62e183eb363"
+    ),
     "reconcile_deferred_ingress_ownership": (
-        "fb8ac9defb961830528e67b3c05e92e7a72368c4c592f5594285f937cfb81f01"
+        "6c47b3670db6f8398e5e4673b8dfc0cd570e0c0a1535aae41aa85c1a7ae0d6c4"
+    ),
+    "reconcile_deferred_runtime_ownership_after_retirement": (
+        "2b5b76aaa860e8186f24f20aef7fcf22e4b704678a4179f0e2666b12504addcd"
+    ),
+    "active_leader_wire_runtime_ordinals": (
+        "60659f35ec4d592990db68069fb1373bc2af662711fb11a14db1078d8b395dc6"
+    ),
+    "retire_orphaned_leader_wire_runtime_receipts": (
+        "9c4e92b725c4da1cf83dcb82ae6f76b8d9906ec4fbcdca1117dfadef6024bd7d"
+    ),
+    "register_leader_wire_runtime_receipt": (
+        "58838980b5f6eac5ad28b4e40af9bbfaab41e4d2a32e5215fbe918a890e6ec11"
+    ),
+    "complete_leader_wire_runtime_owner": (
+        "e17e62beccb6e2e219f3aac01c126456531ffb0448930b83026d9cf02da6695c"
+    ),
+    "complete_driver_dispatch_leader_wire_owners": (
+        "6fccf9497abffa385d06a6e4f4fd9a0f641745ca51b17f8b6e7dcede26c449eb"
     ),
     "accept_driver_dispatch": (
-        "2862df8110e056352a64680616e131393c4eab44be5f9e091f43ccc23d6fab65"
+        "53c15b0a9cc4d074707377b6365e8fc3497c57e8706c191d5f503313016838be"
     ),
     "enqueue_network_with_ingress_ownership": (
-        "db05791e686e2c8b4a84e09707c83b767f3bc7eef1da189060801cf86dfc5927"
+        "f7767ff4d68f29e72bdff8ec39d4c3b2ecaba66733a79c137090d2c29fca7d60"
     ),
     "can_admit_network_message_with_ingress_ownership": (
         "24903fdc43ff249788662132bdf1c260917a8243b260e67ba5e8224a013d361d"
@@ -181,7 +241,7 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
         "b69ec152b545fb4e705335eeaecaa5785b1736349fa1494b383f18c257aa8d18"
     ),
     "older_frozen_aggregate_carrier_rebases_queued_runtime_minimum": (
-        "dc5f365edfc9bbd31d0f8f595c34673a779e85aac7dfe517316792bd2c70a235"
+        "77dbbfac307f2bd98b86d1d9d111579c40b30fed6254da221544dacf1df8a7ba"
     ),
     "network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals": (
         "878269e9bdf567147360a1f3c2bf5a7def18b7abd1b38aed3978dc7923624291"
@@ -233,18 +293,18 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 806
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 813
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 82
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "0c1ee4be74b736dba126c0eeedd1f39ccaf6cbd6eed0e6374f158e3457f2eff5"
+    "708e0ed0221056b20b9d9f03f1ea8cd07225b0c84c39ad18dd25402e090fb30f"
 )
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 302
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 303
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 309
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 310
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "94552d20b46e0ca5bec00934d18792e902ddc05a106ae67d0a417ab4fdf13bce"
+    "b7588b8ab1f3dcba654bd32ec9fc2c196dc129eebc4821de6df89d5b69253cfb"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -320,7 +380,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        40,
+        41,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
@@ -345,13 +405,13 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::serviced_candidate_store::tests",
         1,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 45),
+    ("production-v2-adapter", "sumeragi::v2::tests", 46),
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 66),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 52),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 57),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 34),

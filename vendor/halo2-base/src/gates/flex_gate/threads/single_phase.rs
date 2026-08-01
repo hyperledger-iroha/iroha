@@ -510,6 +510,37 @@ mod physical_mapping_tests {
         };
         assert_eq!(second, first);
 
+        // V1 reusable measurement clears only coordinates from its first
+        // layouter invocation. The virtual graph and pinned breakpoints remain
+        // intact, and the assignment pass rebuilds the identical mapping.
+        circuit.reset_synthesis_state();
+        assert!(
+            copy_manager
+                .lock()
+                .expect("copy manager")
+                .assigned_advices
+                .is_empty()
+        );
+        assert_eq!(circuit.break_points()[0], break_points);
+        assert_eq!(
+            circuit.core().phase_manager[0].total_advice(),
+            WITNESS_COUNT
+        );
+        MockProver::run(K, &circuit, vec![])
+            .expect("synthesis after physical-state reset")
+            .assert_satisfied();
+        let rebuilt = {
+            let manager = copy_manager.lock().expect("copy manager");
+            virtual_cells
+                .iter()
+                .map(|cell| {
+                    let physical = manager.assigned_advices[cell];
+                    (physical.column.index(), physical.row_offset)
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(rebuilt, first);
+
         // Deep clones own a fresh synthesis-local map and repopulate it from
         // their own layouter invocation.
         let cloned = circuit.deep_clone().unknown(true);

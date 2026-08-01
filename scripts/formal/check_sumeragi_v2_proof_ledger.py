@@ -11246,7 +11246,7 @@ def _adequate_leader_producer_origin_contract_errors(
     )
     expected_extends = (
         "SumeragiV2AsyncCandidateProducerContinuationProofs, "
-        "SumeragiV2AdequateLeaderServiceClosureProofs"
+        "SumeragiV2AdequateLeaderRetainedProducerClosureProofs"
     )
     if (
         extends is None
@@ -11256,7 +11256,7 @@ def _adequate_leader_producer_origin_contract_errors(
         errors.append(
             f"{path}: producer-origin contract must extend exactly "
             "SumeragiV2AsyncCandidateProducerContinuationProofs then "
-            "SumeragiV2AdequateLeaderServiceClosureProofs, with no extras"
+            "SumeragiV2AdequateLeaderRetainedProducerClosureProofs, with no extras"
         )
 
     exact_operator_bodies = {
@@ -16441,7 +16441,7 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
 def _timeout_vote_semantic_capacity_source_fidelity_errors(
     repo_root: Path,
 ) -> list[str]:
-    """Seal exact current-view TimeoutVote capacity and pruning ownership."""
+    """Seal exact current/adjacent TimeoutVote capacity and pruning ownership."""
 
     path = (
         repo_root
@@ -16484,10 +16484,149 @@ def _timeout_vote_semantic_capacity_source_fidelity_errors(
     _require_rust_token_sequence(
         path,
         capacity,
-        "MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(2))",
-        "semantic capacity must reserve the two roster-bounded protected sets",
+        "MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(3))",
+        "semantic capacity must reserve the three roster-bounded protected sets",
         errors,
     )
+
+    types_path = path.with_name("v2_core") / "types.rs"
+    if not types_path.is_file() or types_path.is_symlink():
+        errors.append(
+            f"{types_path}: bounded TimeoutVote view predicate source must be "
+            "a regular file"
+        )
+    else:
+        types_source = types_path.read_text(encoding="utf-8")
+        view_window = _require_rust_item(
+            types_path,
+            types_source,
+            "timeout_vote_view_is_admissible",
+            errors,
+        )
+        _require_rust_item_context(
+            types_path,
+            view_window,
+            (),
+            "bounded TimeoutVote view predicate",
+            errors,
+        )
+        _require_rust_item_token_sha256(
+            types_path,
+            view_window,
+            _TIMEOUT_VOTE_VIEW_WINDOW_ITEM_SHA256[
+                "timeout_vote_view_is_admissible"
+            ],
+            "bounded TimeoutVote view predicate",
+            errors,
+        )
+        _require_rust_source_token_sequence(
+            types_path,
+            types_source,
+            "pub(crate) const FUTURE_TIMEOUT_VOTE_LOOKAHEAD: u64 = 1;",
+            "TimeoutVote lookahead must remain exactly one view",
+            errors,
+        )
+        _require_rust_token_sequence(
+            types_path,
+            view_window,
+            """
+vote_view >= current_view
+    && vote_view <= current_view.saturating_add(FUTURE_TIMEOUT_VOTE_LOOKAHEAD)
+""",
+            "TimeoutVote predicate must enforce the lower bound and "
+            "saturating one-view upper bound",
+            errors,
+        )
+
+    reducer_path = path.with_name("v2_core") / "reducer.rs"
+    if not reducer_path.is_file() or reducer_path.is_symlink():
+        errors.append(
+            f"{reducer_path}: bounded TimeoutVote reducer source must be a "
+            "regular file"
+        )
+    else:
+        reducer_source = reducer_path.read_text(encoding="utf-8")
+        timeout_admission = _require_qualified_rust_item(
+            reducer_path,
+            reducer_source,
+            "Reducer",
+            "on_timeout_vote",
+            errors,
+            "bounded reducer TimeoutVote admission",
+        )
+        _require_rust_token_sequence(
+            reducer_path,
+            timeout_admission,
+            """
+if !timeout_vote_view_is_admissible(
+    self.durable.current_view(),
+    vote.round().view()
+) {
+    return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
+}
+""",
+            "reducer TimeoutVote admission must use the bounded current/adjacent predicate",
+            errors,
+        )
+        persisted = _require_qualified_rust_item(
+            reducer_path,
+            reducer_source,
+            "Reducer",
+            "on_persisted",
+            errors,
+            "bounded TimeoutVote install retention",
+        )
+        _require_rust_token_sequence(
+            reducer_path,
+            persisted,
+            """
+let current_view = self.durable.current_view();
+self.timeout_votes.retain(|round, _| {
+    round.height() == self.context.height()
+        && timeout_vote_view_is_admissible(current_view, round.view())
+});
+self.formed_timeouts.retain(|round| {
+    round.height() == self.context.height()
+        && timeout_vote_view_is_admissible(current_view, round.view())
+});
+""",
+            "Timeout install must retain exactly the current/adjacent vote "
+            "and formed-certificate pools",
+            errors,
+        )
+
+    reducer_tests_path = path.with_name("v2_core") / "tests.rs"
+    if not reducer_tests_path.is_file() or reducer_tests_path.is_symlink():
+        errors.append(
+            f"{reducer_tests_path}: bounded TimeoutVote reducer regressions "
+            "must be a regular file"
+        )
+    else:
+        reducer_tests_source = reducer_tests_path.read_text(encoding="utf-8")
+        for name, expected_sha256 in (
+            _TIMEOUT_VOTE_VIEW_WINDOW_REGRESSION_TEST_SHA256.items()
+        ):
+            item = _require_rust_item(
+                reducer_tests_path,
+                reducer_tests_source,
+                name,
+                errors,
+            )
+            _require_rust_item_context(
+                reducer_tests_path,
+                item,
+                (),
+                f"bounded TimeoutVote reducer regression {name}",
+                errors,
+                expected_attributes=("#[test]",),
+            )
+            _require_rust_item_token_sha256(
+                reducer_tests_path,
+                item,
+                expected_sha256,
+                f"bounded TimeoutVote reducer regression {name}",
+                errors,
+            )
 
     admission = _require_qualified_rust_item(
         path,
@@ -16504,7 +16643,7 @@ def _timeout_vote_semantic_capacity_source_fidelity_errors(
         "SumeragiV2Adapter",
         "prune_ingress_records",
         errors,
-        "authenticated TimeoutVote current-view pruning",
+        "authenticated TimeoutVote current/adjacent-view pruning",
     )
     for name, item in (
         ("admit_authenticated_payload", admission),
@@ -16519,12 +16658,26 @@ def _timeout_vote_semantic_capacity_source_fidelity_errors(
                     "authenticated TimeoutVote protected-capacity admission"
                 ),
                 "prune_ingress_records": (
-                    "authenticated TimeoutVote current-view pruning"
+                    "authenticated TimeoutVote current/adjacent-view pruning"
                 ),
             }[name],
             errors,
         )
 
+    _require_rust_token_sequence(
+        path,
+        admission,
+        """
+if !reducer::timeout_vote_view_is_admissible(current_view, vote.round.view) {
+    return Ok((
+        Some(Self::ignored_outcome(reducer::IgnoreReason::IrrelevantView)),
+        None,
+    ));
+}
+""",
+        "authenticated TimeoutVote admission must accept only the current/adjacent view window",
+        errors,
+    )
     _require_rust_token_sequence(
         path,
         admission,
@@ -16565,15 +16718,17 @@ if capacity_bypass && !protected_capacity_bypass {
         path,
         prune,
         """
-let matches_current_timeout = |key: IngressSemanticKey| {
+let matches_retained_timeout = |key: IngressSemanticKey| {
     matches!(
         key,
         IngressSemanticKey::TimeoutVote { round, .. }
-            if round.height == current_height && round.view == current_view
+            if round.height == current_height
+                && reducer::timeout_vote_view_is_admissible(current_view, round.view)
     )
 };
 """,
-        "capacity-bypass TimeoutVotes must be retained only at the current height and view",
+        "capacity-bypass TimeoutVotes must be retained only at the current "
+        "height and current/adjacent view",
         errors,
     )
     _require_rust_token_sequence(
@@ -16581,10 +16736,10 @@ let matches_current_timeout = |key: IngressSemanticKey| {
         prune,
         """
 if record.capacity_bypass {
-    matches_current_lock(*key, record.fingerprint) || matches_current_timeout(*key)
+    matches_current_lock(*key, record.fingerprint) || matches_retained_timeout(*key)
 } else {
 """,
-        "capacity-bypass pruning must preserve either the exact lock or current TimeoutVote",
+        "capacity-bypass pruning must preserve either the exact lock or retained TimeoutVote",
         errors,
     )
     if prune is not None:
@@ -16592,7 +16747,7 @@ if record.capacity_bypass {
         ordered_sequences = (
             "let current_view = self.reducer.current_tag().view()",
             "let current_height = self.wire_context.height",
-            "let matches_current_timeout = |key: IngressSemanticKey|",
+            "let matches_retained_timeout = |key: IngressSemanticKey|",
             "self.ingress_equivocations.retain",
             "self.ingress_deliveries.retain",
         )
@@ -16615,6 +16770,7 @@ if record.capacity_bypass {
     )
     long_tests = {
         "capacity_bypass_records_follow_current_lock_and_timeout_view",
+        "adjacent_future_timeout_vote_remains_retryable_until_current_view_advances",
     }
     for name, expected_sha256 in (
         _TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256.items()
@@ -24850,7 +25006,8 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
             "TimeoutReceiptAdmitted": (
                 "/\\ NoDecisionForNode(node) "
-                "/\\ vote.view = nodeView[node] "
+                "/\\ vote.view >= nodeView[node] "
+                "/\\ vote.view <= nodeView[node] + 1 "
                 "/\\ ~TimeoutVoteSlotOccupied(node, vote)"
             ),
             "TimeoutReceiptsAfter": (
@@ -49047,6 +49204,22 @@ assert!(status.liveness.outbound_intents.iter().all(|intent| {
 fn deferred_admission_ordinal_source(&self) -> &DeferredAdmissionOrdinalSource;
 fn authenticated_deferred_admission_ordinals(&self) -> BTreeSet<u128>;
 fn all_deferred_admission_ordinals(&self) -> BTreeSet<u128>;
+fn deferred_occurrence_ownership(
+    &self,
+    _admission_ordinal: u128,
+) -> Option<DeferredOccurrenceOwnershipEvidence> {
+    None
+}
+fn seal_deferred_runtime_ownership(
+    &mut self,
+    _admission_ordinal: u128,
+    _owner: &RuntimeLifecycleOwner,
+    _current_ingress: RuntimeDispatchIngress,
+    _source_physical_ordinal: Option<u64>,
+    _physical_cut: u128,
+) -> Result<DeferredRuntimeOwnershipSeal, Self::Error> {
+    unreachable!("a synthetic driver cannot admit production Busy ownership")
+}
 #[cfg(test)]
 fn synthetic_deferred_lifecycle_owner(
     &self,
@@ -49074,8 +49247,9 @@ fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
         if deferred_trait_contract_count != 1:
             errors.append(
                 f"{runtime_path}: RuntimeDriver authenticated deferred-owner "
-                "source, snapshot, and exact dispatch methods must be adjacent "
-                "on the production trait surface; found "
+                "source, snapshots, exact occurrence ownership, runtime sealing, "
+                "and exact dispatch methods must be adjacent on the production "
+                "trait surface; found "
                 f"{deferred_trait_contract_count} reviewed contracts"
             )
 
@@ -49093,6 +49267,16 @@ fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
                 "dispatch_deferred",
                 "runtime_driver_dispatch_deferred",
                 "production exact deferred ownership dispatch bridge",
+            ),
+            (
+                "deferred_occurrence_ownership",
+                "runtime_driver_deferred_occurrence_ownership",
+                "production exact deferred occurrence ownership bridge",
+            ),
+            (
+                "seal_deferred_runtime_ownership",
+                "runtime_driver_seal_deferred_runtime_ownership",
+                "production deferred runtime ownership sealing bridge",
             ),
         ):
             matching = tuple(
@@ -49165,6 +49349,30 @@ SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)
             "deferred dispatch must retain the selected occurrence and optional "
             "producer handoff",
             errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            observed_production_driver_items.get("deferred_occurrence_ownership"),
+            "SumeragiV2Adapter::deferred_occurrence_ownership(self, admission_ordinal)",
+            "deferred occurrence lookup must preserve the adapter-issued exact "
+            "occurrence capability",
+            errors,
+        )
+        require_runtime_item_order(
+            observed_production_driver_items.get(
+                "seal_deferred_runtime_ownership"
+            ),
+            (
+                "if !owner.validate_exact()",
+                "SumeragiV2Adapter::bind_deferred_runtime_ownership(",
+                "owner.causal_origin().lifecycle_key.clone()",
+                "owner.lifecycle_ordinal()",
+                "current_ingress == RuntimeDispatchIngress::DirectAuthenticated",
+                "source_physical_ordinal",
+                "physical_cut",
+            ),
+            "deferred runtime sealing must validate and bind the exact lifecycle, "
+            "ingress provenance, physical occurrence, and frozen cut",
         )
 
         for item_name, delegate, description in (
@@ -49306,6 +49514,26 @@ let command = self
                 "canonical payload and route projection validator",
             ),
             (
+                "leader_wire_physical_carrier",
+                "runtime_ingress_leader_wire_physical_carrier",
+                "exact leader-wire physical occurrence and cut projection",
+            ),
+            (
+                "earliest_physical_carrier",
+                "runtime_ingress_earliest_physical_carrier",
+                "earliest retained physical occurrence projection",
+            ),
+            (
+                "contains_physical_carrier",
+                "runtime_ingress_contains_physical_carrier",
+                "exact retained physical occurrence membership predicate",
+            ),
+            (
+                "validate_frozen_physical",
+                "runtime_ingress_validate_frozen_physical",
+                "post-dequeue physical occurrence and runtime-receipt validator",
+            ),
+            (
                 "matches_authenticated",
                 "runtime_ingress_matches_authenticated",
                 "post-authentication canonical payload comparator",
@@ -49356,11 +49584,42 @@ let command = self
 let lifecycle_ordinal_is_exact = self.earliest_lifecycle_ordinal().is_ok();
 let leader_wire_runtime_receipt_is_exact = matches!(
     (self.leader_wire_token(), self.leader_wire_runtime_receipt()),
-    (Ok(None), Ok(None)) | (Ok(Some(_)), Ok(Some(_)))
+    (Ok(None), Ok(None)) | (Ok(Some(_)), Ok(None)) | (Ok(Some(_)), Ok(Some(_)))
 );
 """,
             "canonical ownership validation must bind one lifecycle-ordinal "
-            "domain and a matching leader-wire runtime receipt",
+            "domain while allowing only the reviewed pre-dequeue leader-wire "
+            "receipt state",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            observed_runtime_ingress_items.get("validate_frozen_physical"),
+            """
+self.validate_exact()
+    && matches!(self.earliest_physical_carrier(), Ok(Some(_)))
+    && matches!(
+        (
+            self.leader_wire_token(),
+            self.leader_wire_physical_carrier(),
+            self.leader_wire_runtime_receipt()
+        ),
+        (Ok(None), Ok(None), Ok(None)) | (Ok(Some(_)), Ok(Some(_)), Ok(Some(_)))
+    )
+""",
+            "post-dequeue ownership validation must require a physical carrier "
+            "and an exact token/physical-occurrence/runtime-receipt triple",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            observed_runtime_ingress_items.get("matches_authenticated"),
+            """
+self.validate_frozen_physical()
+    && self.runtime_bytes.as_ref() == authenticated.canonical_wire_bytes().as_slice()
+""",
+            "authenticated dispatch matching must require the frozen physical "
+            "ownership boundary before comparing canonical bytes",
             errors,
         )
         _require_rust_token_sequence(
@@ -49388,6 +49647,117 @@ if retained_lifecycle.is_some() != candidate_lifecycle.is_some() {
 """,
             "per-source merge must preserve the tagged-versus-untagged "
             "lifecycle domain before combining carriers",
+            errors,
+        )
+
+        physical_ownership_context = (
+            ("impl", "RuntimeIngressPhysicalOwnership"),
+        )
+        physical_ownership_validator = tuple(
+            item
+            for item in rust_items(runtime_source, "validate_exact")
+            if item.brace_context == physical_ownership_context
+        )
+        if len(physical_ownership_validator) != 1:
+            errors.append(
+                f"{runtime_path}: require exactly one receiver-local physical "
+                "occurrence validator; found "
+                f"{len(physical_ownership_validator)}"
+            )
+        else:
+            item = physical_ownership_validator[0]
+            _require_rust_item_token_sha256(
+                runtime_path,
+                item,
+                _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[
+                    "runtime_ingress_physical_ownership_validate_exact"
+                ],
+                "receiver-local physical occurrence validator",
+                errors,
+            )
+            _require_rust_token_sequence(
+                runtime_path,
+                item,
+                "self.source_ordinal != 0 && u128::from(self.source_ordinal) < self.physical_cut",
+                "receiver-local physical ownership must be nonzero and strictly "
+                "precede its frozen cut",
+                errors,
+            )
+
+        deferred_lifecycle_context = (
+            ("impl", "RuntimeDeferredLifecycleOwnership"),
+        )
+        observed_deferred_lifecycle_items: dict[str, RustItem | None] = {}
+        for item_name, digest_name, description in (
+            (
+                "validate_exact",
+                "runtime_deferred_lifecycle_validate_exact",
+                "deferred lifecycle runtime-seal validator",
+            ),
+            (
+                "validate_against_ingress",
+                "runtime_deferred_lifecycle_validate_against_ingress",
+                "deferred lifecycle frozen-ingress validator",
+            ),
+            (
+                "validate_active_against_ingress",
+                "runtime_deferred_lifecycle_validate_active_against_ingress",
+                "active deferred occurrence capability validator",
+            ),
+            (
+                "rebase_deferred_ingress",
+                "runtime_deferred_lifecycle_rebase_deferred_ingress",
+                "deferred lifecycle aggregate-carrier rebase",
+            ),
+        ):
+            matching = tuple(
+                item
+                for item in rust_items(runtime_source, item_name)
+                if item.brace_context == deferred_lifecycle_context
+            )
+            if len(matching) != 1:
+                errors.append(
+                    f"{runtime_path}: require exactly one {description}; found "
+                    f"{len(matching)}"
+                )
+                observed_deferred_lifecycle_items[item_name] = None
+                continue
+            item = matching[0]
+            observed_deferred_lifecycle_items[item_name] = item
+            _require_rust_item_token_sha256(
+                runtime_path,
+                item,
+                _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[digest_name],
+                description,
+                errors,
+            )
+        _require_rust_token_sequence(
+            runtime_path,
+            observed_deferred_lifecycle_items.get("validate_exact"),
+            """
+self.runtime_seal.admission_ordinal() == self.deferred_admission_ordinal
+    && self.runtime_seal.matches_runtime_owner(
+        &self.owner.causal_origin().lifecycle_key,
+        self.owner.lifecycle_ordinal(),
+        self.current_ingress == RuntimeDispatchIngress::DirectAuthenticated,
+        self.source_physical_ordinal,
+        self.physical_cut
+    )
+""",
+            "deferred lifecycle validation must bind its private runtime seal to "
+            "the exact occurrence, lifecycle, provenance, physical source, and cut",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            observed_deferred_lifecycle_items.get("validate_active_against_ingress"),
+            """
+self.runtime_seal.still_retained()
+    && self.runtime_seal.belongs_to(source)
+    && self.validate_against_ingress(ingress)
+""",
+            "active deferred lifecycle validation must require a live capability "
+            "from the exact adapter source and its frozen ingress",
             errors,
         )
 
@@ -49480,7 +49850,12 @@ let authenticated_deferred_owner = self
         require_runtime_item_order(
             enqueue_with_ownership,
             (
+                "let observed_physical_cut = ingress_ownership.runtime_physical_cut()",
+                "self.ingress_physical_cut = self.ingress_physical_cut.max(observed_physical_cut);",
+                "RuntimeIngressOwnershipEvidence::from_fair_ingress(&message, ingress_ownership)",
+                "if !ingress_ownership.validate_frozen_physical()",
                 "match ingress_ownership.earliest_lifecycle_ordinal()",
+                "let leader_wire_registration = ingress_ownership.clone();",
                 """
 self.ingress
     .check_authenticated_wire_capacity_with_ownership(
@@ -49514,10 +49889,17 @@ return Ok(owner_tag);
                 """
 .enqueue_authenticated_with_ingress_ownership_and_owner(
 """,
+                """
+Ok(owner) => {
+    if self
+        .register_leader_wire_runtime_receipt(&leader_wire_registration)
+        .is_err()
+""",
             ),
             "authenticated admission must validate the actor-global lifecycle, "
-            "authenticate, merge an exact deferred owner, and preflight before "
-            "physical enqueue",
+            "freeze its physical occurrence, authenticate, merge and register an "
+            "exact deferred owner, then preflight and register ordinary enqueue "
+            "before returning ownership",
         )
         can_admit_with_ownership = observed_concrete_runtime_items.get(
             "can_admit_network_message_with_ingress_ownership"
@@ -49813,6 +50195,21 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
                 "minimum_active_lifecycle_ordinal_excluding",
                 "proof-gated fence dependency minimum",
             ),
+            (
+                "minimum_active_lifecycle_ordinal_for_deferred",
+                "minimum_active_lifecycle_ordinal_for_deferred",
+                "target-relative deferred lifecycle minimum wrapper",
+            ),
+            (
+                "minimum_active_lifecycle_ordinal_for_deferred_excluding",
+                "minimum_active_lifecycle_ordinal_for_deferred_excluding",
+                "target-relative physical-cut lifecycle minimum",
+            ),
+            (
+                "eligible_deferred_admission_ordinals",
+                "eligible_deferred_admission_ordinals",
+                "physical-cut eligible deferred occurrence selector",
+            ),
             ("step", "runtime_step", "live serialized runtime step"),
             (
                 "step_recovery",
@@ -49904,6 +50301,55 @@ for queued in &self.ingress.commands {
             "proof-gated lifecycle exclusion must project every physical FIFO owner",
             errors,
         )
+        _require_rust_token_sequence(
+            runtime_path,
+            observed_runtime_items.get(
+                "minimum_active_lifecycle_ordinal_for_deferred"
+            ),
+            "self.minimum_active_lifecycle_ordinal_for_deferred_excluding(target, &[])",
+            "the complete target-relative lifecycle minimum excludes no owner",
+            errors,
+        )
+        target_relative_minimum = observed_runtime_items.get(
+            "minimum_active_lifecycle_ordinal_for_deferred_excluding"
+        )
+        require_runtime_item_order(
+            target_relative_minimum,
+            (
+                "if !target.validate_exact()",
+                """
+.oldest_active_lifecycle_ordinal_before_physical_cut_excluding(
+    target.physical_cut,
+    excluded
+)?
+""",
+                "if excluded.iter().any(|excluded| excluded == owner)",
+                "if owner.is_post_physical_cut(target.physical_cut)",
+                "for (ordinal, owner) in &self.deferred_lifecycle_ownership",
+                "owner.validate_active_against_ingress(",
+                "observe(owner.owner())?;",
+            ),
+            "target-relative lifecycle selection must validate the target, retain "
+            "only pre-cut physical predecessors, and validate every active Busy "
+            "occurrence before comparing logical rank",
+        )
+        eligible_deferred = observed_runtime_items.get(
+            "eligible_deferred_admission_ordinals"
+        )
+        require_runtime_item_order(
+            eligible_deferred,
+            (
+                "for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership",
+                "candidate.validate_active_against_ingress(",
+                "let physically_behind_an_active_target",
+                "u128::from(source_physical_ordinal) >= target.physical_cut",
+                "if physically_behind_an_active_target",
+                "self.minimum_active_lifecycle_ordinal_for_deferred(candidate)?",
+                "eligible.insert(*admission_ordinal);",
+            ),
+            "deferred eligibility must globally remove post-cut occurrences before "
+            "choosing the logical minimum of the remaining frozen prefix",
+        )
         require_runtime_item_order(
             observed_runtime_items.get("step"),
             (
@@ -49920,30 +50366,65 @@ for queued in &self.ingress.commands {
             (
                 "if self.driver.deferred_work_is_serviceable()",
                 "let active_deferred = self.driver.all_deferred_admission_ordinals();",
-                "let global_minimum = self.minimum_active_lifecycle_ordinal()",
+                "let eligible_deferred = self.eligible_deferred_admission_ordinals()",
+                ".min_by_key(|(ordinal, owner)| (owner.owner().lifecycle_ordinal(), *ordinal))",
+                "self.driver.deferred_occurrence_ownership(target_ordinal)",
+                "target_occurrence_ownership.still_retained()",
+                ".matches_retained_runtime_ownership_seal(&target.runtime_seal)",
                 ".fence_blocked_lifecycle_owners(",
-                ".minimum_active_lifecycle_ordinal_excluding(&blocked_dependency_owners)",
+                ".minimum_active_lifecycle_ordinal_for_deferred_excluding(",
                 ".pop_fence_completion_with_ownership(",
                 "driver.completion_unblocks_deferred_fence(queued.tag, &queued.command)",
                 "let dispatch = match self.driver.dispatch(command)",
                 "if dispatch.retry_unadmitted",
-                "self.accept_driver_dispatch(dispatch, &owner)?",
+                """
+self.accept_driver_dispatch(
+    dispatch,
+    &owner,
+    RuntimeDispatchIngress::LocalOrCausal
+)?
+""",
                 "RuntimeSelectedOwnerKind::FenceCompletion",
                 "self.retain_effect_ownership(",
                 "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
                 "self.driver.acknowledge_producer_handoff(token, evidence)",
-                "self.complete_leader_wire_runtime_owner(",
+                "self.complete_driver_dispatch_leader_wire_owners(",
                 "self.observe_effects(now, &effects)",
             ),
             "the signature-fence dispatcher must prove the dependency edge, "
+            "validate the target's exact occurrence capability and physical cut, "
             "remove one exact completion, transfer every successor, and retire "
-            "the producer in one serialized macro-step",
+            "the selected parent plus adapter-side orphans in one serialized macro-step",
         )
         observed_runtime_ownership_items: dict[str, RustItem | None] = {}
         for item_name, description in (
             (
                 "reconcile_deferred_ingress_ownership",
                 "authenticated deferred carrier reconciliation",
+            ),
+            (
+                "reconcile_deferred_runtime_ownership_after_retirement",
+                "atomic deferred wrapper and orphan-receipt retirement reconciliation",
+            ),
+            (
+                "active_leader_wire_runtime_ordinals",
+                "complete active leader-wire runtime owner projection",
+            ),
+            (
+                "retire_orphaned_leader_wire_runtime_receipts",
+                "orphaned leader-wire runtime receipt terminalization",
+            ),
+            (
+                "register_leader_wire_runtime_receipt",
+                "frozen leader-wire runtime receipt registration",
+            ),
+            (
+                "complete_leader_wire_runtime_owner",
+                "selected leader-wire parent terminalization",
+            ),
+            (
+                "complete_driver_dispatch_leader_wire_owners",
+                "selected-parent-first driver retirement terminalization",
             ),
             (
                 "accept_driver_dispatch",
@@ -49997,8 +50478,106 @@ lifecycle_ownership.insert(ordinal, owner);
             "an earlier aggregate carrier must rebase its exact deferred owner "
             "before either ownership map is committed",
         )
+        reconcile_after_retirement = observed_runtime_ownership_items.get(
+            "reconcile_deferred_runtime_ownership_after_retirement"
+        )
+        require_runtime_item_order(
+            reconcile_after_retirement,
+            (
+                "let active = self.driver.all_deferred_admission_ordinals();",
+                "let authenticated = self.driver.authenticated_deferred_admission_ordinals();",
+                "if !authenticated.is_subset(&active)",
+                "lifecycle.retain(|ordinal, _| active.contains(ordinal));",
+                "ingress.retain(|ordinal, _| authenticated.contains(ordinal));",
+                "!ownership.validate_frozen_physical() || !lifecycle.contains_key(ordinal)",
+                "owner.validate_active_against_ingress(",
+                "self.deferred_lifecycle_ownership = lifecycle;",
+                "self.deferred_ingress_ownership = ingress;",
+                "self.retire_orphaned_leader_wire_runtime_receipts()",
+            ),
+            "adapter-side retirement reconciliation must validate and prune exact "
+            "runtime wrappers before terminalizing receipts which no physical or "
+            "Busy owner retains",
+        )
+        retire_orphans = observed_runtime_ownership_items.get(
+            "retire_orphaned_leader_wire_runtime_receipts"
+        )
+        require_runtime_item_order(
+            retire_orphans,
+            (
+                "let active = self.active_leader_wire_runtime_ordinals()?;",
+                ".filter(|ordinal| !active.contains(ordinal))",
+                "for ordinal in retired",
+                "self.leader_wire_runtime_receipts.remove(&ordinal)",
+                "self.pending_leader_wire_terminals.push_back(",
+            ),
+            "orphan retirement must derive the complete active owner set, remove "
+            "only absent receipt ordinals, and publish each volatile terminal",
+        )
+        register_runtime_receipt = observed_runtime_ownership_items.get(
+            "register_leader_wire_runtime_receipt"
+        )
+        require_runtime_item_order(
+            register_runtime_receipt,
+            (
+                "if !ownership.validate_frozen_physical()",
+                "let Some(receipt) = ownership.leader_wire_runtime_receipt()?.cloned()",
+                "let ordinal = receipt.owner().admission_ordinal();",
+                "ordinal != receipt.token().scheduler_ordinal()",
+                "self.leader_wire_runtime_receipts.insert(ordinal, receipt);",
+            ),
+            "runtime receipt registration must cross the frozen physical boundary "
+            "and bind one exact scheduler ordinal before insertion",
+        )
+        complete_selected_parent = observed_runtime_ownership_items.get(
+            "complete_leader_wire_runtime_owner"
+        )
+        require_runtime_item_order(
+            complete_selected_parent,
+            (
+                "self.leader_wire_runtime_receipts.get(&parent.lifecycle_ordinal())",
+                "if !parent.validate_exact()",
+                "receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()",
+                "let event = match handoff",
+                "self.leader_wire_runtime_receipts.remove(&parent.lifecycle_ordinal());",
+                "self.pending_leader_wire_terminals.push_back(event);",
+            ),
+            "selected leader-wire parent terminalization must validate its exact "
+            "lifecycle, classify its producer handoff, remove its receipt, and "
+            "publish the matching terminal in order",
+        )
+        complete_driver_owners = observed_runtime_ownership_items.get(
+            "complete_driver_dispatch_leader_wire_owners"
+        )
+        require_runtime_item_order(
+            complete_driver_owners,
+            (
+                "if !retained_parent",
+                "self.complete_leader_wire_runtime_owner(parent, handoff)?;",
+                "if self.retire_orphaned_leader_wire_runtime_receipts().is_err()",
+                "self.latch_fail_closed(",
+                "return Err(RuntimeError::FailClosed);",
+            ),
+            "driver retirement must terminalize the selected parent before "
+            "orphan receipts and fail closed if the orphan projection is invalid",
+        )
         accept_dispatch = observed_runtime_ownership_items.get(
             "accept_driver_dispatch"
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            accept_dispatch,
+            """
+fn accept_driver_dispatch(
+    &mut self,
+    dispatch: RuntimeDriverDispatch<D::Effect>,
+    parent: &RuntimeLifecycleOwner,
+    current_ingress: RuntimeDispatchIngress
+)
+""",
+            "driver acceptance must receive the selected command's exact current "
+            "ingress provenance",
+            errors,
         )
         _require_rust_token_sequence(
             runtime_path,
@@ -50019,6 +50598,20 @@ if retry_unadmitted
             (
                 "self.reconcile_deferred_ingress_ownership(deferred_ingress)",
                 "let active = self.driver.all_deferred_admission_ordinals();",
+                "let retained_ingress = self.deferred_ingress_ownership.get(&ordinal);",
+                """
+let (source_physical_ordinal, physical_cut) = match (
+    current_ingress,
+    parent.causal_origin().root_ingress_physical_ownership,
+    retained_ingress
+)
+""",
+                "self.driver.seal_deferred_runtime_ownership(",
+                "let Some(occurrence) = self.driver.deferred_occurrence_ownership(ordinal)",
+                "!occurrence.belongs_to(self.driver.deferred_admission_ordinal_source())",
+                "!occurrence.matches_retained_runtime_ownership_seal(&runtime_seal)",
+                "let ownership = RuntimeDeferredLifecycleOwnership::new(",
+                "owner.validate_active_against_ingress(",
                 "self.deferred_lifecycle_ownership = retained;",
                 """
 Ok((
@@ -50029,8 +50622,9 @@ Ok((
 ))
 """,
             ),
-            "driver acceptance must reconcile carrier ownership before "
-            "transferring its handoff and retention status",
+            "driver acceptance must reconcile carrier ownership, seal and verify "
+            "the exact adapter occurrence against its immutable lifecycle and "
+            "physical cut, then transfer its handoff and retention status",
         )
         dormant_constructor = _require_rust_item(
             runtime_path,
@@ -50074,15 +50668,17 @@ runtime.retain_effect_ownership(
                 "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
                 "self.driver.acknowledge_producer_handoff(token, evidence)",
                 """
-self.complete_leader_wire_runtime_owner(
+self.complete_driver_dispatch_leader_wire_owners(
     &effect_parent,
+    retained_deferred_ingress,
     completed_producer_handoff
 )
 """,
                 "self.observe_effects(now, &effects)",
             ),
             "live dispatch must retain successors, acknowledge the exact "
-            "producer, and publish its terminal before observing effects",
+            "producer, terminalize the selected parent before adapter-side "
+            "orphans, and publish every terminal before observing effects",
         )
         require_runtime_item_order(
             observed_runtime_items.get("step_recovery"),
@@ -50091,11 +50687,18 @@ self.complete_leader_wire_runtime_owner(
                 "token.identity().admission_ordinal() != owner.lifecycle_ordinal()",
                 "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
                 "self.driver.acknowledge_producer_handoff(token, evidence)",
-                "self.complete_leader_wire_runtime_owner(&owner, completed_producer_handoff)",
+                """
+self.complete_driver_dispatch_leader_wire_owners(
+    &owner,
+    retained_deferred_ingress,
+    completed_producer_handoff
+)
+""",
                 "self.observe_effects(now, &effects)",
             ),
             "recovery dispatch must retain successors, acknowledge the exact "
-            "producer, and publish its terminal before observing effects",
+            "producer, terminalize the selected parent before adapter-side "
+            "orphans, and publish every terminal before observing effects",
         )
         require_runtime_item_order(
             observed_runtime_items.get("dispatch_one_adapter_deferred"),
@@ -50105,15 +50708,17 @@ self.complete_leader_wire_runtime_owner(
                 "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
                 "self.driver.acknowledge_producer_handoff",
                 """
-self.complete_leader_wire_runtime_owner(
+self.complete_driver_dispatch_leader_wire_owners(
     &lifecycle_owner,
+    false,
     completed_producer_handoff
 )
 """,
                 "self.observe_effects(now, &effects)",
             ),
             "deferred dispatch must retain successors, acknowledge the exact "
-            "producer, and publish its terminal before observing effects",
+            "producer, terminalize the selected parent before adapter-side "
+            "orphans, and publish every terminal before observing effects",
         )
         for item_name, later_contract in (
             ("step", "let selected_round_tag = self.round_tag"),
@@ -52109,13 +52714,15 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "DeliverTimeoutReady": "TimeoutDeliveryGuard(envelope)",
         "CurrentTimeoutControlFor": (
-            'LET currentClass == RetainedClassItems(items, node, "TimeoutVote") '
-            "exactCurrentClass == \\A item \\in currentClass: "
+            "LET installedView == "
+            "IF StrictSameRoundTcUpgrade(node, tc) "
+            "THEN nodeView[node] ELSE tc.view + 1 "
+            'IN {item \\in RetainedClassItems(items, node, "TimeoutVote"): '
             "/\\ item.envelope.vote.context = context "
             "/\\ item.envelope.vote.height = height "
-            "/\\ item.envelope.vote.view = nodeView[node] "
-            "/\\ item.envelope.vote.signer = node "
-            "IN IF exactCurrentClass THEN currentClass ELSE {}"
+            "/\\ item.envelope.vote.view >= installedView "
+            "/\\ item.envelope.vote.view <= installedView + 1 "
+            "/\\ item.envelope.vote.signer = node}"
         ),
         "InstalledControlAfterTC": (
             "LET withoutOwnTc == retained \\ RetainedClassItems("
@@ -52125,8 +52732,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "item.source # node \\/ ControlClass(item) "
             "\\in AsyncInstallRetainedControlKinds} "
             "withCurrentTimeout == installed \\cup "
-            "(IF StrictSameRoundTcUpgrade(node, tc) "
-            "THEN CurrentTimeoutControlFor(remembered, node) ELSE {}) "
+            "CurrentTimeoutControlFor(remembered, node, tc) "
             "IN ReseedExactHighestPrepareControl("
             "withCurrentTimeout, node, tc)"
         ),
@@ -81738,21 +82344,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-            "current inventory therefore contains 806 tests across 39 modules.\n"
+            "current inventory to 813 tests across 39 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "806-test, 39-module inventory. The complete source-sealed\n"
+            "current 813-test,\n39-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-            "current source-bound inventory therefore contains 806 exact tests "
+            "current source-bound inventory to 813 exact tests "
             "across\n39 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network legs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"

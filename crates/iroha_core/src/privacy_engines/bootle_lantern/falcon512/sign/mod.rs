@@ -13,9 +13,9 @@ mod sampler;
 use super::{DEGREE, LOG_DEGREE, Preimage, Trapdoor, comm};
 use zeroize::Zeroizing;
 
-const PREIMAGE_COEFFICIENT_SAMPLES: u32 = 2 * DEGREE as u32;
-const MAX_PROPOSALS_PER_COEFFICIENT: u32 = 256;
-const TOTAL_GAUSSIAN_PROPOSAL_BUDGET: u32 =
+pub(super) const PREIMAGE_COEFFICIENT_SAMPLES: u32 = 2 * DEGREE as u32;
+pub(super) const MAX_PROPOSALS_PER_COEFFICIENT: u32 = 256;
+pub(super) const TOTAL_GAUSSIAN_PROPOSAL_BUDGET: u32 =
     PREIMAGE_COEFFICIENT_SAMPLES * MAX_PROPOSALS_PER_COEFFICIENT;
 
 // 1 / 12289, rounded exactly as in the pinned Falcon implementation.

@@ -18,6 +18,10 @@ import sys
 import time
 from typing import Sequence
 
+# The reviewed source closure rejects generated cache paths. Prevent local
+# imports below from invalidating the sealed checkout during generation.
+sys.dont_write_bytecode = True
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -33,12 +37,11 @@ from scripts.kagemusha_staged_resource_guard import (
 )
 
 
-ABSOLUTE_MAX_MEMORY_BYTES = 16 * 1024 * 1024 * 1024
-# Every resource sample includes a full-host process inventory so the guard can
-# reject a concurrently started unowned heavy job. Sampling that inventory at
-# 20 Hz can spend most of a busy macOS host's time starting and reaping `ps`,
-# delaying the guarded executable itself. Match the formal guard's bounded
-# 4 Hz cadence; the kernel peak-RSS check remains an independent final gate.
+ABSOLUTE_MAX_MEMORY_BYTES = 64 * 1024 * 1024 * 1024
+# On macOS each resource sample uses a process-group-scoped inventory; full-host
+# inventories remain at admission and the final-success gate. Match the formal
+# guard's bounded 4 Hz cadence; the kernel peak-RSS check remains an independent
+# final gate.
 SAMPLE_INTERVAL_SECONDS = 0.25
 BYTES_PER_GIB = 1024 * 1024 * 1024
 LOCK_PATH = Path("/tmp") / f"iroha-kagemusha-v4-{os.getuid()}.lock"
@@ -688,7 +691,7 @@ def _release_execution_copy(
 
 
 def _physical_memory_bytes() -> int:
-    """Return installed physical memory, or the absolute guard ceiling."""
+    """Return installed physical memory, or zero when it cannot be measured."""
 
     if sys.platform == "darwin":
         try:
@@ -715,13 +718,18 @@ def _physical_memory_bytes() -> int:
             return value
     except (OSError, ValueError, TypeError):
         pass
-    return ABSOLUTE_MAX_MEMORY_BYTES * 2
+    return 0
 
 
 def _effective_memory_limit_bytes(requested_gib: float | None) -> int:
-    """Apply the non-bypassable 16 GiB / half-physical-RAM ceiling."""
+    """Apply the non-bypassable 64 GiB / half-physical-RAM ceiling."""
 
-    physical_half = max(1, _physical_memory_bytes() // 2)
+    physical_memory = _physical_memory_bytes()
+    if physical_memory <= 0:
+        raise resource_guard.GuardError(
+            "could not determine installed physical memory"
+        )
+    physical_half = max(1, physical_memory // 2)
     ceiling = min(ABSOLUTE_MAX_MEMORY_BYTES, physical_half)
     if requested_gib is None:
         return ceiling
@@ -782,7 +790,7 @@ def _validate_generation_command(command: Sequence[str]) -> None:
         raise resource_guard.GuardError(
             "Kagemusha resource guard requires the prebuilt "
             "kagemusha_recursive_spend_v4_bundle executable; build it before "
-            "entering the 16 GiB generation guard"
+            "entering the reviewed generation guard"
         )
     if len(command) < 2 or command[1] != "generate-candidate":
         raise resource_guard.GuardError(
@@ -1793,7 +1801,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run Kagemusha V4 candidate generation beneath the non-raiseable "
-            "lower of the 16 GiB production ceiling or half of physical RAM."
+            "lower of the 64 GiB production ceiling or half of physical RAM."
         )
     )
     parser.add_argument("--resource-report", required=True, type=Path)
@@ -1870,9 +1878,15 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
                         memory_limit_bytes=memory_limit,
                         maximum_memory_bytes=ABSOLUTE_MAX_MEMORY_BYTES,
                         absolute_memory_ceiling_bytes=ABSOLUTE_MAX_MEMORY_BYTES,
+                        memory_enforcement_mode=(
+                            resource_guard.MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT
+                        ),
                         held_lock_descriptors=(heavy_lock, kagemusha_lock),
                         child_directory_descriptors=(output_parent.descriptor,),
                         sample_interval_seconds=SAMPLE_INTERVAL_SECONDS,
+                        physical_footprint_interval_seconds=(
+                            SAMPLE_INTERVAL_SECONDS
+                        ),
                         post_run_cleanup=cleanup_candidate,
                         post_run_validation=lambda: _validate_executable_unchanged(
                             executable_snapshot
@@ -1911,8 +1925,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Run one Kagemusha V4 generation/acceptance command with a 16 GiB "
-            "maximum and reserved host headroom."
+            "Run one Kagemusha V4 generation/acceptance command beneath the "
+            "lower of the 64 GiB maximum or half of physical RAM, with "
+            "reserved host headroom."
         )
     )
     parser.add_argument("--report", type=Path, required=True)
@@ -1920,7 +1935,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--max-memory-gib",
         type=float,
         default=DEFAULT_MAX_MEMORY_GIB,
-        help="requested memory limit; the reviewed absolute maximum is 16 GiB",
+        help=(
+            "requested memory limit; the reviewed absolute maximum is 64 GiB "
+            "and the effective maximum is also capped at half of physical RAM"
+        ),
     )
     parser.add_argument(
         "--minimum-headroom-gib", type=float, default=DEFAULT_MINIMUM_HEADROOM_GIB

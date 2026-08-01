@@ -20730,7 +20730,7 @@ seiyaku IdentityRequired {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let world = World::new();
+        let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
@@ -20975,7 +20975,7 @@ seiyaku IdentityRequired {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let world = World::new();
+        let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
@@ -21005,7 +21005,7 @@ seiyaku IdentityRequired {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let world = World::new();
+        let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));

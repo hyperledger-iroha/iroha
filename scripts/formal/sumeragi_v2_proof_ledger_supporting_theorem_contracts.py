@@ -6,6 +6,22 @@
 # DecisionAgreement, not from the write-once chain projection.
 EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "LeaderWirePhysicalFrozenCertificateRetainsPastCut",
+    ): (
+        "\\A snapshot, packet: "
+        "/\\ LeaderWirePhysicalFrozenCertificateFrontier(snapshot, packet) "
+        "/\\ [AsyncNext]_AsyncAllVars "
+        "=> /\\ ExactDecisionTargetNeutralFrozenSnapshotCarriers(snapshot)' "
+        "= ExactDecisionTargetNeutralFrozenSnapshotCarriers(snapshot) "
+        "/\\ \\A node \\in Responsive: "
+        "snapshot.schedulerCuts[node] "
+        "< AsyncNextCandidateLifecycleOrdinal(node)' "
+        "/\\ \\A node \\in Responsive: "
+        "snapshot.physicalCuts[node] "
+        "<= AsyncNextIngressPhysicalOrdinal(node)'"
+    ),
+    (
         "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
         "AdequateLeaderFixedSelectedOwnerUsesExactAsyncFairness",
     ): (

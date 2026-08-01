@@ -48,6 +48,8 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
         KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4,
         KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
+        KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4,
+        KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4,
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
@@ -134,9 +136,9 @@ process group, physical-memory ceiling, per-run staging identity, cleanup, and
 resource report. If generation is terminated, the launcher removes only the
 owner-private staging directory carrying that invocation's unguessable id.
 Build the source-sealed release binary with the helper before entering that
-16 GiB guard: wrapping `cargo run` would include the compiler in the guarded
-process group. The finalize-release and validate-candidate commands do not
-require the generation guard.
+64 GiB / half-physical-RAM guard: wrapping `cargo run` would include the compiler
+in the guarded process group. The finalize-release and validate-candidate
+commands do not require the generation guard.
 ";
 
 const GENERATE_OPTIONS: &[&str] = &[
@@ -974,12 +976,16 @@ fn prepare_bundle_metadata(
 
     let vesta_layout = vesta_generated
         .circuit_params
-        .validate()
-        .map_err(|error| format!("generated Eq CircuitParamsV4 validation failed: {error}"))?;
+        .validate_release_generation_profile()
+        .map_err(|error| {
+            format!("generated Eq CircuitParamsV4 release-profile validation failed: {error}")
+        })?;
     let pallas_layout = pallas_generated
         .circuit_params
-        .validate()
-        .map_err(|error| format!("generated Ep CircuitParamsV4 validation failed: {error}"))?;
+        .validate_release_generation_profile()
+        .map_err(|error| {
+            format!("generated Ep CircuitParamsV4 release-profile validation failed: {error}")
+        })?;
     if vesta_generated.circuit_params.k != pallas_generated.circuit_params.k
         || vesta_layout != pallas_layout
     {
@@ -1022,7 +1028,9 @@ fn prepare_bundle_metadata(
         .checked_add(pallas_generated.step_proof_size_bytes)
         .ok_or("generated V4 Step-size sum overflow")?;
     if max_proof_bytes <= measured_steps
-        || measured_pair_bytes >= max_proof_bytes
+        || measured_pair_bytes
+            != KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4
+        || max_proof_bytes != KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4
         || max_proof_bytes > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
     {
         return Err("generated V4 recursive proof-pair maximum is inconsistent".into());
@@ -2771,6 +2779,9 @@ fn write_candidate(
         manifest.max_proof_bytes,
     )?;
     if measured != metadata.measured_proof_pair.len()
+        || u32::try_from(measured).ok()
+            != Some(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4)
+        || manifest.max_proof_bytes != KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4
         || u32::try_from(measured)
             .ok()
             .is_none_or(|bytes| bytes >= manifest.max_proof_bytes)
@@ -3644,6 +3655,26 @@ mod tests {
         assert!(validation.contains("TRUSTED_PYTHON_EXECUTABLE"));
         assert!(!validation.contains("Command::new(\"git\")"));
         assert!(!validation.contains("KAGEMUSHA_SOURCE_SEAL_PYTHON"));
+    }
+
+    #[test]
+    fn generated_candidate_metadata_revalidates_both_release_profiles() {
+        let source = include_str!("kagemusha_recursive_spend_v4_bundle.rs");
+        let preparation = source
+            .split_once("fn prepare_bundle_metadata(")
+            .expect("candidate metadata preparation exists")
+            .1
+            .split_once("fn validate_generated_artifacts(")
+            .expect("candidate metadata preparation boundary exists")
+            .0;
+
+        assert_eq!(
+            preparation
+                .matches(".validate_release_generation_profile()")
+                .count(),
+            2,
+            "generated Eq and Ep profiles must both pass the exact release gate"
+        );
     }
 
     #[test]

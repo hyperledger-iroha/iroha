@@ -809,7 +809,10 @@ impl DeferredAdmissionOrdinalSource {
         }
     }
 
-    fn mint(&self) -> Result<DeferredAdmissionCapability, AdapterError> {
+    fn mint(
+        &self,
+        origin: DeferredAdmissionOrigin,
+    ) -> Result<DeferredAdmissionCapability, AdapterError> {
         let mut state = self
             .state
             .lock()
@@ -825,9 +828,11 @@ impl DeferredAdmissionOrdinalSource {
         state.next = next;
         Ok(DeferredAdmissionCapability {
             ordinal,
+            origin,
             source_identity: Arc::clone(&self.identity),
             adapter_service_claimed: Arc::new(AtomicBool::new(false)),
             runtime_handoff_claimed: Arc::new(AtomicBool::new(false)),
+            runtime_ownership: None,
             #[cfg(test)]
             unbound_fixture: false,
         })
@@ -842,12 +847,59 @@ impl DeferredAdmissionOrdinalSource {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeferredAdmissionOrigin {
+    LocalOrCausal,
+    DirectAuthenticated,
+}
+
+impl DeferredAdmissionOrigin {
+    const fn code(self) -> u8 {
+        match self {
+            Self::LocalOrCausal => 0,
+            Self::DirectAuthenticated => 1,
+        }
+    }
+
+    const fn is_authenticated(self) -> bool {
+        matches!(self, Self::DirectAuthenticated)
+    }
+}
+
+/// Runtime-owned fields frozen when one Busy occurrence crosses the adapter
+/// boundary.
+///
+/// This value remains private to the adapter module. The serialized runtime
+/// supplies the already-validated fields exactly once; later scheduler
+/// evidence can compare against the resulting opaque seal but cannot rewrite
+/// it and recompute a public integrity hash.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DeferredRuntimeOwnershipBinding {
+    causal_lifecycle_key: Hash,
+    initial_lifecycle_ordinal: u128,
+    authenticated_ingress: bool,
+    source_physical_ordinal: Option<u64>,
+    physical_cut: u128,
+}
+
+impl DeferredRuntimeOwnershipBinding {
+    fn validate_exact(&self) -> bool {
+        self.initial_lifecycle_ordinal != 0
+            && self.physical_cut != 0
+            && self
+                .source_physical_ordinal
+                .is_none_or(|source| u128::from(source) < self.physical_cut)
+    }
+}
+
 #[derive(Clone, Debug)]
 struct DeferredAdmissionCapability {
     ordinal: u128,
+    origin: DeferredAdmissionOrigin,
     source_identity: Arc<()>,
     adapter_service_claimed: Arc<AtomicBool>,
     runtime_handoff_claimed: Arc<AtomicBool>,
+    runtime_ownership: Option<DeferredRuntimeOwnershipBinding>,
     #[cfg(test)]
     unbound_fixture: bool,
 }
@@ -855,6 +907,7 @@ struct DeferredAdmissionCapability {
 impl PartialEq for DeferredAdmissionCapability {
     fn eq(&self, other: &Self) -> bool {
         self.ordinal == other.ordinal
+            && self.origin == other.origin
             && Arc::ptr_eq(&self.source_identity, &other.source_identity)
             && Arc::ptr_eq(
                 &self.adapter_service_claimed,
@@ -864,6 +917,7 @@ impl PartialEq for DeferredAdmissionCapability {
                 &self.runtime_handoff_claimed,
                 &other.runtime_handoff_claimed,
             )
+            && self.runtime_ownership == other.runtime_ownership
             && {
                 #[cfg(test)]
                 {
@@ -883,9 +937,11 @@ impl DeferredAdmissionCapability {
     fn pending() -> Self {
         Self {
             ordinal: 0,
+            origin: DeferredAdmissionOrigin::LocalOrCausal,
             source_identity: Arc::new(()),
             adapter_service_claimed: Arc::new(AtomicBool::new(false)),
             runtime_handoff_claimed: Arc::new(AtomicBool::new(false)),
+            runtime_ownership: None,
             #[cfg(test)]
             unbound_fixture: false,
         }
@@ -895,11 +951,20 @@ impl DeferredAdmissionCapability {
     fn for_test(ordinal: u128) -> Self {
         Self {
             ordinal,
+            origin: DeferredAdmissionOrigin::LocalOrCausal,
             source_identity: Arc::new(()),
             adapter_service_claimed: Arc::new(AtomicBool::new(false)),
             runtime_handoff_claimed: Arc::new(AtomicBool::new(false)),
+            runtime_ownership: None,
             unbound_fixture: true,
         }
+    }
+
+    #[cfg(test)]
+    fn for_authenticated_test(ordinal: u128) -> Self {
+        let mut capability = Self::for_test(ordinal);
+        capability.origin = DeferredAdmissionOrigin::DirectAuthenticated;
+        capability
     }
 
     fn claim_adapter_service_once(&self) -> bool {
@@ -921,6 +986,396 @@ impl DeferredAdmissionCapability {
     fn runtime_handoff_is_claimed(&self) -> bool {
         self.runtime_handoff_claimed.load(Ordering::Acquire)
     }
+
+    fn runtime_ownership_seal(&self) -> Option<DeferredRuntimeOwnershipSeal> {
+        DeferredRuntimeOwnershipSeal::from_capability(self)
+    }
+}
+
+/// Opaque adapter-issued seal for the runtime owner attached to one Busy
+/// occurrence.
+///
+/// Claim state is deliberately not part of immutable validation: the runtime
+/// validates an active owner while both claims are open, then validates the
+/// same seal again after deferred service has atomically claimed them. Pointer
+/// identity still prevents a same-number capability from being substituted.
+#[derive(Clone, Debug)]
+pub(crate) struct DeferredRuntimeOwnershipSeal {
+    admission_ordinal: u128,
+    origin: DeferredAdmissionOrigin,
+    source_identity: Arc<()>,
+    adapter_service_claimed: Arc<AtomicBool>,
+    runtime_handoff_claimed: Arc<AtomicBool>,
+    binding: DeferredRuntimeOwnershipBinding,
+    projection_hash: Hash,
+    #[cfg(test)]
+    unbound_fixture: bool,
+}
+
+impl PartialEq for DeferredRuntimeOwnershipSeal {
+    fn eq(&self, other: &Self) -> bool {
+        self.admission_ordinal == other.admission_ordinal
+            && self.origin == other.origin
+            && Arc::ptr_eq(&self.source_identity, &other.source_identity)
+            && Arc::ptr_eq(
+                &self.adapter_service_claimed,
+                &other.adapter_service_claimed,
+            )
+            && Arc::ptr_eq(
+                &self.runtime_handoff_claimed,
+                &other.runtime_handoff_claimed,
+            )
+            && self.binding == other.binding
+            && self.projection_hash == other.projection_hash
+            && {
+                #[cfg(test)]
+                {
+                    self.unbound_fixture == other.unbound_fixture
+                }
+                #[cfg(not(test))]
+                {
+                    true
+                }
+            }
+    }
+}
+
+impl Eq for DeferredRuntimeOwnershipSeal {}
+
+impl DeferredRuntimeOwnershipSeal {
+    fn from_capability(capability: &DeferredAdmissionCapability) -> Option<Self> {
+        let binding = capability.runtime_ownership.clone()?;
+        let mut seal = Self {
+            admission_ordinal: capability.ordinal,
+            origin: capability.origin,
+            source_identity: Arc::clone(&capability.source_identity),
+            adapter_service_claimed: Arc::clone(&capability.adapter_service_claimed),
+            runtime_handoff_claimed: Arc::clone(&capability.runtime_handoff_claimed),
+            binding,
+            projection_hash: Hash::new([]),
+            #[cfg(test)]
+            unbound_fixture: capability.unbound_fixture,
+        };
+        seal.projection_hash = deferred_runtime_ownership_seal_projection_hash(&seal);
+        seal.validate_identity().then_some(seal)
+    }
+
+    fn matches_capability(&self, capability: &DeferredAdmissionCapability) -> bool {
+        self.validate_identity()
+            && self.admission_ordinal == capability.ordinal
+            && self.origin == capability.origin
+            && Arc::ptr_eq(&self.source_identity, &capability.source_identity)
+            && Arc::ptr_eq(
+                &self.adapter_service_claimed,
+                &capability.adapter_service_claimed,
+            )
+            && Arc::ptr_eq(
+                &self.runtime_handoff_claimed,
+                &capability.runtime_handoff_claimed,
+            )
+            && capability.runtime_ownership.as_ref() == Some(&self.binding)
+            && {
+                #[cfg(test)]
+                {
+                    self.unbound_fixture == capability.unbound_fixture
+                }
+                #[cfg(not(test))]
+                {
+                    true
+                }
+            }
+    }
+
+    /// Validate immutable capability identity independently of mutable claim
+    /// state.
+    pub(crate) fn validate_identity(&self) -> bool {
+        self.binding.validate_exact()
+            && self.origin.is_authenticated() == self.binding.authenticated_ingress
+            && self.projection_hash == deferred_runtime_ownership_seal_projection_hash(self)
+    }
+
+    /// Whether the exact Busy occurrence remains retained and unclaimed.
+    pub(crate) fn still_retained(&self) -> bool {
+        self.validate_identity()
+            && !self.adapter_service_claimed.load(Ordering::Acquire)
+            && !self.runtime_handoff_claimed.load(Ordering::Acquire)
+    }
+
+    /// Whether this seal came from the runtime actor's exact deferred ordinal
+    /// source rather than a same-number foreign capability.
+    pub(crate) fn belongs_to(&self, source: &DeferredAdmissionOrdinalSource) -> bool {
+        let exact = Arc::ptr_eq(&self.source_identity, &source.identity);
+        #[cfg(test)]
+        {
+            exact || self.unbound_fixture
+        }
+        #[cfg(not(test))]
+        {
+            exact
+        }
+    }
+
+    /// Match the immutable runtime fields carried by a deferred wrapper.
+    pub(crate) fn matches_runtime_owner(
+        &self,
+        causal_lifecycle_key: &Hash,
+        lifecycle_ordinal: u128,
+        authenticated_ingress: bool,
+        source_physical_ordinal: Option<u64>,
+        physical_cut: u128,
+    ) -> bool {
+        self.validate_identity()
+            && self.binding.causal_lifecycle_key == *causal_lifecycle_key
+            && self.binding.authenticated_ingress == authenticated_ingress
+            && self.binding.source_physical_ordinal == source_physical_ordinal
+            && self.binding.physical_cut == physical_cut
+            && if authenticated_ingress {
+                lifecycle_ordinal <= self.binding.initial_lifecycle_ordinal
+            } else {
+                lifecycle_ordinal == self.binding.initial_lifecycle_ordinal
+            }
+    }
+
+    /// Actor-global adapter ordinal sealed into this exact capability.
+    pub(crate) const fn admission_ordinal(&self) -> u128 {
+        self.admission_ordinal
+    }
+
+    /// Logical owner at the instant the adapter admitted this Busy occurrence.
+    pub(crate) const fn initial_lifecycle_ordinal(&self) -> u128 {
+        self.binding.initial_lifecycle_ordinal
+    }
+
+    /// Process-local integrity projection used by enclosing scheduler evidence.
+    pub(crate) const fn projection_hash(&self) -> &Hash {
+        &self.projection_hash
+    }
+
+    /// Construct a capability-consistent seal for scheduler-shell tests which
+    /// do not instantiate the production adapter.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        admission_ordinal: u128,
+        causal_lifecycle_key: Hash,
+        initial_lifecycle_ordinal: u128,
+        authenticated_ingress: bool,
+        source_physical_ordinal: Option<u64>,
+        physical_cut: u128,
+    ) -> Self {
+        let mut capability = if authenticated_ingress {
+            DeferredAdmissionCapability::for_authenticated_test(admission_ordinal)
+        } else {
+            DeferredAdmissionCapability::for_test(admission_ordinal)
+        };
+        capability.runtime_ownership = Some(DeferredRuntimeOwnershipBinding {
+            causal_lifecycle_key,
+            initial_lifecycle_ordinal,
+            authenticated_ingress,
+            source_physical_ordinal,
+            physical_cut,
+        });
+        capability
+            .runtime_ownership_seal()
+            .expect("test runtime ownership binding is exact")
+    }
+
+    /// Construct a seal from a real, independently owned ordinal source so
+    /// runtime tests can distinguish same-number foreign capabilities from the
+    /// deliberate unbound fake-driver fixture above.
+    #[cfg(test)]
+    pub(crate) fn for_source_test(
+        source: &DeferredAdmissionOrdinalSource,
+        causal_lifecycle_key: Hash,
+        initial_lifecycle_ordinal: u128,
+        authenticated_ingress: bool,
+        source_physical_ordinal: Option<u64>,
+        physical_cut: u128,
+    ) -> Self {
+        let origin = if authenticated_ingress {
+            DeferredAdmissionOrigin::DirectAuthenticated
+        } else {
+            DeferredAdmissionOrigin::LocalOrCausal
+        };
+        let mut capability = source
+            .mint(origin)
+            .expect("test ordinal source remains exact");
+        capability.runtime_ownership = Some(DeferredRuntimeOwnershipBinding {
+            causal_lifecycle_key,
+            initial_lifecycle_ordinal,
+            authenticated_ingress,
+            source_physical_ordinal,
+            physical_cut,
+        });
+        capability
+            .runtime_ownership_seal()
+            .expect("foreign test runtime ownership binding is exact")
+    }
+}
+
+fn deferred_runtime_ownership_seal_projection_hash(seal: &DeferredRuntimeOwnershipSeal) -> Hash {
+    let mut projection = Vec::new();
+    projection.extend_from_slice(b"iroha:sumeragi:v2:deferred-runtime-owner:v1");
+    projection.extend_from_slice(&seal.admission_ordinal.to_le_bytes());
+    projection.push(seal.origin.code());
+    projection.extend_from_slice(&(Arc::as_ptr(&seal.source_identity) as usize).to_le_bytes());
+    projection
+        .extend_from_slice(&(Arc::as_ptr(&seal.adapter_service_claimed) as usize).to_le_bytes());
+    projection
+        .extend_from_slice(&(Arc::as_ptr(&seal.runtime_handoff_claimed) as usize).to_le_bytes());
+    projection.extend_from_slice(seal.binding.causal_lifecycle_key.as_ref());
+    projection.extend_from_slice(&seal.binding.initial_lifecycle_ordinal.to_le_bytes());
+    projection.push(u8::from(seal.binding.authenticated_ingress));
+    match seal.binding.source_physical_ordinal {
+        None => projection.push(0),
+        Some(source) => {
+            projection.push(1);
+            projection.extend_from_slice(&source.to_le_bytes());
+        }
+    }
+    projection.extend_from_slice(&seal.binding.physical_cut.to_le_bytes());
+    #[cfg(test)]
+    projection.push(u8::from(seal.unbound_fixture));
+    Hash::new(projection)
+}
+
+/// Immutable adapter-issued identity of one still-retained Busy occurrence.
+///
+/// Unlike a service token, this snapshot does not claim or remove the owner.
+/// Its private admission capability binds the ordinal and direct-network vs
+/// local/causal provenance so the runtime cannot reclassify an authenticated
+/// fence target after dropping its fair-ingress carrier.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DeferredOccurrenceOwnershipEvidence {
+    admission_ordinal: u128,
+    authenticated_ingress: bool,
+    source_identity: Arc<()>,
+    admission_capability: DeferredAdmissionCapability,
+    projection_hash: Hash,
+}
+
+impl DeferredOccurrenceOwnershipEvidence {
+    fn from_input(input: &DeferredInput, source: &DeferredAdmissionOrdinalSource) -> Option<Self> {
+        let source_is_exact = Arc::ptr_eq(
+            &input.admission_capability.source_identity,
+            &source.identity,
+        ) || {
+            #[cfg(test)]
+            {
+                input.admission_capability.unbound_fixture
+            }
+            #[cfg(not(test))]
+            {
+                false
+            }
+        };
+        let authenticated_ingress = input.retag_authenticated_ingress;
+        if input.admission_capability.ordinal != input.admission_ordinal
+            || input.admission_capability.origin.is_authenticated() != authenticated_ingress
+            || authenticated_ingress != input.authenticated_wire_identity.is_some()
+            || !source_is_exact
+            || input.admission_capability.adapter_service_is_claimed()
+            || input.admission_capability.runtime_handoff_is_claimed()
+        {
+            return None;
+        }
+        let mut evidence = Self {
+            admission_ordinal: input.admission_ordinal,
+            authenticated_ingress,
+            source_identity: Arc::clone(&input.admission_capability.source_identity),
+            admission_capability: input.admission_capability.clone(),
+            projection_hash: Hash::new([]),
+        };
+        evidence.projection_hash = deferred_occurrence_ownership_projection_hash(&evidence);
+        evidence.validate_exact().then_some(evidence)
+    }
+
+    /// Validate the private actor capability and immutable provenance bit.
+    pub(crate) fn validate_exact(&self) -> bool {
+        self.admission_capability.ordinal == self.admission_ordinal
+            && self.admission_capability.origin.is_authenticated() == self.authenticated_ingress
+            && self
+                .admission_capability
+                .runtime_ownership
+                .as_ref()
+                .is_none_or(DeferredRuntimeOwnershipBinding::validate_exact)
+            && Arc::ptr_eq(
+                &self.source_identity,
+                &self.admission_capability.source_identity,
+            )
+            && self.projection_hash == deferred_occurrence_ownership_projection_hash(self)
+    }
+
+    /// Whether the underlying occurrence remains retained and neither service
+    /// seam has claimed it yet.
+    pub(crate) fn still_retained(&self) -> bool {
+        self.validate_exact()
+            && !self.admission_capability.adapter_service_is_claimed()
+            && !self.admission_capability.runtime_handoff_is_claimed()
+    }
+
+    /// Adapter-global Busy admission ordinal owned by this snapshot.
+    pub(crate) const fn admission_ordinal(&self) -> u128 {
+        self.admission_ordinal
+    }
+
+    /// Whether the occurrence itself directly carried authenticated ingress.
+    pub(crate) const fn is_authenticated_ingress(&self) -> bool {
+        self.authenticated_ingress
+    }
+
+    /// Process-local integrity projection consumed by runtime evidence.
+    pub(crate) const fn projection_hash(&self) -> &Hash {
+        &self.projection_hash
+    }
+
+    /// Bind a live occurrence snapshot to a previously retained runtime seal.
+    pub(crate) fn matches_runtime_ownership_seal(
+        &self,
+        seal: &DeferredRuntimeOwnershipSeal,
+    ) -> bool {
+        self.validate_exact() && seal.matches_capability(&self.admission_capability)
+    }
+
+    /// Live-map form of [`Self::matches_runtime_ownership_seal`].
+    pub(crate) fn matches_retained_runtime_ownership_seal(
+        &self,
+        seal: &DeferredRuntimeOwnershipSeal,
+    ) -> bool {
+        self.still_retained() && seal.still_retained() && self.matches_runtime_ownership_seal(seal)
+    }
+
+    /// Whether this occurrence was minted by the supplied actor-owned source.
+    pub(crate) fn belongs_to(&self, source: &DeferredAdmissionOrdinalSource) -> bool {
+        self.validate_exact()
+            && Arc::ptr_eq(&self.admission_capability.source_identity, &source.identity)
+    }
+}
+
+fn deferred_occurrence_ownership_projection_hash(
+    evidence: &DeferredOccurrenceOwnershipEvidence,
+) -> Hash {
+    let mut projection = Vec::new();
+    projection.extend_from_slice(b"iroha:sumeragi:v2:deferred-occurrence-owner:v1");
+    projection.extend_from_slice(&evidence.admission_ordinal.to_le_bytes());
+    projection.push(u8::from(evidence.authenticated_ingress));
+    projection.push(evidence.admission_capability.origin.code());
+    projection.extend_from_slice(&(Arc::as_ptr(&evidence.source_identity) as usize).to_le_bytes());
+    projection.extend_from_slice(
+        &(Arc::as_ptr(&evidence.admission_capability.adapter_service_claimed) as usize)
+            .to_le_bytes(),
+    );
+    projection.extend_from_slice(
+        &(Arc::as_ptr(&evidence.admission_capability.runtime_handoff_claimed) as usize)
+            .to_le_bytes(),
+    );
+    match evidence.admission_capability.runtime_ownership_seal() {
+        None => projection.push(0),
+        Some(seal) => {
+            projection.push(1);
+            projection.extend_from_slice(seal.projection_hash().as_ref());
+        }
+    }
+    Hash::new(projection)
 }
 
 /// Three bounded classes in the adapter-owned Busy-deferred lane.
@@ -1052,6 +1507,215 @@ impl DeferredQueueLengths {
     }
 }
 
+/// Adapter-private authority for one exact Busy-deferred queue removal.
+///
+/// Public length/cursor projections are useful for rank checking, but a
+/// caller can otherwise alter those fields and recompute their ordinary hash.
+/// This capability is minted only beside the actual queue mutation, binds the
+/// runtime-selected ordinal set and physical lane position, and may cross the
+/// adapter service seam exactly once.
+#[derive(Clone, Debug)]
+struct DeferredQueueSelectionSeal {
+    source_identity: Arc<()>,
+    adapter_selection_claimed: Arc<AtomicBool>,
+    eligible_admission_ordinals: Arc<[u128]>,
+    queue_lengths_before: DeferredQueueLengths,
+    eligible_queue_lengths_before: DeferredQueueLengths,
+    queue_lengths_after: DeferredQueueLengths,
+    service_cursor_before: DeferredPriority,
+    service_cursor_after: DeferredPriority,
+    selected_priority: DeferredPriority,
+    selected_position: u64,
+    selected_admission_ordinal: u128,
+    selected_eligible_skips: u64,
+    selected_evidence_hash: Hash,
+    projection_hash: Hash,
+}
+
+impl PartialEq for DeferredQueueSelectionSeal {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.source_identity, &other.source_identity)
+            && Arc::ptr_eq(
+                &self.adapter_selection_claimed,
+                &other.adapter_selection_claimed,
+            )
+            && self.eligible_admission_ordinals == other.eligible_admission_ordinals
+            && self.queue_lengths_before == other.queue_lengths_before
+            && self.eligible_queue_lengths_before == other.eligible_queue_lengths_before
+            && self.queue_lengths_after == other.queue_lengths_after
+            && self.service_cursor_before == other.service_cursor_before
+            && self.service_cursor_after == other.service_cursor_after
+            && self.selected_priority == other.selected_priority
+            && self.selected_position == other.selected_position
+            && self.selected_admission_ordinal == other.selected_admission_ordinal
+            && self.selected_eligible_skips == other.selected_eligible_skips
+            && self.selected_evidence_hash == other.selected_evidence_hash
+            && self.projection_hash == other.projection_hash
+    }
+}
+
+impl Eq for DeferredQueueSelectionSeal {}
+
+fn deferred_queue_selection_projection_hash(seal: &DeferredQueueSelectionSeal) -> Hash {
+    let mut projection = Vec::new();
+    projection.extend_from_slice(b"iroha:sumeragi:v2:deferred-queue-selection:v1");
+    projection.extend_from_slice(&(Arc::as_ptr(&seal.source_identity) as usize).to_le_bytes());
+    projection
+        .extend_from_slice(&(Arc::as_ptr(&seal.adapter_selection_claimed) as usize).to_le_bytes());
+    append_deferred_projection_u64(
+        &mut projection,
+        u64::try_from(seal.eligible_admission_ordinals.len())
+            .expect("bounded eligible ordinal set fits u64"),
+    );
+    for ordinal in seal.eligible_admission_ordinals.iter() {
+        append_deferred_projection_field(&mut projection, &ordinal.to_le_bytes());
+    }
+    for lengths in [
+        seal.queue_lengths_before,
+        seal.eligible_queue_lengths_before,
+        seal.queue_lengths_after,
+    ] {
+        append_deferred_projection_u64(&mut projection, lengths.completion);
+        append_deferred_projection_u64(&mut projection, lengths.progress);
+        append_deferred_projection_u64(&mut projection, lengths.normal);
+    }
+    projection.push(seal.service_cursor_before.code());
+    projection.push(seal.service_cursor_after.code());
+    projection.push(seal.selected_priority.code());
+    append_deferred_projection_u64(&mut projection, seal.selected_position);
+    append_deferred_projection_field(
+        &mut projection,
+        &seal.selected_admission_ordinal.to_le_bytes(),
+    );
+    append_deferred_projection_u64(&mut projection, seal.selected_eligible_skips);
+    append_deferred_projection_field(&mut projection, seal.selected_evidence_hash.as_ref());
+    Hash::new(projection)
+}
+
+impl DeferredQueueSelectionSeal {
+    #[allow(clippy::too_many_arguments)]
+    fn mint(
+        source: &DeferredAdmissionOrdinalSource,
+        eligible: &BTreeSet<u128>,
+        queue_lengths_before: DeferredQueueLengths,
+        eligible_queue_lengths_before: DeferredQueueLengths,
+        queue_lengths_after: DeferredQueueLengths,
+        service_cursor_before: DeferredPriority,
+        service_cursor_after: DeferredPriority,
+        selected_priority: DeferredPriority,
+        selected_position: u64,
+        selected_admission_ordinal: u128,
+        selected_eligible_skips: u64,
+        selected_evidence_hash: Hash,
+    ) -> Option<Self> {
+        let mut seal = Self {
+            source_identity: Arc::clone(&source.identity),
+            adapter_selection_claimed: Arc::new(AtomicBool::new(false)),
+            eligible_admission_ordinals: eligible.iter().copied().collect::<Vec<_>>().into(),
+            queue_lengths_before,
+            eligible_queue_lengths_before,
+            queue_lengths_after,
+            service_cursor_before,
+            service_cursor_after,
+            selected_priority,
+            selected_position,
+            selected_admission_ordinal,
+            selected_eligible_skips,
+            selected_evidence_hash,
+            projection_hash: Hash::new([]),
+        };
+        seal.projection_hash = deferred_queue_selection_projection_hash(&seal);
+        seal.validate_identity().then_some(seal)
+    }
+
+    fn validate_identity(&self) -> bool {
+        let eligible_count = self
+            .eligible_queue_lengths_before
+            .checked_total()
+            .and_then(|count| usize::try_from(count).ok());
+        let lane_before = self
+            .queue_lengths_before
+            .for_priority(self.selected_priority);
+        let lane_after = self
+            .queue_lengths_after
+            .for_priority(self.selected_priority);
+        self.projection_hash == deferred_queue_selection_projection_hash(self)
+            && !self.eligible_admission_ordinals.is_empty()
+            && self
+                .eligible_admission_ordinals
+                .windows(2)
+                .all(|window| window[0] < window[1])
+            && self
+                .eligible_admission_ordinals
+                .binary_search(&self.selected_admission_ordinal)
+                .is_ok()
+            && eligible_count == Some(self.eligible_admission_ordinals.len())
+            && self.selected_position < lane_before
+            && lane_after.checked_add(1) == Some(lane_before)
+            && [
+                DeferredPriority::Completion,
+                DeferredPriority::Progress,
+                DeferredPriority::Normal,
+            ]
+            .into_iter()
+            .filter(|priority| *priority != self.selected_priority)
+            .all(|priority| {
+                self.queue_lengths_before.for_priority(priority)
+                    == self.queue_lengths_after.for_priority(priority)
+            })
+    }
+
+    fn matches_evidence(&self, evidence: &DeferredServiceEvidence) -> bool {
+        let source_is_exact = Arc::ptr_eq(
+            &self.source_identity,
+            &evidence.admission_capability.source_identity,
+        ) || {
+            #[cfg(test)]
+            {
+                evidence.admission_capability.unbound_fixture
+            }
+            #[cfg(not(test))]
+            {
+                false
+            }
+        };
+        self.validate_identity()
+            && source_is_exact
+            && self.queue_lengths_before == evidence.queue_lengths_before
+            && self.eligible_queue_lengths_before == evidence.eligible_queue_lengths_before
+            && self.queue_lengths_after == evidence.queue_lengths_after
+            && self.service_cursor_before == evidence.service_cursor_before
+            && self.service_cursor_after == evidence.service_cursor_after
+            && self.selected_priority == evidence.priority
+            && self.selected_admission_ordinal == evidence.admission_ordinal
+            && self.selected_eligible_skips == evidence.eligible_skips_before
+            && self.selected_evidence_hash == evidence.projection_hash
+            && self.selected_evidence_hash == deferred_service_projection_hash(evidence)
+    }
+
+    fn matches_eligible_admission_ordinals(&self, eligible: &BTreeSet<u128>) -> bool {
+        self.validate_identity()
+            && self.eligible_admission_ordinals.len() == eligible.len()
+            && self
+                .eligible_admission_ordinals
+                .iter()
+                .copied()
+                .eq(eligible.iter().copied())
+    }
+
+    fn claim_adapter_selection_once(&self) -> bool {
+        self.validate_identity()
+            && self
+                .adapter_selection_claimed
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+    }
+
+    fn adapter_selection_is_claimed(&self) -> bool {
+        self.adapter_selection_claimed.load(Ordering::Acquire)
+    }
+}
+
 /// Exact process-local owner discharged by one Busy-deferred service turn.
 ///
 /// The full typed events remain process-local and make semantic identity
@@ -1080,6 +1744,10 @@ pub(crate) struct DeferredServiceEvidence {
     pub(crate) eligible_skips_after: u64,
     /// All class lengths before selection.
     pub(crate) queue_lengths_before: DeferredQueueLengths,
+    /// Per-class owners admitted by the runtime's frozen target-relative set
+    /// before selection. Post-cut or nonminimal owners remain represented in
+    /// `queue_lengths_before`, but cannot influence class rotation.
+    pub(crate) eligible_queue_lengths_before: DeferredQueueLengths,
     /// All class lengths after selection.
     pub(crate) queue_lengths_after: DeferredQueueLengths,
     /// Redundant exact total before selection.
@@ -1099,6 +1767,7 @@ pub(crate) struct DeferredServiceEvidence {
     effective_admission: Option<IngressAdmission>,
     authenticated_wire_identity: Option<Arc<[u8]>>,
     admission_capability: DeferredAdmissionCapability,
+    selection_seal: Option<DeferredQueueSelectionSeal>,
 }
 
 impl DeferredServiceEvidence {
@@ -1113,7 +1782,7 @@ impl DeferredServiceEvidence {
     ) -> Self {
         assert!(completion_len_before != 0);
         let admission_capability = source
-            .mint()
+            .mint(DeferredAdmissionOrigin::LocalOrCausal)
             .expect("test deferred ordinal remains available");
         let admission_ordinal = admission_capability.ordinal;
         let event = reducer::Event::TimeoutElapsed { tag };
@@ -1124,6 +1793,11 @@ impl DeferredServiceEvidence {
         };
         let queue_lengths_after = DeferredQueueLengths {
             completion: completion_len_before - 1,
+            progress: 0,
+            normal: 0,
+        };
+        let eligible_queue_lengths_before = DeferredQueueLengths {
+            completion: 1,
             progress: 0,
             normal: 0,
         };
@@ -1146,6 +1820,7 @@ impl DeferredServiceEvidence {
             eligible_skips_before: 0,
             eligible_skips_after: 0,
             queue_lengths_before,
+            eligible_queue_lengths_before,
             queue_lengths_after,
             total_len_before: queue_lengths_before.total(),
             total_len_after: queue_lengths_after.total(),
@@ -1159,8 +1834,23 @@ impl DeferredServiceEvidence {
             effective_admission: None,
             authenticated_wire_identity: None,
             admission_capability,
+            selection_seal: None,
         };
         evidence.projection_hash = deferred_service_projection_hash(&evidence);
+        evidence.selection_seal = DeferredQueueSelectionSeal::mint(
+            source,
+            &BTreeSet::from([admission_ordinal]),
+            queue_lengths_before,
+            eligible_queue_lengths_before,
+            queue_lengths_after,
+            service_cursor_before,
+            cursor,
+            DeferredPriority::Completion,
+            0,
+            admission_ordinal,
+            0,
+            evidence.projection_hash,
+        );
         assert!(evidence.validate_exact());
         evidence
     }
@@ -1168,20 +1858,55 @@ impl DeferredServiceEvidence {
     /// Return whether every redundant field and rank transition still matches
     /// the exact selected occurrence.
     pub(crate) fn validate_exact(&self) -> bool {
+        let protected_progress_is_exact = self.protected_progress
+            == self
+                .original_admission
+                .is_some_and(|admission| admission.locked_commit_progress)
+            && self.protected_progress
+                == self
+                    .effective_admission
+                    .is_some_and(|admission| admission.locked_commit_progress)
+            && (!self.protected_progress
+                || (self.priority == DeferredPriority::Progress
+                    && matches!(
+                        &self.original_event,
+                        reducer::Event::VoteReceived { vote, .. }
+                            if vote.vote().phase() == reducer::Phase::Commit
+                    )
+                    && matches!(
+                        &self.effective_event,
+                        reducer::Event::VoteReceived { vote, .. }
+                            if vote.vote().phase() == reducer::Phase::Commit
+                    )));
         if self.admission_capability.ordinal != self.admission_ordinal
+            || self.admission_capability.origin.is_authenticated()
+                != self.is_authenticated_ingress()
+            || self
+                .admission_capability
+                .runtime_ownership
+                .as_ref()
+                .is_some_and(|binding| !binding.validate_exact())
             || self.event_kind != deferred_event_kind(&self.original_event)
             || self.event_kind != deferred_event_kind(&self.effective_event)
             || self.original_tag != deferred_event_tag(&self.original_event)
             || self.effective_tag != deferred_event_tag(&self.effective_event)
+            || !protected_progress_is_exact
             || self.eligible_skips_after != 0
             || Some(self.total_len_before) != self.queue_lengths_before.checked_total()
             || Some(self.total_len_after) != self.queue_lengths_after.checked_total()
             || self.total_len_after.checked_add(1) != Some(self.total_len_before)
+            || self.eligible_queue_lengths_before.completion > self.queue_lengths_before.completion
+            || self.eligible_queue_lengths_before.progress > self.queue_lengths_before.progress
+            || self.eligible_queue_lengths_before.normal > self.queue_lengths_before.normal
             || self
                 .queue_lengths_before
                 .for_priority(self.priority)
                 .checked_sub(1)
                 != Some(self.queue_lengths_after.for_priority(self.priority))
+            || !self
+                .selection_seal
+                .as_ref()
+                .is_some_and(|seal| seal.matches_evidence(self))
         {
             return false;
         }
@@ -1235,7 +1960,7 @@ impl DeferredServiceEvidence {
         for _ in 0..3 {
             let candidate = cursor;
             cursor = cursor.next();
-            if self.queue_lengths_before.for_priority(candidate) != 0 {
+            if self.eligible_queue_lengths_before.for_priority(candidate) != 0 {
                 expected_selection = Some(candidate);
                 expected_after = cursor;
                 break;
@@ -1273,6 +1998,29 @@ impl DeferredServiceEvidence {
     /// Return whether the adapter claimed this owner before reducer dispatch.
     pub(crate) fn adapter_service_is_claimed(&self) -> bool {
         self.admission_capability.adapter_service_is_claimed()
+            && self
+                .selection_seal
+                .as_ref()
+                .is_some_and(DeferredQueueSelectionSeal::adapter_selection_is_claimed)
+    }
+
+    /// Match the complete target-relative ordinal set supplied by the
+    /// serialized runtime before accepting this adapter selection.
+    pub(crate) fn matches_eligible_admission_ordinals(&self, eligible: &BTreeSet<u128>) -> bool {
+        self.validate_exact()
+            && self
+                .selection_seal
+                .as_ref()
+                .is_some_and(|seal| seal.matches_eligible_admission_ordinals(eligible))
+    }
+
+    fn claim_adapter_service_once(&self) -> bool {
+        self.validate_exact()
+            && self
+                .selection_seal
+                .as_ref()
+                .is_some_and(DeferredQueueSelectionSeal::claim_adapter_selection_once)
+            && self.admission_capability.claim_adapter_service_once()
     }
 
     /// Atomically consume the adapter-to-runtime handoff once. Cloned or
@@ -1311,7 +2059,39 @@ impl DeferredServiceEvidence {
 
     #[cfg(test)]
     pub(crate) fn claim_adapter_service_for_test(&self) -> bool {
-        self.validate_exact() && self.admission_capability.claim_adapter_service_once()
+        self.claim_adapter_service_once()
+    }
+
+    /// Attach the fake runtime's exact wrapper fields to this test capability.
+    #[cfg(test)]
+    pub(crate) fn bind_runtime_ownership_for_test(
+        &mut self,
+        causal_lifecycle_key: Hash,
+        initial_lifecycle_ordinal: u128,
+        source_physical_ordinal: Option<u64>,
+        physical_cut: u128,
+    ) -> Option<DeferredRuntimeOwnershipSeal> {
+        let binding = DeferredRuntimeOwnershipBinding {
+            causal_lifecycle_key,
+            initial_lifecycle_ordinal,
+            authenticated_ingress: self.is_authenticated_ingress(),
+            source_physical_ordinal,
+            physical_cut,
+        };
+        if !binding.validate_exact()
+            || self
+                .admission_capability
+                .runtime_ownership
+                .as_ref()
+                .is_some_and(|retained| retained != &binding)
+        {
+            return None;
+        }
+        self.admission_capability.runtime_ownership = Some(binding);
+        self.projection_hash = deferred_service_projection_hash(self);
+        self.validate_exact()
+            .then(|| self.admission_capability.runtime_ownership_seal())
+            .flatten()
     }
 
     /// Return whether this occurrence was minted by the supplied actor-owned
@@ -1326,6 +2106,18 @@ impl DeferredServiceEvidence {
         {
             exact
         }
+    }
+
+    /// Verify that post-service evidence came from the same adapter capability
+    /// whose immutable runtime seal was retained before selection.
+    pub(crate) fn matches_runtime_ownership_seal(
+        &self,
+        seal: &DeferredRuntimeOwnershipSeal,
+    ) -> bool {
+        self.validate_exact()
+            && self.service_handoff_is_complete()
+            && seal.validate_identity()
+            && seal.matches_capability(&self.admission_capability)
     }
 }
 
@@ -2180,6 +2972,18 @@ fn deferred_service_projection_hash(evidence: &DeferredServiceEvidence) -> Hash 
         append_deferred_projection_u64(&mut projection, lengths.progress);
         append_deferred_projection_u64(&mut projection, lengths.normal);
     }
+    append_deferred_projection_u64(
+        &mut projection,
+        evidence.eligible_queue_lengths_before.completion,
+    );
+    append_deferred_projection_u64(
+        &mut projection,
+        evidence.eligible_queue_lengths_before.progress,
+    );
+    append_deferred_projection_u64(
+        &mut projection,
+        evidence.eligible_queue_lengths_before.normal,
+    );
     append_deferred_projection_u64(&mut projection, evidence.total_len_before);
     append_deferred_projection_u64(&mut projection, evidence.total_len_after);
     projection.push(evidence.service_cursor_before.code());
@@ -2276,7 +3080,9 @@ const fn deferred_progress_capacity(roster_len: usize) -> usize {
 }
 
 const fn semantic_ingress_capacity(roster_len: usize) -> usize {
-    MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(2))
+    // One exact locked Commit set plus current and adjacent-future TimeoutVote
+    // sets bypass the ordinary semantic table.
+    MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(3))
 }
 
 /// Maximum distinct service stages which one immutable lifecycle can cross.
@@ -2366,6 +3172,8 @@ const fn serviced_candidate_capacity(roster_len: usize) -> usize {
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DeferredBodyPipelineStageForTest {
+    /// Body reconstruction completed.
+    BodyAvailable,
     /// Durable storage completed.
     BodyStored,
     /// Deterministic validation succeeded.
@@ -3575,6 +4383,97 @@ impl SumeragiV2Adapter {
             .collect()
     }
 
+    /// Snapshot the private actor capability of one exact retained Busy owner
+    /// without claiming its service turn.
+    pub(crate) fn deferred_occurrence_ownership(
+        &self,
+        admission_ordinal: u128,
+    ) -> Option<DeferredOccurrenceOwnershipEvidence> {
+        let mut matching = self
+            .deferred_completions
+            .iter()
+            .chain(&self.deferred_progress_inputs)
+            .chain(&self.deferred_inputs)
+            .filter(|input| input.admission_ordinal == admission_ordinal);
+        let input = matching.next()?;
+        if matching.next().is_some() {
+            return None;
+        }
+        DeferredOccurrenceOwnershipEvidence::from_input(input, &self.deferred_admission_ordinals)
+    }
+
+    /// Atomically attach the runtime's immutable lifecycle/cut owner to one
+    /// newly admitted Busy occurrence and return its opaque adapter seal.
+    ///
+    /// Exact repetition is idempotent. A different binding for the same
+    /// adapter ordinal, a foreign capability, or an already claimed occurrence
+    /// closes the adapter before scheduler state can be retained.
+    pub(crate) fn bind_deferred_runtime_ownership(
+        &mut self,
+        admission_ordinal: u128,
+        causal_lifecycle_key: Hash,
+        initial_lifecycle_ordinal: u128,
+        authenticated_ingress: bool,
+        source_physical_ordinal: Option<u64>,
+        physical_cut: u128,
+    ) -> Result<DeferredRuntimeOwnershipSeal, AdapterError> {
+        let binding = DeferredRuntimeOwnershipBinding {
+            causal_lifecycle_key,
+            initial_lifecycle_ordinal,
+            authenticated_ingress,
+            source_physical_ordinal,
+            physical_cut,
+        };
+        let matching = self
+            .deferred_completions
+            .iter()
+            .chain(&self.deferred_progress_inputs)
+            .chain(&self.deferred_inputs)
+            .filter(|input| input.admission_ordinal == admission_ordinal)
+            .count();
+        if matching != 1 || !binding.validate_exact() {
+            self.fail_closed = true;
+            return Err(AdapterError::RuntimeIngressOwnershipViolation);
+        }
+        let source = &self.deferred_admission_ordinals.identity;
+        let input = self
+            .deferred_completions
+            .iter_mut()
+            .chain(&mut self.deferred_progress_inputs)
+            .chain(&mut self.deferred_inputs)
+            .find(|input| input.admission_ordinal == admission_ordinal)
+            .expect("the exact matching Busy occurrence was counted above");
+        let capability = &mut input.admission_capability;
+        let exact_input = capability.ordinal == admission_ordinal
+            && capability.origin.is_authenticated() == authenticated_ingress
+            && input.retag_authenticated_ingress == authenticated_ingress
+            && input.authenticated_wire_identity.is_some() == authenticated_ingress
+            && Arc::ptr_eq(&capability.source_identity, source)
+            && !capability.adapter_service_is_claimed()
+            && !capability.runtime_handoff_is_claimed();
+        if !exact_input
+            || capability
+                .runtime_ownership
+                .as_ref()
+                .is_some_and(|retained| retained != &binding)
+        {
+            self.fail_closed = true;
+            return Err(AdapterError::RuntimeIngressOwnershipViolation);
+        }
+        if capability.runtime_ownership.is_none() {
+            capability.runtime_ownership = Some(binding);
+        }
+        let Some(seal) = capability.runtime_ownership_seal() else {
+            self.fail_closed = true;
+            return Err(AdapterError::RuntimeIngressOwnershipViolation);
+        };
+        if !seal.still_retained() {
+            self.fail_closed = true;
+            return Err(AdapterError::RuntimeIngressOwnershipViolation);
+        }
+        Ok(seal)
+    }
+
     /// Return whether a wire payload may use the active lock's progress lane.
     ///
     /// This is only a pre-authentication capacity hint. Callers must still
@@ -3922,7 +4821,7 @@ impl SumeragiV2Adapter {
                 )
             }
             wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
-                if vote.round.view != current_view {
+                if !reducer::timeout_vote_view_is_admissible(current_view, vote.round.view) {
                     return Ok((
                         Some(Self::ignored_outcome(reducer::IgnoreReason::IrrelevantView)),
                         None,
@@ -4023,7 +4922,7 @@ impl SumeragiV2Adapter {
         if capacity_bypass && !protected_capacity_bypass {
             // This is bounded backpressure for ordinary semantic traffic. QCs
             // and TCs do not consume this table. The at-most-roster-sized exact
-            // locked Commit and current-view TimeoutVote sets bypass ordinary
+            // locked Commit and bounded current/future TimeoutVote sets bypass ordinary
             // capacity and use their independent reserved progress partitions.
             return Ok((
                 Some(Self::ignored_outcome(reducer::IgnoreReason::Busy)),
@@ -4091,16 +4990,17 @@ impl SumeragiV2Adapter {
                     && execution_commitment == locked_execution_commitment
             )
         };
-        let matches_current_timeout = |key: IngressSemanticKey| {
+        let matches_retained_timeout = |key: IngressSemanticKey| {
             matches!(
                 key,
                 IngressSemanticKey::TimeoutVote { round, .. }
-                    if round.height == current_height && round.view == current_view
+                    if round.height == current_height
+                        && reducer::timeout_vote_view_is_admissible(current_view, round.view)
             )
         };
         self.ingress_equivocations.retain(|key, record| {
             if record.capacity_bypass {
-                matches_current_lock(*key, record.fingerprint) || matches_current_timeout(*key)
+                matches_current_lock(*key, record.fingerprint) || matches_retained_timeout(*key)
             } else {
                 key.round().view >= oldest_retained_view
                     || matches_current_lock(*key, record.fingerprint)
@@ -4789,7 +5689,7 @@ impl SumeragiV2Adapter {
         let core_manifest = self
             .registry
             .manifest_to_core(manifest, &self.wire_context)?;
-        let admission_capability = self.mint_deferred_admission_ordinal()?;
+        let admission_capability = self.mint_deferred_admission_ordinal(false)?;
         let admission_ordinal = admission_capability.ordinal;
         self.deferred_completions.push_back(DeferredInput {
             admission_ordinal,
@@ -4813,13 +5713,19 @@ impl SumeragiV2Adapter {
         Ok(())
     }
 
-    /// Stage one authenticated proposal in the Busy-deferred lane for seam tests.
+    /// Stage one authenticated proposal and its exact semantic admission
+    /// records in the Busy-deferred lane for runtime seam tests.
     #[cfg(test)]
     pub(crate) fn defer_authenticated_proposal_for_test(
         &mut self,
         tag: reducer::EventTag,
         proposal: &wire::Proposal,
     ) -> Result<(), AdapterError> {
+        let admission_key = IngressSemanticKey::Proposal {
+            round: proposal.round,
+            proposer: proposal.proposer,
+        };
+        let fingerprint = IngressFingerprint::Proposal(Hash::new(proposal.signature_preimage()));
         let authenticated_wire_identity = Arc::<[u8]>::from(
             wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
                 proposal.clone(),
@@ -4832,8 +5738,9 @@ impl SumeragiV2Adapter {
         let round = proposal.proposal().round();
         let subject = proposal.proposal().manifest().subject();
         self.active_subject = Some((round, subject));
-        let admission_capability = self.mint_deferred_admission_ordinal()?;
+        let admission_capability = self.mint_deferred_admission_ordinal(true)?;
         let admission_ordinal = admission_capability.ordinal;
+        let admitted_at = Instant::now();
         self.deferred_inputs.push_back(DeferredInput {
             admission_ordinal,
             admission_capability,
@@ -4844,9 +5751,36 @@ impl SumeragiV2Adapter {
             protected_progress: false,
             admission: None,
             authenticated_wire_identity: Some(authenticated_wire_identity),
-            admitted_at: Instant::now(),
+            admitted_at,
             eligible_skips: 0,
         });
+        assert!(
+            self.ingress_equivocations
+                .insert(
+                    admission_key,
+                    IngressEquivocationRecord {
+                        fingerprint,
+                        equivocation_reported: false,
+                        capacity_bypass: false,
+                        admitted_at,
+                    },
+                )
+                .is_none(),
+            "authenticated Busy test seam cannot replace semantic admission ownership"
+        );
+        assert!(
+            self.ingress_deliveries
+                .insert(
+                    admission_key,
+                    IngressDeliveryRecord {
+                        fingerprint,
+                        generation: tag.generation(),
+                        locked_commit_progress: false,
+                    },
+                )
+                .is_none(),
+            "authenticated Busy test seam cannot replace delivery ownership"
+        );
         Ok(())
     }
 
@@ -4871,6 +5805,11 @@ impl SumeragiV2Adapter {
         );
         let validated_receipt = ValidatedBodyReceipt::for_test(durable_receipt.clone());
         let completion_evidence = match stage {
+            DeferredBodyPipelineStageForTest::BodyAvailable => {
+                BodyPipelineCompletionEvidence::BodyAvailable {
+                    manifest: manifest.clone(),
+                }
+            }
             DeferredBodyPipelineStageForTest::BodyStored => {
                 BodyPipelineCompletionEvidence::BodyStored {
                     round: manifest.round,
@@ -4900,6 +5839,11 @@ impl SumeragiV2Adapter {
             }
         };
         let event = match stage {
+            DeferredBodyPipelineStageForTest::BodyAvailable => reducer::Event::BodyAvailable {
+                tag,
+                round,
+                subject,
+            },
             DeferredBodyPipelineStageForTest::BodyStored => reducer::Event::BodyStored {
                 tag,
                 round,
@@ -4928,7 +5872,7 @@ impl SumeragiV2Adapter {
                 }
             }
         };
-        let admission_capability = self.mint_deferred_admission_ordinal()?;
+        let admission_capability = self.mint_deferred_admission_ordinal(false)?;
         let admission_ordinal = admission_capability.ordinal;
         self.deferred_completions.push_back(DeferredInput {
             admission_ordinal,
@@ -6295,6 +7239,28 @@ impl SumeragiV2Adapter {
         &mut self,
         candidate: Option<(ServicedCandidateKey, wire::View, ServicedCandidatePolicy)>,
     ) -> Result<Option<ProducerReservationToken>, AdapterError> {
+        if self.reducer.durable_state().decision().is_some() {
+            // The durable Decision is the sole restart owner for the rest of
+            // this height. Reclamation publishes an empty owner epoch before
+            // any post-Decision application, timer, or queued ingress can be
+            // serviced. Reserving another producer here would persist a live
+            // owner beside `decision_reclaimed = true`, contradicting that
+            // durable boundary before the reducer can discard the occurrence.
+            if !self.serviced_candidates_decision_reclaimed
+                || !self.serviced_candidates.is_empty()
+                || !self.durable_serviced_candidates.is_empty()
+                || !self.producer_continuations.is_empty()
+                || !self.durable_producer_continuations.is_empty()
+                || !self.restored_dormant_producer_continuations.is_empty()
+                || !self.deferred_producer_continuations.is_empty()
+                || !self.pending_producer_handoffs.is_empty()
+            {
+                return Err(self.fail_serviced_candidate_store(
+                    "durable Decision did not retain canonical reclaimed producer state".to_owned(),
+                ));
+            }
+            return Ok(None);
+        }
         let (Some((candidate, _, _)), Some(selected)) =
             (candidate, self.selected_producer_lifecycle.clone())
         else {
@@ -6931,6 +7897,13 @@ impl SumeragiV2Adapter {
                 "snapshot claims durable-Decision reclamation before a durable Decision".to_owned(),
             ));
         }
+        let retired_process_candidates = self
+            .serviced_candidates
+            .iter()
+            .filter_map(|(candidate, service_view)| {
+                (*service_view < current_view).then_some(*candidate)
+            })
+            .collect::<BTreeSet<_>>();
         self.serviced_candidates
             .retain(|_, service_view| *service_view >= current_view);
         let previous_durable_len = self.durable_serviced_candidates.len();
@@ -6939,16 +7912,32 @@ impl SumeragiV2Adapter {
             .retain(|_, service_view| *service_view >= current_view);
         if !decision_durable {
             // A strict certified view advance is itself the durable reason an
-            // older lifecycle cannot re-enter. Remove its paired producer
-            // tombstone whenever the exact service tombstone is reclaimed so
-            // every non-Decision snapshot keeps the two tables atomic.
+            // older terminal lifecycle cannot re-enter. Remove its paired
+            // producer tombstone whenever the exact service tombstone is
+            // reclaimed so every non-Decision snapshot keeps the two tables
+            // atomic. A live reservation is different: its runtime owner can
+            // still be completing the exact transition which installed the
+            // newer view. Retain that restart-safe admission metadata until
+            // the owner explicitly hands off or releases it; dropping only
+            // the durable half here leaves a process-local ghost which the
+            // next legitimate retry must fail closed.
             self.durable_producer_continuations.retain(|_, record| {
                 if record.status() == ProducerContinuationStatus::Terminal {
                     self.durable_serviced_candidates
                         .contains_key(&record.identity().candidate())
                 } else {
-                    record.identity().candidate().source_view() >= current_view
+                    true
                 }
+            });
+            // Process-only terminals close same-episode ABA retries, but a
+            // certified view advance is already the durable retirement reason
+            // for every service marker pruned above. Retaining only this half
+            // of the pair makes a retagged deferred occurrence look like a
+            // corrupt live reservation. Reclaim the terminal with its exact
+            // process marker while preserving every Reserved owner.
+            self.producer_continuations.retain(|_, record| {
+                record.status() != ProducerContinuationStatus::Terminal
+                    || !retired_process_candidates.contains(&record.identity().candidate())
             });
         }
         let mut durable_changed = self.durable_serviced_candidates.len() != previous_durable_len
@@ -7580,7 +8569,8 @@ impl SumeragiV2Adapter {
                 }
             }
         }
-        input.admission_capability = self.mint_deferred_admission_ordinal()?;
+        input.admission_capability =
+            self.mint_deferred_admission_ordinal(retag_authenticated_ingress)?;
         input.admission_ordinal = input.admission_capability.ordinal;
         let admission_ordinal = input.admission_ordinal;
         match priority {
@@ -7593,8 +8583,14 @@ impl SumeragiV2Adapter {
 
     fn mint_deferred_admission_ordinal(
         &mut self,
+        authenticated_ingress: bool,
     ) -> Result<DeferredAdmissionCapability, AdapterError> {
-        match self.deferred_admission_ordinals.mint() {
+        let origin = if authenticated_ingress {
+            DeferredAdmissionOrigin::DirectAuthenticated
+        } else {
+            DeferredAdmissionOrigin::LocalOrCausal
+        };
+        match self.deferred_admission_ordinals.mint(origin) {
             Ok(ordinal) => Ok(ordinal),
             Err(error) => {
                 self.fail_closed = true;
@@ -7756,7 +8752,7 @@ impl SumeragiV2Adapter {
                 })
             }
             wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
-                if vote.round.view != current_view {
+                if !reducer::timeout_vote_view_is_admissible(current_view, vote.round.view) {
                     return false;
                 }
                 Some(IngressSemanticKey::TimeoutVote {
@@ -7845,13 +8841,14 @@ impl SumeragiV2Adapter {
         self.drain_deferred_with_evidence_for_ordinals(&eligible)
     }
 
-    /// Service one deferred transition from the exact lifecycle-minimal set
+    /// Service one deferred transition from the exact target-relative set
     /// selected by the serialized runtime.
     ///
-    /// The adapter still owns class rotation within that set.  Passing the set
-    /// across the runtime/adapter seam prevents a later Completion, Progress,
-    /// or Normal occurrence from overtaking an older causal lifecycle merely
-    /// because it occupies the cursor's next class.
+    /// The runtime first excludes post-cut physical replays, then applies
+    /// logical minima within each retained predecessor set. The adapter owns
+    /// class rotation only within the resulting exact set, so a later
+    /// Completion, Progress, or Normal occurrence cannot overtake a frozen
+    /// causal owner merely because it occupies the cursor's next class.
     pub(crate) fn drain_deferred_with_evidence_for_ordinals(
         &mut self,
         eligible: &BTreeSet<u128>,
@@ -7900,11 +8897,11 @@ impl SumeragiV2Adapter {
             || !selection
                 .evidence
                 .belongs_to(&self.deferred_admission_ordinals)
-            || !self.deferred_authenticated_event_matches_wire(&selection.evidence)
             || !selection
                 .evidence
-                .admission_capability
-                .claim_adapter_service_once()
+                .matches_eligible_admission_ordinals(eligible)
+            || !self.deferred_authenticated_event_matches_wire(&selection.evidence)
+            || !selection.evidence.claim_adapter_service_once()
         {
             self.fail_closed = true;
             return Err(AdapterError::DeferredServiceOwnershipViolation);
@@ -8036,6 +9033,7 @@ impl SumeragiV2Adapter {
         AdapterError::DeferredServiceContractViolation
     }
 
+    /// Snapshot every physically retained deferred owner by queue class.
     fn deferred_queue_lengths(&self) -> DeferredQueueLengths {
         DeferredQueueLengths {
             completion: u64::try_from(self.deferred_completions.len())
@@ -8044,6 +9042,31 @@ impl SumeragiV2Adapter {
                 .expect("bounded progress queue length fits u64"),
             normal: u64::try_from(self.deferred_inputs.len())
                 .expect("bounded normal queue length fits u64"),
+        }
+    }
+
+    /// Snapshot only the lifecycle-minimal candidates the runtime authorized
+    /// for this service turn.
+    ///
+    /// The runtime may deliberately exclude an older queue class whose
+    /// physical lifecycle is not yet serviceable. This projection controls
+    /// class rotation alongside the full physical queue snapshot, so an
+    /// excluded owner cannot make a valid filtered selection prove the wrong
+    /// class.
+    fn eligible_deferred_queue_lengths(&self, eligible: &BTreeSet<u128>) -> DeferredQueueLengths {
+        let count = |queue: &VecDeque<DeferredInput>| {
+            u64::try_from(
+                queue
+                    .iter()
+                    .filter(|input| eligible.contains(&input.admission_ordinal))
+                    .count(),
+            )
+            .expect("bounded eligible deferred queue length fits u64")
+        };
+        DeferredQueueLengths {
+            completion: count(&self.deferred_completions),
+            progress: count(&self.deferred_progress_inputs),
+            normal: count(&self.deferred_inputs),
         }
     }
 
@@ -8058,6 +9081,7 @@ impl SumeragiV2Adapter {
         eligible: &BTreeSet<u128>,
     ) -> Result<Option<DeferredServiceSelection>, AdapterError> {
         let queue_lengths_before = self.deferred_queue_lengths();
+        let eligible_queue_lengths_before = self.eligible_deferred_queue_lengths(eligible);
         let service_cursor_before = self.next_deferred_priority;
         for _ in 0..3 {
             let priority = self.next_deferred_priority;
@@ -8067,19 +9091,31 @@ impl SumeragiV2Adapter {
                     .deferred_completions
                     .iter()
                     .position(|input| eligible.contains(&input.admission_ordinal))
-                    .and_then(|position| self.deferred_completions.remove(position)),
+                    .and_then(|position| {
+                        self.deferred_completions
+                            .remove(position)
+                            .map(|input| (position, input))
+                    }),
                 DeferredPriority::Progress => self
                     .deferred_progress_inputs
                     .iter()
                     .position(|input| eligible.contains(&input.admission_ordinal))
-                    .and_then(|position| self.deferred_progress_inputs.remove(position)),
+                    .and_then(|position| {
+                        self.deferred_progress_inputs
+                            .remove(position)
+                            .map(|input| (position, input))
+                    }),
                 DeferredPriority::Normal => self
                     .deferred_inputs
                     .iter()
                     .position(|input| eligible.contains(&input.admission_ordinal))
-                    .and_then(|position| self.deferred_inputs.remove(position)),
+                    .and_then(|position| {
+                        self.deferred_inputs
+                            .remove(position)
+                            .map(|input| (position, input))
+                    }),
             };
-            let Some(selected) = selected else {
+            let Some((selected_position, selected)) = selected else {
                 continue;
             };
             for skipped_priority in [
@@ -8142,6 +9178,7 @@ impl SumeragiV2Adapter {
                 eligible_skips_before: input.eligible_skips,
                 eligible_skips_after: 0,
                 queue_lengths_before,
+                eligible_queue_lengths_before,
                 queue_lengths_after,
                 total_len_before: queue_lengths_before.total(),
                 total_len_after: queue_lengths_after.total(),
@@ -8155,8 +9192,27 @@ impl SumeragiV2Adapter {
                 effective_admission: input.admission,
                 authenticated_wire_identity: input.authenticated_wire_identity.clone(),
                 admission_capability: input.admission_capability.clone(),
+                selection_seal: None,
             };
             evidence.projection_hash = deferred_service_projection_hash(&evidence);
+            evidence.selection_seal = DeferredQueueSelectionSeal::mint(
+                &self.deferred_admission_ordinals,
+                eligible,
+                queue_lengths_before,
+                eligible_queue_lengths_before,
+                queue_lengths_after,
+                service_cursor_before,
+                self.next_deferred_priority,
+                priority,
+                u64::try_from(selected_position).expect("bounded deferred queue position fits u64"),
+                input.admission_ordinal,
+                input.eligible_skips,
+                evidence.projection_hash,
+            );
+            if evidence.selection_seal.is_none() {
+                self.fail_closed = true;
+                return Err(AdapterError::DeferredServiceOwnershipViolation);
+            }
             return Ok(Some(DeferredServiceSelection { input, evidence }));
         }
         Ok(None)
@@ -12303,6 +13359,142 @@ mod tests {
     }
 
     #[test]
+    fn strict_view_advance_retains_live_producer_admission_until_owner_release() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let event = reducer::Event::TimeoutElapsed { tag };
+        let candidate = adapter
+            .serviced_candidate(&event, DeferredPriority::Completion, None, None)
+            .expect("timeout has a producer stage");
+        let causal_key = Hash::new(b"live producer across strict view advance");
+        adapter
+            .bind_selected_producer_lifecycle(causal_key.clone(), 1)
+            .expect("bind live producer owner");
+        let reservation = adapter
+            .reserve_selected_producer_continuation(Some(candidate))
+            .expect("reserve live producer")
+            .expect("tracked timeout reserves");
+        let address = reservation.address;
+        adapter.clear_selected_producer_lifecycle();
+
+        let round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: tag.view(),
+        };
+        let timeout = wire::TimeoutCertificate {
+            round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xA5; 96],
+            }],
+        };
+        adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout),
+            ))
+            .expect("install timeout certificate and advance the view");
+        assert_eq!(adapter.current_tag().view(), tag.view() + 1);
+        assert_eq!(
+            adapter.durable_producer_continuations.get(&address),
+            adapter.producer_continuations.get(&address),
+            "strict-view reclamation must not split a still-live producer from its durable admission"
+        );
+
+        adapter
+            .bind_selected_producer_lifecycle(causal_key, 1)
+            .expect("rebind exact live retry");
+        let retry = adapter
+            .reserve_selected_producer_continuation(Some(candidate))
+            .expect("exact live retry remains admissible")
+            .expect("exact live retry retains its reservation");
+        assert_eq!(retry.address, address);
+        assert_eq!(retry.change, ProducerReservationChange::Unchanged);
+        assert!(!adapter.fail_closed);
+    }
+
+    #[test]
+    fn strict_view_advance_reclaims_process_terminal_before_retagged_retry() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let event = reducer::Event::TimeoutElapsed { tag };
+        let candidate = adapter
+            .serviced_candidate(&event, DeferredPriority::Completion, None, None)
+            .expect("timeout has a producer stage");
+        let causal_key = Hash::new(b"process terminal before retagged retry");
+        adapter
+            .bind_selected_producer_lifecycle(causal_key.clone(), 1)
+            .expect("bind original producer owner");
+        let reservation = adapter
+            .reserve_selected_producer_continuation(Some(candidate))
+            .expect("reserve original producer")
+            .expect("tracked timeout reserves");
+        let handoff = adapter
+            .record_serviced_candidate(Some(candidate), false, false, Some(reservation))
+            .expect("record original producer service")
+            .expect("original service returns a handoff");
+        let address = handoff.identity().address();
+        adapter
+            .acknowledge_producer_handoff(
+                handoff,
+                ProducerContinuationHandoffEvidence::ConcreteSuccessor,
+            )
+            .expect("acknowledge volatile successor");
+        adapter.clear_selected_producer_lifecycle();
+        assert_eq!(
+            adapter.producer_continuations[&address].status(),
+            ProducerContinuationStatus::Terminal
+        );
+        assert!(
+            !adapter
+                .durable_producer_continuations
+                .contains_key(&address)
+        );
+        assert!(adapter.serviced_candidates.contains_key(&candidate.0));
+
+        let round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: tag.view(),
+        };
+        let timeout = wire::TimeoutCertificate {
+            round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xA6; 96],
+            }],
+        };
+        adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout),
+            ))
+            .expect("install timeout certificate and advance the view");
+        assert_eq!(adapter.current_tag().view(), tag.view() + 1);
+        assert!(!adapter.serviced_candidates.contains_key(&candidate.0));
+        assert!(
+            !adapter.producer_continuations.contains_key(&address),
+            "the strict episode exit must reclaim its process-only terminal"
+        );
+
+        let retagged_candidate = (candidate.0, adapter.current_tag().view(), candidate.2);
+        adapter
+            .bind_selected_producer_lifecycle(causal_key, 1)
+            .expect("rebind the exact deferred owner");
+        let retry = adapter
+            .reserve_selected_producer_continuation(Some(retagged_candidate))
+            .expect("retagged exact retry does not collide with a stale terminal")
+            .expect("retagged exact retry reserves");
+        assert_eq!(retry.change, ProducerReservationChange::Inserted);
+        assert!(!adapter.fail_closed);
+    }
+
+    #[test]
     fn terminal_producer_tombstone_survives_restart_blocks_aba_and_advances_shared_source() {
         let directory = TempDir::new().expect("temporary directory");
         let causal_key = Hash::new(b"terminal producer parent");
@@ -12555,29 +13747,10 @@ mod tests {
             .expect("bind post-Decision completion");
         let completion_reservation = replayed_again
             .reserve_selected_producer_continuation(Some(completion_candidate))
-            .expect("reserve post-Decision completion")
-            .expect("tracked completion reserves");
-        let completion_handoff = replayed_again
-            .record_serviced_candidate(
-                Some(completion_candidate),
-                true,
-                true,
-                Some(completion_reservation.clone()),
-            )
-            .expect("Decision retires process-local completion");
-        assert!(completion_handoff.is_none());
-        assert!(
-            !replayed_again
-                .durable_producer_continuations
-                .contains_key(&completion_reservation.address),
-            "Decision early return cannot publish an orphan producer terminal"
-        );
-        assert!(
-            !replayed_again
-                .producer_continuations
-                .contains_key(&completion_reservation.address),
-            "Decision early return cannot retain a process-local producer ghost"
-        );
+            .expect("suppress post-Decision producer reservation");
+        assert!(completion_reservation.is_none());
+        assert!(replayed_again.durable_producer_continuations.is_empty());
+        assert!(replayed_again.producer_continuations.is_empty());
         replayed_again.clear_selected_producer_lifecycle();
         let post_replay = unowned_body_event(&replayed_again, marker);
         replayed_again
@@ -13800,7 +14973,7 @@ mod tests {
         let deferred_tag = adapter.current_tag();
         adapter.deferred_inputs.push_back(DeferredInput {
             admission_ordinal: 1,
-            admission_capability: DeferredAdmissionCapability::for_test(1),
+            admission_capability: DeferredAdmissionCapability::for_authenticated_test(1),
             event: reducer::Event::ProposalReceived {
                 tag: deferred_tag,
                 proposal: deferred,
@@ -14014,6 +15187,95 @@ mod tests {
         assert_eq!(adapter.active_subject, active_before);
         assert_eq!(adapter.reducer, reducer_before);
         assert_eq!(adapter.wal.recovered_records().len(), wal_len_before);
+    }
+
+    #[test]
+    fn post_decision_selected_lifecycles_cannot_reopen_the_reclaimed_owner_epoch() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
+        assert!(startup.is_empty());
+
+        let decided_subject = subject(0x7c);
+        let leader = adapter.wire_context.leader(0);
+        let proposal = proposal(&adapter.wire_context, leader, decided_subject);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+            unreachable!("proposal helper returns a proposal")
+        };
+        let manifest = proposal.manifest;
+        let (durable, validated) =
+            validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+        let decision = wire::QuorumCertificate {
+            round: manifest.round,
+            proposal_round: manifest.round,
+            phase: wire::GlobalPhase::Commit,
+            subject: decided_subject,
+            execution_commitment: validated.execution_commitment(),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0x7c; 96],
+        };
+        let decided = adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                    decision.clone(),
+                )),
+            ))
+            .expect("install the exact durable Decision");
+        assert!(matches!(
+            decided.effects(),
+            [AdapterEffect::FetchBody { .. }]
+        ));
+        assert!(adapter.serviced_candidates_decision_reclaimed);
+        assert!(adapter.serviced_candidates.is_empty());
+        assert!(adapter.durable_serviced_candidates.is_empty());
+        assert!(adapter.producer_continuations.is_empty());
+        assert!(adapter.durable_producer_continuations.is_empty());
+        let reclaimed_snapshot = std::fs::read(adapter.serviced_candidate_store_path_for_test())
+            .expect("read reclaimed owner snapshot");
+
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"post-Decision validated body"), 1)
+            .expect("bind post-Decision validation lifecycle");
+        let applied = adapter
+            .local_proposal_ready(adapter.current_tag(), manifest, &durable, &validated)
+            .expect("service selected post-Decision validation without a producer owner");
+        adapter.clear_selected_producer_lifecycle();
+        let apply_tag = match applied.effects() {
+            [
+                AdapterEffect::Apply {
+                    tag,
+                    subject,
+                    certificate,
+                },
+            ] if *subject == decided_subject && certificate == &decision => *tag,
+            effects => panic!("unexpected exact Decision application effects: {effects:?}"),
+        };
+        assert!(applied.producer_handoff().is_none());
+
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"post-Decision application"), 2)
+            .expect("bind post-Decision application lifecycle");
+        let completed = adapter
+            .application_completed(apply_tag, decided_subject)
+            .expect("service selected post-Decision application completion");
+        adapter.clear_selected_producer_lifecycle();
+        assert_eq!(completed.disposition(), reducer::StepDisposition::Applied);
+        assert!(completed.effects().is_empty());
+        assert!(completed.producer_handoff().is_none());
+
+        assert!(adapter.serviced_candidates_decision_reclaimed);
+        assert!(adapter.serviced_candidates.is_empty());
+        assert!(adapter.durable_serviced_candidates.is_empty());
+        assert!(adapter.producer_continuations.is_empty());
+        assert!(adapter.durable_producer_continuations.is_empty());
+        assert!(adapter.restored_dormant_producer_continuations.is_empty());
+        assert!(adapter.deferred_producer_continuations.is_empty());
+        assert!(adapter.pending_producer_handoffs.is_empty());
+        assert_eq!(
+            std::fs::read(adapter.serviced_candidate_store_path_for_test())
+                .expect("reread reclaimed owner snapshot"),
+            reclaimed_snapshot,
+            "post-Decision service cannot republish or mutate the reclaimed owner epoch"
+        );
     }
 
     #[test]
@@ -14366,7 +15628,18 @@ mod tests {
             .expect("normal ingress owns one deferred slot")
             .clone();
         assert_eq!(filler.priority, DeferredPriority::Normal);
-        adapter.deferred_inputs = std::iter::repeat_n(filler, MAX_DEFERRED_INPUTS).collect();
+        let mut saturated_inputs = VecDeque::from([filler.clone()]);
+        for _ in 1..MAX_DEFERRED_INPUTS {
+            let admission_capability = adapter
+                .deferred_admission_ordinals
+                .mint(filler.admission_capability.origin)
+                .expect("each saturated fixture owns a distinct adapter admission");
+            let mut distinct_filler = filler.clone();
+            distinct_filler.admission_ordinal = admission_capability.ordinal;
+            distinct_filler.admission_capability = admission_capability;
+            saturated_inputs.push_back(distinct_filler);
+        }
+        adapter.deferred_inputs = saturated_inputs;
 
         let first_retry = adapter
             .local_proposal_ready(proposal_tag, manifest.clone(), &durable, &validated)
@@ -14997,7 +16270,7 @@ mod tests {
                     });
                     let (outcome, admission) = adapter
                         .admit_authenticated_payload(&payload)
-                        .expect("current TimeoutVote bypasses ordinary capacity");
+                        .expect("retained TimeoutVote bypasses ordinary capacity");
                     assert!(outcome.is_none());
                     let admission = admission.expect("TimeoutVote owns a capacity-bypass record");
                     assert!(
@@ -15031,10 +16304,15 @@ mod tests {
         admit_locked_roster(&mut adapter, first_lock.0, first_lock.1, first_lock.2);
         let roster_len = adapter.wire_context.roster.len();
         admit_timeout_roster(&mut adapter, first_lock.0);
+        let adjacent_timeout_round = wire::ConsensusRound {
+            view: first_lock.0.view + reducer::FUTURE_TIMEOUT_VOTE_LOOKAHEAD,
+            ..first_lock.0
+        };
+        admit_timeout_roster(&mut adapter, adjacent_timeout_round);
         assert_eq!(
             adapter.ingress_equivocations.len(),
             semantic_ingress_capacity(roster_len),
-            "ordinary, exact-lock, and current TimeoutVote owners realize the complete live semantic bound"
+            "ordinary, exact-lock, and bounded TimeoutVote owners realize the complete live semantic bound"
         );
         let ingress = adapter
             .adapter_queue_statuses()
@@ -15055,7 +16333,7 @@ mod tests {
                 .values()
                 .filter(|record| record.capacity_bypass)
                 .count(),
-            roster_len * 2
+            roster_len * 3
         );
         let same_view_equivocations = adapter.ingress_equivocations.clone();
         let same_view_deliveries = adapter.ingress_deliveries.clone();
@@ -15611,6 +16889,44 @@ mod tests {
     }
 
     #[test]
+    fn deferred_occurrence_capability_binds_direct_authenticated_provenance() {
+        let directory = TempDir::new().expect("temporary occurrence-capability directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let context = adapter.wire_context.clone();
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) =
+            proposal(&context, context.leader(0), subject(0xD9)).payload
+        else {
+            unreachable!("proposal fixture")
+        };
+        let tag = adapter.current_tag();
+        adapter
+            .defer_authenticated_proposal_for_test(tag, &proposal)
+            .expect("stage one authenticated Busy occurrence");
+        let ordinals = adapter
+            .all_deferred_admission_ordinals()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let [ordinal] = ordinals.as_slice() else {
+            panic!("one exact Busy occurrence is retained")
+        };
+        let evidence = adapter
+            .deferred_occurrence_ownership(*ordinal)
+            .expect("snapshot the unclaimed adapter capability");
+        assert!(evidence.validate_exact());
+        assert_eq!(evidence.admission_ordinal(), *ordinal);
+        assert!(evidence.is_authenticated_ingress());
+
+        let mut reclassified = evidence;
+        reclassified.authenticated_ingress = false;
+        reclassified.projection_hash = deferred_occurrence_ownership_projection_hash(&reclassified);
+        assert!(
+            !reclassified.validate_exact(),
+            "rehashing cannot detach provenance from the private admission capability"
+        );
+    }
+
+    #[test]
     fn deferred_service_evidence_rejects_every_owner_and_rank_mutation() {
         let source = DeferredAdmissionOrdinalSource::new(0);
         let foreign = DeferredAdmissionOrdinalSource::new(0);
@@ -15647,6 +16963,7 @@ mod tests {
 
         let mut mutated = evidence.clone();
         mutated.protected_progress = true;
+        mutated.projection_hash = deferred_service_projection_hash(&mutated);
         rejected(mutated);
 
         let mut mutated = evidence.clone();
@@ -15706,7 +17023,7 @@ mod tests {
             effective_tag.generation(),
         );
         let admission_capability = adapter
-            .mint_deferred_admission_ordinal()
+            .mint_deferred_admission_ordinal(true)
             .expect("mint exact deferred owner");
         adapter.deferred_inputs.push_back(DeferredInput {
             admission_ordinal: admission_capability.ordinal,
@@ -15787,7 +17104,7 @@ mod tests {
         assert!(adapter.deferred_inputs.is_empty());
 
         let admission_capability = adapter
-            .mint_deferred_admission_ordinal()
+            .mint_deferred_admission_ordinal(true)
             .expect("mint exact deferred owner");
         adapter.deferred_inputs.push_back(DeferredInput {
             admission_ordinal: admission_capability.ordinal,
@@ -15827,7 +17144,7 @@ mod tests {
             current.generation(),
         );
         let capability = adapter
-            .mint_deferred_admission_ordinal()
+            .mint_deferred_admission_ordinal(false)
             .expect("mint exact adapter capability");
         let input = |tag| DeferredInput {
             admission_ordinal: capability.ordinal,
@@ -15843,13 +17160,6 @@ mod tests {
             eligible_skips: 0,
         };
         adapter.deferred_completions.push_back(input(stale));
-        adapter
-            .deferred_completions
-            .push_back(input(reducer::EventTag::new(
-                stale.height().saturating_add(1),
-                stale.view(),
-                stale.generation(),
-            )));
 
         let (_, first) = adapter
             .drain_deferred_with_evidence()
@@ -15864,6 +17174,13 @@ mod tests {
                 .copied(),
             Some(1)
         );
+        adapter
+            .deferred_completions
+            .push_back(input(reducer::EventTag::new(
+                stale.height().saturating_add(1),
+                stale.view(),
+                stale.generation(),
+            )));
         assert!(matches!(
             adapter.drain_deferred_with_evidence(),
             Err(AdapterError::DeferredServiceOwnershipViolation)
@@ -15882,7 +17199,9 @@ mod tests {
             open_test(&foreign_directory).expect("open foreign adapter");
         assert!(foreign_startup.is_empty());
         let foreign_source = DeferredAdmissionOrdinalSource::new(0);
-        let foreign_capability = foreign_source.mint().expect("mint foreign capability");
+        let foreign_capability = foreign_source
+            .mint(DeferredAdmissionOrigin::LocalOrCausal)
+            .expect("mint foreign capability");
         let foreign_tag = reducer::EventTag::new(
             foreign_adapter.current_tag().height().saturating_add(1),
             foreign_adapter.current_tag().view(),
@@ -15916,18 +17235,25 @@ mod tests {
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
         assert!(startup.is_empty());
         let tag = adapter.current_tag();
-        let input = |priority: DeferredPriority| DeferredInput {
-            admission_ordinal: priority.code().into(),
-            admission_capability: DeferredAdmissionCapability::for_test(priority.code().into()),
-            event: reducer::Event::TimeoutElapsed { tag },
-            completion_evidence: None,
-            retag_authenticated_ingress: false,
-            priority,
-            protected_progress: false,
-            admission: None,
-            authenticated_wire_identity: None,
-            admitted_at: Instant::now(),
-            eligible_skips: 0,
+        let mut next_ordinal = 1_u128;
+        let mut input = |priority: DeferredPriority| {
+            let admission_ordinal = next_ordinal;
+            next_ordinal = next_ordinal
+                .checked_add(1)
+                .expect("small deferred fixture ordinal remains representable");
+            DeferredInput {
+                admission_ordinal,
+                admission_capability: DeferredAdmissionCapability::for_test(admission_ordinal),
+                event: reducer::Event::TimeoutElapsed { tag },
+                completion_evidence: None,
+                retag_authenticated_ingress: false,
+                priority,
+                protected_progress: false,
+                admission: None,
+                authenticated_wire_identity: None,
+                admitted_at: Instant::now(),
+                eligible_skips: 0,
+            }
         };
         adapter
             .deferred_completions
@@ -15998,10 +17324,69 @@ mod tests {
             .expect("the runtime-minimal deferred owner is present");
         assert_eq!(selection.evidence.admission_ordinal, 1);
         assert_eq!(selection.evidence.priority, DeferredPriority::Normal);
+        assert_eq!(
+            selection.evidence.queue_lengths_before,
+            DeferredQueueLengths {
+                completion: 1,
+                progress: 0,
+                normal: 2,
+            }
+        );
+        assert_eq!(
+            selection.evidence.queue_lengths_after,
+            DeferredQueueLengths {
+                completion: 1,
+                progress: 0,
+                normal: 1,
+            }
+        );
+        assert_eq!(
+            selection.evidence.eligible_queue_lengths_before,
+            DeferredQueueLengths {
+                completion: 0,
+                progress: 0,
+                normal: 1,
+            }
+        );
+        assert!(selection.evidence.validate_exact());
+        assert!(
+            selection
+                .evidence
+                .matches_eligible_admission_ordinals(&BTreeSet::from([1]))
+        );
+        assert!(
+            !selection
+                .evidence
+                .matches_eligible_admission_ordinals(&BTreeSet::from([1, 10])),
+            "the adapter seal binds the runtime's complete target-relative set"
+        );
+
+        let rejected = |mut evidence: DeferredServiceEvidence| {
+            evidence.projection_hash = deferred_service_projection_hash(&evidence);
+            assert!(
+                !evidence.validate_exact(),
+                "coherently rehashed eligible-selector weakening must fail"
+            );
+        };
+        let mut wrong_cursor_class = selection.evidence.clone();
+        wrong_cursor_class.eligible_queue_lengths_before.completion = 1;
+        rejected(wrong_cursor_class);
+        let mut missing_selected_owner = selection.evidence.clone();
+        missing_selected_owner.eligible_queue_lengths_before.normal = 0;
+        rejected(missing_selected_owner);
+        let mut exceeds_total_class = selection.evidence.clone();
+        exceeds_total_class.eligible_queue_lengths_before.progress = 1;
+        rejected(exceeds_total_class);
+
         assert_eq!(adapter.deferred_completions[0].admission_ordinal, 10);
         assert_eq!(adapter.deferred_inputs[0].admission_ordinal, 11);
         assert_eq!(adapter.deferred_completions[0].eligible_skips, 0);
         assert_eq!(adapter.deferred_inputs[0].eligible_skips, 0);
+        assert!(selection.evidence.claim_adapter_service_for_test());
+        assert!(
+            !selection.evidence.claim_adapter_service_for_test(),
+            "the exact queue-selection capability crosses the adapter seam once"
+        );
     }
 
     #[test]
@@ -16044,18 +17429,25 @@ mod tests {
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
         assert!(startup.is_empty());
         let tag = adapter.current_tag();
-        let input = |priority: DeferredPriority| DeferredInput {
-            admission_ordinal: priority.code().into(),
-            admission_capability: DeferredAdmissionCapability::for_test(priority.code().into()),
-            event: reducer::Event::TimeoutElapsed { tag },
-            completion_evidence: None,
-            retag_authenticated_ingress: false,
-            priority,
-            protected_progress: false,
-            admission: None,
-            authenticated_wire_identity: None,
-            admitted_at: Instant::now(),
-            eligible_skips: 0,
+        let mut next_ordinal = 1_u128;
+        let mut input = |priority: DeferredPriority| {
+            let admission_ordinal = next_ordinal;
+            next_ordinal = next_ordinal
+                .checked_add(1)
+                .expect("small deferred fixture ordinal remains representable");
+            DeferredInput {
+                admission_ordinal,
+                admission_capability: DeferredAdmissionCapability::for_test(admission_ordinal),
+                event: reducer::Event::TimeoutElapsed { tag },
+                completion_evidence: None,
+                retag_authenticated_ingress: false,
+                priority,
+                protected_progress: false,
+                admission: None,
+                authenticated_wire_identity: None,
+                admitted_at: Instant::now(),
+                eligible_skips: 0,
+            }
         };
         for priority in [
             DeferredPriority::Completion,
@@ -16233,7 +17625,7 @@ mod tests {
                 admission_ordinal: u128::try_from(ordinal)
                     .expect("bounded fixture ordinal fits u128")
                     .saturating_add(1),
-                admission_capability: DeferredAdmissionCapability::for_test(
+                admission_capability: DeferredAdmissionCapability::for_authenticated_test(
                     u128::try_from(ordinal)
                         .expect("bounded fixture ordinal fits u128")
                         .saturating_add(1),
@@ -16266,7 +17658,7 @@ mod tests {
             .expect("convert timeout-certificate lane fixture");
         adapter.deferred_progress_inputs.push_back(DeferredInput {
             admission_ordinal: 4,
-            admission_capability: DeferredAdmissionCapability::for_test(4),
+            admission_capability: DeferredAdmissionCapability::for_authenticated_test(4),
             event: reducer::Event::TimeoutCertificateReceived {
                 tag,
                 certificate: deferred_timeout,
@@ -16424,7 +17816,7 @@ mod tests {
                 .expect("convert locked-vote capacity fixture");
             fillers.push_back(DeferredInput {
                 admission_ordinal: u128::from(signer).saturating_add(1),
-                admission_capability: DeferredAdmissionCapability::for_test(
+                admission_capability: DeferredAdmissionCapability::for_authenticated_test(
                     u128::from(signer).saturating_add(1),
                 ),
                 event: reducer::Event::VoteReceived {
@@ -16527,7 +17919,7 @@ mod tests {
             "invalid oversized rosters cannot expand the static adapter bound"
         );
         assert_eq!(semantic_ingress_capacity(0), MAX_INGRESS_SEMANTIC_KEYS);
-        assert_eq!(semantic_ingress_capacity(4), MAX_INGRESS_SEMANTIC_KEYS + 8);
+        assert_eq!(semantic_ingress_capacity(4), MAX_INGRESS_SEMANTIC_KEYS + 12);
         assert_eq!(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE, 11);
         assert_eq!(
             BTreeSet::from(ServicedCandidateStage::ALL.map(|stage| stage as u8)).len(),
@@ -16537,7 +17929,7 @@ mod tests {
         assert_eq!(
             serviced_candidate_capacity(4),
             (MAX_INGRESS_SEMANTIC_KEYS
-                + 8
+                + 12
                 + MAX_DEFERRED_INPUTS * 2
                 + 11
                 + MAX_DEFERRED_INPUTS * 4
@@ -16885,7 +18277,7 @@ mod tests {
         let tag = adapter.current_tag();
         let certificate_input = DeferredInput {
             admission_ordinal: 1,
-            admission_capability: DeferredAdmissionCapability::for_test(1),
+            admission_capability: DeferredAdmissionCapability::for_authenticated_test(1),
             event: reducer::Event::TimeoutCertificateReceived {
                 tag,
                 certificate: timeout,
@@ -17040,6 +18432,142 @@ mod tests {
         assert_eq!(
             adapter.ingress_equivocations.len(),
             MAX_INGRESS_SEMANTIC_KEYS
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn adjacent_future_timeout_vote_remains_retryable_until_current_view_advances() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let current_tag = adapter.current_tag();
+        let current_round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: current_tag.view(),
+        };
+
+        let local_timeout = adapter
+            .timeout_elapsed(current_tag)
+            .expect("start the local TimeoutVote signature fence");
+        let sign_tag = match local_timeout.effects() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(_),
+                },
+            ] => *tag,
+            effects => panic!("unexpected timeout effects: {effects:?}"),
+        };
+
+        let timeout_certificate = wire::TimeoutCertificate {
+            round: current_round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xC1; 96],
+            }],
+        };
+        let deferred_tc = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
+            ))
+            .expect("defer the current-view TC behind the signature fence");
+        assert_eq!(
+            deferred_tc.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        );
+
+        let current_vote = wire::TimeoutVote {
+            round: current_round,
+            highest_prepare_qc: None,
+            signer: 1,
+            signature: vec![0xC2],
+        };
+        let current_key = IngressSemanticKey::TimeoutVote {
+            round: current_round,
+            signer: 1,
+        };
+        let deferred_current = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(current_vote),
+            ))
+            .expect("defer one current-view owner for the signer");
+        assert_eq!(
+            deferred_current.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        );
+        assert!(adapter.ingress_deliveries.contains_key(&current_key));
+        assert_eq!(adapter.deferred_progress_inputs.len(), 2);
+
+        let adjacent_round = wire::ConsensusRound {
+            view: current_round
+                .view
+                .saturating_add(reducer::FUTURE_TIMEOUT_VOTE_LOOKAHEAD),
+            ..current_round
+        };
+        let adjacent_vote = wire::TimeoutVote {
+            round: adjacent_round,
+            highest_prepare_qc: None,
+            signer: 1,
+            signature: vec![0xC3],
+        };
+        let adjacent_key = IngressSemanticKey::TimeoutVote {
+            round: adjacent_round,
+            signer: 1,
+        };
+        for attempt in 0..2 {
+            let busy = adapter
+                .receive_verified(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::TimeoutVote(adjacent_vote.clone()),
+                ))
+                .expect("adjacent TimeoutVote remains retryable behind its current owner");
+            assert_eq!(
+                busy.disposition(),
+                reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy),
+                "pre-advance attempt {attempt} must remain retryable"
+            );
+            assert_eq!(
+                adapter.deferred_progress_inputs.len(),
+                2,
+                "one signer cannot consume both retained timeout-round partitions"
+            );
+            assert!(adapter.ingress_equivocations.contains_key(&adjacent_key));
+            assert!(
+                !adapter.ingress_deliveries.contains_key(&adjacent_key),
+                "unowned adjacent traffic must not be poisoned as delivered"
+            );
+        }
+
+        adapter
+            .signature_completed(sign_tag, vec![0xC4; 96])
+            .expect("complete the local TimeoutVote signature");
+        let enter_view = adapter
+            .drain_deferred()
+            .expect("install the deferred TC in its own macro-step");
+        assert!(enter_view.iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::EnterView { tag, .. } if tag.view() == adjacent_round.view
+        )));
+        assert_eq!(adapter.current_tag().view(), adjacent_round.view);
+
+        let applied = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(adjacent_vote.clone()),
+            ))
+            .expect("apply the adjacent vote after its view becomes current");
+        assert_eq!(applied.disposition(), reducer::StepDisposition::Applied);
+        assert!(adapter.ingress_deliveries.contains_key(&adjacent_key));
+
+        let duplicate = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(adjacent_vote),
+            ))
+            .expect("coalesce the delivered adjacent TimeoutVote");
+        assert_eq!(
+            duplicate.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
         );
     }
 
@@ -17377,7 +18905,18 @@ mod tests {
             .expect("normal vote is queued")
             .clone();
         assert_eq!(filler.priority, DeferredPriority::Normal);
-        adapter.deferred_inputs = std::iter::repeat_n(filler, MAX_DEFERRED_INPUTS).collect();
+        let mut saturated_inputs = VecDeque::from([filler.clone()]);
+        for _ in 1..MAX_DEFERRED_INPUTS {
+            let admission_capability = adapter
+                .deferred_admission_ordinals
+                .mint(filler.admission_capability.origin)
+                .expect("each saturated fixture owns a distinct adapter admission");
+            let mut distinct_filler = filler.clone();
+            distinct_filler.admission_ordinal = admission_capability.ordinal;
+            distinct_filler.admission_capability = admission_capability;
+            saturated_inputs.push_back(distinct_filler);
+        }
+        adapter.deferred_inputs = saturated_inputs;
 
         let mut backpressured_vote = normal_vote;
         backpressured_vote.signer = 2;

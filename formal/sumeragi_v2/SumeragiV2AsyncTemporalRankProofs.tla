@@ -2481,11 +2481,11 @@ CertifiedResponseClaimAuxStrictResult(node, rank) ==
   CertifiedResponseClaimAuxProgress(node, rank)'
 
 (***************************************************************************
-An exact Serve ticket can temporarily own the target's runner while a
+An admitted physical ingress owner can temporarily own the target's runner while a
 certified-response claim is still capacity blocked.  The target-only
 Runtime-to-Ingress turn is not a descent of `ReadyRunAuxRank`: Runtime is zero
 in `RuntimeReachRank`, whereas Ingress is positive.  The missing component is
-therefore a finite, coalesced Serve episode, not another action-local rank
+therefore a finite, coalesced ingress episode, not another action-local rank
 claim.  The residual below retains the exact owner and original rank target;
 its temporal property must be proved from the immutable ticket lifecycle.
 ***************************************************************************)
@@ -2495,7 +2495,7 @@ CertifiedResponseClaimServeEpisodeResidual(node, rank) ==
   /\ gst
   /\ CertifiedResponseClaimRunnerOwned(node)
   /\ ~CertifiedResponseClaimAuxProgress(node, rank)
-  /\ \/ /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+  /\ \/ /\ AsyncIngressSchedulerBarrierActive(node)
         /\ asyncRunnerPhase[node] = "Ingress"
      \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
 
@@ -4313,8 +4313,8 @@ PROOF
   <1> QED BY <1>1
 
 (***************************************************************************
-Local actionability alone no longer selects Local admission: a frozen exact
-Serve ticket owns the target-only turn first.  The empty-ticket premise is
+Local actionability alone no longer selects Local admission: a frozen physical
+ingress owner takes the target-only turn first.  The empty-barrier premise is
 therefore essential here.  Callers that cannot establish it must close the
 finite Serve episode before using this strict stage-rank exit.
 ***************************************************************************)
@@ -4323,7 +4323,7 @@ THEOREM Stage4LocalAdvanceStrictlyProgresses ==
   \A candidate, position:
     /\ ProtectedStage4Pending(candidate, position)
     /\ ReadyStage4Actionable(candidate)
-    /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) = {}
+    /\ ~AsyncIngressSchedulerBarrierActive(candidate.node)
     /\ PostGstRunNode(candidate.node)
     => ProtectedRankProgressExit(candidate, <<4, position>>)'
 BY ProducerAdmissionRecordsCausalDebt,
@@ -4365,11 +4365,11 @@ Stage4AuxStrictResult(candidate, position, rank) ==
   Stage4AuxProgress(candidate, position, rank)'
 
 (***************************************************************************
-An exact Serve ticket may take the target-only Runtime-to-Ingress turn while
+An admitted physical ingress owner may take the target-only Runtime-to-Ingress turn while
 the stage-4 candidate remains protected.  That turn can increase
 `RuntimeReachRank`, so it is not a `ReadyRunAuxRank` descent.  The missing
-component is the finite, coalesced Serve episode retained below; its temporal
-property must be supplied by the exact ticket lifecycle before this auxiliary
+component is the finite, coalesced ingress episode retained below; its temporal
+property must be supplied by the exact owner lifecycle before this auxiliary
 rank can be used as a convergence theorem.
 ***************************************************************************)
 
@@ -4378,7 +4378,7 @@ Stage4ServeEpisodeResidual(candidate, position, rank) ==
   /\ AsyncProgressOwnershipInvariant
   /\ ProtectedStage4Pending(candidate, position)
   /\ ~Stage4AuxProgress(candidate, position, rank)
-  /\ \/ /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+  /\ \/ /\ AsyncIngressSchedulerBarrierActive(candidate.node)
         /\ asyncRunnerPhase[candidate.node] = "Ingress"
      \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
           candidate.node)

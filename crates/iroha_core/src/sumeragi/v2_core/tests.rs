@@ -1417,6 +1417,136 @@ fn strictly_ahead_install_timeout_advances_owner_and_protects_highest_prepare() 
 }
 
 #[test]
+fn adjacent_future_timeout_votes_form_a_catch_up_certificate() {
+    let context = context();
+    let mut reducer = Reducer::new(context.clone(), Some(id(4)), Generation::new(6)).unwrap();
+    let current_round = Round::new(context.height(), 0);
+    let future_round = Round::new(context.height(), 1);
+
+    let current = reducer
+        .step(Event::TimeoutVoteReceived {
+            tag: reducer.current_tag(),
+            vote: SignedTimeoutVote::new(
+                TimeoutVote::new(context.id(), current_round, id(4), None),
+                signature(4),
+            ),
+        })
+        .expect("the current timeout share is retained");
+    assert!(current.effects().is_empty());
+
+    for signer in [1_u8, 2] {
+        let future = reducer
+            .step(Event::TimeoutVoteReceived {
+                tag: reducer.current_tag(),
+                vote: SignedTimeoutVote::new(
+                    TimeoutVote::new(context.id(), future_round, id(signer), None),
+                    signature(signer),
+                ),
+            })
+            .expect("an adjacent future timeout share is retained");
+        assert!(future.effects().is_empty());
+    }
+    assert_eq!(reducer.timeout_pool_snapshots().len(), 2);
+
+    let install = only_persist(
+        reducer
+            .step(Event::TimeoutVoteReceived {
+                tag: reducer.current_tag(),
+                vote: SignedTimeoutVote::new(
+                    TimeoutVote::new(context.id(), future_round, id(3), None),
+                    signature(3),
+                ),
+            })
+            .expect("future shares form a valid catch-up TC"),
+    );
+    assert!(matches!(
+        install.record(),
+        WalRecord::InstallTimeout(certificate) if certificate.round() == future_round
+    ));
+    let entered = acknowledge(&mut reducer, &install);
+    assert_eq!(reducer.current_tag().view(), 2);
+    assert!(entered.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::EnterView { certificate, .. } if certificate.round() == future_round
+    )));
+    assert!(reducer.timeout_pool_snapshots().is_empty());
+}
+
+#[test]
+fn timeout_install_preserves_adjacent_shares_for_the_new_current_view() {
+    let context = context();
+    let mut reducer = Reducer::new(context.clone(), Some(id(4)), Generation::new(7)).unwrap();
+    let future_round = Round::new(context.height(), 1);
+
+    for signer in [1_u8, 2] {
+        let outcome = reducer
+            .step(Event::TimeoutVoteReceived {
+                tag: reducer.current_tag(),
+                vote: SignedTimeoutVote::new(
+                    TimeoutVote::new(context.id(), future_round, id(signer), None),
+                    signature(signer),
+                ),
+            })
+            .expect("future timeout share enters the bounded lookahead pool");
+        assert!(outcome.effects().is_empty());
+    }
+
+    let current_tc = tc_without_high(&context, 0, &[1, 2, 3]);
+    let install = only_persist(
+        reducer
+            .step(Event::TimeoutCertificateReceived {
+                tag: reducer.current_tag(),
+                certificate: current_tc,
+            })
+            .expect("the current TC advances to the prefetched round"),
+    );
+    acknowledge(&mut reducer, &install);
+    assert_eq!(reducer.current_tag().view(), 1);
+    assert!(matches!(
+        reducer.timeout_pool_snapshots().as_slice(),
+        [TimeoutPoolSnapshot { round, signers, .. }]
+            if *round == future_round && signers == &[id(1), id(2)]
+    ));
+
+    let catch_up = only_persist(
+        reducer
+            .step(Event::TimeoutVoteReceived {
+                tag: reducer.current_tag(),
+                vote: SignedTimeoutVote::new(
+                    TimeoutVote::new(context.id(), future_round, id(3), None),
+                    signature(3),
+                ),
+            })
+            .expect("the retained pool completes after view entry"),
+    );
+    assert!(matches!(
+        catch_up.record(),
+        WalRecord::InstallTimeout(certificate) if certificate.round() == future_round
+    ));
+}
+
+#[test]
+fn timeout_votes_beyond_adjacent_lookahead_are_ignored() {
+    let context = context();
+    let mut reducer = Reducer::new(context.clone(), Some(id(1)), Generation::new(8)).unwrap();
+    let far_round = Round::new(context.height(), 2);
+    let outcome = reducer
+        .step(Event::TimeoutVoteReceived {
+            tag: reducer.current_tag(),
+            vote: SignedTimeoutVote::new(
+                TimeoutVote::new(context.id(), far_round, id(2), None),
+                signature(2),
+            ),
+        })
+        .expect("far-future timeout traffic is bounded back");
+    assert_eq!(
+        outcome.disposition(),
+        StepDisposition::Ignored(IgnoreReason::IrrelevantView)
+    );
+    assert!(reducer.timeout_pool_snapshots().is_empty());
+}
+
+#[test]
 fn tc_omitting_the_local_high_keeps_its_exact_prepare_qc_retransmittable() {
     let context = context();
     let subject = Subject::repeat(0x7a);

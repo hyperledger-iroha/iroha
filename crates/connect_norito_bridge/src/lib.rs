@@ -18630,13 +18630,13 @@ mod kagemusha_bridge_tests {
             KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
             KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
             KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4,
-            KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4, KagemushaPastaPublicLayoutV4,
+            KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4, KagemushaPastaPublicLayoutV4,
             KagemushaStepCircuitParamsV4,
         };
 
         let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
         let layout = KagemushaPastaPublicLayoutV4::for_ipa_round_count(k)
-            .expect("compact degree-16 production public layout");
+            .expect("compact degree-17 production public layout");
         let params = KagemushaStepCircuitParamsV4 {
             version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
             k,
@@ -18647,11 +18647,11 @@ mod kagemusha_bridge_tests {
             num_instance_columns: 1,
             public_input_limbs: layout.instance_column_limbs,
             minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-            max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4,
+            max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
         };
         params
             .validate_release_generation_profile()
-            .expect("reviewed compact degree-16 production generation profile");
+            .expect("reviewed compact degree-17 production generation profile");
         params
     }
 
@@ -18789,7 +18789,7 @@ mod kagemusha_bridge_tests {
                         .map_err(|error| error.to_string())
                 },
             )
-            .expect("generate and self-verify the genuine compact degree-16 Eq/Ep release");
+            .expect("generate and self-verify the genuine compact degree-17 Eq/Ep release");
         let max_recursive_pair_bytes = generated_pair.max_recursive_pair_bytes;
         let live_pair = generated_pair.initialization_pair_bytes;
         assert!(
@@ -22023,7 +22023,7 @@ mod kagemusha_bridge_tests {
 
     #[cfg(feature = "privacy-production-enabled")]
     #[test]
-    #[ignore = "full production gate performs genuine compact degree-16 Eq/Ep key generation"]
+    #[ignore = "full production gate performs genuine compact degree-17 Eq/Ep key generation"]
     fn recursive_spend_v4_production_feature_installs_and_executes_real_release() {
         let resource_guard =
             KagemushaV4GuardChannel::require("bridge.production-acceptance.admitted")

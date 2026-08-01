@@ -7,7 +7,9 @@ supervisor, reset manifest, and exact four configs, then authenticates the
 current launchd cohort, disk headroom, and a read-only directory fsync barrier.
 An explicitly authorized reset of an already-degraded testnet may use
 ``--allow-absent-old-child`` only when an exact loaded old supervisor has
-neither a PID file nor any child process.  ``--apply`` additionally requires
+neither a PID file nor any child process. A legacy macOS CPython supervisor may
+use ``--allow-framework-python-argv0-rewrite`` only for its structurally exact
+same-framework Python.app executable rewrite. ``--apply`` additionally requires
 root, re-verifies admission under the deployment lock, atomically consumes its
 receipt in the canonical protected replay ledger, and installs
 content-addressed root-owned code.  That exact binary fully qualifies the
@@ -30,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
 import dataclasses
 import fcntl
 import grp
@@ -39,7 +42,6 @@ import os
 import plistlib
 import pwd
 import re
-import shlex
 import shutil
 import signal
 import stat
@@ -88,9 +90,22 @@ MAX_CONFIG_BYTES = 2 * 1024 * 1024
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_HTTP_BYTES = 4 * 1024 * 1024
 MAX_QUALIFICATION_SEAL_BYTES = 8 * 1024 * 1024
+MAX_PROCESS_ARGUMENT_BYTES = 1024 * 1024
+MAX_PROCESS_ARGUMENTS = 256
+DARWIN_CTL_KERN = 1
+DARWIN_KERN_PROCARGS2 = 49
 MAX_TERMINAL_UNHEALTHY_BYTES = 1024
+MAX_RESTART_LOG_DELTA_BYTES = 8 * 1024 * 1024
+RESTART_LOG_PREFIX_GUARD_BYTES = 4 * 1024
 MAX_RELEASE_FILE_BYTES = 5 * 1024 * 1024 * 1024
 MAX_BUNDLE_BYTES = 64 * 1024 * 1024 * 1024
+SNAPSHOT_LOAD_SUCCESS_MARKER = b"Successfully loaded the state from a snapshot"
+SNAPSHOT_LOAD_FALLBACK_MARKERS = (
+    b"Snapshot restore is disabled by configuration",
+    b"Didn't find a state snapshot; creating an empty state",
+    b"Failed to load state snapshot; checking whether Kura can rebuild from an empty state",
+    b"Kura retains the configured-primary replay floor; rebuilding state from blocks",
+)
 EXPECTED_RELEASE_FILE_COUNT = 16
 RELEASE_ATTESTATION_FILE_NAME = "release-attestation-v4.norito"
 RELEASE_POLICY_FILE_NAME = "release-policy-v1.norito"
@@ -135,11 +150,14 @@ TOP_LEVEL_NAMES = {
 VALIDATOR_NAMES = {"codec", "config.toml", "configs", "manifests", "runtime", "storage"}
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
-BLOCK_HASH_RE = re.compile(r"(?:hash:)?([0-9A-Fa-f]{64})")
+BLOCK_HASH_RE = re.compile(
+    r"(?:hash:)?([0-9A-Fa-f]{64})(?:#[0-9A-Fa-f]{4})?"
+)
 TERMINAL_UNHEALTHY_SCHEMA = "taira-terminal-unhealthy-v1"
 INSTALL_ROOT = Path("/Library/SORA/Taira")
 LAUNCH_DAEMONS = Path("/Library/LaunchDaemons")
 DEFAULT_SUPERVISOR_PYTHON = Path("/usr/bin/python3")
+SYSTEM_PYTHON_DEVELOPER_DIR = "/Library/Developer/CommandLineTools"
 DEPLOYMENT_LOCK = INSTALL_ROOT / "deploy-v21.lock"
 ADMISSION_REPLAY_LEDGER = INSTALL_ROOT / "rollout-admission-replay-v1.json"
 ADMISSION_REPLAY_LEDGER_MODE = 0o644
@@ -336,6 +354,19 @@ def metadata_identity(info: os.stat_result) -> tuple[int, ...]:
         info.st_size,
         info.st_mtime_ns,
         info.st_ctime_ns,
+    )
+
+
+def growing_file_identity(info: os.stat_result) -> tuple[int, ...]:
+    """Return identity fields that remain stable while a regular file grows."""
+
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_uid,
+        info.st_gid,
+        info.st_nlink,
     )
 
 
@@ -1294,6 +1325,39 @@ def require_root_controlled_file(path: Path, *, executable: bool) -> os.stat_res
     return path.lstat()
 
 
+def require_system_python_launcher(path: Path) -> os.stat_result:
+    """Require the exact immutable macOS launcher, permitting its system hardlinks."""
+
+    if path != DEFAULT_SUPERVISOR_PYTHON:
+        fail(f"supervisor Python must be exactly {DEFAULT_SUPERVISOR_PYTHON}")
+    canonical_path(path, "supervisor Python")
+    components = [*reversed(path.parents), path]
+    launcher_info: Optional[os.stat_result] = None
+    for index, component in enumerate(components):
+        info = component.lstat()
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or info.st_uid != 0
+            or stat.S_IMODE(info.st_mode) & 0o022
+        ):
+            fail(f"system Python path has an unsafe component: {component}")
+        if index + 1 == len(components):
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink < 1:
+                fail("system Python launcher is not a regular file")
+            if not info.st_mode & 0o111:
+                fail("system Python launcher is not executable")
+            launcher_info = info
+        elif not stat.S_ISDIR(info.st_mode):
+            fail(f"system Python ancestor is not a directory: {component}")
+        require_acl_free_path(component, "system Python path component")
+    if launcher_info is None:
+        fail("system Python launcher identity is unavailable")
+    after = path.lstat()
+    if metadata_identity(after) != metadata_identity(launcher_info):
+        fail("system Python launcher changed during validation")
+    return after
+
+
 @dataclasses.dataclass(frozen=True)
 class AdmissionPlan:
     """One complete archive verification bound to immutable deployment bytes."""
@@ -1325,15 +1389,16 @@ class SourcePlan:
     supervisor: Path
     supervisor_sha256: str
     python: Path
+    python_identity: tuple[int, ...]
 
 
-def validate_supervisor_python(path: Path) -> Path:
-    """Require the root-controlled macOS system Python and a 3.9-compatible ABI."""
+def validate_supervisor_python(path: Path) -> tuple[Path, tuple[int, ...]]:
+    """Resolve the system launcher to its root-controlled Python.app executable."""
 
     python = canonical_path(path, "supervisor Python")
     if python != DEFAULT_SUPERVISOR_PYTHON:
         fail(f"supervisor Python must be exactly {DEFAULT_SUPERVISOR_PYTHON}")
-    require_root_controlled_file(python, executable=True)
+    launcher_before = require_system_python_launcher(python)
     try:
         probe = subprocess.run(
             [
@@ -1342,10 +1407,11 @@ def validate_supervisor_python(path: Path) -> Path:
                 "-S",
                 "-c",
                 (
-                    "import sys;"
+                    "import os,sys;"
                     "print('%d.%d.%d' % "
                     "(sys.version_info.major,sys.version_info.minor,"
-                    "sys.version_info.micro))"
+                    "sys.version_info.micro));"
+                    "print(os.fsencode(sys.base_prefix).hex())"
                 ),
             ],
             check=False,
@@ -1353,20 +1419,75 @@ def validate_supervisor_python(path: Path) -> Path:
             capture_output=True,
             text=True,
             timeout=5,
-            env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+            env={
+                "DEVELOPER_DIR": SYSTEM_PYTHON_DEVELOPER_DIR,
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            },
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise DeploymentError("supervisor Python version probe failed") from error
-    version_text = probe.stdout.strip()
+    lines = probe.stdout.splitlines()
     if (
         probe.returncode != 0
-        or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version_text) is None
+        or len(lines) != 2
+        or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", lines[0]) is None
+        or re.fullmatch(r"(?:[0-9a-f]{2})+", lines[1]) is None
+        or len(probe.stdout.encode("utf-8")) > 4096
     ):
-        fail("supervisor Python did not return one bounded semantic version")
+        fail("supervisor Python did not return one bounded runtime identity")
+    version_text, base_prefix_hex = lines
     major, minor, _patch = (int(part) for part in version_text.split("."))
     if major != 3 or minor < 9:
         fail("supervisor Python must be Python >=3.9,<4")
-    return python
+    try:
+        base_prefix = Path(os.fsdecode(bytes.fromhex(base_prefix_hex)))
+    except (ValueError, TypeError) as error:
+        raise DeploymentError("supervisor Python returned an invalid base prefix") from error
+    runtime = base_prefix / "Resources/Python.app/Contents/MacOS/Python"
+    runtime = canonical_path(runtime, "supervisor Python runtime")
+    runtime_before = require_root_controlled_file(runtime, executable=True)
+    try:
+        direct_probe = subprocess.run(
+            [
+                str(runtime),
+                "-I",
+                "-S",
+                "-c",
+                (
+                    "import os,sys;"
+                    "print('%d.%d.%d' % "
+                    "(sys.version_info.major,sys.version_info.minor,"
+                    "sys.version_info.micro));"
+                    "print(os.fsencode(sys.executable).hex())"
+                ),
+            ],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={
+                "DEVELOPER_DIR": SYSTEM_PYTHON_DEVELOPER_DIR,
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            },
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise DeploymentError("supervisor Python runtime probe failed") from error
+    expected_runtime_hex = os.fsencode(runtime).hex()
+    if (
+        direct_probe.returncode != 0
+        or direct_probe.stdout.splitlines() != [version_text, expected_runtime_hex]
+        or len(direct_probe.stdout.encode("utf-8")) > 4096
+    ):
+        fail("supervisor Python runtime did not preserve its exact identity")
+    launcher_after = require_system_python_launcher(python)
+    runtime_after = require_root_controlled_file(runtime, executable=True)
+    if (
+        metadata_identity(launcher_before) != metadata_identity(launcher_after)
+        or metadata_identity(runtime_before) != metadata_identity(runtime_after)
+    ):
+        fail("supervisor Python identity changed during validation")
+    return runtime, metadata_identity(runtime_after)
 
 
 def validate_sources(
@@ -1397,13 +1518,14 @@ def validate_sources(
     if supervisor_sha != admission.supervisor_sha256:
         fail("supervisor source does not match the verified admission receipt")
 
-    python = validate_supervisor_python(args.supervisor_python)
+    python, python_identity = validate_supervisor_python(args.supervisor_python)
     return SourcePlan(
         binary=binary,
         binary_sha256=binary_sha,
         supervisor=supervisor,
         supervisor_sha256=supervisor_sha,
         python=python,
+        python_identity=python_identity,
     )
 
 
@@ -1620,11 +1742,13 @@ def require_admission_bound_inputs_unchanged(
     require_bundle_runtime_unchanged(bundle)
     binary_sha256, _ = sha256_regular(sources.binary, MAX_BINARY_BYTES)
     supervisor_sha256, _ = sha256_regular(sources.supervisor, 4 * 1024 * 1024)
+    python_info = require_root_controlled_file(sources.python, executable=True)
     if (
         binary_sha256 != admission.binary_sha256
         or supervisor_sha256 != admission.supervisor_sha256
+        or metadata_identity(python_info) != sources.python_identity
     ):
-        fail("receipt-bound binary or supervisor changed after admission")
+        fail("receipt-bound binary, supervisor, or Python changed after admission")
     require_inputs_match_admission(bundle, sources, admission)
 
 
@@ -1636,6 +1760,100 @@ class ProcessInfo:
     ppid: int
     uid: int
     argv: tuple[str, ...]
+
+
+def parse_darwin_procargs2(raw: bytes) -> tuple[str, ...]:
+    """Parse one bounded ``KERN_PROCARGS2`` payload into its exact argv."""
+
+    if len(raw) < ctypes.sizeof(ctypes.c_int) or len(raw) > MAX_PROCESS_ARGUMENT_BYTES:
+        fail("managed process native argument payload has an invalid size")
+    argc = ctypes.c_int.from_buffer_copy(raw[: ctypes.sizeof(ctypes.c_int)]).value
+    if argc < 1 or argc > MAX_PROCESS_ARGUMENTS:
+        fail("managed process native argument count is outside its bound")
+    cursor = ctypes.sizeof(ctypes.c_int)
+    executable_end = raw.find(b"\0", cursor)
+    if executable_end <= cursor:
+        fail("managed process native executable path is incomplete")
+    try:
+        executable = raw[cursor:executable_end].decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise DeploymentError(
+            "managed process native executable path is not UTF-8"
+        ) from error
+    cursor = executable_end + 1
+    while cursor < len(raw) and raw[cursor] == 0:
+        cursor += 1
+    arguments: list[str] = []
+    for _index in range(argc):
+        argument_end = raw.find(b"\0", cursor)
+        if argument_end < cursor:
+            fail("managed process native argument vector is incomplete")
+        argument_raw = raw[cursor:argument_end]
+        if not argument_raw:
+            fail("managed process native argument vector contains an empty argument")
+        try:
+            arguments.append(argument_raw.decode("utf-8"))
+        except UnicodeDecodeError as error:
+            raise DeploymentError(
+                "managed process native argument vector is not UTF-8"
+            ) from error
+        cursor = argument_end + 1
+    argv = tuple(arguments)
+    if argv[0] != executable:
+        fail("managed process native executable path differs from argv[0]")
+    return argv
+
+
+def read_darwin_process_argv(pid: int) -> tuple[str, ...]:
+    """Read one process argv through bounded, NUL-delimited Darwin sysctl data."""
+
+    if sys.platform != "darwin" or pid <= 1:
+        fail(f"native managed process argument inspection is unavailable: pid {pid}")
+    libc = ctypes.CDLL(None, use_errno=True)
+    sysctl = libc.sysctl
+    sysctl.argtypes = (
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.c_uint,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+    )
+    sysctl.restype = ctypes.c_int
+    mib = (ctypes.c_int * 3)(DARWIN_CTL_KERN, DARWIN_KERN_PROCARGS2, pid)
+    size = ctypes.c_size_t()
+    if sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0:
+        fail(f"could not size native managed process arguments: pid {pid}")
+    if size.value < ctypes.sizeof(ctypes.c_int) or size.value > MAX_PROCESS_ARGUMENT_BYTES:
+        fail(f"native managed process argument buffer is outside its bound: pid {pid}")
+    buffer = ctypes.create_string_buffer(size.value)
+    actual = ctypes.c_size_t(size.value)
+    if (
+        sysctl(
+            mib,
+            3,
+            ctypes.cast(buffer, ctypes.c_void_p),
+            ctypes.byref(actual),
+            None,
+            0,
+        )
+        != 0
+    ):
+        fail(f"could not read native managed process arguments: pid {pid}")
+    if actual.value > size.value:
+        fail(f"native managed process argument payload grew during capture: pid {pid}")
+    return parse_darwin_procargs2(buffer.raw[: actual.value])
+
+
+@dataclasses.dataclass(frozen=True)
+class RestartLogCursor:
+    """Bounded append-only cursor for one authenticated supervisor log inode."""
+
+    path: Path
+    identity: tuple[int, ...]
+    offset: int
+    guard_offset: int
+    guard_sha256: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1704,36 +1922,42 @@ class SystemOps:
             )
 
     def inspect_process(self, pid: int) -> ProcessInfo:
-        """Read parent, uid, and complete argv for one macOS process."""
+        """Read a stable parent, uid, and native argv for one macOS process."""
 
-        result = self.run(
-            [
-                "/bin/ps",
-                "-ww",
-                "-p",
-                str(pid),
-                "-o",
-                "ppid=",
-                "-o",
-                "uid=",
-                "-o",
-                "command=",
-            ]
-        )
-        if result.returncode != 0 or not result.stdout.strip():
-            fail(f"managed process is not running: pid {pid}")
-        fields = result.stdout.strip().split(maxsplit=2)
-        if len(fields) != 3:
-            fail(f"could not parse managed process identity: pid {pid}")
-        try:
-            argv = tuple(shlex.split(fields[2]))
-            return ProcessInfo(
-                pid=pid, ppid=int(fields[0]), uid=int(fields[1]), argv=argv
+        def numeric_identity() -> tuple[int, int]:
+            result = self.run(
+                [
+                    "/bin/ps",
+                    "-p",
+                    str(pid),
+                    "-o",
+                    "ppid=",
+                    "-o",
+                    "uid=",
+                ]
             )
-        except (ValueError, TypeError) as error:
-            raise DeploymentError(
-                f"could not parse managed process identity: pid {pid}"
-            ) from error
+            if result.returncode != 0 or not result.stdout.strip():
+                fail(f"managed process is not running: pid {pid}")
+            fields = result.stdout.split()
+            if len(fields) != 2:
+                fail(f"could not parse managed process identity: pid {pid}")
+            try:
+                ppid, uid = (int(field) for field in fields)
+            except (ValueError, TypeError) as error:
+                raise DeploymentError(
+                    f"could not parse managed process identity: pid {pid}"
+                ) from error
+            if ppid < 0 or uid < 0:
+                fail(f"managed process identity is invalid: pid {pid}")
+            return ppid, uid
+
+        before = numeric_identity()
+        argv_before = read_darwin_process_argv(pid)
+        argv_after = read_darwin_process_argv(pid)
+        after = numeric_identity()
+        if before != after or argv_before != argv_after:
+            fail(f"managed process identity changed during capture: pid {pid}")
+        return ProcessInfo(pid=pid, ppid=before[0], uid=before[1], argv=argv_before)
 
     def child_pids(self, parent_pid: int) -> tuple[int, ...]:
         """Return the stable PID inventory currently parented by one process."""
@@ -1794,6 +2018,82 @@ def required_option(argv: tuple[str, ...], option: str, label: str) -> str:
     return argv[indices[0] + 1]
 
 
+def framework_python_argv0_rewrite_matches(
+    plist_argv: tuple[str, ...],
+    runtime_argv: tuple[str, ...],
+    *,
+    owner_uid: int,
+) -> bool:
+    """Authenticate CPython's same-framework launcher-to-Python.app rewrite."""
+
+    if (
+        len(plist_argv) != len(runtime_argv)
+        or not plist_argv
+        or plist_argv[1:] != runtime_argv[1:]
+        or not Path(plist_argv[0]).is_absolute()
+        or not Path(runtime_argv[0]).is_absolute()
+    ):
+        return False
+    launcher = Path(plist_argv[0])
+    try:
+        resolved_launcher_before = launcher.resolve(strict=True)
+        canonical_path(resolved_launcher_before, "old supervisor Python launcher")
+        launcher_before = resolved_launcher_before.lstat()
+    except (OSError, DeploymentError):
+        return False
+    launcher_name = re.fullmatch(
+        r"python3(?:\.([0-9]+))?", resolved_launcher_before.name
+    )
+    if (
+        resolved_launcher_before.parent.name != "bin"
+        or launcher_name is None
+        or not stat.S_ISREG(launcher_before.st_mode)
+        or launcher_before.st_nlink != 1
+        or not launcher_before.st_mode & 0o111
+        or stat.S_IMODE(launcher_before.st_mode) & 0o022
+        or launcher_before.st_uid != owner_uid
+    ):
+        return False
+    version_root = resolved_launcher_before.parent.parent
+    minor = launcher_name.group(1)
+    if (
+        version_root.parent.name != "Versions"
+        or version_root.parent.parent.name not in {"Python.framework", "Python3.framework"}
+        or version_root.parent.parent.parent.name != "Frameworks"
+        or (minor is not None and version_root.name != f"3.{minor}")
+    ):
+        return False
+    expected_runtime = (
+        version_root / "Resources/Python.app/Contents/MacOS/Python"
+    )
+    try:
+        expected_runtime = canonical_path(
+            expected_runtime, "old supervisor Python runtime"
+        )
+        runtime_before = expected_runtime.lstat()
+        resolved_launcher_after = launcher.resolve(strict=True)
+        launcher_after = resolved_launcher_after.lstat()
+        runtime_after = expected_runtime.lstat()
+    except (OSError, DeploymentError):
+        return False
+    if (
+        str(expected_runtime) != runtime_argv[0]
+        or resolved_launcher_after != resolved_launcher_before
+        or metadata_identity(launcher_before) != metadata_identity(launcher_after)
+        or metadata_identity(runtime_before) != metadata_identity(runtime_after)
+        or not stat.S_ISREG(runtime_before.st_mode)
+        or runtime_before.st_nlink != 1
+        or not runtime_before.st_mode & 0o111
+        or stat.S_IMODE(runtime_before.st_mode) & 0o022
+        or runtime_before.st_dev != launcher_before.st_dev
+        or runtime_before.st_uid != launcher_before.st_uid
+        or runtime_before.st_gid != launcher_before.st_gid
+        or runtime_before.st_uid != owner_uid
+    ):
+        return False
+    return True
+
+
 def inspect_old_managed_identity(
     payload: dict[str, Any],
     label: str,
@@ -1801,6 +2101,7 @@ def inspect_old_managed_identity(
     ops: SystemOps,
     *,
     allow_absent_child: bool = False,
+    allow_framework_python_argv0_rewrite: bool = False,
 ) -> OldManagedIdentity:
     """Authenticate one old launchd supervisor and its exact managed child."""
 
@@ -1821,17 +2122,27 @@ def inspect_old_managed_identity(
         raise DeploymentError(
             f"old LaunchDaemon runtime identity is unknown: {label}"
         ) from error
-    supervisor_argv = tuple(arguments)
+    plist_supervisor_argv = tuple(arguments)
     supervisor = ops.inspect_process(supervisor_pid)
     if (
         supervisor.ppid != 1
         or supervisor.uid != uid
-        or supervisor.argv != supervisor_argv
+        or (
+            supervisor.argv != plist_supervisor_argv
+            and not (
+                allow_framework_python_argv0_rewrite
+                and framework_python_argv0_rewrite_matches(
+                    plist_supervisor_argv,
+                    supervisor.argv,
+                    owner_uid=uid,
+                )
+            )
+        )
     ):
         fail(f"old LaunchDaemon supervisor identity differs from its plist: {label}")
-    pid_file = Path(required_option(supervisor_argv, "--pid-file", label))
-    binary = required_option(supervisor_argv, "--binary", label)
-    config = required_option(supervisor_argv, "--config", label)
+    pid_file = Path(required_option(plist_supervisor_argv, "--pid-file", label))
+    binary = required_option(plist_supervisor_argv, "--binary", label)
+    config = required_option(plist_supervisor_argv, "--config", label)
     if (
         not pid_file.is_absolute()
         or not Path(binary).is_absolute()
@@ -1851,7 +2162,7 @@ def inspect_old_managed_identity(
     )
     return OldManagedIdentity(
         supervisor_uid=uid,
-        supervisor_argv=supervisor_argv,
+        supervisor_argv=supervisor.argv,
         child_uid=uid,
         child_argv=child_argv,
         pid_file=pid_file,
@@ -1940,7 +2251,10 @@ def verify_restored_snapshot(snapshot: PlistSnapshot, ops: SystemOps) -> None:
 
 
 def capture_old_cohort(
-    ops: SystemOps, *, allow_absent_child: bool = False
+    ops: SystemOps,
+    *,
+    allow_absent_child: bool = False,
+    allow_framework_python_argv0_rewrite: bool = False,
 ) -> tuple[PlistSnapshot, ...]:
     """Read the exact four old plists and require all four jobs loaded."""
 
@@ -1965,7 +2279,12 @@ def capture_old_cohort(
             supervisor_pid,
             ops,
             allow_absent_child=allow_absent_child,
+            allow_framework_python_argv0_rewrite=(
+                allow_framework_python_argv0_rewrite
+            ),
         )
+        if launchd_pid(ops.launchd_print(label), label) != supervisor_pid:
+            fail(f"old LaunchDaemon supervisor changed during capture: {label}")
         snapshots.append(
             PlistSnapshot(
                 path=path,
@@ -3106,6 +3425,14 @@ class FleetSample:
     nodes: tuple[str, ...]
 
 
+@dataclasses.dataclass(frozen=True)
+class RestartProofResult:
+    """Validated post-restart fleet state and bounded measured recovery time."""
+
+    fleet: FleetSample
+    duration_ms: int
+
+
 HttpGetter = Callable[[str, float], dict[str, Any]]
 HealthGetter = Callable[[str, float], None]
 TerminalChecker = Callable[[], None]
@@ -3646,6 +3973,150 @@ def verify_managed_peer(
     return supervisor_pid, child_pid
 
 
+def _open_growing_regular(path: Path) -> tuple[int, os.stat_result]:
+    """Open one single-link growing regular file without following aliases."""
+
+    try:
+        before = path.lstat()
+    except OSError as error:
+        raise DeploymentError("restart supervisor log is unavailable") from error
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        fail("restart supervisor log is not a regular file")
+    if before.st_nlink != 1:
+        fail("restart supervisor log must have exactly one link")
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+    except OSError as error:
+        raise DeploymentError("restart supervisor log could not be opened") from error
+    try:
+        opened = os.fstat(descriptor)
+        named = path.lstat()
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or growing_file_identity(before) != growing_file_identity(opened)
+            or growing_file_identity(opened) != growing_file_identity(named)
+        ):
+            fail("restart supervisor log changed while it was opened")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor, opened
+
+
+def _require_safe_restart_log_owner_mode(
+    info: os.stat_result, owner_uid: int, owner_gid: int
+) -> None:
+    """Require a launchd- or runtime-owned append log with a safe mode."""
+
+    if (
+        info.st_uid not in {0, owner_uid}
+        or info.st_gid not in {0, owner_gid}
+        or stat.S_IMODE(info.st_mode) not in {0o600, 0o640, 0o644}
+    ):
+        fail("restart supervisor log has an unsafe owner or mode")
+
+
+def _pread_exact(descriptor: int, offset: int, length: int) -> bytes:
+    """Read exactly one bounded region without changing a shared file offset."""
+
+    chunks: list[bytes] = []
+    consumed = 0
+    while consumed < length:
+        try:
+            chunk = os.pread(
+                descriptor,
+                min(1024 * 1024, length - consumed),
+                offset + consumed,
+            )
+        except OSError as error:
+            raise DeploymentError("restart supervisor log read failed") from error
+        if not chunk:
+            fail("restart supervisor log was truncated while it was read")
+        chunks.append(chunk)
+        consumed += len(chunk)
+    return b"".join(chunks)
+
+
+def bind_restart_log_cursor(
+    path: Path, owner_uid: int, owner_gid: int
+) -> RestartLogCursor:
+    """Bind the pre-restart end of one safe supervisor log inode."""
+
+    descriptor, opened = _open_growing_regular(path)
+    try:
+        _require_safe_restart_log_owner_mode(opened, owner_uid, owner_gid)
+        offset = opened.st_size
+        guard_offset = max(0, offset - RESTART_LOG_PREFIX_GUARD_BYTES)
+        guard = _pread_exact(descriptor, guard_offset, offset - guard_offset)
+        after = os.fstat(descriptor)
+        named = path.lstat()
+        if (
+            growing_file_identity(after) != growing_file_identity(opened)
+            or growing_file_identity(named) != growing_file_identity(opened)
+            or after.st_size < offset
+        ):
+            fail("restart supervisor log changed while its cursor was bound")
+        return RestartLogCursor(
+            path=path,
+            identity=growing_file_identity(opened),
+            offset=offset,
+            guard_offset=guard_offset,
+            guard_sha256=hashlib.sha256(guard).hexdigest(),
+        )
+    finally:
+        os.close(descriptor)
+
+
+def read_restart_log_delta(cursor: RestartLogCursor) -> bytes:
+    """Read a bounded post-cursor delta from the same append-only log inode."""
+
+    descriptor, opened = _open_growing_regular(cursor.path)
+    try:
+        if growing_file_identity(opened) != cursor.identity:
+            fail("restart supervisor log inode was replaced")
+        if opened.st_size < cursor.offset:
+            fail("restart supervisor log was truncated after restart began")
+        guard = _pread_exact(
+            descriptor,
+            cursor.guard_offset,
+            cursor.offset - cursor.guard_offset,
+        )
+        if hashlib.sha256(guard).hexdigest() != cursor.guard_sha256:
+            fail("restart supervisor log prefix changed after restart began")
+        end = opened.st_size
+        delta_size = end - cursor.offset
+        if delta_size > MAX_RESTART_LOG_DELTA_BYTES:
+            fail("restart supervisor log delta exceeded its bound")
+        delta = _pread_exact(descriptor, cursor.offset, delta_size)
+        after = os.fstat(descriptor)
+        named = cursor.path.lstat()
+        if (
+            growing_file_identity(after) != cursor.identity
+            or growing_file_identity(named) != cursor.identity
+            or after.st_size < end
+        ):
+            fail("restart supervisor log changed while its delta was read")
+        return delta
+    finally:
+        os.close(descriptor)
+
+
+def require_snapshot_backed_restart(cursor: RestartLogCursor) -> None:
+    """Require exactly one snapshot restore and forbid empty-state fallback."""
+
+    delta = read_restart_log_delta(cursor)
+    if any(marker in delta for marker in SNAPSHOT_LOAD_FALLBACK_MARKERS):
+        fail("managed validator restart entered a snapshot fallback path")
+    if delta.count(SNAPSHOT_LOAD_SUCCESS_MARKER) != 1:
+        fail("managed validator restart did not load exactly one state snapshot")
+
+
 def restart_proof(
     bundle: BundlePlan,
     expected_source_commit: str,
@@ -3658,8 +4129,8 @@ def restart_proof(
     getter: HttpGetter = http_json,
     health_getter: HealthGetter = http_ok,
     terminal_checker: TerminalChecker = no_terminal_check,
-) -> FleetSample:
-    """Terminate one exact child and prove O(1)-sealed independent recovery."""
+) -> RestartProofResult:
+    """Terminate one exact child and measure bounded snapshot-backed recovery."""
 
     terminal_checker()
     peer = bundle.peers[0]
@@ -3671,8 +4142,14 @@ def restart_proof(
         installed_binary,
         ops,
     )
-    ops.terminate(child_pid)
+    log_cursor = bind_restart_log_cursor(
+        runtime_root / "logs" / f"validator-{peer.number}-supervisor.log",
+        bundle.owner_uid,
+        bundle.owner_gid,
+    )
     deadline = time.monotonic() + RESTART_PROOF_TIMEOUT_SECONDS
+    restart_started_ns = time.monotonic_ns()
+    ops.terminate(child_pid)
     new_child: Optional[int] = None
     while time.monotonic() < deadline:
         terminal_checker()
@@ -3698,7 +4175,7 @@ def restart_proof(
     if ops.process_exists(child_pid):
         fail("old managed validator child remained alive after restart")
     terminal_checker()
-    return wait_for_advancement(
+    advanced = wait_for_advancement(
         bundle,
         expected_source_commit,
         baseline,
@@ -3707,6 +4184,26 @@ def restart_proof(
         health_getter=health_getter,
         terminal_checker=terminal_checker,
     )
+    require_snapshot_backed_restart(log_cursor)
+    final_supervisor, final_child = verify_managed_peer(
+        peer,
+        bundle,
+        runtime_root,
+        plist_bodies[peer.label],
+        installed_binary,
+        ops,
+    )
+    if final_supervisor != supervisor_pid or final_child != new_child:
+        fail("restart proof changed the authenticated supervisor or replacement child")
+    terminal_checker()
+    restart_completed_ns = time.monotonic_ns()
+    if restart_completed_ns < restart_started_ns:
+        fail("monotonic restart timer moved backwards")
+    duration_ns = restart_completed_ns - restart_started_ns
+    duration_ms = (duration_ns + 999_999) // 1_000_000
+    if duration_ms > RESTART_PROOF_TIMEOUT_SECONDS * 1_000:
+        fail("managed validator snapshot-backed restart exceeded 45 seconds")
+    return RestartProofResult(fleet=advanced, duration_ms=duration_ms)
 
 
 def rollback_cohort(snapshots: Sequence[PlistSnapshot], ops: SystemOps) -> None:
@@ -3989,7 +4486,7 @@ def apply_reset(
                 ops,
             )
         terminal_checker()
-        restarted = restart_proof(
+        restart_result = restart_proof(
             bundle,
             args.expected_source_commit,
             runtime_root,
@@ -4001,6 +4498,7 @@ def apply_reset(
             health_getter=health_getter,
             terminal_checker=terminal_checker,
         )
+        restarted = restart_result.fleet
     except BaseException as rollout_error:
         # A second termination request must not interrupt the rollback itself.
         for signum in guarded_signals:
@@ -4093,6 +4591,7 @@ def apply_reset(
         "release": str(bundle.release.installed_root),
         "release_tree_sha256": bundle.release.tree_sha256,
         "restart_generation": args.restart_generation,
+        "restart_duration_ms": restart_result.duration_ms,
         "restart_proof": "passed",
         "source_commit": args.expected_source_commit,
         "start_height": baseline.height,
@@ -4150,6 +4649,16 @@ def build_parser() -> argparse.ArgumentParser:
             "process; stale or mismatched children remain fatal"
         ),
     )
+    parser.add_argument(
+        "--allow-framework-python-argv0-rewrite",
+        action="store_true",
+        help=(
+            "explicitly authorize only the same-framework bin/python* to "
+            "Resources/Python.app executable rewrite for the old testnet "
+            "supervisors; every remaining argument and managed child must "
+            "still match exactly"
+        ),
+    )
     parser.add_argument("--apply", action="store_true")
     return parser
 
@@ -4204,11 +4713,13 @@ def execute(
     require_inputs_match_admission(bundle, sources, admission)
     args.restart_generation = admission.restart_generation
     system_ops = ops or SystemOps()
+    capture_options: dict[str, bool] = {
+        "allow_absent_child": args.allow_absent_old_child,
+    }
+    if getattr(args, "allow_framework_python_argv0_rewrite", False):
+        capture_options["allow_framework_python_argv0_rewrite"] = True
     if not args.apply:
-        old_cohort = capture_old_cohort(
-            system_ops,
-            allow_absent_child=args.allow_absent_old_child,
-        )
+        old_cohort = capture_old_cohort(system_ops, **capture_options)
         require_admission_archive_unchanged(admission)
         return {
             "admission_archive_sha256": admission.archive_sha256,
@@ -4244,10 +4755,7 @@ def execute(
         if locked_admission != admission:
             fail("verified admission identity changed before the deployment lock")
         require_admission_bound_inputs_unchanged(bundle, sources, locked_admission)
-        old_cohort = capture_old_cohort(
-            system_ops,
-            allow_absent_child=args.allow_absent_old_child,
-        )
+        old_cohort = capture_old_cohort(system_ops, **capture_options)
         require_admission_bound_inputs_unchanged(bundle, sources, locked_admission)
         with consume_admission_receipt(locked_admission) as consumption:
             report = apply_reset(

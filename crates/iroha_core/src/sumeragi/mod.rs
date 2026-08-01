@@ -1138,6 +1138,45 @@ impl FairV2IngressLeaderWireToken {
         self.source_class
     }
 
+    /// Proposal view retained by this exact productive wire.
+    pub(crate) const fn view(&self) -> iroha_data_model::block::consensus_v2::View {
+        self.identity.view
+    }
+
+    /// Whether this token is the exact chunk lifecycle for one manifest hash.
+    pub(crate) fn matches_chunk_manifest(
+        &self,
+        manifest_hash: HashOf<iroha_data_model::block::consensus_v2::PayloadManifest>,
+    ) -> bool {
+        self.identity.phase == FairV2IngressLeaderWirePhase::Chunk
+            && self.source_class == FairV2IngressLeaderWireSourceClass::Chunk
+            && self.identity.manifest_hash == Some(manifest_hash.into())
+    }
+
+    /// Whether this chunk token names the exact proposal coordinates.
+    pub(crate) fn matches_body_coordinates(
+        &self,
+        round: iroha_data_model::block::consensus_v2::ConsensusRound,
+        subject: iroha_data_model::block::consensus_v2::BlockSubject,
+    ) -> bool {
+        self.identity.phase == FairV2IngressLeaderWirePhase::Chunk
+            && self.source_class == FairV2IngressLeaderWireSourceClass::Chunk
+            && self.identity.context_id == round.context_id
+            && self.identity.height == round.height
+            && self.identity.view == round.view
+            && self.identity.subject_hash == fair_v2_ingress_subject_hash(Some(&subject))
+    }
+
+    /// Whether this chunk token names one exact proposal body.
+    pub(crate) fn matches_exact_body(
+        &self,
+        round: iroha_data_model::block::consensus_v2::ConsensusRound,
+        subject: iroha_data_model::block::consensus_v2::BlockSubject,
+        manifest_hash: HashOf<iroha_data_model::block::consensus_v2::PayloadManifest>,
+    ) -> bool {
+        self.matches_body_coordinates(round, subject) && self.matches_chunk_manifest(manifest_hash)
+    }
+
     /// Validate the complete context-bound token against configured geometry.
     pub(crate) fn validate_exact(
         &self,
@@ -5764,7 +5803,8 @@ impl FairV2Ingress {
     /// only one round-robin turn. A later control for the same semantic
     /// source, context, height, and protocol class remains behind its immutable
     /// predecessor. After that predecessor crosses into the runtime queue, its
-    /// smaller lifecycle ordinal preserves the same order there. Other proposal,
+    /// frozen physical source/cut excludes later replays before logical rank is
+    /// compared inside the retained predecessor set. Other proposal,
     /// certificate, body-response, or payload work may bypass an unrelated
     /// auxiliary request waiting for I/O capacity without dropping or duplicating
     /// that request. If an active-height certified-body request is queued,
@@ -9055,11 +9095,11 @@ mod authoritative_runtime_gate_tests {
             .configure_roster([validator.clone()])
             .expect("validator and anonymous protected owners fit");
         ingress.open().expect("open configured roster");
-        let request = v2_certified_body_request(&validator);
+        let message = v2_certified_body_response(7, 0, 64);
 
         assert!(matches!(
             ingress.try_push(InboundBlockMessage::new(
-                request.clone(),
+                message.clone(),
                 Some(validator.clone()),
             )),
             Ok(super::FairV2IngressPushDisposition::Enqueued)
@@ -9077,7 +9117,7 @@ mod authoritative_runtime_gate_tests {
         };
 
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(request, Some(validator.clone()))),
+            ingress.try_push(InboundBlockMessage::new(message, Some(validator.clone()))),
             Ok(super::FairV2IngressPushDisposition::Coalesced)
         ));
         {
@@ -9159,6 +9199,68 @@ mod authoritative_runtime_gate_tests {
                 .admission_ordinal,
             rollover_ordinal
         );
+    }
+
+    #[test]
+    fn fair_v2_ingress_checked_dequeue_freezes_one_physical_cut_per_occurrence() {
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        let ingress = super::FairV2Ingress::new(
+            8,
+            64 * 1024 * 1024,
+            32 * 1024 * 1024,
+            super::TIMEOUT_VOTE_RESERVE_BYTES,
+            iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.get()
+                + super::BODY_ENVELOPE_HEADROOM_BYTES,
+        );
+        ingress
+            .configure_roster([validator.clone()])
+            .expect("validator and anonymous protected owners fit");
+        ingress.open().expect("open configured roster");
+        let message = v2_certified_body_response(7, 0, 64);
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                message.clone(),
+                Some(validator.clone()),
+            )),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                message.clone(),
+                Some(validator.clone()),
+            )),
+            Ok(super::FairV2IngressPushDisposition::Coalesced)
+        ));
+
+        let mut first = ingress
+            .try_recv()
+            .expect("checked dequeue owns the coalesced request");
+        let first_owner = first
+            .take_ingress_ownership()
+            .expect("checked dequeue retains exact ownership");
+        assert_eq!(first_owner.physical_admission_ordinal(), Some(1));
+        assert_eq!(first_owner.runtime_physical_cut(), Some(2));
+        let mut illegally_refreshed = first_owner.clone();
+        assert!(
+            !illegally_refreshed.freeze_runtime_physical_cut(3),
+            "an admitted occurrence cannot refresh its frozen predecessor cut"
+        );
+        assert_eq!(illegally_refreshed.runtime_physical_cut(), Some(2));
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(message, Some(validator))),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let mut retry = ingress
+            .try_recv()
+            .expect("post-drain transport retry owns a fresh physical occurrence");
+        let retry_owner = retry
+            .take_ingress_ownership()
+            .expect("retry retains exact physical ownership");
+        assert_eq!(retry_owner.physical_admission_ordinal(), Some(2));
+        assert_eq!(retry_owner.runtime_physical_cut(), Some(3));
+        assert_eq!(first_owner.runtime_physical_cut(), Some(2));
     }
 
     include!("tests/mod_authoritative_runtime_gate_09_snapshot_and_source_lanes.rs");

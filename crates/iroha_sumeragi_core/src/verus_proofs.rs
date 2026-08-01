@@ -5574,6 +5574,7 @@ pub struct ProductionTransitionProjection {
     pub timeout_votes_after: int,
     pub formed_timeouts_before: int,
     pub formed_timeouts_after: int,
+    pub timeout_evidence_after_outside_installed_window: u64,
     pub timeout_control_before: Option<int>,
     pub timeout_control_after: Option<int>,
     pub boundary_claimed: ProductionBoundaryCapabilityKeyProjection,
@@ -5612,6 +5613,7 @@ pub struct ProductionTransitionFactsProjection {
     pub install_view_unchanged: bool,
     pub timeout_vote_pool_unchanged: bool,
     pub formed_timeouts_unchanged: bool,
+    pub timeout_evidence_after_in_installed_window: bool,
     pub timeout_control_unchanged: bool,
     pub timeout_control_after_absent: bool,
     pub enter_view_exact: bool,
@@ -5651,6 +5653,7 @@ pub struct ProductionTransitionDeltaFactsProjection {
     pub install_view_unchanged: bool,
     pub timeout_vote_pool_unchanged: bool,
     pub formed_timeouts_unchanged: bool,
+    pub timeout_evidence_after_in_installed_window: bool,
     pub timeout_control_unchanged: bool,
     pub timeout_control_after_absent: bool,
     pub replay_boundary_exact: bool,
@@ -5814,6 +5817,8 @@ pub open spec fn production_delta_facts_equal(
         && left.install_view_unchanged == right.install_view_unchanged
         && left.timeout_vote_pool_unchanged == right.timeout_vote_pool_unchanged
         && left.formed_timeouts_unchanged == right.formed_timeouts_unchanged
+        && left.timeout_evidence_after_in_installed_window
+            == right.timeout_evidence_after_in_installed_window
         && left.timeout_control_unchanged == right.timeout_control_unchanged
         && left.timeout_control_after_absent == right.timeout_control_after_absent
         && left.effects == right.effects
@@ -6679,7 +6684,7 @@ pub proof fn production_action_has_named_tla_mapping(
 }
 
 /// The executable gate bounds the safety-relevant volatile structures on both
-/// sides of every committed step and makes the persisted-TC reset explicit.
+/// sides of every committed step and makes bounded persisted-TC retention explicit.
 pub proof fn production_action_preserves_volatile_bounds(
     facts: ProductionTransitionFactsProjection,
 )
@@ -6688,10 +6693,10 @@ pub proof fn production_action_preserves_volatile_bounds(
     ensures
         facts.volatile_after.vote_pools <= 2,
         facts.volatile_after.vote_entries <= facts.validator_count * 2,
-        facts.volatile_after.timeout_vote_pools <= 1,
-        facts.volatile_after.timeout_vote_entries <= facts.validator_count,
+        facts.volatile_after.timeout_vote_pools <= 2,
+        facts.volatile_after.timeout_vote_entries <= facts.validator_count * 2,
         facts.volatile_after.formed_certificates <= 2,
-        facts.volatile_after.formed_timeouts <= 1,
+        facts.volatile_after.formed_timeouts <= 2,
         facts.volatile_after.outbound_control <= 7,
         facts.volatile_after.pending_prepare <= facts.volatile_after.known_prepare,
         facts.volatile_after.known_prepare - facts.volatile_after.pending_prepare <= 2,
@@ -6713,8 +6718,11 @@ pub proof fn production_action_preserves_volatile_bounds(
                         && facts.volatile_after.timeout_vote_entries
                             == facts.volatile_before.timeout_vote_entries
                 } else {
-                    facts.volatile_after.timeout_vote_pools == 0
-                        && facts.volatile_after.timeout_vote_entries == 0
+                    facts.timeout_evidence_after_in_installed_window
+                        && facts.volatile_after.timeout_vote_pools
+                            <= facts.volatile_before.timeout_vote_pools
+                        && facts.volatile_after.timeout_vote_entries
+                            <= facts.volatile_before.timeout_vote_entries
                 })
                 && facts.volatile_after.formed_certificates == 0
                 && (if facts.install_view_unchanged {
@@ -6722,7 +6730,8 @@ pub proof fn production_action_preserves_volatile_bounds(
                         && facts.volatile_after.formed_timeouts
                             == facts.volatile_before.formed_timeouts
                 } else {
-                    facts.volatile_after.formed_timeouts == 0
+                    facts.volatile_after.formed_timeouts
+                        <= facts.volatile_before.formed_timeouts
                 })
                 && (if facts.install_view_unchanged {
                     facts.timeout_control_unchanged

@@ -161,6 +161,17 @@ fn find_unknown_parameters(table: &toml::Table, known: &ParamTree) -> BTreeSet<P
                         self.current_path.push(key.as_str());
                         self = self.run(nested, known);
                         self.current_path.pop();
+                    } else {
+                        // A known namespace with known descendants must be a
+                        // table. Treat a scalar/array at that boundary as a
+                        // structural configuration error instead of silently
+                        // materializing every descendant from defaults.
+                        let malformed_path = self
+                            .current_path
+                            .iter()
+                            .chain(std::iter::once(&key.as_str()))
+                            .into();
+                        self.unknown.insert(malformed_path);
                     }
                 } else {
                     // we are in the "unknown"

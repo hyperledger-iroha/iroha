@@ -1073,13 +1073,23 @@ BY FS_CardinalityType, Isa
        AsyncChunkExactLifecycleCoordinatesRetained,
        IngressLane, IngressLaneDepth
 
+THEOREM AsyncInitEstablishesOrdinaryIngressCarrierOwnership ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => AsyncOrdinaryIngressCarrierOwnershipInvariant
+BY FS_CardinalityType, Isa
+   DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
+       AsyncOrdinaryIngressCarrierOwnershipInvariant
+
 AsyncStrongTypeInvariant ==
   /\ StrongInductiveInvariant
   /\ AsyncSchedulerTypeInvariant
   /\ AsyncServiceActivationPairInvariant
   /\ AsyncControlServiceStateTypeInvariant
+  /\ AsyncCandidateLifecycleSchedulerCoverageInvariant
   /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
   /\ AsyncLeaderWireIngressCarrierOwnershipInvariant
+  /\ AsyncOrdinaryIngressCarrierOwnershipInvariant
   /\ ReceivedTimeoutVotePoolInvariant
   /\ AsyncRecoveryTypeInvariant
   /\ AsyncRestartAuthorityInvariant
@@ -1093,6 +1103,10 @@ THEOREM AsyncStrongTypeProjectsAsyncType ==
   AsyncStrongTypeInvariant => AsyncTypeInvariant
 BY DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
        StrongInductiveInvariant, Safety
+
+THEOREM AsyncStrongTypeProjectsControlServiceStateType ==
+  AsyncStrongTypeInvariant => AsyncControlServiceStateTypeInvariant
+BY DEF AsyncStrongTypeInvariant
 
 THEOREM AsyncInitEstablishesStrongTypeInvariant ==
   \A initialContext:
@@ -1123,13 +1137,38 @@ PROOF
              AsyncCandidateServiceTombstoneSet,
              AsyncCandidateProducerContinuationLifecycleCoverageInvariant,
              AsyncCandidateProducerContinuationLifecycleCoverageInvariantIn,
-             AsyncCandidateProducerContinuationLifecycleCoveredIn
+             AsyncCandidateProducerContinuationLifecycleCoveredIn,
+             AsyncRetransmitLifecycleOrdinal,
+             AsyncRetransmitLifecycleOwned,
+             RetransmitDue, RetransmitTagPresent,
+             TimeoutDue, AsyncOlderRuntimeLifecycleBlocksTimeout,
+             AsyncOlderRetransmitLifecycleBlocksTimeout,
+             AsyncOlderCandidateLifecycleBlocksTimeout,
+             AsyncTimeoutClockDue, AsyncTimeoutClockDueIn,
+             TimeoutTagPresentIn, ResponsiveReplayQuarantinedIn,
+             AsyncNextCandidateLifecycleOrdinal
+    <2>3bb. AsyncCandidateLifecycleSchedulerCoverageInvariant
+      BY <1>1, Isa
+         DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
+             AsyncRuntimeInit, AsyncIoInit, AsyncDeferredInit,
+             AsyncCandidateLifecycleSchedulerCoverageInvariant,
+             AsyncCandidateLifecycleActiveRecords,
+             AsyncCandidateLifecycleRecordCoversScheduledOrigin,
+             AsyncScheduledCandidateOriginsForNode,
+             AsyncCandidateLifecycleAdmissions,
+             AsyncInitialCandidateLifecycleAdmissions,
+             QueuedCandidates, DeferredCandidates,
+             CausalCandidates, TrackedWorkCandidates,
+             SequenceSet
     <2>3a. AsyncCertifiedResponseClaimIngressOwnershipInvariant
       BY <1>1, EmptyCertifiedResponseClaimHasIngressOwnership
          DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit
     <2>3d. AsyncLeaderWireIngressCarrierOwnershipInvariant
       BY <1>1,
          AsyncInitEstablishesLeaderWireIngressCarrierOwnership
+    <2>3e. AsyncOrdinaryIngressCarrierOwnershipInvariant
+      BY <1>1,
+         AsyncInitEstablishesOrdinaryIngressCarrierOwnership
     <2>4. ReceivedTimeoutVotePoolInvariant
       BY <1>1, AsyncInitEstablishesTimeoutPoolInvariant
     <2>5. /\ AsyncRecoveryTypeInvariant
@@ -1151,7 +1190,7 @@ PROOF
              AsyncGstRecoveryPhaseInvariant
     <2>7. AsyncSerializedBusyKernelInvariant
       BY <1>1, AsyncInitEstablishesSerializedBusyKernelInvariant
-    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3c, <2>3d, <2>4,
+    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3bb, <2>3c, <2>3d, <2>3e, <2>4,
                 <2>5, <2>6, <2>7
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
@@ -1189,9 +1228,12 @@ PROOF
          PROVE AsyncStrongTypeInvariant'
     <2>1. /\ StrongInductiveInvariant
            /\ AsyncSchedulerTypeInvariant
+           /\ AsyncServiceActivationPairInvariant
            /\ AsyncControlServiceStateTypeInvariant
+           /\ AsyncCandidateLifecycleSchedulerCoverageInvariant
            /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
            /\ AsyncLeaderWireIngressCarrierOwnershipInvariant
+           /\ AsyncOrdinaryIngressCarrierOwnershipInvariant
            /\ ReceivedTimeoutVotePoolInvariant
            /\ AsyncRecoveryTypeInvariant
            /\ AsyncRestartAuthorityInvariant
@@ -1207,6 +1249,11 @@ PROOF
       BY <2>1, <2>2, CoreStrongInductiveActionPreservation
     <2>4. AsyncSchedulerTypeInvariant'
       BY <1>1, <2>1, AsyncAllVarsStutterPreservesSchedulerType
+    <2>4aa. AsyncServiceActivationPairInvariant'
+      BY <1>1, <2>1, Isa
+         DEF AsyncAllVars, AsyncSchedulerVars,
+             AsyncServiceActivationPairInvariant,
+             AsyncActiveServiceNodes
     <2>4b. AsyncControlServiceStateTypeInvariant'
       BY <1>1, <2>1, Isa
          DEF AsyncAllVars, AsyncSchedulerVars,
@@ -1216,7 +1263,24 @@ PROOF
              AsyncCertifiedResponseClaimRecords,
              AsyncNextCertifiedResponseClaimOrdinal,
              AsyncCandidateServiceTombstones,
-             AsyncNextCandidateServiceOrdinal
+             AsyncNextCandidateServiceOrdinal,
+             AsyncRetransmitLifecycleOrdinal,
+             AsyncRetransmitLifecycleOwned,
+             RetransmitDue, RetransmitTagPresent,
+             TimeoutDue, AsyncOlderRuntimeLifecycleBlocksTimeout,
+             AsyncOlderRetransmitLifecycleBlocksTimeout,
+             AsyncOlderCandidateLifecycleBlocksTimeout,
+             AsyncTimeoutClockDue, AsyncTimeoutClockDueIn,
+             TimeoutTagPresentIn, ResponsiveReplayQuarantinedIn,
+             AsyncNextCandidateLifecycleOrdinal
+    <2>4bb. AsyncCandidateLifecycleSchedulerCoverageInvariant'
+      BY <1>1, <2>1, Isa
+         DEF AsyncAllVars, AsyncSchedulerVars,
+             AsyncCandidateLifecycleSchedulerCoverageInvariant,
+             AsyncCandidateLifecycleActiveRecords,
+             AsyncCandidateLifecycleRecordCoversScheduledOrigin,
+             AsyncScheduledCandidateOriginsForNode,
+             AsyncCandidateLifecycleAdmissions
     <2>4a. AsyncCertifiedResponseClaimIngressOwnershipInvariant'
       BY <1>1, <2>1,
          CertifiedResponseClaimIngressOwnershipStutter
@@ -1227,6 +1291,12 @@ PROOF
              AsyncLeaderWireIngressCarrierOwnershipInvariant,
              AsyncLeaderWireIngressCarrierCoordinates,
              AsyncChunkExactLifecycleCoordinatesRetained,
+             IngressLane
+    <2>4d. AsyncOrdinaryIngressCarrierOwnershipInvariant'
+      BY <1>1, <2>1, Isa
+         DEF AsyncAllVars, AsyncSchedulerVars,
+             AsyncOrdinaryIngressCarrierOwnershipInvariant,
+             AsyncOrdinaryIngressCarrierCoordinates,
              IngressLane
     <2>5. ReceivedTimeoutVotePoolInvariant'
       BY <1>1, <2>1,
@@ -1251,8 +1321,8 @@ PROOF
     <2>8. AsyncSerializedBusyKernelInvariant'
       BY <2>1, <2>2,
          CoreVarsStutterPreservesSerializedBusyKernelInvariant
-    <2> QED BY <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>5, <2>6,
-                <2>7, <2>8
+    <2> QED BY <2>3, <2>4, <2>4aa, <2>4a, <2>4b, <2>4bb, <2>4c, <2>4d,
+                <2>5, <2>6, <2>7, <2>8
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
@@ -3724,11 +3794,17 @@ THEOREM AsyncNextPreservesControlServiceStateTypeFromPrimedSchedulerType ==
   /\ AsyncNext
   => AsyncControlServiceStateTypeInvariant'
 BY AsyncCandidateServiceRecordProducersAreTrackedBoundaryKinds,
+   AsyncCandidateProducerContinuationSourcePhysicalOrdinalIsBeforeCut,
    AsyncControlServiceTransitionPreservesCandidateProducerContinuationLifecycleCoverage,
    AsyncCandidateLifecycleDistinctNewRootsReceiveDistinctOwnership,
    AsyncCandidateLifecycleHighWatermarkAdvancesByFullFreshSet,
    AsyncServeIngressSharedHighWatermarkAdvancesByFreshTickets,
    AsyncServeIngressReservationPrecedesSameStepCandidateAllocation,
+   AsyncRetransmitFreshEpisodeConsumesSharedLifecycleOrdinal,
+   AsyncRetransmitFreshEpisodeAdvancesSharedHighWatermark,
+   AsyncRetransmitCompletedEpisodeClearsActiveOwner,
+   AsyncRetransmitCompletedEpisodeClearsOrReplacesDrainedOwner,
+   AsyncRetransmitFreshEpisodeCannotReuseDrainedPosition,
    AsyncSharedSchedulerHighWatermarkIsMonotone,
    FunctionalUpdatePreservesType,
    FS_Subset, FS_Image, FS_Union, FS_Interval,
@@ -3744,7 +3820,21 @@ BY AsyncCandidateServiceRecordProducersAreTrackedBoundaryKinds,
        AsyncCandidateServiceStateAfterReclamation,
        AsyncCandidateServiceStateAfterSuccessfulService,
        AsyncCandidateServiceStateAfterTerminalRetirement,
+       AsyncCandidateProducerContinuationStateAfterDeparture,
+       AsyncCandidateProducerContinuationRecord,
+       AsyncCandidateProducerContinuationRecordSet,
+       AsyncCandidateProducerContinuationSourcePhysicalOrdinalIn,
+       AsyncCandidateProducerContinuationPhysicalCutIn,
+       AsyncCandidateProducerContinuationLifecycleRecordIn,
+       AsyncCandidateProducerContinuationAddressForIn,
+       AsyncCandidateProducerContinuationOrdinalForIn,
+       AsyncCandidateProducerContinuationInitialStatusAfter,
        AsyncCandidateLifecycleStateAfterServiceSlotTransfer,
+       AsyncOrdinaryIngressCarrierStateAfterTransition,
+       AsyncOrdinaryIngressCarrierEvidenceAfterPhysicalTransition,
+       AsyncOrdinaryIngressCarrierAfterPhysicalTransition,
+       AsyncCandidateLifecycleAdmissionsAfterOrdinaryIngressRebase,
+       AsyncCandidateLifecycleAdmissionAfterOrdinaryIngressRebase,
        AsyncCandidateLifecycleStateAfterCarrierUpdate,
        AsyncCandidateLifecycleCarrierUpdatedAdmissions,
        AsyncCandidateLifecycleStateAfterCompaction,
@@ -3755,6 +3845,8 @@ BY AsyncCandidateServiceRecordProducersAreTrackedBoundaryKinds,
        AsyncCandidateLifecycleStateAfterServeIngressAdmission,
        AsyncCandidateLifecycleStateAfterAdmission,
        AsyncCandidateLifecycleStateAfterTimeoutOwnership,
+       AsyncCandidateLifecycleStateAfterOrdinaryIngressAdmission,
+       AsyncCandidateLifecycleStateAfterLeaderWireAdmission,
        AsyncControlServiceResetNodesThisStep,
        AsyncControlServiceAdmissionsThisStep,
        AsyncControlServicesThisStep,
@@ -3781,6 +3873,8 @@ BY AsyncCandidateServiceRecordProducersAreTrackedBoundaryKinds,
        AsyncCandidateLifecycleClockReservationAvailableIn,
        AsyncCandidateLifecycleNewAdmissions,
        AsyncCandidateLifecycleAdmissionOrdinalFor,
+       AsyncCandidateLifecycleSourcePhysicalOrdinalFor,
+       AsyncCandidateLifecyclePhysicalCutFor,
        AsyncCandidateLifecycleAdmissionSlotFor,
        AsyncCandidateLifecycleFreeSlotPredecessorsFor,
        AsyncCandidateLifecycleFreeOrdinarySlotsForNodeIn,
@@ -3804,6 +3898,22 @@ BY AsyncCandidateServiceRecordProducersAreTrackedBoundaryKinds,
        AsyncFreshServeIngressAdmissionsForNodeThisStep,
        AsyncFreshServeIngressAdmissionsAreSingularThisStep,
        AsyncFreshServeIngressSchedulerReservationMatchesIn,
+       AsyncRetransmitLifecycleCanAcquireThisStep,
+       AsyncRetransmitLifecycleConsumesFreshOrdinal,
+       AsyncRetransmitLifecycleResetThisStep,
+       AsyncRetransmitLifecycleEpisodeCompletesThisStep,
+       AsyncRetransmitLifecycleOwned,
+       AsyncRetransmitLifecycleOrdinal,
+       AsyncRetransmitClockCanAcquireAfter,
+       RetransmitDue, RetransmitDueAfter, RetransmitTagPresent,
+       AsyncTimeoutClockDue, AsyncTimeoutClockDueAfter,
+       AsyncTimeoutClockDueIn, TimeoutTagPresentIn,
+       ResponsiveReplayQuarantinedIn,
+       TimeoutDue, TimeoutDueAfter,
+       AsyncOlderRuntimeLifecycleBlocksTimeout,
+       AsyncOlderRetransmitLifecycleBlocksTimeout,
+       AsyncOlderCandidateLifecycleBlocksTimeout,
+       DirectRetransmitStep, DeferredRetransmitStep,
        AsyncTimeoutLifecycleNewOriginsForNodeIn,
        AsyncTimeoutLifecycleTransfersThisStep,
        AsyncTimeoutLifecycleResetThisStep,
@@ -3848,6 +3958,11 @@ BY AsyncCandidateServiceRecordProducersAreTrackedBoundaryKinds,
        AsyncCandidateLifecyclePerNodeCapacityRespected,
        AsyncCandidateLifecycleAdmissionSet,
        AsyncCandidateLifecycleAdmission,
+       AsyncCandidateLifecyclePhysicalCutInvariantIn,
+       AsyncOrdinaryIngressCarrierPhysicalCutInvariantIn,
+       AsyncOrdinaryIngressMinimumCarrierIn,
+       AsyncOrdinaryIngressCarrierEvidenceOwnsOriginIn,
+       AsyncDeferredOrdinaryIngressCarrierEvidenceForOriginIn,
        AsyncCandidateLifecycleSlots,
        AsyncCandidateLifecycleOrdinarySlots,
        AsyncCandidateLifecycleServicedSlots,
@@ -3941,6 +4056,84 @@ BY AdmitHiddenLeaderWireIsAtomicLocalAcceptanceCut,
        AsyncNonRunnerStep, AsyncNetworkStep, AsyncFaultStep,
        AsyncAllVars, AsyncSchedulerVars, IngressLane
 
+THEOREM AsyncNextPreservesOrdinaryIngressCarrierOwnership ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncNext
+  => AsyncOrdinaryIngressCarrierOwnershipInvariant'
+BY ExactOrdinaryIngressDuplicateCoalescesWithoutCarrierAllocation,
+   FS_CardinalityType, FS_Subset, IsaT(7200)
+   DEF AsyncStrongTypeInvariant,
+       AsyncOrdinaryIngressCarrierOwnershipInvariant,
+       AsyncOrdinaryIngressCarrierCoordinates,
+       AsyncControlServiceSlotTransition,
+       AsyncOrdinaryIngressCarrierStateAfterTransition,
+       AsyncOrdinaryIngressCarrierEvidenceAfterPhysicalTransition,
+       AsyncOrdinaryIngressCarrierAfterPhysicalTransition,
+       AsyncOrdinaryIngressCarrierStillPhysicalAfter,
+       AsyncOrdinaryIngressCarrierRetainedAfterIn,
+       AsyncCandidateLifecycleStateAfterOrdinaryIngressAdmission,
+       AsyncFreshOrdinaryIngressCarrierEvidenceForNodeIn,
+       AsyncFreshOrdinaryIngressCarrierItemsForNodeThisStep,
+       AsyncOrdinaryIngressPhysicalAdmission,
+       AsyncOrdinaryIngressCarrierItem,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, AsyncNetworkStep, AsyncFaultStep,
+       AdmitIngressPacket, AdmitHiddenPacket, CoalesceHiddenPacket,
+       DropPolicyRejectedHiddenPacket,
+       PopSelectedIngress, DrainFairIngressSelected,
+       DrainHistoricalIngressSelected,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart,
+       AsyncAllVars, AsyncSchedulerVars, IngressLane
+
+THEOREM AsyncNextPreservesCandidateLifecycleSchedulerCoverage ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncNext
+  => AsyncCandidateLifecycleSchedulerCoverageInvariant'
+BY AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
+   FS_CardinalityType, FS_Subset, IsaT(7200)
+   DEF AsyncStrongTypeInvariant,
+       AsyncCandidateLifecycleSchedulerCoverageInvariant,
+       AsyncCandidateLifecycleActiveRecords,
+       AsyncCandidateLifecycleRecordCoversScheduledOrigin,
+       AsyncScheduledCandidateOriginsForNode,
+       AsyncCandidateLifecycleAdmissions,
+       AsyncControlServiceSlotTransition,
+       AsyncCandidateLifecycleStateAfterCarrierUpdate,
+       AsyncCandidateLifecycleCarrierUpdatedAdmissions,
+       AsyncCandidateLifecycleStateAfterOrdinaryIngressAdmission,
+       AsyncCandidateLifecycleStateAfterServeIngressAdmission,
+       AsyncCandidateLifecycleStateAfterCompaction,
+       AsyncCandidateLifecycleStateAfterAdmission,
+       AsyncCandidateLifecycleStateAfterTimeoutOwnership,
+       AsyncCandidateLifecycleNewAdmissions,
+       AsyncNewCandidateLifecycleOriginsForNodeIn,
+       AsyncCandidateLifecycleOriginsRecordedForNodeIn,
+       AsyncCandidateLifecycleRetirementCoveredIn,
+       AsyncCandidateLifecycleDormantReservationOwnedAfter,
+       AsyncCandidateLifecycleDeparturesThisStep,
+       AsyncCandidateServicesThisStep,
+       AsyncCandidateSemanticallyAppliedThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncCandidateIgnoredWithoutApplicationThisStepSet,
+       AsyncCandidateIgnoredWithoutApplicationThisStep,
+       AsyncCandidatePhysicallyDiscardedThisStep,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, AsyncNetworkStep, AsyncFaultStep,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       SerializedRuntimeStep, SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep, RuntimeStep,
+       FifoRuntimeStep, DeferredDrainStep,
+       ServiceIoWorkerWork, AppendCausalSuccessors,
+       AdmitIngressPacket, AdmitHiddenPacket, CoalesceHiddenPacket,
+       DropPolicyRejectedHiddenPacket,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart,
+       CandidateScheduled, CandidateScheduledAfter,
+       CandidateScheduledIn, EnqueueCandidate,
+       AsyncAllVars, AsyncSchedulerVars
+
 THEOREM AsyncNextPreservesStrongTypeInvariant ==
   AsyncStrongTypeInvariant /\ AsyncNext
     => AsyncStrongTypeInvariant'
@@ -3969,9 +4162,13 @@ PROOF
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>2j. AsyncLeaderWireIngressCarrierOwnershipInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
+    <2>2k. AsyncOrdinaryIngressCarrierOwnershipInvariant
+      BY <1>1 DEF AsyncStrongTypeInvariant
     <2>2h. AsyncControlServiceStateTypeInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>2i. AsyncServiceActivationPairInvariant
+      BY <1>1 DEF AsyncStrongTypeInvariant
+    <2>2l. AsyncCandidateLifecycleSchedulerCoverageInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>3. StrongInductiveInvariant'
       BY <1>1, <2>1, AsyncNextPreservesStrongInductiveInvariant
@@ -3984,6 +4181,8 @@ PROOF
     <2>4b. AsyncControlServiceStateTypeInvariant'
       BY <1>1, <2>2, <2>2h,
          AsyncNextPreservesControlServiceStateTypeInvariant
+    <2>4c. AsyncCandidateLifecycleSchedulerCoverageInvariant'
+      BY <1>1, AsyncNextPreservesCandidateLifecycleSchedulerCoverage
     <2>5. ReceivedTimeoutVotePoolInvariant'
       BY <1>1, <2>2, AsyncNextPreservesTimeoutPoolInvariant
     <2>6. /\ AsyncRecoveryTypeInvariant'
@@ -4009,8 +4208,11 @@ PROOF
     <2>12. AsyncLeaderWireIngressCarrierOwnershipInvariant'
       BY <1>1, <2>2j,
          AsyncNextPreservesLeaderWireIngressCarrierOwnership
-    <2> QED BY <2>3, <2>4, <2>4a, <2>4b, <2>5, <2>6, <2>7,
-                <2>8, <2>9, <2>10, <2>11, <2>12
+    <2>13. AsyncOrdinaryIngressCarrierOwnershipInvariant'
+      BY <1>1, <2>2k,
+         AsyncNextPreservesOrdinaryIngressCarrierOwnership
+    <2> QED BY <2>2l, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>5, <2>6, <2>7,
+                <2>8, <2>9, <2>10, <2>11, <2>12, <2>13
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 

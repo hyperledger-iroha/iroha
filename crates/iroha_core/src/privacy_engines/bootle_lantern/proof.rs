@@ -1,9 +1,10 @@
-//! Native fixed-profile Bootle/Lantern presentation prover and verifier.
+//! Native fixed-profile Bootle/Lantern P1/P2 prover and verifier.
 //!
-//! This module implements the complete presentation path: transparent
-//! commitments, projected norm witnesses, Schwartz compression, the generic
-//! quadratic linearization, ABDLOP response compression, strict proof
-//! construction, verifier-side challenge reconstruction, and prover
+//! This module implements the blind-issuance-request (P1) and presentation
+//! (P2) paths over their distinct transcript purposes and nominal wire types:
+//! transparent commitments, projected norm witnesses, Schwartz compression,
+//! the generic quadratic linearization, ABDLOP response compression, strict
+//! proof construction, verifier-side challenge reconstruction, and prover
 //! self-verification.
 
 use rand_core_06::{CryptoRng, RngCore};
@@ -13,9 +14,10 @@ use zeroize::{Zeroize, Zeroizing};
 use super::{
     bounds::{ResponseBoundErrorV1, validate_public_response_bounds_v1},
     codec::{
-        BootleLanternPresentationProofV1, H_POLYNOMIALS_V1, HINT_POLYNOMIALS_V1,
-        PROOF_COEFFICIENTS_V1, ProofCodecErrorV1, T_A1_POLYNOMIALS_V1, T_B_POLYNOMIALS_V1,
-        Z1_POLYNOMIALS_V1, Z3_POLYNOMIALS_V1, Z4_POLYNOMIALS_V1, Z21_POLYNOMIALS_V1,
+        BootleLanternBlindIssuanceRequestProofV1, BootleLanternPresentationProofV1,
+        H_POLYNOMIALS_V1, HINT_POLYNOMIALS_V1, PROOF_COEFFICIENTS_V1, ProofCodecErrorV1,
+        T_A1_POLYNOMIALS_V1, T_B_POLYNOMIALS_V1, Z1_POLYNOMIALS_V1, Z3_POLYNOMIALS_V1,
+        Z4_POLYNOMIALS_V1, Z21_POLYNOMIALS_V1,
     },
     compression::{
         CompressionErrorV1, gamma_decompose_v1, make_gamma_hint_v1, power2round_v1,
@@ -282,14 +284,15 @@ pub(crate) fn prove_blind_issuance_request_v1<R: CryptoRng + RngCore>(
     witness: &BootleLanternPresentationWitnessV1,
     transcript: BlindIssuanceRequestTranscriptV1,
     rng: &mut R,
-) -> Result<BootleLanternPresentationProofV1, PresentationProofErrorV1> {
-    prove_with_transcript_core_v1(
+) -> Result<BootleLanternBlindIssuanceRequestProofV1, PresentationProofErrorV1> {
+    let body = prove_with_transcript_core_v1(
         relation,
         witness,
         transcript.proof_core(),
         rng,
         MAX_PROOF_SAMPLING_ATTEMPTS_V1,
-    )
+    )?;
+    Ok(BootleLanternBlindIssuanceRequestProofV1::from_validated_body_v1(body))
 }
 
 fn prove_presentation_with_rejection_limit_v1<R: CryptoRng + RngCore>(
@@ -369,9 +372,9 @@ pub fn verify_presentation_v1(
 pub(crate) fn verify_blind_issuance_request_v1(
     relation: &BootleLanternApplicationRelationV1,
     transcript: BlindIssuanceRequestTranscriptV1,
-    proof: &BootleLanternPresentationProofV1,
+    proof: &BootleLanternBlindIssuanceRequestProofV1,
 ) -> Result<(), PresentationProofErrorV1> {
-    verify_with_transcript_core_v1(relation, transcript.proof_core(), proof)
+    verify_with_transcript_core_v1(relation, transcript.proof_core(), proof.validated_body_v1())
 }
 
 fn verify_with_transcript_core_v1(
@@ -1415,10 +1418,11 @@ mod tests {
     use iroha_data_model::privacy::{
         BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
         BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyV1,
-        IrohaBootleLanternAnoncredStatementV1, PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1,
-        PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
-        PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1, PrivacyStatementV1,
-        PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+        IrohaBootleLanternAnoncredStatementV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+        PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1, PrivacyParameterDigestV1,
+        PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyStatementContextV1,
+        PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+        PrivacyVerifierDigestV1,
     };
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha3::{Digest, Sha3_256};
@@ -1441,7 +1445,10 @@ mod tests {
         prove_bound_presentation_v1,
         relation::{compile_application_relation_v1, validate_presentation_witness_v1},
         ring::ApplicationPolynomialV1,
-        transcript::{MatrixSeedV1, PresentationChallengeBindingV1, matrix_seed_v1},
+        transcript::{
+            BlindIssuanceRequestChallengeBindingV1, MatrixSeedV1, PresentationChallengeBindingV1,
+            matrix_seed_v1,
+        },
         verify_bound_presentation_encoded_v1, verify_bound_presentation_v1,
     };
 
@@ -1717,6 +1724,48 @@ mod tests {
 
     fn alternate_residue(residue: u64) -> u64 {
         if residue == 0 { 1 } else { 0 }
+    }
+
+    #[test]
+    fn blind_issuance_and_presentation_purposes_derive_distinct_challenges() {
+        let seed = matrix_seed();
+        let relation_digest = [0x95; 32];
+        let presentation = PresentationTranscriptV1::new(
+            PresentationChallengeBindingV1 {
+                parameter_digest: [0x31; 32],
+                genesis_hash: [0x32; 32],
+                statement_digest: [0x33; 32],
+                issuer_policy_record_digest: [0x34; 32],
+                transaction_intent_digest: [0x35; 32],
+            },
+            seed,
+            relation_digest,
+        )
+        .expect("canonical P2 transcript");
+        let blind_issuance = BlindIssuanceRequestTranscriptV1::new(
+            BlindIssuanceRequestChallengeBindingV1 {
+                parameter_digest: [0x31; 32],
+                genesis_hash: [0x32; 32],
+                issuer_profile_digest: [0x33; 32],
+                credential_scope_digest: [0x36; 32],
+                issuer_policy_record_digest: [0x34; 32],
+                masked_target_digest: [0x37; 32],
+                request_nonce: [0x35; 32],
+            },
+            seed,
+            relation_digest,
+        )
+        .expect("canonical P1 transcript");
+        let pre_challenge = b"same canonical fixed-profile proof body";
+        assert_ne!(
+            presentation
+                .derive_final_challenge(pre_challenge)
+                .expect("P2 challenge"),
+            blind_issuance
+                .derive_final_challenge(pre_challenge)
+                .expect("P1 challenge"),
+            "P1 and P2 must not share a Fiat--Shamir challenge namespace"
+        );
     }
 
     fn quadratic_test_variables(

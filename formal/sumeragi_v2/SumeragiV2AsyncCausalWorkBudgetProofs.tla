@@ -346,11 +346,93 @@ finite producer episode.  Only the higher Stage-3/4/6 composition may turn
 exhaustion of this rank into occurrence-rank descent.
 ***************************************************************************)
 
+AsyncCausalEpisodeTargetPhysicalCut(node, cutoffOrdinal) ==
+  LET targets ==
+        {record \in AsyncCandidateLifecycleAdmissions:
+           /\ record.node = node
+           /\ record.ordinal = cutoffOrdinal}
+  IN IF targets = {}
+     THEN AsyncNextIngressPhysicalOrdinal(node)
+     ELSE (CHOOSE record \in targets: TRUE).physicalCut
+
 AsyncCausalEpisodeFrozenPredecessorOrigins(node, cutoffOrdinal) ==
-  {record.origin:
-     record \in AsyncCandidateLifecycleAdmissions,
-     /\ record.node = node
-     /\ record.ordinal <= cutoffOrdinal}
+  LET physicalCut ==
+        AsyncCausalEpisodeTargetPhysicalCut(node, cutoffOrdinal)
+  IN {record.origin:
+        record \in AsyncCandidateLifecycleAdmissions,
+        /\ record.node = node
+        /\ record.ordinal <= cutoffOrdinal
+        /\ record.sourcePhysicalOrdinal < physicalCut}
+
+(***************************************************************************
+Frozen physical-ingress transfer budget.
+
+The ordinary Candidate budget below counts only materialized scheduler
+carriers.  A pre-cut leader-wire or ordinary aggregate ingress occurrence can
+atomically replace its physical carrier with a Candidate, so that transfer
+must be prepaid outside the Candidate cardinality.  These tokens are frozen
+by the target lifecycle's immutable physical cut and strict logical prefix.
+A later admission has a physical ordinal at or beyond the cut and cannot
+enter; a dormant transport retry keeps its logical identity but receives that
+later physical ordinal.  Draining a charged carrier consumes its token before
+the resulting Candidate can increase the inner structural budget.
+***************************************************************************)
+
+AsyncFrozenLeaderWireBarrierModes == {"Logical", "Physical"}
+
+AsyncFrozenLeaderWireBarrierRecords(
+    node, logicalCutoff, physicalCut, barrierMode) ==
+  {record \in asyncLeaderWireLifecycles:
+     /\ record.recipient = node
+     /\ IF barrierMode = "Logical"
+        THEN /\ record.schedulerOrdinal <= logicalCutoff
+             /\ AsyncLeaderWireLifecycleActive(record)
+             /\ record.physicalAdmissionOrdinal < physicalCut
+        ELSE /\ barrierMode = "Physical"
+             /\ AsyncLeaderWireLifecycleActive(record)
+             /\ record.physicalAdmissionOrdinal < physicalCut}
+
+AsyncFrozenOrdinaryIngressBarrierRecords(
+    node, logicalCutoff, physicalCut, barrierMode) ==
+  {carrier \in
+     asyncControlServiceState.ordinaryIngressCarrierEvidence:
+     /\ carrier.node = node
+     /\ carrier.status = "Ingress"
+     /\ carrier.physicalOrdinal < physicalCut
+     /\ IF barrierMode = "Logical"
+        THEN carrier.schedulerOrdinal <= logicalCutoff
+        ELSE barrierMode = "Physical"}
+
+AsyncFrozenLeaderWireBarrierRemainingStage(record, barrierMode) ==
+  CASE AsyncLeaderWireLifecycleIngressProtected(record) -> 1
+    [] OTHER -> 0
+
+AsyncFrozenLeaderWireBarrierStageTokens(
+    node, logicalCutoff, physicalCut, barrierMode) ==
+  {<<"LeaderWireBarrier", AsyncLeaderWirePotentialOwnerIdentity(record),
+     token>>:
+     record \in AsyncFrozenLeaderWireBarrierRecords(
+                   node, logicalCutoff, physicalCut, barrierMode),
+     token \in
+       1..AsyncFrozenLeaderWireBarrierRemainingStage(
+            record, barrierMode)}
+    \cup
+  {<<"OrdinaryIngressBarrier", carrier.carrierIdentity, 1>>:
+     carrier \in AsyncFrozenOrdinaryIngressBarrierRecords(
+                    node, logicalCutoff, physicalCut, barrierMode)}
+
+AsyncFrozenLeaderWireBarrierStageBudget(
+    node, logicalCutoff, physicalCut, barrierMode) ==
+  Cardinality(
+    AsyncFrozenLeaderWireBarrierStageTokens(
+      node, logicalCutoff, physicalCut, barrierMode))
+
+AsyncCausalEpisodeFrozenIngressBarrierStageBudget(
+    node, cutoffOrdinal) ==
+  AsyncFrozenLeaderWireBarrierStageBudget(
+    node, cutoffOrdinal - 1,
+    AsyncCausalEpisodeTargetPhysicalCut(node, cutoffOrdinal),
+    "Logical")
 
 \* The cut is owned by the immutable lifecycle admission, rather than by one
 \* transient parent command.  A serviced parent may disappear while its
@@ -404,6 +486,7 @@ BY FS_Interval, FS_Image, FS_Union, FS_Subset,
    FS_CardinalityType, IsaT(1800)
    DEF AsyncCausalEpisodeCandidates,
        AsyncCausalEpisodeFrozenPredecessorOrigins,
+       AsyncCausalEpisodeTargetPhysicalCut,
        AsyncCandidateProducerEpisodeCapacity,
        QueuedCandidates, DeferredCandidates,
        CausalCandidates, TrackedWorkCandidates,
@@ -524,6 +607,7 @@ BY AsyncCausalRemainingWorkWeightIsPositive,
    FS_Image, FS_Product, FS_Union, FS_Subset, FS_Interval,
    FS_CardinalityType, IsaT(600)
    DEF AsyncCausalEpisodeFrozenPredecessorOrigins,
+       AsyncCausalEpisodeTargetPhysicalCut,
        AsyncCausalEpisodeCandidates,
        AsyncCausalEpisodeCandidateWorkTokens,
        AsyncCausalEpisodeExactCandidateOccurrenceTokens,
@@ -567,6 +651,7 @@ BY AsyncCausalRemainingWorkWeightIsPositive,
    FS_Image, FS_Product, FS_Union, FS_Subset, FS_Interval,
    FS_CardinalityType, IsaT(900)
    DEF AsyncCausalEpisodeFrozenPredecessorOrigins,
+       AsyncCausalEpisodeTargetPhysicalCut,
        AsyncCausalEpisodeCandidates,
        AsyncCausalEpisodeCandidateWorkTokens,
        AsyncCausalEpisodeExactCandidateOccurrenceTokens,
@@ -595,11 +680,25 @@ THEOREM AsyncCausalEpisodeTargetLifecycleOrdinalPersists ==
     => AsyncCandidateLifecycleOrdinal(candidate)'
          = AsyncCandidateLifecycleOrdinal(candidate)
 BY AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
-   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
    IsaT(600)
    DEF ProtectedCandidateOwned, CandidateScheduled,
        AsyncCandidateLifecycleOrdinal,
        AsyncCandidateLifecycleRecordsFor,
+       AsyncCandidateLifecycleSchedulerCoverageInvariant,
+       AsyncCandidateLifecycleActiveRecords,
+       AsyncCandidateLifecycleRecordCoversScheduledOrigin,
+       AsyncScheduledCandidateOriginsForNode,
+       AsyncControlServiceSlotTransition,
+       AsyncCandidateLifecycleStateAfterCarrierUpdate,
+       AsyncCandidateLifecycleCarrierUpdatedAdmissions,
+       AsyncCandidateLifecycleStateAfterCompaction,
+       AsyncCandidateLifecycleRetirementCoveredIn,
+       AsyncCandidateLifecycleStateAfterAdmission,
+       AsyncCandidateLifecycleNewAdmissions,
+       AsyncNewCandidateLifecycleOriginsForNodeIn,
+       AsyncCandidateLifecycleOriginsRecordedForNodeIn,
        AsyncProgressOwnershipInvariant,
        AsyncLogicalCandidateOwnershipInvariant,
        AsyncAllVars
@@ -652,6 +751,43 @@ BY AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
        AsyncCandidateLifecycleOriginsRecordedForNodeIn,
        AsyncAllVars
 
+THEOREM AsyncCausalEpisodeTargetPhysicalCutPersists ==
+  \A candidate \in AsyncCandidateSet:
+    LET cutoffOrdinal == AsyncCandidateLifecycleOrdinal(candidate)
+    IN /\ AsyncStrongTypeInvariant
+       /\ AsyncProgressOwnershipInvariant
+       /\ ProtectedCandidateOwned(candidate)
+       /\ [AsyncNext]_AsyncAllVars
+       /\ ProtectedCandidateOwned(candidate)'
+       => (AsyncCausalEpisodeTargetPhysicalCut(
+              candidate.node, cutoffOrdinal))'
+            = AsyncCausalEpisodeTargetPhysicalCut(
+                candidate.node, cutoffOrdinal)
+BY AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
+   AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
+   AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   AsyncIngressPhysicalHighWatermarkIsMonotone,
+   IsaT(1200)
+   DEF AsyncCausalEpisodeTargetPhysicalCut,
+       ProtectedCandidateOwned, CandidateScheduled,
+       AsyncCandidateLifecycleOrdinal,
+       AsyncCandidateLifecycleRecordsFor,
+       AsyncCandidateLifecycleStateAfterCarrierUpdate,
+       AsyncCandidateLifecycleCarrierUpdatedAdmissions,
+       AsyncCandidateLifecycleStateAfterCompaction,
+       AsyncCandidateLifecycleRetirementCoveredIn,
+       AsyncCandidateLifecycleStateAfterAdmission,
+       AsyncCandidateLifecycleNewAdmissions,
+       AsyncNewCandidateLifecycleOriginsForNodeIn,
+       AsyncCandidateLifecycleOriginsRecordedForNodeIn,
+       AsyncCandidateLifecycleSchedulerCoverageInvariant,
+       AsyncCandidateLifecycleActiveRecords,
+       AsyncCandidateLifecycleRecordCoversScheduledOrigin,
+       AsyncScheduledCandidateOriginsForNode,
+       AsyncControlServiceSlotTransition,
+       AsyncAllVars
+
 THEOREM AsyncCausalEpisodeFrozenOriginsCannotReplenish ==
   \A candidate \in AsyncCandidateSet:
     LET cutoffOrdinal == AsyncCandidateLifecycleOrdinal(candidate)
@@ -666,11 +802,14 @@ THEOREM AsyncCausalEpisodeFrozenOriginsCannotReplenish ==
               AsyncCausalEpisodeFrozenPredecessorOrigins(
                 candidate.node, cutoffOrdinal)
 BY AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
+   AsyncCausalEpisodeTargetPhysicalCutPersists,
    AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
-   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncBracketNextPreservesStrongTypeInvariant,
    AsyncSharedSchedulerHighWatermarkIsMonotone,
+   AsyncIngressPhysicalHighWatermarkIsMonotone,
    IsaT(900)
    DEF AsyncCausalEpisodeFrozenPredecessorOrigins,
+       AsyncCausalEpisodeTargetPhysicalCut,
        ProtectedCandidateOwned, CandidateScheduled,
        AsyncAllVars
 
@@ -689,11 +828,13 @@ THEOREM AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish ==
              AsyncCausalEpisodeFrozenPredecessorOrigins(
                node, cutoffOrdinal)
 BY AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
-   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncBracketNextPreservesStrongTypeInvariant,
    AsyncSharedSchedulerHighWatermarkIsMonotone,
+   AsyncIngressPhysicalHighWatermarkIsMonotone,
    IsaT(1200)
    DEF AsyncCausalEpisodeLifecycleCutOwned,
        AsyncCausalEpisodeFrozenPredecessorOrigins,
+       AsyncCausalEpisodeTargetPhysicalCut,
        AsyncAllVars
 
 THEOREM AsyncCausalEpisodeServeCutCannotReplenish ==
@@ -775,7 +916,6 @@ THEOREM AsyncCausalEpisodeServicedCandidateConsumesTopologicalWeight ==
 BY AsyncCausalEpisodeFrozenOriginsCannotReplenish,
    AsyncCommandSuccessorsStrictlyLowerRemainingWorkStage,
    AsyncCommandSuccessorBatchStrictlyConsumesRemainingWork,
-   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
    AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
    FS_CardinalityType, FS_Subset, IsaT(1200)
    DEF AsyncCausalEpisodeCandidateWorkBudget,
@@ -805,7 +945,6 @@ THEOREM AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget ==
                node, cutoffOrdinal)
 BY AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish,
    AsyncCommandExactSuccessorBatchStrictlyConsumesOccurrenceBudget,
-   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
    AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
    FS_CardinalityType, FS_Subset, IsaT(1500)
    DEF AsyncCausalEpisodeLifecycleCutOwned,
@@ -950,28 +1089,38 @@ BY QueuedIoEnablesPostGstService,
        AsyncAllVars
 
 (***************************************************************************
-Action-local structural classification.  It is deliberately a non-ascent
-statement: reaching a lower producer rank consumes a finite episode, while
-equality leaves the caller's Stage rank responsible for the next descent.
-The theorem depends on the exact target-only turn and both non-resurrection
-facts; deleting any of them reintroduces the replenishment lasso.
+Action-local structural classification.  A pre-cut leader-wire or ordinary
+ingress drain may materialize a Candidate and therefore increase the inner
+Candidate budget.  That is not structural progress: the first disjunct
+requires strict consumption of its frozen physical-carrier stage.  Every
+other action preserves that stage and either lowers or frames the inner
+Candidate/Serve rank.  The higher Stage-3/4/6 composition places this stage
+outside the structural rank, so replenishment is never called progress.
 ***************************************************************************)
 THEOREM AsyncCausalEpisodeStructuralStepIsDescentOrFrame ==
   \A candidate \in AsyncCandidateSet:
     LET cutoffOrdinal == AsyncCandidateLifecycleOrdinal(candidate)
         rank == AsyncCausalEpisodeStructuralRank(
                   candidate.node, cutoffOrdinal)
+        ingressStage ==
+          AsyncCausalEpisodeFrozenIngressBarrierStageBudget(
+            candidate.node, cutoffOrdinal)
     IN /\ AsyncStrongTypeInvariant
        /\ AsyncProgressOwnershipInvariant
        /\ ProtectedCandidateOwned(candidate)
        /\ [AsyncNext]_AsyncAllVars
        /\ ProtectedCandidateOwned(candidate)'
-       => \/ <<AsyncCausalEpisodeStructuralRank(
-                   candidate.node, cutoffOrdinal)', rank>>
-                  \in AsyncCausalEpisodeStructuralRankOrdering
-          \/ AsyncCausalEpisodeStructuralRank(
-               candidate.node, cutoffOrdinal)' = rank
+       => \/ AsyncCausalEpisodeFrozenIngressBarrierStageBudget(
+                 candidate.node, cutoffOrdinal)' < ingressStage
+          \/ /\ AsyncCausalEpisodeFrozenIngressBarrierStageBudget(
+                    candidate.node, cutoffOrdinal)' = ingressStage
+             /\ \/ <<AsyncCausalEpisodeStructuralRank(
+                         candidate.node, cutoffOrdinal)', rank>>
+                        \in AsyncCausalEpisodeStructuralRankOrdering
+                \/ AsyncCausalEpisodeStructuralRank(
+                     candidate.node, cutoffOrdinal)' = rank
 BY AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
+   AsyncCausalEpisodeTargetPhysicalCutPersists,
    AsyncCausalEpisodeFrozenOriginsCannotReplenish,
    AsyncCausalEpisodeServeCutCannotReplenish,
    AsyncCausalEpisodeServicedCandidateConsumesTopologicalWeight,
@@ -987,10 +1136,18 @@ BY AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
    RuntimeStepDecreasesDrainableIngressTurnReach,
    OlderRuntimeInterleaveDecreasesDrainableIngressTurnReach,
    FS_CardinalityType, FS_Subset, IsaT(2400)
-   DEF AsyncCausalEpisodeStructuralRank,
+   DEF AsyncCausalEpisodeFrozenIngressBarrierStageBudget,
+       AsyncFrozenLeaderWireBarrierStageBudget,
+       AsyncFrozenLeaderWireBarrierStageTokens,
+       AsyncFrozenLeaderWireBarrierRemainingStage,
+       AsyncFrozenLeaderWireBarrierRecords,
+       AsyncFrozenOrdinaryIngressBarrierRecords,
+       AsyncCausalEpisodeTargetPhysicalCut,
+       AsyncCausalEpisodeStructuralRank,
        AsyncCausalEpisodeCandidateWorkBudget,
        AsyncCausalEpisodeCandidateWorkTokens,
        AsyncCausalEpisodeCandidates,
+       AsyncCausalEpisodeFrozenPredecessorOrigins,
        AsyncCausalEpisodeServeWorkBudget,
        AsyncCausalEpisodeServeWorkTokens,
        AsyncCausalEpisodeServeOccurrenceTokens,
@@ -1044,7 +1201,14 @@ THEOREM AsyncCausalEpisodeIngressOwnerDepartureStrictlyDescends ==
 BY AsyncCausalEpisodeStructuralStepIsDescentOrFrame,
    AsyncCausalEpisodeServeCutCannotReplenish,
    FS_CardinalityType, FS_Subset, IsaT(1200)
-   DEF AsyncCausalEpisodeStructuralRank,
+   DEF AsyncCausalEpisodeFrozenIngressBarrierStageBudget,
+       AsyncFrozenLeaderWireBarrierStageBudget,
+       AsyncFrozenLeaderWireBarrierStageTokens,
+       AsyncFrozenLeaderWireBarrierRemainingStage,
+       AsyncFrozenLeaderWireBarrierRecords,
+       AsyncFrozenOrdinaryIngressBarrierRecords,
+       AsyncCausalEpisodeTargetPhysicalCut,
+       AsyncCausalEpisodeStructuralRank,
        AsyncCausalEpisodeServeWorkBudget,
        AsyncCausalEpisodeServeWorkTokens,
        AsyncCausalEpisodeServeOccurrenceTokens,

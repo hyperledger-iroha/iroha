@@ -390,7 +390,7 @@ PROOF
 THEOREM LocalProducerAdmissionIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Local"
-    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    /\ ~AsyncIngressSchedulerBarrierActive(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Producer"
     => ENABLED LocalAdmissionStep(node)
@@ -403,7 +403,7 @@ BY SelectedProducerCanAdvance, ExpandENABLED, Isa
 THEOREM LocalDuplicateCausalAdmissionIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Local"
-    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    /\ ~AsyncIngressSchedulerBarrierActive(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     /\ CandidateInFlight(HeadCausalCandidate(node))
@@ -445,7 +445,7 @@ LocalCompletionCausalStep(node) ==
 THEOREM LocalCompletionCausalAdmissionIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Local"
-    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    /\ ~AsyncIngressSchedulerBarrierActive(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     /\ ~CandidateInFlight(HeadCausalCandidate(node))
@@ -454,7 +454,7 @@ THEOREM LocalCompletionCausalAdmissionIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Local"
-                /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+                /\ ~AsyncIngressSchedulerBarrierActive(node)
                 /\ LocalAdmissionCanAdvance(node)
                 /\ SelectedLocalSource(node) = "Causal"
                 /\ ~CandidateInFlight(HeadCausalCandidate(node))
@@ -509,7 +509,7 @@ LocalCommandCausalStep(node) ==
 THEOREM LocalCommandCausalAdmissionIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Local"
-    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    /\ ~AsyncIngressSchedulerBarrierActive(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     /\ ~CandidateInFlight(HeadCausalCandidate(node))
@@ -518,7 +518,7 @@ THEOREM LocalCommandCausalAdmissionIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Local"
-                /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+                /\ ~AsyncIngressSchedulerBarrierActive(node)
                 /\ LocalAdmissionCanAdvance(node)
                 /\ SelectedLocalSource(node) = "Causal"
                 /\ ~CandidateInFlight(HeadCausalCandidate(node))
@@ -551,7 +551,7 @@ PROOF
 THEOREM LocalCausalAdmissionIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Local"
-    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    /\ ~AsyncIngressSchedulerBarrierActive(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     => ENABLED LocalAdmissionStep(node)
@@ -560,7 +560,7 @@ BY LocalDuplicateCausalAdmissionIsEnabled,
    LocalCommandCausalAdmissionIsEnabled, Isa
 
 LocalPhaseAdvanceStep(node) ==
-  /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+  /\ ~AsyncIngressSchedulerBarrierActive(node)
   /\ UNCHANGED AsyncDeferredVars
   /\ LeaveCausalQueues
   /\ RecordBlockedCausalDebt(node)
@@ -582,13 +582,13 @@ LocalPhaseAdvanceStep(node) ==
 THEOREM LocalPhaseAdvanceIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Local"
-    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    /\ ~AsyncIngressSchedulerBarrierActive(node)
     /\ ~LocalAdmissionCanAdvance(node)
     => ENABLED LocalAdmissionStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Local"
-                /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+                /\ ~AsyncIngressSchedulerBarrierActive(node)
                 /\ ~LocalAdmissionCanAdvance(node)
          PROVE ENABLED LocalAdmissionStep(node)
     <2>1. ENABLED LocalPhaseAdvanceStep(node)
@@ -617,7 +617,7 @@ PROOF
 THEOREM LocalAdmissionStepIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Local"
-    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    /\ ~AsyncIngressSchedulerBarrierActive(node)
       => ENABLED LocalAdmissionStep(node)
 BY LocalProducerAdmissionIsEnabled,
    LocalCausalAdmissionIsEnabled,
@@ -2125,12 +2125,12 @@ none of them treats ticket replenishment as progress or adds fairness.
 THEOREM NoServeIngressTicketSerializedRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    /\ ~AsyncIngressSchedulerBarrierActive(node)
     => ENABLED SerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+                /\ ~AsyncIngressSchedulerBarrierActive(node)
          PROVE ENABLED SerializedRuntimeStep(node)
     <2>1. ENABLED UngatedSerializedRuntimeStep(node)
       BY <1>1, UngatedSerializedRuntimeStepIsEnabled
@@ -2151,13 +2151,13 @@ PROOF
 THEOREM OlderRuntimePrecedesServeIngressStepIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+    /\ AsyncIngressSchedulerBarrierActive(node)
     /\ AsyncOlderRuntimeLifecyclePrecedesServeIngress(node)
     => ENABLED SerializedRuntimePrecedesServeIngressStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+                /\ AsyncIngressSchedulerBarrierActive(node)
                 /\ AsyncOlderRuntimeLifecyclePrecedesServeIngress(node)
          PROVE ENABLED SerializedRuntimePrecedesServeIngressStep(node)
     <2>1. ENABLED UngatedSerializedRuntimeStep(node)
@@ -2179,7 +2179,7 @@ PROOF
 
 THEOREM ServeIngressTargetOnlyTurnIsEnabled ==
   \A node \in ValidatorIds:
-    /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+    /\ AsyncIngressSchedulerBarrierActive(node)
     /\ asyncRunnerPhase[node] \in {"Runtime", "Local"}
     /\ ~( /\ asyncRunnerPhase[node] = "Runtime"
            /\ AsyncOlderRuntimeLifecyclePrecedesServeIngress(node))
@@ -2227,7 +2227,7 @@ PROOF
       BY Isa DEF LocalServeSchedulerStep, LocalAdmissionStep,
                  SerializedLocalPrecedesServeIngressStep,
                  AsyncServeIngressTargetOnlyTurn
-    <2>2. CASE AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    <2>2. CASE ~AsyncIngressSchedulerBarrierActive(node)
       <3>1. ENABLED LocalAdmissionStep(node)
         BY <1>1, <2>2, LocalAdmissionStepIsEnabled
       <3>2. LocalAdmissionStep(node) \in BOOLEAN
@@ -2235,7 +2235,7 @@ PROOF
       <3>3. LocalAdmissionStep(node) => LocalServeSchedulerStep(node)
         BY DEF LocalServeSchedulerStep
       <3> QED BY <2>1, <3>1, <3>2, <3>3, ENABLEDaxioms
-    <2>3. CASE AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+    <2>3. CASE AsyncIngressSchedulerBarrierActive(node)
       <3>1. CASE AsyncOlderLocalLifecyclePrecedesServeIngress(node)
         <4>1. ENABLED SerializedLocalPrecedesServeIngressStep(node)
           BY <1>1, <3>1,
@@ -2273,7 +2273,7 @@ PROOF
          DEF RuntimeServeSchedulerStep, SerializedRuntimeStep,
              SerializedRuntimePrecedesServeIngressStep,
              AsyncServeIngressTargetOnlyTurn, RuntimeStep
-    <2>2. CASE AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    <2>2. CASE ~AsyncIngressSchedulerBarrierActive(node)
       <3>1. ENABLED SerializedRuntimeStep(node)
         BY <1>1, <2>2,
            NoServeIngressTicketSerializedRuntimeIsEnabled
@@ -2283,7 +2283,7 @@ PROOF
                => RuntimeServeSchedulerStep(node)
         BY DEF RuntimeServeSchedulerStep
       <3> QED BY <2>1, <3>1, <3>2, <3>3, ENABLEDaxioms
-    <2>3. CASE /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+    <2>3. CASE /\ AsyncIngressSchedulerBarrierActive(node)
                   /\ AsyncOlderRuntimeLifecyclePrecedesServeIngress(node)
       <3>1. ENABLED SerializedRuntimePrecedesServeIngressStep(node)
         BY <1>1, <2>3,
@@ -2295,7 +2295,7 @@ PROOF
                => RuntimeServeSchedulerStep(node)
         BY DEF RuntimeServeSchedulerStep
       <3> QED BY <2>1, <3>1, <3>2, <3>3, ENABLEDaxioms
-    <2>4. CASE /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+    <2>4. CASE /\ AsyncIngressSchedulerBarrierActive(node)
                   /\ ~AsyncOlderRuntimeLifecyclePrecedesServeIngress(node)
       <3>1. ENABLED AsyncServeIngressTargetOnlyTurn(node)
         BY <1>1, <2>4, ServeIngressTargetOnlyTurnIsEnabled
@@ -2320,7 +2320,7 @@ RecoveryRunNodeGuard(node) ==
   \/ /\ ResponsiveReplayDraining(node)
      /\ ~NodeIdle(node)
      /\ asyncIngressReady[node] = <<>>
-     /\ \/ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+     /\ \/ ~AsyncIngressSchedulerBarrierActive(node)
         \/ asyncRunnerPhase[node] = "Ingress"
 
 LocalRunNodeStep(node) ==
@@ -2503,7 +2503,7 @@ ResponsiveRunNodeBlockedOnExternalContinuation(node) ==
 
 THEOREM ResponsiveUnappliedRunNodeEnabledOrAwaitsExternalContinuation ==
   \A node \in AsyncCurrentResponsiveVoters:
-    /\ AsyncTypeInvariant
+    /\ AsyncStrongTypeInvariant
     /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ node \in up
     /\ ~NodeHasApplication(node)
@@ -2512,7 +2512,7 @@ THEOREM ResponsiveUnappliedRunNodeEnabledOrAwaitsExternalContinuation ==
        \/ ResponsiveRunNodeBlockedOnExternalContinuation(node)
 PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
-                /\ AsyncTypeInvariant
+                /\ AsyncStrongTypeInvariant
                 /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
                 /\ node \in up
                 /\ ~NodeHasApplication(node)
@@ -2520,11 +2520,12 @@ PROOF
          PROVE \/ ENABLED RunNode(node)
                 \/ ResponsiveRunNodeBlockedOnExternalContinuation(node)
     <2>1. node \in ValidatorIds
-      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+      BY <1>1, AsyncStrongTypeProjectsAsyncType,
+         AsyncCurrentResponsiveVotersAreValidators
          DEF AsyncTypeInvariant
     <2>2. asyncRunnerPhase[node]
              \in {"Local", "Ingress", "Runtime"}
-      BY <1>1, <2>1
+      BY <1>1, <2>1, AsyncStrongTypeProjectsAsyncType
          DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant
     <2>3. CASE
@@ -2546,7 +2547,8 @@ PROOF
                        node)).sourceClass = "Local"
         BY <1>1, <2>1, <2>2, <2>3, <3>2,
            AsyncCandidateProducerContinuationSelectedLocalReplayHasReservedCapacity,
-           AsyncCandidateProducerContinuationRunnerSelectionIsGlobalMinimum,
+           AsyncStrongTypeProjectsControlServiceStateType,
+           AsyncCandidateProducerContinuationRunnerSelectionIsTwoStageLogicalMinimum,
            AutoUSE, ExpandENABLED, IsaT(900)
            DEF RunNode, RunNodeWork,
                ReplayRunNodeCandidateProducerContinuation,
@@ -2557,6 +2559,7 @@ PROOF
                AsyncCandidateProducerContinuationExactReplayIdentity,
                AsyncCandidateProducerContinuationSelectedLocalCandidate,
                AsyncCandidateProducerContinuationRuntimeReplayCarrier,
+               AsyncStrongTypeInvariant,
                AsyncCandidateProducerContinuationRunnerResolutionRequired,
                AsyncCandidateProducerContinuationRunnerResolutionReady,
                AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
@@ -2581,7 +2584,8 @@ PROOF
         BY <2>3, <3>3
            DEF ResponsiveRunNodeBlockedOnExternalContinuation
       <3> QED BY <1>1, <2>1, <2>3, <3>1, <3>2, <3>3, Isa
-           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+           DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
+               AsyncSchedulerTypeInvariant,
                AsyncControlServiceStateTypeInvariant,
                AsyncCandidateProducerContinuationRunnerResolutionRequired,
                AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
@@ -2636,7 +2640,7 @@ BY Isa
 
 THEOREM ResponsiveUnappliedRunNodeIsEnabled ==
   \A node \in AsyncCurrentResponsiveVoters:
-    /\ AsyncTypeInvariant
+    /\ AsyncStrongTypeInvariant
     /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
     /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ node \in up

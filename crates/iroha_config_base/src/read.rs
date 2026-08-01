@@ -261,6 +261,18 @@ impl ConfigReader {
         self
     }
 
+    /// Rewrite the ordered TOML sources before typed parameter deserialization.
+    ///
+    /// Sources are provided in resolution order: later entries have higher
+    /// precedence. This hook is intended for schema-owned canonicalization of
+    /// disabled optional subtrees, where dormant values must be removed before
+    /// type and unknown-parameter validation run.
+    #[must_use]
+    pub fn rewrite_toml_sources(mut self, rewrite: impl FnOnce(&mut [TomlSource])) -> Self {
+        rewrite(&mut self.sources);
+        self
+    }
+
     /// Return whether any loaded TOML source explicitly defines `id`.
     ///
     /// This distinguishes an operator-provided value from a value materialized

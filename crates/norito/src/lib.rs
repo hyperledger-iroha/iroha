@@ -10014,20 +10014,22 @@ where
     core::to_bytes(value)
 }
 
-/// Return conservative decode limits derived from one complete Norito frame.
+/// Return conservative decode limits derived from one complete encoded value.
 ///
 /// Packed boolean sequences may carry eight logical elements per encoded byte,
 /// so sequence and cumulative element budgets use an eightfold allowance.
-/// Allocation receives a wider multiplier plus a fixed 64 KiB floor for small
-/// structural values. Saturating arithmetic keeps malformed length inputs
-/// fail-closed.
+/// Allocation is capped at 34 times the encoded length plus a fixed 64 KiB floor
+/// for small structural values. The extra linear allowance covers owned
+/// container bookkeeping in large canonical values while the independent
+/// field, element, and nesting limits remain in force. Saturating arithmetic
+/// keeps malformed length inputs fail-closed.
 #[must_use]
 pub const fn canonical_decode_limits(payload_len: usize) -> DecodeLimits {
     DecodeLimits::new(
         payload_len.saturating_mul(8),
         payload_len,
         payload_len.saturating_mul(8),
-        payload_len.saturating_mul(32).saturating_add(64 * 1024),
+        payload_len.saturating_mul(34).saturating_add(64 * 1024),
         core::MAX_OWNED_VALUE_DECODE_DEPTH,
     )
 }
@@ -10145,6 +10147,34 @@ mod canonical_codec_tests {
         let unit = encode_canonical(&()).expect("encode canonical unit");
         decode_canonical_with_limits::<()>(&unit, canonical_decode_limits(unit.len()))
             .expect("decode canonical unit");
+    }
+
+    #[test]
+    fn canonical_allocation_budget_covers_large_signed_genesis() {
+        // A production signed-genesis payload of this size accounts for slightly
+        // more than the former 32x-plus-64-KiB allocation envelope while it is
+        // reconstructed into owned containers.
+        const PAYLOAD_BYTES: usize = 55_766;
+        const ACCOUNTED_ALLOCATION_BYTES: usize = 1_850_832;
+
+        let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
+
+        assert_eq!(allocation_budget, PAYLOAD_BYTES * 34 + 64 * 1024);
+        assert!(allocation_budget >= ACCOUNTED_ALLOCATION_BYTES);
+    }
+
+    #[test]
+    fn canonical_allocation_budget_covers_large_resultless_genesis_candidate() {
+        // The canonical resultless projection has a smaller frame than its
+        // result-bearing signed genesis, but reconstructing its owned graph
+        // crosses the 33x-plus-64-KiB envelope used by the former policy.
+        const PAYLOAD_BYTES: usize = 54_586;
+        const FIRST_REJECTED_ALLOCATION_BYTES: usize = 1_867_001;
+
+        let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
+
+        assert_eq!(allocation_budget, PAYLOAD_BYTES * 34 + 64 * 1024);
+        assert!(allocation_budget >= FIRST_REJECTED_ALLOCATION_BYTES);
     }
 
     #[test]

@@ -27519,6 +27519,33 @@ impl State {
         }
     }
 
+    /// Fallibly construct [`State`] with an explicit chain id and the default
+    /// telemetry sink when telemetry support is compiled in.
+    ///
+    /// This feature-stable entry point is intended for dependent tooling. Its
+    /// arity does not change when another workspace package enables the
+    /// `telemetry` feature for `iroha_core` through Cargo feature unification.
+    ///
+    /// # Errors
+    ///
+    /// Returns the exact durable merge-ledger or Kura validation failure.
+    #[inline]
+    pub fn try_new_with_chain_with_default_telemetry(
+        world: World,
+        kura: Arc<Kura>,
+        query_handle: LiveQueryStoreHandle,
+        chain_id: iroha_data_model::ChainId,
+    ) -> Result<Self, MergeLedgerCommitError> {
+        Self::try_new_with_chain(
+            world,
+            kura,
+            query_handle,
+            chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+        )
+    }
+
     /// _(test only)_ Create state with mock telemetry (depends on features)
     #[must_use]
     #[inline]
@@ -44517,21 +44544,20 @@ static DEFAULT_TEST_CHAIN_ID: LazyLock<iroha_data_model::ChainId> = LazyLock::ne
     let config_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_config/iroha_test_config.toml");
 
-    let user_config = ConfigReader::new()
+    let reader = ConfigReader::new()
         .read_toml_with_extends(&config_path)
         .unwrap_or_else(|err| {
             panic!(
                 "failed to read default testing config `{}`: {err:?}",
                 config_path.display()
             )
-        })
-        .read_and_complete::<user::Root>()
-        .unwrap_or_else(|err| {
-            panic!(
-                "default testing config `{}` is incomplete: {err:?}",
-                config_path.display()
-            )
         });
+    let user_config = user::Root::read_and_complete(reader).unwrap_or_else(|err| {
+        panic!(
+            "default testing config `{}` is incomplete: {err:?}",
+            config_path.display()
+        )
+    });
 
     user_config
         .parse()

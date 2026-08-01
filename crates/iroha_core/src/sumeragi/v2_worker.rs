@@ -89,8 +89,9 @@ use super::{
         ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask, BodyValidationTask,
         CertifiedBodyFetchCompletionDisposition, CompletionDisposition, ConsensusSignTask,
         DurableApplyCompletion, EffectExecutorError, EffectExecutorStatus, EffectRuntime,
-        EffectTransportError, EffectWorkId, PendingTipRecoveryAttemptResult,
-        PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor, V2EffectServices,
+        EffectTransportError, EffectWorkId, PayloadChunkLifecycleDisposition,
+        PendingTipRecoveryAttemptResult, PostFinalityCleanupOutcome, PostFinalityCleanupTarget,
+        V2EffectExecutor, V2EffectServices,
     },
     v2_lane_work::{DurableLaneRolloverAuthority, V2LaneWorkEffect, lane_output_identity},
     v2_runtime::{
@@ -6958,10 +6959,6 @@ impl V2IoHandle {
                             });
                             let failed = match completion {
                                 Err(reason) => {
-                                    iroha_logger::error!(
-                                        reason,
-                                        "Sumeragi v2 I/O command failed closed"
-                                    );
                                     if let Some(work_id) = work_id {
                                         command_rx.complete_work(work_id);
                                     }
@@ -7385,6 +7382,11 @@ fn execute_fail_stop_io_command(
         .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
     match execute() {
         Ok(V2IoCompletion::RecoveryRequired(reason)) | Err(reason) => {
+            // Log before closing output. The retained relay exits the process
+            // as soon as it observes the closed guard, so logging after this
+            // drop races with `process::exit` and can erase the only precise
+            // failure diagnostic.
+            iroha_logger::error!(reason, "Sumeragi v2 I/O command failed closed");
             drop(operation);
             Err(reason)
         }
@@ -14247,6 +14249,31 @@ impl ProductionV2Services {
         let _permit = output_guard
             .acquire()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+
+        if let Some(runtime) = ingress_ownership.leader_wire_runtime_receipt() {
+            if self.has_exact_reconstructed_completion(manifest_hash, &ingress_ownership)? {
+                self.leader_wire_ingress
+                    .mark_leader_wire_volatile_terminal(runtime)?;
+                return Ok(PayloadChunkDisposition::Duplicate);
+            }
+            match executor
+                .classify_payload_chunk_lifecycle(manifest_hash, &ingress_ownership)
+                .map_err(|error| error.to_string())?
+            {
+                PayloadChunkLifecycleDisposition::Durable(receipt) => {
+                    self.leader_wire_ingress
+                        .mark_leader_wire_durable_body_terminal(runtime, &receipt)?;
+                    return Ok(PayloadChunkDisposition::Duplicate);
+                }
+                PayloadChunkLifecycleDisposition::Volatile => {
+                    self.leader_wire_ingress
+                        .mark_leader_wire_volatile_terminal(runtime)?;
+                    return Ok(PayloadChunkDisposition::Duplicate);
+                }
+                PayloadChunkLifecycleDisposition::Retain => {}
+            }
+        }
+
         let terminal_ownership = ingress_ownership.clone();
         match self.buffer_orphan_payload_chunk_owned_checked(sender, chunk, ingress_ownership) {
             OrphanPayloadChunkBufferResult::Disposition(disposition) => {
@@ -14262,6 +14289,36 @@ impl ProductionV2Services {
                 Err("bounded orphan storage could not retain an exact leader-wire owner".to_owned())
             }
         }
+    }
+
+    fn has_exact_reconstructed_completion(
+        &self,
+        manifest_hash: HashOf<wire::PayloadManifest>,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> Result<bool, String> {
+        let runtime = ingress_ownership
+            .leader_wire_runtime_receipt()
+            .ok_or_else(|| {
+                "productive payload chunk lost its leader-wire runtime receipt".to_owned()
+            })?;
+        let token = runtime.token();
+        if !token.matches_chunk_manifest(manifest_hash) {
+            return Err(
+                "reconstructed payload completion changed its leader-wire manifest".to_owned(),
+            );
+        }
+        for completion in &self.local_completions {
+            let LocalCompletion::Reconstructed { task, manifest, .. } = completion;
+            if token.matches_exact_body(manifest.round, manifest.subject, HashOf::new(manifest)) {
+                if !task.matches_reconstructed_manifest(manifest) {
+                    return Err(
+                        "queued payload reconstruction differs from its exact task".to_owned()
+                    );
+                }
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     fn buffer_orphan_payload_chunk_owned_checked(
@@ -14461,6 +14518,75 @@ impl ProductionV2Services {
         true
     }
 
+    fn sweep_buffered_payload_chunk_lifecycles<R: EffectRuntime>(
+        &mut self,
+        executor: &V2EffectExecutor<R>,
+    ) -> Result<usize, String> {
+        let manifest_hashes = self.orphan_chunks.keys().copied().collect::<Vec<_>>();
+        let mut retired = 0usize;
+        let mut first_error = None;
+        for manifest_hash in manifest_hashes {
+            let Some(mut chunks) = self.orphan_chunks.remove(&manifest_hash) else {
+                continue;
+            };
+            let mut retained = VecDeque::new();
+            while let Some(buffered) = chunks.pop_front() {
+                let Some(ingress_ownership) = buffered.ingress_ownership.as_ref() else {
+                    retained.push_back(buffered);
+                    continue;
+                };
+                let Some(runtime) = ingress_ownership.leader_wire_runtime_receipt() else {
+                    retained.push_back(buffered);
+                    continue;
+                };
+                let disposition = match self
+                    .has_exact_reconstructed_completion(manifest_hash, ingress_ownership)
+                {
+                    Ok(true) => Ok(PayloadChunkLifecycleDisposition::Volatile),
+                    Ok(false) => executor
+                        .classify_payload_chunk_lifecycle(manifest_hash, ingress_ownership)
+                        .map_err(|error| error.to_string()),
+                    Err(error) => Err(error),
+                };
+                let terminal = match disposition {
+                    Ok(PayloadChunkLifecycleDisposition::Durable(receipt)) => self
+                        .leader_wire_ingress
+                        .mark_leader_wire_durable_body_terminal(runtime, &receipt),
+                    Ok(PayloadChunkLifecycleDisposition::Volatile) => self
+                        .leader_wire_ingress
+                        .mark_leader_wire_volatile_terminal(runtime),
+                    Ok(PayloadChunkLifecycleDisposition::Retain) => {
+                        retained.push_back(buffered);
+                        continue;
+                    }
+                    Err(error) => {
+                        if first_error.is_none() {
+                            first_error = Some(error);
+                        }
+                        retained.push_back(buffered);
+                        continue;
+                    }
+                };
+                if let Err(error) = terminal {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                    retained.push_back(buffered);
+                    continue;
+                }
+                let bytes = u64::try_from(buffered.chunk.bytes.len()).unwrap_or(u64::MAX);
+                self.orphan_chunk_count = self.orphan_chunk_count.saturating_sub(1);
+                self.orphan_chunk_bytes = self.orphan_chunk_bytes.saturating_sub(bytes);
+                retired = retired.saturating_add(1);
+            }
+            if !retained.is_empty() {
+                let previous = self.orphan_chunks.insert(manifest_hash, retained);
+                debug_assert!(previous.is_none());
+            }
+        }
+        first_error.map_or(Ok(retired), Err)
+    }
+
     /// Replay all chunks whose proposal manifests have now opened sessions.
     pub(crate) fn replay_buffered_chunks<R: EffectRuntime>(
         &mut self,
@@ -14469,6 +14595,7 @@ impl ProductionV2Services {
         if self.output_guard.restart_required() {
             return Err("Sumeragi v2 consensus requires process restart".to_owned());
         }
+        self.sweep_buffered_payload_chunk_lifecycles(executor)?;
         let ready = self
             .orphan_chunks
             .keys()
@@ -31245,6 +31372,281 @@ pub(super) mod tests {
             PayloadChunkDisposition::Buffered
         );
         token
+    }
+
+    fn productive_chunk_at_view(
+        service: &ProductionV2Services,
+        keys: &[KeyPair],
+        view: u64,
+    ) -> (
+        Vec<u8>,
+        wire::PayloadManifest,
+        wire::Proposal,
+        wire::PayloadChunk,
+        PeerId,
+    ) {
+        let (canonical_wire, payload) =
+            proposal_body_and_payload_at_view(&service.context, keys, view);
+        let (manifest, chunks) = payload.into_parts();
+        assert_eq!(chunks.len(), 1, "fixture body must have one exact chunk");
+        let proposer = service.context.leader(view);
+        let proposer_index = usize::try_from(proposer).expect("small proposer index");
+        let sender = service.context.roster[proposer_index].validator.clone();
+        let proposal = wire::Proposal {
+            round: manifest.round,
+            proposer,
+            subject: manifest.subject,
+            manifest: manifest.clone(),
+            justification: wire::ProposalJustification::ParentCommit(
+                wire::ParentCommitJustification { certificate: None },
+            ),
+            signature: Vec::new(),
+        };
+        let mut chunk = wire::PayloadChunk {
+            manifest_hash: HashOf::new(&manifest),
+            index: 0,
+            bytes: chunks.into_iter().next().expect("one fixture chunk"),
+            sender: proposer,
+            signature: Vec::new(),
+        };
+        chunk.signature = Signature::new(
+            keys[proposer_index].private_key(),
+            &chunk
+                .signature_preimage(&service.context, &manifest)
+                .expect("chunk signature preimage"),
+        )
+        .payload()
+        .to_vec();
+        (canonical_wire, manifest, proposal, chunk, sender)
+    }
+
+    fn admit_and_terminalize_productive_proposal(
+        ingress: &FairV2Ingress,
+        proposal: wire::Proposal,
+        sender: PeerId,
+    ) {
+        let ownership = admit_productive_orphan_runtime(
+            ingress,
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal)),
+            sender,
+        );
+        ingress
+            .mark_leader_wire_volatile_terminal(
+                ownership
+                    .leader_wire_runtime_receipt()
+                    .expect("proposal has productive runtime ownership"),
+            )
+            .expect("terminalize proposal after binding its manifest coordinates");
+    }
+
+    fn chunk_effect_executor(
+        service: &ProductionV2Services,
+        recovered: BTreeMap<
+            (wire::ConsensusRound, wire::BlockSubject),
+            (wire::PayloadManifest, DurableBodyReceipt),
+        >,
+    ) -> V2EffectExecutor<SaturatedCompletionRuntime> {
+        V2EffectExecutor::with_runtime(
+            SaturatedCompletionRuntime::new(0, 8),
+            recovered,
+            service.context.clone(),
+            service.local_peer.clone(),
+            service.local_validator,
+            EffectQueueConfig::default(),
+        )
+        .expect("construct productive-chunk effect executor")
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn durable_reconstructed_body_terminalizes_late_chunk_across_arrival_order() {
+        for durable_before_late_chunk in [false, true] {
+            let (mut service, keys) = fixture_with_block_payload();
+            service.max_orphan_chunks = 16;
+            service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
+            let gate_directory = TempDir::new().expect("temporary durable-chunk gate");
+            let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
+            let (_, manifest, proposal, chunk, sender) =
+                productive_chunk_at_view(&service, &keys, 0);
+            admit_and_terminalize_productive_proposal(&ingress, proposal, sender.clone());
+            let ownership = admit_productive_orphan_runtime(
+                &ingress,
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
+                    chunk.clone(),
+                )),
+                sender.clone(),
+            );
+            let token = ownership
+                .leader_wire_token()
+                .expect("late chunk has a productive token")
+                .clone();
+            let durable = DurableBodyReceipt::for_test(
+                service.context.id(),
+                manifest.round,
+                manifest.subject,
+                HashOf::new(&manifest),
+            );
+            let recovered = BTreeMap::from([(
+                (manifest.round, manifest.subject),
+                (manifest.clone(), durable),
+            )]);
+            let mut executor = chunk_effect_executor(
+                &service,
+                if durable_before_late_chunk {
+                    recovered.clone()
+                } else {
+                    BTreeMap::new()
+                },
+            );
+            let disposition = service
+                .route_payload_chunk(&mut executor, sender.clone(), chunk, ownership)
+                .expect("route late chunk around durable recovery");
+            if durable_before_late_chunk {
+                assert_eq!(
+                    disposition,
+                    PayloadChunkDisposition::Duplicate,
+                    "pre-existing durable recovery must terminalize the late chunk immediately"
+                );
+            } else {
+                assert_eq!(
+                    disposition,
+                    PayloadChunkDisposition::Buffered,
+                    "the late chunk must remain owned until durable recovery arrives"
+                );
+                assert_eq!(service.orphan_chunk_count, 1);
+                assert_ne!(service.orphan_chunk_bytes, 0);
+                executor = chunk_effect_executor(&service, recovered);
+                assert_eq!(
+                    service
+                        .replay_buffered_chunks(&mut executor)
+                        .expect("durable recovery sweeps the buffered runtime owner"),
+                    0
+                );
+            }
+            assert!(
+                service.orphan_chunks.is_empty(),
+                "durable_before_late_chunk={durable_before_late_chunk}"
+            );
+            assert_eq!(
+                service.orphan_chunk_count, 0,
+                "durable_before_late_chunk={durable_before_late_chunk}"
+            );
+            assert_eq!(
+                service.orphan_chunk_bytes, 0,
+                "durable_before_late_chunk={durable_before_late_chunk}"
+            );
+            assert_eq!(
+                ingress.state.lock().leader_wire_lifecycles[&token.slot].status,
+                super::super::FairV2IngressLeaderWireStatus::Terminal,
+                "durable_before_late_chunk={durable_before_late_chunk}"
+            );
+
+            let next_view = (1..=1_024)
+                .find(|view| service.context.leader(*view) == service.context.leader(0))
+                .expect("bounded view search returns to the same leader");
+            let (_, _, next_proposal, next_chunk, next_sender) =
+                productive_chunk_at_view(&service, &keys, next_view);
+            assert_eq!(
+                next_sender, sender,
+                "view rotation returns to the same origin"
+            );
+            admit_and_terminalize_productive_proposal(&ingress, next_proposal, next_sender.clone());
+            let next = admit_productive_orphan_runtime(
+                &ingress,
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
+                    next_chunk,
+                )),
+                next_sender,
+            );
+            let next_token = next.leader_wire_token().expect("next-view token");
+            assert_eq!(
+                next_token.view(),
+                next_view,
+                "durable_before_late_chunk={durable_before_late_chunk}"
+            );
+            assert!(
+                next.leader_wire_runtime_receipt().is_some(),
+                "higher-view chunk must reach Runtime admission"
+            );
+            assert_eq!(
+                ingress.state.lock().leader_wire_lifecycles[&next_token.slot].status,
+                super::super::FairV2IngressLeaderWireStatus::Runtime,
+                "durable_before_late_chunk={durable_before_late_chunk}"
+            );
+        }
+    }
+
+    #[test]
+    fn productive_retry_after_proofless_reconstruction_does_not_become_orphan() {
+        let (mut service, keys) = fixture_with_block_payload();
+        service.max_orphan_chunks = 16;
+        service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
+        let _chunk_root = install_temporary_chunk_root(&mut service);
+        let gate_directory = TempDir::new().expect("temporary reconstructed-chunk gate");
+        let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
+        let (_, manifest, proposal, chunk, sender) = productive_chunk_at_view(&service, &keys, 0);
+
+        let proofless = admit_productive_orphan_runtime(
+            &ingress,
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
+                chunk.clone(),
+            )),
+            sender.clone(),
+        );
+        assert!(proofless.leader_wire_runtime_receipt().is_none());
+        let mut executor = chunk_effect_executor(&service, BTreeMap::new());
+        assert_eq!(
+            service
+                .route_payload_chunk(&mut executor, sender.clone(), chunk.clone(), proofless)
+                .expect("buffer proofless chunk"),
+            PayloadChunkDisposition::Buffered
+        );
+
+        admit_and_terminalize_productive_proposal(&ingress, proposal, sender.clone());
+        let tag = service.active_tag;
+        executor
+            .consume_effects(
+                vec![AdapterEffect::FetchBody {
+                    tag,
+                    round: manifest.round,
+                    subject: manifest.subject,
+                    manifest: Some(manifest),
+                    certified_sources: Vec::new(),
+                    certificate: None,
+                }],
+                &mut service,
+            )
+            .expect("open proofless reconstruction fetch");
+        assert_eq!(
+            service
+                .replay_buffered_chunks(&mut executor)
+                .expect("reconstruct proofless body"),
+            1
+        );
+        assert_eq!(service.local_completions.len(), 1);
+
+        let productive = admit_productive_orphan_runtime(
+            &ingress,
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
+                chunk.clone(),
+            )),
+            sender.clone(),
+        );
+        let token = productive
+            .leader_wire_token()
+            .expect("retransmit binds productive token")
+            .clone();
+        assert_eq!(
+            service
+                .route_payload_chunk(&mut executor, sender, chunk, productive)
+                .expect("queued reconstruction owns the exact bytes"),
+            PayloadChunkDisposition::Duplicate
+        );
+        assert!(service.orphan_chunks.is_empty());
+        assert_eq!(
+            ingress.state.lock().leader_wire_lifecycles[&token.slot].status,
+            super::super::FairV2IngressLeaderWireStatus::VolatileTerminal
+        );
     }
 
     #[test]

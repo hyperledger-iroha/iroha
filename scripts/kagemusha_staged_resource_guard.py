@@ -34,8 +34,8 @@ except ImportError:  # pragma: no cover - keeps the refusal path importable.
 
 
 BYTES_PER_GIB = 1024 * 1024 * 1024
-DEFAULT_MAX_MEMORY_GIB = 16.0
-MAXIMUM_MEMORY_GIB = 16.0
+DEFAULT_MAX_MEMORY_GIB = 64.0
+MAXIMUM_MEMORY_GIB = 64.0
 DEFAULT_SAMPLE_INTERVAL_SECONDS = 0.1
 DEFAULT_FOOTPRINT_INTERVAL_SECONDS = 5.0
 MAXIMUM_SAMPLE_INTERVAL_SECONDS = 5.0
@@ -50,6 +50,7 @@ MAX_STAGE_DRAIN_BYTES = 64 * 1024
 MAX_RECORDED_STAGE_EVENTS = 1024
 PROCESS_TERMINATION_TIMEOUT_SECONDS = 10.0
 MEMORY_BOUNDED_RELEASE_CODEGEN_UNITS = "256"
+MEMORY_ACCOUNTING_MODE = "process_tree_rss"
 PS = next(
     (candidate for candidate in ("/bin/ps", "/usr/bin/ps") if Path(candidate).exists()),
     "ps",
@@ -89,9 +90,9 @@ class MemorySample:
 
     @property
     def guarded_memory_bytes(self) -> int:
-        """Return the strongest child-memory measurement in this sample."""
+        """Return process-tree RSS used for Kagemusha memory enforcement."""
 
-        return max(self.process_tree_rss_bytes, self.process_tree_footprint_bytes)
+        return self.process_tree_rss_bytes
 
 
 @dataclass(frozen=True)
@@ -403,6 +404,22 @@ def effective_limit_bytes(
     return min(requested_limit_bytes, max(0, available_bytes - reserve_bytes))
 
 
+def physical_memory_capped_limit_bytes(
+    requested_limit_bytes: int, total_memory_bytes: int
+) -> int:
+    """Cap one reviewed request at half of installed physical memory."""
+
+    if requested_limit_bytes <= 0:
+        raise ValueError("requested memory limit must be greater than zero")
+    if total_memory_bytes <= 0:
+        raise ValueError("total physical memory must be greater than zero")
+    return min(
+        requested_limit_bytes,
+        gib_to_bytes(MAXIMUM_MEMORY_GIB),
+        max(1, total_memory_bytes // 2),
+    )
+
+
 def soft_stop_bytes(
     hard_limit_bytes: int, *, kernel_limit_enforced: bool = True
 ) -> int:
@@ -414,7 +431,7 @@ def soft_stop_bytes(
         # Darwin exposes RLIMIT_AS as an alias of its unenforceable RLIMIT_RSS
         # and rejects finite values with EINVAL. Leave a larger sampling and
         # process-group termination margin when supervision is the only limit.
-        # Three GiB at the reviewed 16-GiB ceiling is still three times the
+        # Three GiB at the reviewed 64-GiB ceiling is still three times the
         # kernel-backed margin and sits on top of the independent host-memory
         # reserve. A four-GiB margin incorrectly rejected the partitioned
         # release data-model compiler at just over 12 GiB even with more than
@@ -587,7 +604,7 @@ def run_guarded_command(
     minimum_effective_bytes: int = BYTES_PER_GIB,
     lock_path: Path = RESOURCE_LOCK,
 ) -> GuardResult:
-    """Run one command under memory, host-headroom, lock, and stage guards."""
+    """Run under reviewed, half-physical-RAM, headroom, lock, and stage guards."""
 
     validate_memory_limit_gib(max_memory_gib)
     validate_minimum_headroom_gib(minimum_headroom_gib)
@@ -622,11 +639,15 @@ def run_guarded_command(
     total_memory = total_physical_memory_bytes()
     if total_memory <= 0:
         raise RuntimeError("could not determine total physical memory")
+    physical_half_limit = max(1, total_memory // 2)
+    reviewed_limit = physical_memory_capped_limit_bytes(
+        requested_limit, total_memory
+    )
     reserve = minimum_headroom_bytes(total_memory, minimum_headroom_gib)
     initial_available = available_memory_bytes(total_memory)
     if initial_available is None:
         raise RuntimeError("could not determine available host memory")
-    hard_limit = effective_limit_bytes(requested_limit, initial_available, reserve)
+    hard_limit = effective_limit_bytes(reviewed_limit, initial_available, reserve)
     if hard_limit < minimum_effective_bytes:
         raise RuntimeError(
             "insufficient memory headroom for guarded Kagemusha V4 generation: "
@@ -777,10 +798,15 @@ def run_guarded_command(
         "started_at_unix_seconds": started_at_unix,
         "completed_at_unix_seconds": completed_at_unix,
         "elapsed_seconds": time.monotonic() - started_at_monotonic,
+        "absolute_memory_ceiling_bytes": gib_to_bytes(MAXIMUM_MEMORY_GIB),
+        "total_physical_memory_bytes": total_memory,
+        "physical_half_limit_bytes": physical_half_limit,
         "requested_limit_bytes": requested_limit,
+        "reviewed_limit_bytes": reviewed_limit,
         "effective_hard_limit_bytes": hard_limit,
         "soft_stop_bytes": soft_limit,
         "kernel_address_space_limit_enforced": kernel_limit_enforced,
+        "memory_accounting_mode": MEMORY_ACCOUNTING_MODE,
         "memory_enforcement_mode": (
             "kernel_and_supervisor" if kernel_limit_enforced else "supervisor"
         ),
@@ -789,7 +815,7 @@ def run_guarded_command(
         "minimum_available_memory_bytes": minimum_available,
         "max_process_tree_rss_bytes": max_rss,
         "max_process_tree_footprint_bytes": max_footprint,
-        "guarded_peak_bytes": max(max_rss, max_footprint),
+        "guarded_peak_bytes": max_rss,
         "stage_events": stage_events,
         "stage_event_count": stage_event_count,
         "stage_events_dropped": max(0, stage_event_count - len(stage_events)),

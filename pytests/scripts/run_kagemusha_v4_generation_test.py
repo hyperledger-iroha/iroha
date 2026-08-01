@@ -30,6 +30,16 @@ def _admit_test_output_filesystem(monkeypatch) -> None:
     monkeypatch.setattr(MODULE, "_filesystem_type", lambda _path: "ext4")
 
 
+def test_runner_disables_local_bytecode_before_importing_guard_modules() -> None:
+    source = RUNNER_PATH.read_text(encoding="utf-8")
+    disable_offset = source.index("sys.dont_write_bytecode = True")
+    local_import_offset = source.index(
+        "from scripts.formal import run_sumeragi_v2_tlapm_guard"
+    )
+
+    assert disable_offset < local_import_offset
+
+
 def _fake_prebuilt_generator(tmp_path: Path, mode: str = "success") -> Path:
     """Create a loader-stable shell double for the admitted native generator.
 
@@ -138,13 +148,43 @@ def test_effective_limit_is_half_physical_and_cannot_be_raised(monkeypatch) -> N
     with pytest.raises(MODULE.resource_guard.GuardError, match="greater than zero"):
         MODULE._effective_memory_limit_bytes(float("nan"))
 
-    monkeypatch.setattr(MODULE, "_physical_memory_bytes", lambda: 64 * MODULE.BYTES_PER_GIB)
+    monkeypatch.setattr(
+        MODULE,
+        "_physical_memory_bytes",
+        lambda: 64 * MODULE.BYTES_PER_GIB,
+    )
     assert (
         MODULE._effective_memory_limit_bytes(None)
-        == 16 * MODULE.BYTES_PER_GIB
+        == 32 * MODULE.BYTES_PER_GIB
     )
     with pytest.raises(MODULE.resource_guard.GuardError, match="cannot raise"):
-        MODULE._effective_memory_limit_bytes(16.01)
+        MODULE._effective_memory_limit_bytes(32.01)
+
+    monkeypatch.setattr(
+        MODULE,
+        "_physical_memory_bytes",
+        lambda: 128 * MODULE.BYTES_PER_GIB,
+    )
+    assert (
+        MODULE._effective_memory_limit_bytes(None)
+        == 64 * MODULE.BYTES_PER_GIB
+    )
+    with pytest.raises(MODULE.resource_guard.GuardError, match="cannot raise"):
+        MODULE._effective_memory_limit_bytes(64.01)
+
+    monkeypatch.setattr(MODULE, "_physical_memory_bytes", lambda: 0)
+    with pytest.raises(
+        MODULE.resource_guard.GuardError,
+        match="could not determine installed physical memory",
+    ):
+        MODULE._effective_memory_limit_bytes(None)
+
+
+def test_physical_memory_detection_fails_closed(monkeypatch) -> None:
+    monkeypatch.setattr(MODULE.sys, "platform", "unsupported-posix")
+    monkeypatch.setattr(MODULE.os, "sysconf", lambda _name: None)
+
+    assert MODULE._physical_memory_bytes() == 0
 
 
 def test_runner_executes_small_owned_group_and_writes_reports(
@@ -201,7 +241,15 @@ def test_runner_executes_small_owned_group_and_writes_reports(
     ).hexdigest()
     assert executable_identity["size_bytes"] == executable.stat().st_size
     assert 0 < summary["memory_limit_bytes"] <= MODULE.ABSOLUTE_MAX_MEMORY_BYTES
+    assert (
+        summary["memory_enforcement_mode"]
+        == MODULE.resource_guard.MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT
+    )
     assert summary["sample_interval_seconds"] == MODULE.SAMPLE_INTERVAL_SECONDS
+    assert (
+        summary["physical_footprint_interval_seconds"]
+        == MODULE.SAMPLE_INTERVAL_SECONDS
+    )
     assert (report_root / "kagemusha_resource.jsonl").stat().st_size > 0
 
 
@@ -210,9 +258,11 @@ def test_runner_does_not_use_the_retired_boolean_supervision_marker() -> None:
 
     assert "IROHA_KAGEMUSHA_V4_RESOURCE_SUPERVISED" not in source
     assert "held_lock_descriptors=(heavy_lock, kagemusha_lock)" in source
-    assert MODULE.ABSOLUTE_MAX_MEMORY_BYTES == 16 * MODULE.BYTES_PER_GIB
+    assert MODULE.ABSOLUTE_MAX_MEMORY_BYTES == 64 * MODULE.BYTES_PER_GIB
     assert MODULE.SAMPLE_INTERVAL_SECONDS == 0.25
     assert "sample_interval_seconds=SAMPLE_INTERVAL_SECONDS" in source
+    assert "physical_footprint_interval_seconds" in source
+    assert "MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT" in source
 
 
 def test_runner_requires_prebuilt_generator_and_exact_subcommand(tmp_path: Path) -> None:

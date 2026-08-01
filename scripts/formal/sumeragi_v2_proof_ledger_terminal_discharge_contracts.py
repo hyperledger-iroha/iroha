@@ -797,11 +797,39 @@ def _atomic_timeout_completion_source_fidelity_errors(
             "TimeoutCertificateAfterReceipt(node, vote), TRUE)"
         ),
         "TimeoutReceiptSurvivesInstall": (
-            "\\/ received.node # node "
-            "\\/ /\\ StrictSameRoundTcUpgrade(node, tc) "
-            "/\\ received.vote.context = context "
+            "LET installedView == "
+            "IF StrictSameRoundTcUpgrade(node, tc) "
+            "THEN nodeView[node] ELSE tc.view + 1 "
+            "IN \\/ received.node # node "
+            "\\/ /\\ received.vote.context = context "
             "/\\ received.vote.height = height "
-            "/\\ received.vote.view = nodeView[node]"
+            "/\\ received.vote.view >= installedView "
+            "/\\ received.vote.view <= installedView + 1"
+        ),
+    }
+    exact_async_install_kernels = {
+        "CurrentTimeoutControlFor": (
+            "LET installedView == "
+            "IF StrictSameRoundTcUpgrade(node, tc) "
+            "THEN nodeView[node] ELSE tc.view + 1 "
+            'IN {item \\in RetainedClassItems(items, node, "TimeoutVote"): '
+            "/\\ item.envelope.vote.context = context "
+            "/\\ item.envelope.vote.height = height "
+            "/\\ item.envelope.vote.view >= installedView "
+            "/\\ item.envelope.vote.view <= installedView + 1 "
+            "/\\ item.envelope.vote.signer = node}"
+        ),
+        "InstalledControlAfterTC": (
+            "LET withoutOwnTc == retained \\ RetainedClassItems("
+            'retained, node, "TimeoutCertificate") '
+            "remembered == RememberedControl(withoutOwnTc, items) "
+            "installed == {item \\in remembered: "
+            "item.source # node \\/ ControlClass(item) "
+            "\\in AsyncInstallRetainedControlKinds} "
+            "withCurrentTimeout == installed \\cup "
+            "CurrentTimeoutControlFor(remembered, node, tc) "
+            "IN ReseedExactHighestPrepareControl("
+            "withCurrentTimeout, node, tc)"
         ),
     }
 
@@ -905,33 +933,56 @@ def _atomic_timeout_completion_source_fidelity_errors(
                     f"{guard_invocation!r}; found {normalized!r}"
                 )
 
+        for symbol, exact_body in exact_async_install_kernels.items():
+            declarations = re.findall(
+                rf"(?m)^{re.escape(symbol)}\s*\([^)=]*\)\s*==",
+                stripped_network,
+            )
+            extracted = _top_level_operator_body(
+                network_source, symbol, preserve_string_contents=True
+            )
+            if len(declarations) != 1 or extracted is None:
+                errors.append(
+                    f"{network_path}: require exactly one top-level {symbol} "
+                    f"operator; found {len(declarations)}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != exact_body:
+                errors.append(
+                    f"{network_path}:{line}: {symbol} must equal only the "
+                    "exact reviewed bounded timeout install-retention kernel "
+                    f"{exact_body!r}; found {normalized!r}"
+                )
+
     return errors
 
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "fc3c131df1f3511f80ce47720ab87043106239d332936f240348d3244550835e"
+        "61c374819d09f0bb17e235a2d344d724ff2adbb0600b5899723dd94464259a10"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "a1023bc4be73a325b99bf7390116d82eb378bcc45afde6d47174c01a43173dab"
+        "43dc16ddaf1fd2d9faf9ea90e596497e9812b22dcfead443a005274d9fa33d09"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
-        "5c0e3d9acd7ca82304ff752338ab69f93962f6d85658c568119e5e09b69edb52"
+        "c9be95c54480b74106ce845c44a82727ccf8a2fd1e1ef16ba9b4faa314608f2a"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/wal.rs": (
-        "9fb4335289c39dae60b9a8299902e57a64d258070e61e331941c24201519c947"
+        "6bff6e8e90983f8bd1657de5faaf59b5db9a57e99ba0f9e0be96e7de0d3e2b9f"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "1e144f784c02f945d6a258a4bea6d683d8d5285c04d08db343847d2b77dac0b8"
+        "459bb6a712c0fd3759c647b610165161102ab6e3aeb5ac747c93a08b37ebacf8"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "d84a426c7d967091e27a3fba79b9c1e0becf8dbe44a7dfe80f30ec150f4198a8"
+        "e536cfa6ea5dfa072d06c69b2de098a8545fb96df21f7b8b8b502e81c75c8335"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "6f3a91c284822f02a41a0867e55aeaa3b881dba3714996cbfb2a2565ddfdc499"
+        "0e6f1ba5449a2e2c4b2d29265bccdebff2bddcd4f131e0597f97744368cb9c0e"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
-        "b0a35d3ed66c22fa6b37fc4cd0155ebcfb00de47afeb6ddf89f609f3bbdc70e0"
+        "ee0a1f7d536e7f2ef6e5847f090c4af28241f086912e8f9c7672971b648604af"
     ),
 }
 
@@ -1114,11 +1165,13 @@ let timeout_vote_pool_unchanged =
     $projection.timeout_votes_before == $projection.timeout_votes_after;
 let formed_timeouts_unchanged =
     $projection.formed_timeouts_before == $projection.formed_timeouts_after;
+let timeout_evidence_after_in_installed_window =
+    $projection.timeout_evidence_after_outside_installed_window == 0u64;
 let timeout_control_unchanged =
     $projection.timeout_control_before == $projection.timeout_control_after;
 let timeout_control_after_absent = $projection.timeout_control_after.is_none();
 """,
-                "production must derive exact timeout pool, marker, control identity, and advancing-view absence from primitive projections",
+                "production must derive timeout identity and the installed current/adjacent window from primitive projections",
             ),
             (
                 """
@@ -1129,11 +1182,14 @@ if $facts.install_view_unchanged {
         && $facts.volatile_after.timeout_vote_entries
             == $facts.volatile_before.timeout_vote_entries
 } else {
-    $facts.volatile_after.timeout_vote_pools == 0u64
-        && $facts.volatile_after.timeout_vote_entries == 0u64
+    $facts.timeout_evidence_after_in_installed_window
+        && $facts.volatile_after.timeout_vote_pools
+        <= $facts.volatile_before.timeout_vote_pools
+        && $facts.volatile_after.timeout_vote_entries
+            <= $facts.volatile_before.timeout_vote_entries
 }
 """,
-                "the production gate must reject same-size timeout-pool substitution and advancing-view retention",
+                "the production gate must reject same-size substitution and require bounded non-inventing timeout retention",
             ),
             (
                 """
@@ -1142,10 +1198,11 @@ if $facts.install_view_unchanged {
         && $facts.volatile_after.formed_timeouts
         == $facts.volatile_before.formed_timeouts
 } else {
-    $facts.volatile_after.formed_timeouts == 0u64
+    $facts.volatile_after.formed_timeouts
+        <= $facts.volatile_before.formed_timeouts
 }
 """,
-                "the production gate must preserve the exact same-round formed marker only across a lock-only install",
+                "the production gate must preserve exact same-round markers and forbid advancing-install invention",
             ),
             (
                 """
@@ -1255,19 +1312,31 @@ let effect = self.start_persistence(
             ),
             (
                 """
-if !refinement::accepts(transition) {
-    return Err(ReducerError::RefinementViolation);
-}
+let Some(checked_refinement) = refinement::check(transition) else {
 """,
                 "Reducer::step must invoke the production refinement commit gate",
             ),
             (
                 """
-if !production_durable_intent_trace_refines_progress_witness_kernel(
-    durable_intent_trace,
-)
+let _authorized_refinement = checked_refinement.into_projection();
+*self = next;
+""",
+                "Reducer::step must consume checked refinement authority before commit",
+            ),
+            (
+                """
+let Some(checked_transition) =
+    check_production_durable_intent_transition(durable_intent_trace)
+else {
 """,
                 "Reducer::step must invoke the shared durable-intent kernel",
+            ),
+            (
+                """
+let _authorized_transition = checked_transition.into_projection();
+let _authorized_refinement = checked_refinement.into_projection();
+""",
+                "Reducer::step must consume both checked transition authorities",
             ),
             (
                 """
@@ -1280,28 +1349,27 @@ if certificate.round().view() < self.durable.current_view()
             ),
             (
                 """
-let strict_same_round_timeout_upgrade = matches!(
-    pending.entry.record(),
-    WalRecord::InstallTimeout(certificate)
-        if self
-            .durable
-            .is_strict_same_round_timeout_upgrade(certificate)
-);
+if self
+    .durable
+    .is_strict_same_round_timeout_upgrade(certificate)
+{
+    self.generation.next()
+} else {
+    Some(Generation::INITIAL)
+}
 """,
-                "InstallTimeout acknowledgement must classify the exact strict same-round lock-only upgrade before applying durable state",
+                "InstallTimeout generation must classify the exact strict same-round upgrade and reset only advancing views",
             ),
             (
                 """
-let next_generation =
-    if matches!(&pending.continuation, Continuation::InstallTimeout { .. }) {
-        self.generation
-            .next()
-            .ok_or(ReducerError::GenerationOverflow)?
-    } else {
-        self.generation
-    };
+let next_generation = match pending.entry.record() {
+    WalRecord::InstallTimeout(certificate) => self
+        .generation_after_timeout_install(certificate)
+        .ok_or(ReducerError::GenerationOverflow)?,
+    _ => self.generation,
+};
 """,
-                "InstallTimeout acknowledgement must reject generation exhaustion before applying WAL state or releasing its pending owner",
+                "InstallTimeout acknowledgement must preflight same-view exhaustion and advancing-view reset before durable mutation",
             ),
             (
                 "self.generation = next_generation;",
@@ -1321,19 +1389,17 @@ if expected
             ),
             (
                 """
-if strict_same_round_timeout_upgrade {
-    let current_round =
-        Round::new(self.context.height(), self.durable.current_view());
-    self.timeout_votes
-        .retain(|round, _| *round == current_round);
-    self.formed_timeouts
-        .retain(|round| *round == current_round);
-} else {
-    self.timeout_votes.clear();
-    self.formed_timeouts.clear();
-}
+let current_view = self.durable.current_view();
+self.timeout_votes.retain(|round, _| {
+    round.height() == self.context.height()
+        && timeout_vote_view_is_admissible(current_view, round.view())
+});
+self.formed_timeouts.retain(|round| {
+    round.height() == self.context.height()
+        && timeout_vote_view_is_admissible(current_view, round.view())
+});
 """,
-                "strict same-round InstallTimeout must preserve only the exact current-round timeout pool and formed marker",
+                "InstallTimeout must retain only installed current/adjacent timeout evidence",
             ),
             (
                 """
@@ -1347,6 +1413,24 @@ OutboundControlClass::CommitVote
             ),
             (
                 """
+let timeout_evidence_after_outside_installed_window = Self::cardinality(
+    after
+        .timeout_votes
+        .keys()
+        .chain(after.formed_timeouts.iter())
+        .filter(|round| {
+            round.height() != installed_height
+                || !timeout_vote_view_is_admissible(installed_view, round.view())
+        })
+        .count(),
+);
+""",
+                "the transition projection must count every timeout-evidence round outside the installed current/adjacent window",
+            ),
+            (
+                """
+formed_timeouts_after: &after.formed_timeouts,
+timeout_evidence_after_outside_installed_window,
 timeout_control_before: self
     .outbound_control
     .get(&OutboundControlClass::TimeoutVote),
@@ -1358,15 +1442,15 @@ timeout_control_after: after
             ),
             (
                 """
-fn timeout_install_accepts_the_last_generation() {
+fn same_round_timeout_upgrade_accepts_the_last_generation() {
 """,
-                "the final representable InstallTimeout generation must remain covered by a positive regression",
+                "the final representable same-round InstallTimeout generation must remain covered by a positive regression",
             ),
             (
                 """
-fn timeout_install_generation_overflow_preserves_the_complete_state() {
+fn same_round_timeout_generation_overflow_preserves_the_complete_state() {
 """,
-                "generation overflow must retain a regression for complete reducer-state non-mutation",
+                "same-round generation overflow must retain a regression for complete reducer-state non-mutation",
             ),
             (
                 """
@@ -1552,6 +1636,12 @@ let facts = transition_facts_from_components_body!(
             ),
             (
                 """
+pub timeout_evidence_after_outside_installed_window: u64,
+""",
+                "Verus must receive the exact production-projected outside-window evidence count",
+            ),
+            (
+                """
 let facts = transition_delta_facts_from_projection_body!(
     projection,
     ProductionTransitionDeltaFactsProjection
@@ -1568,10 +1658,21 @@ facts
 left.install_view_unchanged == right.install_view_unchanged
     && left.timeout_vote_pool_unchanged == right.timeout_vote_pool_unchanged
     && left.formed_timeouts_unchanged == right.formed_timeouts_unchanged
+    && left.timeout_evidence_after_in_installed_window
+        == right.timeout_evidence_after_in_installed_window
     && left.timeout_control_unchanged == right.timeout_control_unchanged
     && left.timeout_control_after_absent == right.timeout_control_after_absent
 """,
                 "Verus transition-fact extensionality must include every timeout-owner delta field",
+            ),
+            (
+                """
+facts.volatile_after.timeout_vote_pools <= 2,
+facts.volatile_after.timeout_vote_entries <= facts.validator_count * 2,
+facts.volatile_after.formed_certificates <= 2,
+facts.volatile_after.formed_timeouts <= 2,
+""",
+                "Verus volatile bounds must cover exactly the current and adjacent timeout rounds",
             ),
             (
                 """
@@ -1582,11 +1683,27 @@ if facts.install_view_unchanged {
         && facts.volatile_after.timeout_vote_entries
             == facts.volatile_before.timeout_vote_entries
 } else {
-    facts.volatile_after.timeout_vote_pools == 0
-        && facts.volatile_after.timeout_vote_entries == 0
+    facts.timeout_evidence_after_in_installed_window
+        && facts.volatile_after.timeout_vote_pools
+            <= facts.volatile_before.timeout_vote_pools
+        && facts.volatile_after.timeout_vote_entries
+            <= facts.volatile_before.timeout_vote_entries
 }
 """,
-                "Verus volatile preservation must distinguish lock-only timeout ownership from advancing-view reset",
+                "Verus volatile preservation must prove bounded non-inventing timeout retention on advancing installs",
+            ),
+            (
+                """
+if facts.install_view_unchanged {
+    facts.formed_timeouts_unchanged
+        && facts.volatile_after.formed_timeouts
+            == facts.volatile_before.formed_timeouts
+} else {
+    facts.volatile_after.formed_timeouts
+        <= facts.volatile_before.formed_timeouts
+}
+""",
+                "Verus formed-timeout preservation must forbid advancing-install invention",
             ),
             (
                 """
@@ -1597,13 +1714,6 @@ if facts.install_view_unchanged {
 }
 """,
                 "Verus volatile preservation must prove exact timeout control retention or advancing-view absence",
-            ),
-            (
-                """
-let facts = verified_facts_from_projection(projection);
-let accepted = verified_production_transition_gate(facts);
-""",
-                "the executable Verus production kernel must derive facts before gating",
             ),
         ),
     }

@@ -21,7 +21,6 @@ use iroha_core::{
     smartcontracts::isi::Registrable as _,
     state::{State, World},
     sumeragi::{VotingBlock, network_topology::Topology},
-    telemetry::StateTelemetry,
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey, PublicKey};
 use iroha_data_model::{
@@ -527,12 +526,11 @@ fn staged_sumeragi_v2_context_hashes_on_bounded_stack(
         .map_err(|error| eyre!("initialize isolated Kura for staged genesis: {error}"))?,
         None => Kura::blank_kura_for_testing(),
     };
-    let mut state = State::try_new_with_chain_with_telemetry(
+    let mut state = State::try_new_with_chain_with_default_telemetry(
         world,
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
         genesis.chain_id().clone(),
-        StateTelemetry::default(),
     )
     .map_err(|error| eyre!("initialize isolated State for staged genesis: {error}"))?;
     configure_staged_genesis_state(&mut state, genesis, config)?;
@@ -2012,10 +2010,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
 
     #[test]
     fn expected_public_key_must_match_selected_private_key() {
-        let selected =
-            KeyPair::try_from_seed([7_u8; 32], Algorithm::Ed25519).expect("selected fixture key");
-        let different =
-            KeyPair::try_from_seed([8_u8; 32], Algorithm::Ed25519).expect("different fixture key");
+        let selected = KeyPair::try_from_seed(vec![7_u8; 32], Algorithm::Ed25519)
+            .expect("selected fixture key");
+        let different = KeyPair::try_from_seed(vec![8_u8; 32], Algorithm::Ed25519)
+            .expect("different fixture key");
 
         ensure_expected_public_key(&selected, Some(selected.public_key()))
             .expect("matching public key must be accepted");
