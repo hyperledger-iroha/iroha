@@ -1,7 +1,6 @@
 package org.hyperledger.iroha.sdk.offline
 
 import java.net.URI
-import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.ArrayList
 import java.util.Collections
@@ -10,6 +9,7 @@ import java.util.concurrent.locks.ReentrantLock
 import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.ZkMerklePathEntry
 import org.hyperledger.iroha.sdk.client.ZkMerklePathResponse
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
@@ -3807,6 +3807,84 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun acknowledgementDigest(): ByteArray = acknowledgementDigestValue.copyOf()
     }
 
+    /** Asset-neutral offline protocol capability implemented by every app-api node. */
+    class OfflineStatus internal constructor(
+        val mandatory: Boolean,
+        val cashHandoffCapability: String,
+        val requiredBridgeAbiVersion: Int,
+        val maximumHops: Int,
+        val ready: Boolean,
+        val assets: List<Any?>,
+        val blockers: List<ReadinessBlocker>,
+    ) {
+        init {
+            require(!mandatory) { "mandatory must be false for universal offline capability" }
+            require(cashHandoffCapability == CASH_HANDOFF_CAPABILITY_V1) {
+                "cashHandoffCapability must be the exact cash_handoff_v1 contract"
+            }
+            require(requiredBridgeAbiVersion == REQUIRED_NATIVE_BRIDGE_ABI_VERSION) {
+                "requiredBridgeAbiVersion must be 21"
+            }
+            require(maximumHops == MAXIMUM_PEER_HOPS) {
+                "maximumHops must match the cash_handoff_v1 bound"
+            }
+            require(ready) { "ready must be true for universal offline capability" }
+            require(assets.isEmpty()) { "assets must be empty because capability is asset-neutral" }
+            require(blockers.isEmpty()) { "blockers must be empty for universal offline capability" }
+        }
+
+        internal companion object {
+            private val fields = setOf(
+                "mandatory",
+                "cash_handoff_capability",
+                "required_bridge_abi_version",
+                "max_hops",
+                "ready",
+                "assets",
+                "blockers",
+            )
+
+            fun decode(payload: ByteArray): OfflineStatus {
+                val parsed = JsonParser.parse(String(payload, StandardCharsets.UTF_8))
+                check(parsed is Map<*, *>) { "offline capability response must be a JSON object" }
+                check(parsed.keys == fields) {
+                    "offline capability response must contain exactly the universal fields"
+                }
+                val mandatory = parsed["mandatory"] as? Boolean
+                    ?: error("offline capability mandatory must be a boolean")
+                val capability = parsed["cash_handoff_capability"] as? String
+                    ?: error("offline capability cash_handoff_capability must be a string")
+                val abi = exactInt(parsed["required_bridge_abi_version"], "required_bridge_abi_version")
+                val hops = exactInt(parsed["max_hops"], "max_hops")
+                val ready = parsed["ready"] as? Boolean
+                    ?: error("offline capability ready must be a boolean")
+                val assets = parsed["assets"] as? List<*>
+                    ?: error("offline capability assets must be an array")
+                val blockers = parsed["blockers"] as? List<*>
+                    ?: error("offline capability blockers must be an array")
+                check(assets.isEmpty()) { "offline capability assets must be empty" }
+                check(blockers.isEmpty()) { "offline capability blockers must be empty" }
+                return OfflineStatus(
+                    mandatory = mandatory,
+                    cashHandoffCapability = capability,
+                    requiredBridgeAbiVersion = abi,
+                    maximumHops = hops,
+                    ready = ready,
+                    assets = emptyList(),
+                    blockers = emptyList(),
+                )
+            }
+
+            private fun exactInt(value: Any?, field: String): Int {
+                check(value is Long && value in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) {
+                    "offline capability $field must be a signed 32-bit JSON integer"
+                }
+                return value.toInt()
+            }
+        }
+    }
+
+    /** Legacy command-specific artifact diagnostics; not a discovery response. */
     class Readiness internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
         "OfflineReadiness",
@@ -4023,6 +4101,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             const val REDEEM_PATH: String = "/v1/offline/redeem"
             const val OPERATIONS_PATH: String = "/v1/offline/operations"
             const val RECEIVER_LINEAGE_PATH: String = "/v1/offline/receiver-lineage"
+            const val JSON_MEDIA_TYPE: String = "application/json"
             const val NORITO_MEDIA_TYPE: String = "application/x-norito"
 
             private fun requireOperationId(value: String?): String {
@@ -4053,20 +4132,27 @@ class KagemushaRecursiveSpendProver private constructor() {
             this.baseUri = stripTrailingSlash(baseUri.toString())
         }
 
-        fun getReadiness(assetDefinitionId: String): CompletableFuture<Readiness> {
-            require(assetDefinitionId.isNotEmpty() && assetDefinitionId == assetDefinitionId.trim()) {
-                "assetDefinitionId must be canonical non-empty text"
-            }
-            val encoded = URLEncoder.encode(assetDefinitionId, StandardCharsets.UTF_8.name())
+        fun getOfflineCapability(): CompletableFuture<OfflineStatus> {
             return execute(
                 TransportRequest.builder()
                     .setMethod("GET")
-                    .setUri(URI.create("$baseUri$READINESS_PATH?asset_definition_id=$encoded"))
-                    .addHeader("Accept", NORITO_MEDIA_TYPE)
+                    .setUri(URI.create("$baseUri$READINESS_PATH"))
+                    .addHeader("Accept", JSON_MEDIA_TYPE)
                     .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
                     .build(),
                 200,
-            ).thenApply { Readiness(it.body) }
+                JSON_MEDIA_TYPE,
+            ).thenApply { OfflineStatus.decode(it.body) }
+        }
+
+        @Deprecated(
+            message = "Offline capability is asset-neutral; use getOfflineCapability()",
+            replaceWith = ReplaceWith("getOfflineCapability()"),
+        )
+        fun getReadiness(assetDefinitionId: String): CompletableFuture<OfflineStatus> {
+            @Suppress("UNUSED_VARIABLE")
+            val ignoredSelector = assetDefinitionId
+            return getOfflineCapability()
         }
 
         fun getRecipientRegistrationLineage(
@@ -4139,13 +4225,14 @@ class KagemushaRecursiveSpendProver private constructor() {
         private fun execute(
             request: TransportRequest,
             expectedStatus: Int,
+            expectedMediaType: String = NORITO_MEDIA_TYPE,
         ): CompletableFuture<TransportResponse> = transport.execute(request).thenApply { response ->
             check(response.statusCode == expectedStatus) {
                 "Kagemusha Torii request failed with HTTP ${response.statusCode}"
             }
             val contentTypes = response.headers["Content-Type"].orEmpty()
-            check(contentTypes.size == 1 && contentTypes.single().equals(NORITO_MEDIA_TYPE, true)) {
-                "Kagemusha Torii response must use $NORITO_MEDIA_TYPE"
+            check(contentTypes.size == 1 && contentTypes.single().equals(expectedMediaType, true)) {
+                "Kagemusha Torii response must use $expectedMediaType"
             }
             response
         }

@@ -4,7 +4,7 @@ Swift SDK for the first Hyperledger Iroha 3 release on Apple platforms.
 
 Features:
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, prover reports, contracts)
-- Kagemusha cash models, transaction builders, proof binding helpers, and readiness discovery through `/v1/offline/readiness`
+- Kagemusha cash models, transaction builders, proof binding helpers, and universal capability discovery through `/v1/offline/readiness`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
@@ -1054,8 +1054,16 @@ apps can decide how to remediate.
 `ToriiClient` uses only the canonical direct Torii lifecycle:
 `GET /v1/offline/readiness`, `POST /v1/offline/top-up`,
 `POST /v1/offline/redeem`, and `GET /v1/offline/operations/{operation_id}`.
-Use `getKagemushaReadiness(assetDefinitionId:)`, `submitKagemushaTopUp`,
+Use `getOfflineCapability()`, `submitKagemushaTopUp`,
 `submitKagemushaRedeem`, and `getKagemushaOperationStatus(operationId:)`.
+The retained selector-taking `getKagemushaReadiness(assetDefinitionId:)` shim is
+deprecated, ignores its selector, and returns the same `ToriiOfflineStatus`.
+
+`ToriiOfflineStatus` is an asset-neutral protocol contract, not backend
+settlement readiness. Swift accepts only `mandatory: false`,
+`cash_handoff_capability: "cash_handoff_v1"`, bridge ABI `21`, the exact maximum
+hop bound, `ready: true`, and empty `assets` and `blockers`. Assets and
+dataspaces require no offline enrollment or backend enablement.
 
 `KagemushaTopUpRequest` and `KagemushaRedeemRequest` accept only the corresponding
 typed Kagemusha Norito archive. They derive the lowercase idempotency key from
@@ -1066,7 +1074,7 @@ operation and its input note until the operation status reaches final chain
 state. A transport timeout or unknown state is not permission to create a new
 operation ID.
 
-Artifact and readiness validation requires exact bridge ABI 21 and manifest
+Local artifact validation requires exact bridge ABI 21 and manifest
 schema `kagemusha.offline.recursive_spend.artifact_manifest.v4`. The V4
 manifest's eight streamed artifacts are content-addressed and installed
 atomically through `KagemushaRecursiveSpendArtifactInstallSessionV4`; a partial,
@@ -1074,26 +1082,8 @@ corrupt, unpromoted, or role-substituted generation never becomes active.
 `KagemushaRecursiveSpendReleaseAuthenticationV4` requires the canonical
 candidate-bound promotion record in addition to policy, attestation, benchmark,
 and review bytes. Circuit parameters remain authenticated inline in the Eq/Ep
-profiles.
-
-`ToriiKagemushaReadiness.artifactSet` is required but nullable. A non-null value
-binds the authenticated generation, manifest, release-policy and
-release-attestation digests, issuance window, proof-pair bound, and asset scale
-to both exact recursive verifier records:
-`kagemusha_recursive_step_eq_v4_verifier_record` with
-`kagemusha-recursive-spend-step-eq-compact-layout-v5`, and
-`kagemusha_recursive_step_ep_v4_verifier_record` with
-`kagemusha-recursive-spend-step-ep-compact-lineage-v5`. Authenticated
-backend construction is not proof admission. A null artifact set requires both
-recursive records and backend construction to be unavailable with exactly one
-`recursive_v4_registry_unavailable` or `recursive_v4_registry_malformed`
-blocker. `proofBackendAvailable` reports exact backend construction
-independently.
-`recursiveLineageSupported` is true only when the artifact set, distinct active
-Eq/Ep records, and backend are all available; its inverse is represented by
-`recursive_lineage_unavailable`. `ready` is true only when the complete blocker
-set is empty, so unrelated issuer or transfer blockers do not erase valid
-backend and lineage facts.
+profiles. Proof material and verifier bindings are validated by the operation
+that consumes them; they do not change universal offline capability.
 
 Top-up uses `KagemushaTopUpShieldBuildRequestV4`,
 `KagemushaRecursiveSpendTopUpUnsignedV4`, and an authorization over the

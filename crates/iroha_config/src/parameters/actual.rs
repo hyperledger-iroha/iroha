@@ -12320,16 +12320,16 @@ impl FromStr for StreamingSoranetAccessKind {
     }
 }
 
-/// Settlement configuration for offline cash and conversion routing.
+/// Settlement execution state and conversion routing configuration.
 #[derive(Debug, Clone, Default)]
 pub struct Settlement {
-    /// Offline settlement retention policy.
+    /// Universal cash-protocol state plus optional proof-release cache controls.
     pub offline: Offline,
     /// Router configuration for XOR conversion.
     pub router: Router,
 }
 
-/// Kagemusha escrow and execution policy parameters.
+/// Universal Kagemusha execution state and optional proof-release cache parameters.
 #[derive(Debug, Clone)]
 pub struct Offline {
     /// Lazily derived escrow accounts keyed by asset definition.

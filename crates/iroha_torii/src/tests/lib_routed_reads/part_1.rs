@@ -2318,6 +2318,107 @@
     }
 
     #[tokio::test]
+    async fn paginated_accounts_fanout_drains_deduplicates_and_pages_globally() {
+        let routes = [
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
+            RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
+        ];
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let collected = collect_torii_paginated_list_json_payloads(&routes, 2, {
+            let calls = std::sync::Arc::clone(&calls);
+            move |route, offset, limit| {
+                let calls = std::sync::Arc::clone(&calls);
+                async move {
+                    calls
+                        .lock()
+                        .expect("call log lock")
+                        .push((route.dataspace_id.as_u64(), offset, limit));
+                    let payload = match (route.dataspace_id.as_u64(), offset) {
+                        (1, 0) => norito::json!({
+                            "items": [{"id": "a"}, {"id": "b"}],
+                            "total": 3,
+                            "has_more": true,
+                            "count_mode": "exact"
+                        }),
+                        (1, 2) => norito::json!({
+                            "items": [{"id": "c"}],
+                            "total": 3,
+                            "has_more": false,
+                            "count_mode": "exact"
+                        }),
+                        (2, 0) => norito::json!({
+                            "items": [{"id": "b"}, {"id": "d"}],
+                            "total": 2,
+                            "has_more": false,
+                            "count_mode": "exact"
+                        }),
+                        other => panic!("unexpected routed page request: {other:?}"),
+                    };
+                    crate::utils::respond_value_with_format(payload, ResponseFormat::Json)
+                }
+            }
+        })
+        .await
+        .expect("all routed pages should validate");
+
+        assert_eq!(collected.diagnostics.succeeded_routes, 2);
+        assert_eq!(
+            *calls.lock().expect("call log lock"),
+            vec![(1, 0, 2), (1, 2, 2), (2, 0, 2)]
+        );
+        let response = merged_paginated_list_response(
+            collected
+                .payloads
+                .into_iter()
+                .map(|(_, payload)| payload)
+                .collect(),
+            1,
+            2,
+            "exact",
+            "proxy",
+        )
+        .expect("drained account pages should merge");
+        let json = response_json(response).await;
+        let root = json.as_object().expect("merged response object");
+        assert_eq!(root.len(), 4);
+        assert_eq!(root.get("total").and_then(Value::as_u64), Some(4));
+        assert_eq!(root.get("has_more").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            root.get("count_mode").and_then(Value::as_str),
+            Some("exact")
+        );
+        let ids = root
+            .get("items")
+            .and_then(Value::as_array)
+            .expect("merged items")
+            .iter()
+            .map(|item| item["id"].as_str().expect("item id"))
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["b", "c"]);
+    }
+
+    #[test]
+    fn routed_account_page_rejects_missing_pagination_metadata() {
+        let response = validate_torii_exact_list_page(
+            &norito::json!({"items": [], "total": 0}),
+            0,
+            100,
+            None,
+        )
+        .expect_err("fanout must not accept an unverifiable partial account inventory");
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("invalid_proxy_response")
+        );
+    }
+
+    #[tokio::test]
     async fn merged_account_history_response_sorts_deduplicates_and_pages_globally() {
         let response = merged_account_history_response(
             vec![
@@ -2827,4 +2928,3 @@
         assert_eq!(dataspaces[1]["dataspace_id"].as_u64(), Some(7));
         assert_eq!(dataspaces[1]["dataspace_alias"].as_str(), Some("ops"));
     }
-

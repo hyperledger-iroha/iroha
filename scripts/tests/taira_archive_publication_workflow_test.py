@@ -106,7 +106,7 @@ def _assert_archive_publication_contract(source: str) -> None:
     assert "build_taira_rollout_bundle.sh" in source
     assert "capture_taira_macos_four_peer_receipt.py" in source
     assert "sudo -n /usr/bin/python3 -S \\" in source
-    assert source.count('CARGO_TARGET_DIR="$target_root"') == 2
+    assert source.count('CARGO_TARGET_DIR="$target_root"') == 1
     assert 'mkdir -m 0700 "$target_root"' in source
     assert "$GITHUB_WORKSPACE/target/release/irohad" not in source
     assert '--validator-binary "$TAIRA_MACOS_IROHAD"' in source
@@ -270,7 +270,8 @@ def _assert_macos_capture_contract(source: str) -> None:
     assert 'installed_name="taira_peer_supervisor.py"' in source
     assert "supervisor=installed_supervisor" in source
     assert 'cleanup_errors.append("validation-supervisor")' in source
-    assert "deploy.restore_release_to_bundle(bundle)" in source
+    assert "move_release_to_root_store" not in source
+    assert "qualification_seal" not in source
     assert "deploy.require_bundle_runtime_unchanged(bundle)" in source
 
 
@@ -302,7 +303,8 @@ def test_macos_capture_source_requires_every_peer_restart_and_cleanup() -> None:
             "supervisor=installed_supervisor", "supervisor=supervisor"
         ),
         lambda source: source.replace(
-            "deploy.restore_release_to_bundle(bundle)", "# release restoration removed"
+            "deploy.require_bundle_runtime_unchanged(bundle)",
+            "# bundle identity recheck removed",
         ),
     ),
 )
@@ -333,7 +335,7 @@ def test_macos_capture_emits_the_exact_canonical_admission_receipt() -> None:
         context="context",
         build="build",
         config="config",
-        offline_release="offline",
+        dataspace_catalog="dataspaces",
         nodes=("one", "two", "three", "four"),
     )
     end = deploy.FleetSample(
@@ -342,7 +344,7 @@ def test_macos_capture_emits_the_exact_canonical_admission_receipt() -> None:
         context="context",
         build="build",
         config="config",
-        offline_release="offline",
+        dataspace_catalog="dataspaces",
         nodes=("one", "two", "three", "four"),
     )
     issued_at = 1_800_000_000

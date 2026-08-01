@@ -22,18 +22,9 @@ fn offline_catalog_exposes_only_the_first_release_routes() {
 
     let catalog = RouteCatalog::new(offline::ROUTES);
     catalog.validate().expect("offline route catalog is valid");
-    assert!(
-        catalog
-            .project(
-                CatalogProjection::Mounted,
-                EnabledFeatures::new(&["app_api"]),
-            )
-            .is_empty(),
-        "app_api alone must not mount the runtime-disabled offline surface"
-    );
     let mounted = catalog.project(
         CatalogProjection::Mounted,
-        EnabledFeatures::new(&["app_api", "offline"]),
+        EnabledFeatures::new(&["app_api"]),
     );
     let actual = mounted
         .iter()
@@ -54,18 +45,9 @@ fn offline_catalog_exposes_only_the_first_release_routes() {
 #[test]
 fn offline_catalog_projections_are_explicit() {
     let catalog = RouteCatalog::new(offline::ROUTES);
-    let enabled = ["app_api", "offline"];
+    let enabled = ["app_api"];
     let features = EnabledFeatures::new(&enabled);
 
-    assert!(
-        catalog
-            .project(
-                CatalogProjection::OpenApi,
-                EnabledFeatures::new(&["app_api"]),
-            )
-            .is_empty(),
-        "runtime OpenAPI projection must omit disabled offline operations"
-    );
     assert_eq!(
         catalog.project(CatalogProjection::OpenApi, features).len(),
         5
@@ -76,8 +58,9 @@ fn offline_catalog_projections_are_explicit() {
             .len(),
         5
     );
-    assert!(
-        catalog.project(CatalogProjection::Mcp, features).is_empty(),
-        "offline value-moving commands are not implicitly MCP tools"
+    assert_eq!(
+        catalog.project(CatalogProjection::Mcp, features).len(),
+        5,
+        "the universal offline interface must not require a separate feature flag"
     );
 }

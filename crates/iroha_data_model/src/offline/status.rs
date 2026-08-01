@@ -1,4 +1,4 @@
-//! Public, key-material-free offline readiness projections.
+//! Public offline-wallet protocol capability and legacy proof-release diagnostics.
 //!
 //! These types live in the data model because they are shared by Torii
 //! responses and node telemetry. Keeping them here prevents either transport
@@ -7,7 +7,7 @@
 use iroha_schema::IntoSchema;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 
-/// One machine-readable reason why an asset is not ready for offline payments.
+/// Legacy machine-readable diagnostic for an explicitly requested proof release.
 #[derive(
     Debug,
     Clone,
@@ -213,7 +213,9 @@ impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
     }
 }
 
-/// Snapshot-bound readiness result for one asset definition.
+/// Legacy snapshot-bound diagnostics for one asset-specific proof release.
+///
+/// This does not enroll an asset for offline use and is never node readiness.
 #[derive(
     Debug, Clone, PartialEq, Eq, IntoSchema, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
@@ -254,7 +256,7 @@ pub struct OfflineReadiness {
     pub blockers: Vec<OfflineReadinessBlocker>,
 }
 
-/// Complete mandatory offline-cash projection embedded in node status.
+/// Universal offline protocol capability projection embedded in node status.
 #[derive(
     Debug,
     Clone,
@@ -269,7 +271,8 @@ pub struct OfflineReadiness {
 )]
 #[norito(deny_unknown_fields)]
 pub struct OfflineStatus {
-    /// Offline cash is a mandatory service of this node profile.
+    /// Legacy compatibility field. Offline capability is universal and does
+    /// not impose a backend service-readiness gate.
     pub mandatory: bool,
     /// Exact irreversible peer-cash handoff contract.
     pub cash_handoff_capability: String,
@@ -277,11 +280,13 @@ pub struct OfflineStatus {
     pub required_bridge_abi_version: u32,
     /// Maximum peer-spend hop depth accepted by the protocol.
     pub max_hops: u32,
-    /// Aggregate readiness across every configured escrow asset.
+    /// Protocol capability availability. This is independent of any asset or
+    /// dataspace catalog.
     pub ready: bool,
-    /// Per-asset readiness snapshots, sorted by canonical asset definition id.
+    /// Optional diagnostics for release material explicitly referenced by
+    /// offline operations, sorted by canonical asset definition id.
     pub assets: Vec<OfflineReadiness>,
-    /// Fleet-level configuration or evaluation failures.
+    /// Command-specific proof-material diagnostics; never startup blockers.
     pub blockers: Vec<OfflineReadinessBlocker>,
 }
 
@@ -527,14 +532,14 @@ mod tests {
     }
 
     #[test]
-    fn readiness_norito_roundtrip_preserves_exact_projection() {
+    fn universal_status_norito_roundtrip_preserves_exact_projection() {
         let status = OfflineStatus {
-            mandatory: true,
+            mandatory: false,
             cash_handoff_capability: "cash_handoff_v1".to_owned(),
             required_bridge_abi_version: 21,
             max_hops: 8,
-            ready: false,
-            assets: vec![sample_readiness()],
+            ready: true,
+            assets: Vec::new(),
             blockers: Vec::new(),
         };
         let bytes = norito::to_bytes(&status).expect("encode status");

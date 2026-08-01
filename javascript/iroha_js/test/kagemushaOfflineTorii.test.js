@@ -6,11 +6,12 @@ import * as distSdk from "../dist/index.js";
 import { ToriiClient } from "../src/toriiClient.js";
 import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
 import {
+  KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
   KAGEMUSHA_MANIFEST_VERSION,
   KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
   KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
-  normalizeKagemushaReadinessV4,
+  normalizeOfflineStatus,
   normalizeKagemushaTopUpRequestV4,
 } from "../src/kagemushaOffline.js";
 
@@ -24,26 +25,16 @@ function jsonResponse(payload, { status = 200, headers = {} } = {}) {
   });
 }
 
-function unavailableReadiness(abiVersion = 21) {
+function universalCapability(overrides = {}) {
   return {
-    required_bridge_abi_version: abiVersion,
+    mandatory: false,
+    cash_handoff_capability: "cash_handoff_v1",
+    required_bridge_abi_version: 21,
     max_hops: 8,
-    asset_definition_id: "coin#wonderland",
-    asset_scale: null,
-    evaluated_block_height: 7,
-    evaluated_block_hash: "aa".repeat(32),
-    active_transfer_verifier: null,
-    active_topup_shield_verifier: null,
-    active_unshield_verifier: null,
-    active_recursive_step_eq_verifier: null,
-    active_recursive_step_ep_verifier: null,
-    artifact_set: null,
-    proof_backend_available: false,
-    recursive_lineage_supported: false,
-    ready: false,
-    blockers: [
-      { code: "recursive_v4_registry_unavailable", message: "not provisioned" },
-    ],
+    ready: true,
+    assets: [],
+    blockers: [],
+    ...overrides,
   };
 }
 
@@ -70,10 +61,12 @@ function operationReference(kind) {
 
 test("Kagemusha JavaScript surface is transport-only ABI-21/V4", () => {
   assert.equal(KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION, 21);
+  assert.equal(KAGEMUSHA_CASH_HANDOFF_CAPABILITY, "cash_handoff_v1");
   assert.equal(KAGEMUSHA_MANIFEST_VERSION, 4);
   assert.equal(KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES, 512 * 1024);
   assert.equal(KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES, 48 * 1024 * 1024);
   assert.equal(distSdk.KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION, 21);
+  assert.equal(typeof distSdk.ToriiClient.prototype.getOfflineCapability, "function");
   assert.equal(typeof distSdk.ToriiClient.prototype.getKagemushaReadinessV4, "function");
   assert.equal(
     Object.keys(sdk).some((name) => /kagemusha.*prover/iu.test(name)),
@@ -85,7 +78,7 @@ test("Kagemusha JavaScript surface is transport-only ABI-21/V4", () => {
   );
 
   assert.throws(
-    () => normalizeKagemushaReadinessV4(unavailableReadiness(19), "coin#wonderland"),
+    () => normalizeOfflineStatus(universalCapability({ required_bridge_abi_version: 19 })),
     /required_bridge_abi_version must be 21/u,
   );
   assert.throws(
@@ -97,7 +90,7 @@ test("Kagemusha JavaScript surface is transport-only ABI-21/V4", () => {
 test("ToriiClient preserves all four Kagemusha routes and V4 request headers", async () => {
   const observed = [];
   const responses = [
-    jsonResponse(unavailableReadiness()),
+    jsonResponse(universalCapability()),
     jsonResponse(operationReference("top_up"), {
       status: 202,
       headers: { location: `/v1/offline/operations/${OPERATION_ID}` },
@@ -129,12 +122,12 @@ test("ToriiClient preserves all four Kagemusha routes and V4 request headers", a
     maxRetries: 0,
   });
 
-  const readiness = await client.getKagemushaReadinessV4("coin#wonderland");
+  const capability = await client.getOfflineCapability();
   const topUp = await client.submitKagemushaTopUpV4(requestV4());
   const redeem = await client.submitKagemushaRedeemV4(requestV4());
   const status = await client.getKagemushaOperationStatus(OPERATION_ID);
 
-  assert.equal(readiness.required_bridge_abi_version, 21);
+  assert.deepEqual(capability, universalCapability());
   assert.equal(topUp.kind.kind, "top_up");
   assert.equal(redeem.kind.kind, "redeem");
   assert.equal(status.state, "applied");
@@ -148,7 +141,7 @@ test("ToriiClient preserves all four Kagemusha routes and V4 request headers", a
       `/v1/offline/operations/${OPERATION_ID}`,
     ],
   );
-  assert.equal(observed[0].url.searchParams.get("asset_definition_id"), "coin#wonderland");
+  assert.equal(observed[0].url.search, "");
   for (const { init } of observed.slice(1, 3)) {
     const headers = new Headers(init.headers);
     assert.equal(headers.get("content-type"), "application/x-norito");
@@ -160,7 +153,7 @@ test("ToriiClient preserves all four Kagemusha routes and V4 request headers", a
 test("ToriiBrowserClient exposes the same transport-only Kagemusha contract", async () => {
   const observed = [];
   const responses = [
-    jsonResponse(unavailableReadiness()),
+    jsonResponse(universalCapability()),
     jsonResponse(operationReference("top_up"), {
       status: 202,
       headers: { location: `/v1/offline/operations/${OPERATION_ID}` },
@@ -182,11 +175,12 @@ test("ToriiBrowserClient exposes the same transport-only Kagemusha contract", as
     },
   });
 
-  const readiness = await client.getKagemushaReadinessV4("coin#wonderland");
+  const capability = await client.getOfflineCapability();
   const reference = await client.submitKagemushaTopUpV4(requestV4());
   const status = await client.getKagemushaOperationStatus(OPERATION_ID);
 
-  assert.equal(readiness.ready, false);
+  assert.equal(capability.ready, true);
+  assert.equal(observed[0].url.search, "");
   assert.equal(reference.state.state, "pending");
   assert.equal(status.state, "pending");
   assert.deepEqual(
@@ -197,6 +191,23 @@ test("ToriiBrowserClient exposes the same transport-only Kagemusha contract", as
       `/v1/offline/operations/${OPERATION_ID}`,
     ],
   );
+});
+
+test("deprecated asset selectors are ignored by both Torii clients", async () => {
+  for (const Client of [ToriiClient, ToriiBrowserClient]) {
+    const observed = [];
+    const client = new Client("https://torii.example", {
+      fetchImpl: async (url) => {
+        observed.push(new URL(url));
+        return jsonResponse(universalCapability());
+      },
+      maxRetries: 0,
+    });
+
+    const capability = await client.getKagemushaReadinessV4("not-an-asset-selector");
+    assert.equal(capability.cash_handoff_capability, "cash_handoff_v1");
+    assert.equal(observed[0].search, "");
+  }
 });
 
 test("operation parsing rejects a V3 top-up anchor instead of upgrading it", async () => {

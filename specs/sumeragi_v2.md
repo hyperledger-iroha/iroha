@@ -71,7 +71,7 @@ The V1 inventory is:
 | Fraud admission | enablement, required risk band, whether missing evidence is permitted, authenticated attester identities |
 | Governance | ballot/tally keys, bonds and slashing, JDG and runtime-upgrade provenance, citizen/viral/SoraFS policy, voting thresholds, terms, committee sizes, and pipeline deadlines |
 | Content | bundle/file/path/retention/chunk limits, publishing allow-list, cache and immutability effects, authorization mode, DA stripe defaults |
-| Settlement | offline enablement and escrow policy/catalog, Kagemusha decoded bound and authenticated release-policy digest, deterministic router windows and guard rails |
+| Settlement | deterministic router windows and guard rails; offline-wallet capability is compiled universally and has no enablement, asset catalog, dataspace enrollment, or deployment-readiness input |
 | Existing canonical sub-policies | Nexus plus loaded lane-manifest/compliance digests, ZK policy (including process-local SCCP admission/work limits) |
 
 Only result-preserving operational choices are excluded: worker and cache sizes, parallel/GPU

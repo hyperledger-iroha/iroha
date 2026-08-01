@@ -15,7 +15,7 @@ pin the exact cryptographic contract.
 Offline cash is a wallet and device protocol, not a validator deployment mode.
 Every Iroha deployment exposes the ABI-21/V4 and `cash_handoff_v1` surfaces
 needed to build an offline user experience. Operators do not enable that
-capability per node, asset, domain, dataspace, or routing lane. In particular,
+capability per node, asset, domain, dataspace, or routing container. In particular,
 there is no `settlement.offline.enabled` switch, `offline.enabled` asset
 metadata, configured escrow catalog, or offline-specific startup/readiness
 gate.

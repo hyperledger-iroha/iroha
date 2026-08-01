@@ -5766,12 +5766,9 @@ impl NetworkRelayShared {
             | SoracloudLocalReadProxyResponse(_)
             | ToriiProxyRequest(_)
             | ToriiProxyResponse(_)
-            | GenesisRequest(_)
-            | GenesisResponse(_)
             | Health
             | Connect(_)) => {
                 debug_assert!(Self::is_handled_by_dedicated_subscriber(&msg));
-                // Genesis bootstrap is handled by the dedicated bootstrapper listener.
                 // Health frames are handled elsewhere. Connect, Soracloud local-read proxy,
                 // and Torii proxy frames go to Torii via its own subscriber tasks when those
                 // surfaces are enabled.
@@ -5800,10 +5797,7 @@ impl NetworkRelayShared {
         msg.is_torii_proxy_control_message()
             || matches!(
                 msg,
-                iroha_core::NetworkMessage::GenesisRequest(_)
-                    | iroha_core::NetworkMessage::GenesisResponse(_)
-                    | iroha_core::NetworkMessage::Health
-                    | iroha_core::NetworkMessage::Connect(_)
+                iroha_core::NetworkMessage::Health | iroha_core::NetworkMessage::Connect(_)
             )
     }
 
@@ -8013,11 +8007,11 @@ fn authorize_kura_runtime_start(
 
 fn apply_state_runtime_config_before_snapshot_auth(state: &mut State, config: &Config) {
     // These fields are process-local execution policy and do not touch Kura-owned geometry.
-    // Settlement must be installed before replay because configured offline
-    // assets and every top-up/redemption transition resolve policy through
-    // `State::settlement`. Installing it only after the mandatory readiness
-    // gate would validate an empty/default catalog and replay historical
-    // offline transitions under the wrong policy.
+    // Settlement must be installed before replay because historical
+    // top-up/redemption transitions resolve their deterministic execution
+    // state and any explicitly referenced proof release through
+    // `State::settlement`. This ordering is replay correctness, not an offline
+    // capability or node-readiness gate.
     state.set_crypto(config.crypto.clone());
     state.set_pipeline(config.pipeline.clone());
     state.set_oracle(config.oracle.clone());
@@ -10118,9 +10112,9 @@ impl Iroha {
         state.set_oracle(oracle_cfg);
         state.set_streaming(streaming_cfg);
         state.set_fraud_monitoring(fraud_cfg);
-        // Settlement was installed before Kura replay and authenticated by the
-        // mandatory offline gate. Do not replace that post-replay snapshot
-        // after Kura has started.
+        // Settlement runtime state was installed before Kura replay. Preserve
+        // its lazily derived escrow bindings instead of replacing the replayed
+        // snapshot after Kura has started.
         state.set_gov(gov_cfg);
         state.set_merge_ledger_cache_capacity(merge_cache_capacity);
         log_startup_trace(

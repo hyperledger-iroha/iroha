@@ -120,17 +120,6 @@ max_tx_value = "1000000000"
 operation_registry_max_entries = 4096
 operation_registry_max_bytes = 524288
 
-[settlement.offline]
-# Optional authenticated verifier cache. This does not enable offline support:
-# ABI-21/V4 and cash_handoff_v1 are available on every Iroha deployment.
-# Asset/account bindings are derived by each submitted command, not configured
-# here, and this section is never part of /health or /readyz.
-kagemusha_release_policy_path = "/etc/iroha/taira-validator/kagemusha/release-policy.norito"
-kagemusha_artifact_dir = "/var/lib/iroha/taira-validator/kagemusha/v4"
-# Reset packaging injects the release-specific absolute seal path:
-# /Library/SORA/Taira/seals/kagemusha-v4-<release-tree-sha256>.norito
-kagemusha_max_decoded_bytes = 268435456
-
 [torii.account_onboarding]
 authority = "REPLACE_WITH_TAIRA_ONBOARDING_AUTHORITY"
 private_key_file = "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE"
@@ -480,28 +469,28 @@ lane = 3
 dataspace = "is"
 [nexus.routing_policy.rules.matcher]
 instruction = "smartcontract::deploy"
-description = "Route contract deployments to the external IS lane for PoC proof tracking"
+description = "Route contract deployments to the external `is` dataspace routing container for PoC proof tracking"
 
 [[nexus.routing_policy.rules]]
 lane = 3
 dataspace = "is"
 [nexus.routing_policy.rules.matcher]
 instruction = "shield"
-description = "Route shield instructions to the external IS lane for dataspace-scoped balances"
+description = "Route shield instructions to the external `is` dataspace routing container for dataspace-scoped balances"
 
 [[nexus.routing_policy.rules]]
 lane = 3
 dataspace = "is"
 [nexus.routing_policy.rules.matcher]
 instruction = "zk::zk_transfer"
-description = "Route private ZK transfers to the external IS lane for dataspace-scoped balances"
+description = "Route private ZK transfers to the external `is` dataspace routing container for dataspace-scoped balances"
 
 [[nexus.routing_policy.rules]]
 lane = 3
 dataspace = "is"
 [nexus.routing_policy.rules.matcher]
 instruction = "unshield"
-description = "Route unshield instructions to the external IS lane for dataspace-scoped balances"
+description = "Route unshield instructions to the external `is` dataspace routing container for dataspace-scoped balances"
 
 [nexus.fusion]
 floor_teu = 2500

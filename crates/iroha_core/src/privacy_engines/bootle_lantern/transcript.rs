@@ -673,22 +673,6 @@ impl BlindIssuanceRequestTranscriptV1 {
     }
 }
 
-impl core::ops::Deref for PresentationTranscriptV1 {
-    type Target = ProofTranscriptCoreV1;
-
-    fn deref(&self) -> &Self::Target {
-        &self.core
-    }
-}
-
-impl core::ops::Deref for BlindIssuanceRequestTranscriptV1 {
-    type Target = ProofTranscriptCoreV1;
-
-    fn deref(&self) -> &Self::Target {
-        &self.core
-    }
-}
-
 impl ProofTranscriptCoreV1 {
     pub(crate) const fn matrix_seed(&self) -> MatrixSeedV1 {
         self.matrix_seed
