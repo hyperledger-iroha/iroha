@@ -1390,38 +1390,29 @@ fn offline_readiness_operation() -> Map {
     );
     operation.insert(
         "summary".into(),
-        Value::String("Report Kagemusha readiness.".to_owned()),
+        Value::String("Report universal offline-wallet capability.".to_owned()),
     );
     operation.insert(
         "description".into(),
         Value::String(
-            "Evaluate Kagemusha readiness for one asset definition at a specific committed block. The response binds the live asset scale, five distinct active verifier records, and exact authenticated ABI-21 V4 release identity to that same height and block hash so clients can cross-check capabilities and release artifacts atomically. proof_backend_available reports exact backend construction independently; recursive_lineage_supported additionally requires the authenticated artifact set and distinct active Eq/Ep records. ready is true exactly when no typed blocker remains, so unrelated blockers do not erase backend or lineage facts. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness."
+            "Report the offline-wallet protocol interface implemented by every Iroha app-api deployment. cash_handoff_v1 and native bridge ABI 21 are universally available to applications and do not require settlement flags, escrow catalogs, asset metadata, or dataspace enrollment. This capability response is deliberately asset-neutral: mandatory is false, ready is true, and assets and blockers are empty. It does not claim that any particular asset has server-managed top-up, redemption, proof, or escrow material."
                 .to_owned(),
         ),
     );
     operation.insert(
         "parameters".into(),
-        Value::Array(vec![
-            norito::json!({
-                "name": "asset_definition_id",
-                "in": "query",
-                "required": true,
-                "schema": { "type": "string" },
-                "description": "Canonical asset-definition address literal or currently live asset alias. The response always contains the resolved canonical asset definition id."
-            }),
-            norito::json!({
-                "name": "If-None-Match",
-                "in": "header",
-                "required": false,
-                "schema": { "type": "string" },
-                "description": "A strong or weak ETag returned by an earlier readiness evaluation, or *. A match for the selected representation returns 304."
-            }),
-        ]),
+        Value::Array(vec![norito::json!({
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "A strong or weak ETag returned by an earlier capability response, or *. A match for the selected representation returns 304."
+        })]),
     );
     let mut responses = Map::new();
     let mut ok = dual_format_response(
-        "Readiness was evaluated successfully.",
-        "#/components/schemas/OfflineReadiness",
+        "The universal offline-wallet capability is available.",
+        "#/components/schemas/OfflineCapabilityStatus",
     );
     if let Value::Object(response) = &mut ok {
         response.insert(
@@ -1450,22 +1441,6 @@ fn offline_readiness_operation() -> Map {
             }
         }),
     );
-    responses.insert(
-        "400".to_owned(),
-        dual_format_error_response_with_reject_codes(
-            "The asset selector is malformed.",
-            "Exact application-validation code; transport or parser failures sharing HTTP 400 may omit this header.",
-            &["asset_definition_id_invalid"],
-        ),
-    );
-    responses.insert(
-        "404".to_owned(),
-        dual_format_error_response_with_reject_codes(
-            "The asset definition does not exist.",
-            "Exact application-resource code distinguishing a missing asset from an unmatched or intermediary-generated HTTP 404.",
-            &["asset_definition_not_found"],
-        ),
-    );
     responses.insert("401".to_owned(), api_token_unauthorized_response());
     responses.insert("406".to_owned(), offline_not_acceptable_response());
     responses.insert(
@@ -1473,13 +1448,6 @@ fn offline_readiness_operation() -> Map {
         retryable_error_response(
             "The readiness request was rejected by an ingress or route rate limit.",
             &[],
-        ),
-    );
-    responses.insert(
-        "503".to_owned(),
-        retryable_error_response(
-            "Torii could not evaluate readiness (readiness_unavailable).",
-            &["readiness_unavailable"],
         ),
     );
     operation.insert("responses".into(), Value::Object(responses));
@@ -23558,6 +23526,57 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "OfflineCapabilityStatus".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "mandatory", "cash_handoff_capability",
+                "required_bridge_abi_version", "max_hops",
+                "ready", "assets", "blockers"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "mandatory": {
+                    "type": "boolean",
+                    "const": false,
+                    "description": "Always false: offline-wallet UI capability is universal and is never a deployment admission requirement."
+                },
+                "cash_handoff_capability": {
+                    "type": "string",
+                    "const": (iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1),
+                    "description": "Client-facing irreversible cash-handoff interface implemented by every app-api deployment."
+                },
+                "required_bridge_abi_version": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "const": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4),
+                    "description": "Native bridge ABI exposed to offline-wallet applications."
+                },
+                "max_hops": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "const": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2)
+                },
+                "ready": {
+                    "type": "boolean",
+                    "const": true,
+                    "description": "Always true because this reports interface availability, not per-asset backend material."
+                },
+                "assets": {
+                    "type": "array",
+                    "maxItems": 0,
+                    "description": "Always empty; universal capability discovery never enrolls or attests any asset."
+                },
+                "blockers": {
+                    "type": "array",
+                    "maxItems": 0,
+                    "description": "Always empty; application feature capability never blocks node health or readiness."
+                }
+            },
+            "description": "Universal, asset-neutral offline-wallet application interface capability."
+        }),
+    );
+    schemas.insert(
         "OfflineRecipientRegistrationLineage".to_owned(),
         norito::json!({
             "type": "object",
@@ -29523,14 +29542,6 @@ pub fn generate_spec() -> Value {
     generate_spec_with_features(crate::router::builder::compiled_route_features())
 }
 
-/// Return the OpenAPI specification for one concrete Torii runtime.
-#[must_use]
-pub(crate) fn generate_spec_for_runtime(offline_enabled: bool) -> Value {
-    generate_spec_with_features(crate::router::builder::runtime_route_features(
-        offline_enabled,
-    ))
-}
-
 fn generate_spec_with_features(enabled_features: EnabledFeatures<'_>) -> Value {
     let mut doc = Map::new();
     doc.insert("openapi".into(), Value::String("3.1.0".to_owned()));
@@ -29551,9 +29562,10 @@ mod tests {
 
     use super::*;
 
-    const OFFLINE_TYPED_SCHEMA_ROOTS: [&str; 8] = [
+    const OFFLINE_TYPED_SCHEMA_ROOTS: [&str; 9] = [
         "OfflineTopUpRequest",
         "OfflineRedeemRequest",
+        "OfflineCapabilityStatus",
         "OfflineReadiness",
         "OfflineOperationReference",
         "OfflineOperationStatus",
@@ -32293,43 +32305,24 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn runtime_openapi_omits_offline_operations_when_capability_is_disabled() {
+    fn openapi_always_contains_the_universal_offline_interface() {
         use iroha_torii_shared::route_catalog::offline;
 
-        let static_paths = generate_spec()
+        let paths = generate_spec()
             .get("paths")
             .and_then(Value::as_object)
-            .expect("static OpenAPI paths")
-            .clone();
-        let enabled_paths = generate_spec_for_runtime(true)
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("offline-enabled runtime OpenAPI paths")
-            .clone();
-        let disabled_paths = generate_spec_for_runtime(false)
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("offline-disabled runtime OpenAPI paths")
-            .clone();
+            .expect("OpenAPI paths");
 
         for route in offline::ROUTES {
             let path = route.path().replace("{*", "{");
             assert!(
-                static_paths.contains_key(&path),
-                "static build-capability OpenAPI must retain {path}"
-            );
-            assert!(
-                enabled_paths.contains_key(&path),
-                "offline-enabled runtime OpenAPI must retain {path}"
-            );
-            assert!(
-                !disabled_paths.contains_key(&path),
-                "offline-disabled runtime OpenAPI must omit {path}"
+                paths.contains_key(&path),
+                "the universal OpenAPI contract must retain {path}"
             );
         }
         assert!(
-            disabled_paths.contains_key("/v1/accounts"),
-            "runtime filtering must preserve unrelated app-api operations"
+            paths.contains_key("/v1/accounts"),
+            "offline exposure must preserve unrelated app-api operations"
         );
     }
 

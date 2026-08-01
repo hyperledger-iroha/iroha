@@ -5926,6 +5926,17 @@ impl Kura {
         false
     }
 
+    fn sidecar_directory_binding_unchanged(
+        left: &std::fs::Metadata,
+        right: &std::fs::Metadata,
+    ) -> bool {
+        // Directory mtime/ctime describe mutations to child entries, not replacement of the
+        // directory itself. Progress sidecars are published concurrently, so descriptor binding
+        // must compare object identity only. Stable inventory scans deliberately retain the
+        // stronger timestamp comparison in `sidecar_directory_metadata_unchanged`.
+        Self::sidecar_metadata_same_object(left, right)
+    }
+
     #[cfg(windows)]
     fn sidecar_file_metadata_unchanged(
         left: &std::fs::Metadata,
@@ -6059,7 +6070,7 @@ impl Kura {
             .map_err(|error| Error::IO(error, expected_directory.to_path_buf()))?;
         if after.file_type().is_symlink()
             || !after.is_dir()
-            || !Self::sidecar_directory_metadata_unchanged(&before, &after)
+            || !Self::sidecar_directory_binding_unchanged(&before, &after)
         {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -7041,10 +7052,10 @@ impl Kura {
             .map_err(|error| Error::IO(error, expected_path.to_path_buf()))?;
         let after = Self::canonical_sidecar_directory_for(store_root, expected_path)?;
         if !opened.is_dir()
-            || !Self::sidecar_directory_metadata_unchanged(&metadata, &opened)
+            || !Self::sidecar_directory_binding_unchanged(&metadata, &opened)
             || !after.as_ref().is_some_and(|(after_path, after_metadata)| {
                 *after_path == canonical_path
-                    && Self::sidecar_directory_metadata_unchanged(&metadata, after_metadata)
+                    && Self::sidecar_directory_binding_unchanged(&metadata, after_metadata)
             })
         {
             return Err(Error::IO(
@@ -7349,11 +7360,8 @@ impl Kura {
                         return false;
                     }
                 }
-                let opened_matches = if index == 0 {
-                    Self::sidecar_directory_metadata_unchanged(&directory.metadata, &opened)
-                } else {
-                    Self::sidecar_metadata_same_object(&directory.metadata, &opened)
-                };
+                let opened_matches =
+                    Self::sidecar_directory_binding_unchanged(&directory.metadata, &opened);
                 if !opened.is_dir() || !opened_matches {
                     return false;
                 }
@@ -7361,14 +7369,10 @@ impl Kura {
                     .ok()
                     .flatten()
                     .is_some_and(|(canonical_path, metadata)| {
-                        let path_matches = if index == 0 {
-                            Self::sidecar_directory_metadata_unchanged(
-                                &directory.metadata,
-                                &metadata,
-                            )
-                        } else {
-                            Self::sidecar_metadata_same_object(&directory.metadata, &metadata)
-                        };
+                        let path_matches = Self::sidecar_directory_binding_unchanged(
+                            &directory.metadata,
+                            &metadata,
+                        );
                         canonical_path == directory.canonical_path && path_matches
                     })
             })

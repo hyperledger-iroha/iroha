@@ -10,6 +10,25 @@ types that V4 embeds directly. The manifest and native capability schemas have
 no `mode` field; schema/version, backend, transcript, and circuit identities
 pin the exact cryptographic contract.
 
+## Universal capability contract
+
+Offline cash is a wallet and device protocol, not a validator deployment mode.
+Every Iroha deployment exposes the ABI-21/V4 and `cash_handoff_v1` surfaces
+needed to build an offline user experience. Operators do not enable that
+capability per node, asset, domain, dataspace, or routing lane. In particular,
+there is no `settlement.offline.enabled` switch, `offline.enabled` asset
+metadata, configured escrow catalog, or offline-specific startup/readiness
+gate.
+
+Applications decide whether to expose offline load, pay, receive, receipt, and
+redemption screens. Two applications may use different dataspaces and expose
+different user interfaces while talking to validators with the same universal
+capability. `/health` and `/readyz` report ordinary process and node service
+readiness; wallet/device state and the absence of an asset-specific proof
+release cannot make a validator unhealthy. A command that references missing,
+inactive, malformed, or unauthorized proof material is rejected as that
+command's validation result rather than changing node admission.
+
 ## Amounts and assets
 
 Every request binds the chain id, asset definition, authoritative asset scale,
@@ -42,7 +61,7 @@ The lifecycle uses exactly four Torii routes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/v1/offline/readiness` | Authoritative scale, block, verifier windows, and artifact requirements |
+| `GET` | `/v1/offline/readiness` | Discover the universal ABI-21/V4 offline protocol capability |
 | `POST` | `/v1/offline/top-up` | Submit `OfflineTopUpRequest` |
 | `POST` | `/v1/offline/redeem` | Submit `OfflineRedeemRequest` |
 | `GET` | `/v1/offline/operations/{operation_id}` | Observe durable operation state and finality |
@@ -75,18 +94,12 @@ count, oversized unshield proof, or structurally decodable non-canonical
 representation therefore fails within its body and allocation ceilings.
 
 Readiness and operation responses support Torii's typed response negotiation.
-Readiness is authoritative only when its block context, live asset scale,
-active transfer verifier, top-up-shield verifier, recursive StepEq and
-StepEp verifier windows, unshield verifier window, bridge ABI, and artifact
-generation agree. Its authenticated `artifact_set` field is required but
-nullable. A present value binds the V4 generation, manifest, release policy,
-release attestation, issuance window, proof-pair bound, and asset scale to the
-atomic recursive verifier pair. It may establish authenticated backend
-construction, but it does not establish recursive-lineage admission.
-A null value requires both recursive verifier records and backend construction
-to be unavailable and exactly one `recursive_v4_registry_unavailable` or
-`recursive_v4_registry_malformed` blocker; a present value forbids both.
-The recursive pair uses registry backend `halo2/ipa` and exact roles
+The readiness response advertises the protocol-level ABI and handoff
+capability on every deployment; it is not an asset enrollment list and does
+not gate `/health`, `/readyz`, Torii startup, consensus, or block production.
+Asset scale, verifier windows, release material, authorization, and balances
+are validated against the exact top-up or redemption command when that command
+is submitted. The recursive pair uses registry backend `halo2/ipa` and exact roles
 `kagemusha_recursive_step_eq_v4_verifier_record` with circuit
 `kagemusha-recursive-spend-step-eq-compact-layout-v5` and
 `kagemusha_recursive_step_ep_v4_verifier_record` with circuit
@@ -336,12 +349,13 @@ vendored processed-key reader panics are converted into ordinary rejection.
 Release verification and finalization likewise authenticate one framed role at
 a time and drop its payload before opening the next. They do not reconstruct an
 eight-role raw prover container merely to check carrier bindings.
-Validator startup performs the same exact shape-derived role-size preflight
+Cache qualification performs the same exact shape-derived role-size preflight
 before Halo2 parsing. Its decoded-memory budget includes retained IPA vectors,
 verifier-key FFT domains, transient release files, and allocator headroom.
 Runtime validates the shipped selector-zero proof with the final Step VK and
-does not regenerate a bootstrap VK. A release that cannot fit the configured
-budget fails closed before verifier parsing.
+does not regenerate a bootstrap VK. A supplied release that cannot fit the
+configured budget is rejected before verifier parsing; this does not prevent
+the node from starting without that cache.
 Swift, Kotlin, and Java release-authentication inputs therefore require that
 promotion record alongside the trusted policy, attestation, benchmark evidence,
 and review. A partial, unpromoted, or role-substituted generation never becomes
@@ -349,32 +363,33 @@ active.
 
 ## Validator provisioning and activation
 
-Operators must configure both paths together under `settlement.offline`:
-`kagemusha_release_policy_path` names the canonical Norito trust policy, and
-`kagemusha_artifact_dir` names the directory whose children are manifest
-digests. The optional absolute
-`kagemusha_catalog_qualification_seal_path` names an immutable, root-trusted
-qualification seal for that exact catalog and validator executable.
-`kagemusha_max_decoded_bytes` caps the conservative decoded verifier working-set
-estimate. It defaults to, and cannot be raised above, 256 MiB per node; lower
-deployment limits are accepted. Leaving either release path unset,
-disabling escrow, omitting every escrow asset, omitting the funded permitted
-command issuer, or supplying malformed/corrupt material is a startup error
-after Kura replay and before Kura writing, networking, consensus, or Torii.
+No validator provisioning step enables offline support. Offline routes and
+ABI-21/V4 command types are present even when no Kagemusha release cache is
+installed and no asset has yet been used by an offline wallet. Escrow account
+identity is derived deterministically when an online top-up or redemption
+command executes; it is not selected through node configuration and does not
+constitute an asset catalog.
 
-Without a configured qualification seal, startup performs the complete
-authentication pass: it authenticates every candidate subdirectory, validates
-framed and payload sizes and SHA-256 values, parses the six validator-side
-artifacts (ParamsIPA, verifying key, and bootstrap witness for Eq and Ep), and
-builds an immutable catalog keyed by manifest digest. Loading fails before
-large artifact allocation when the decoded estimate exceeds the configured
-budget. With a configured seal, startup instead uses the sealed cold path and
-fails closed if the seal is missing, mutable, malformed, or no longer matches
-the source directories or running executable. For each Eq/Ep profile the seal
-binds the manifest's value-free V1 compiled-protocol structure digest
-separately from the qualified V2 full protocol identity derived from the final
-verifying key; the two values must be non-zero and distinct. The sealed path
-never silently falls back to the expensive qualification pass.
+An operator may install a local authenticated Kagemusha release cache to make
+specific proof material available without fetching it during transaction
+execution. The optional paired `kagemusha_release_policy_path` and
+`kagemusha_artifact_dir`, optional qualification seal, and bounded decoded
+working-set limit are cache qualification controls only. If supplied, malformed
+or corrupt material is rejected and cannot be used for a command. If omitted,
+Iroha still starts, participates in consensus, serves every offline route, and
+reports ordinary node readiness. A transaction requiring unavailable release
+material fails transaction validation with a precise error.
+
+Qualification authenticates every candidate subdirectory, validates framed
+and payload sizes and SHA-256 values, parses the six validator-side artifacts
+(ParamsIPA, verifying key, and bootstrap witness for Eq and Ep), and builds an
+immutable cache keyed by manifest digest. Loading fails before large artifact
+allocation when the decoded estimate exceeds the configured budget. A supplied
+qualification seal must be immutable, well formed, and bound to both the source
+directories and running executable. For each Eq/Ep profile the seal binds the
+manifest's value-free V1 compiled-protocol structure digest separately from
+the qualified V2 full protocol identity derived from the final verifying key;
+the two values must be non-zero and distinct.
 
 Create a seal only with the no-bind validation command:
 
@@ -419,8 +434,10 @@ Wallets and provers install all eight artifacts, including both proving keys.
 Generated `dist/kagemusha/v4/*`, raw parameters, keys, device logs, and signing
 inputs remain untracked runtime material.
 
-A validator must be provisioned and restarted with a candidate before
-`ActivateKagemushaRecursiveReleaseV4` is submitted. Activation authenticates
+A validator that will validate a transaction against a particular locally
+cached candidate must have that candidate before the transaction is submitted.
+This is command material availability, not offline capability or node
+readiness. `ActivateKagemushaRecursiveReleaseV4` authenticates
 the release-policy digest, signed release and evidence, exact-eight inventory,
 chain/asset/scale and future issuance window, distinct inline Eq/Ep verifier
 records, matching local cached material, and the embedded production iOS and
@@ -428,36 +445,28 @@ Android device-attestation policy. The instruction requires both release-
 activation and device-policy governance permissions, then publishes the exact
 device policy, release, and Eq/Ep records in one consensus transaction overlay.
 There is no independently reorderable or standalone release-activation path. A
-validator missing non-revoked material for an already active release fails
-before joining the voting set. Withdrawal ends new issuance and offline-change
+validator missing material required by a submitted operation rejects that
+operation deterministically; it does not become unhealthy or leave the voting
+set. Withdrawal ends new issuance and offline-change
 creation, but retained material continues to verify and fully redeem previously
 issued branches indefinitely. Later governed device-policy rotation remains a
 separate operation and invalidates prior registrations, forcing re-registration.
 
 ## Production boundary
 
-Admission is selected by the transaction's exact authenticated ABI-21/V4
-release binding. Consensus must contain the release-qualified Eq/Ep records,
-the immutable startup catalog must authenticate the same release, and the
-production verifier must construct from that material. There is no process-wide
-boolean admission shortcut.
-
-Readiness preserves three independent facts. `proof_backend_available` reports
-exact backend construction. `recursive_lineage_supported` is true only with a
-non-null authenticated `artifact_set`, both distinct active V4 recursive
-records, and that constructed backend. `ready` is true only when the complete
-blocker set is empty; an unrelated issuer or transfer blocker can therefore
-make `ready` false without erasing backend or lineage facts.
-`recursive_lineage_unavailable` is present exactly when lineage is false.
+Admission is selected by each transaction's exact authenticated ABI-21/V4
+release binding. Consensus must contain the release-qualified Eq/Ep records
+required by that transaction, and the production verifier must construct from
+authenticated material. There is no process-wide boolean admission shortcut,
+per-asset enablement bit, or node-readiness consequence.
 
 `KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE` remains `false` in the
 candidate change set. It may be changed only by the final signed promotion
 commit after the authenticated review, benchmark, physical-device, and
 role-threshold evidence has been added. Even after promotion it is not by
-itself an admission or readiness signal: runtime capability stays fail-closed
-until the exact authenticated ABI-21/V4 artifact set is installed, its live
-inventory is revalidated, and both verifier and prover material construct
-successfully.
+itself authorization for a transaction: the exact authenticated ABI-21/V4
+material referenced by that transaction must validate and construct
+successfully. None of these transaction checks gates node startup or health.
 Top-up and redemption change additionally require the governed selected
 release's issuance window to be active. Full redemption authenticates the
 parent release for its longer redemption lifetime, so a legitimately issued

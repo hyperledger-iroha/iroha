@@ -954,11 +954,11 @@ fn validate_feature_name(
     }
 }
 
-/// Final first-release offline route descriptors.
+/// Universal offline-wallet protocol route descriptors.
 pub mod offline {
     use super::{ApiSurface, FeatureGate, HttpMethod, Listener, RouteDescriptor, RouteProjections};
 
-    /// Fetch evaluated offline-payment readiness for an asset definition.
+    /// Fetch the node's universal offline-wallet interface capability.
     pub const READINESS_PATH: &str = "/v1/offline/readiness";
     /// Resolve proof-bearing active registration lineage for a signed receiver request.
     pub const RECIPIENT_LINEAGE_PATH: &str = "/v1/offline/receiver-lineage";
@@ -969,7 +969,7 @@ pub mod offline {
     /// Fetch one offline operation by its canonical operation ID.
     pub const OPERATION_PATH: &str = "/v1/offline/operations/{operation_id}";
 
-    /// Descriptor for offline-payment readiness evaluation.
+    /// Descriptor for universal offline-wallet capability discovery.
     pub const READINESS: RouteDescriptor = RouteDescriptor::new(
         "offline.readiness",
         HttpMethod::Get,
@@ -977,8 +977,8 @@ pub mod offline {
         ApiSurface::Public,
         Listener::Torii,
     )
-    .with_feature_gate(FeatureGate::All(&["app_api", "offline"]))
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::ALL)
     .with_implicit_head(true)
     .with_cors_options(true);
     /// Descriptor for proof-bearing receiver-registration lineage resolution.
@@ -989,8 +989,8 @@ pub mod offline {
         ApiSurface::Public,
         Listener::Torii,
     )
-    .with_feature_gate(FeatureGate::All(&["app_api", "offline"]))
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Descriptor for online-to-offline top-up submission.
     pub const TOP_UP: RouteDescriptor = RouteDescriptor::new(
@@ -1000,8 +1000,8 @@ pub mod offline {
         ApiSurface::Public,
         Listener::Torii,
     )
-    .with_feature_gate(FeatureGate::All(&["app_api", "offline"]))
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Descriptor for offline redemption submission.
     pub const REDEEM: RouteDescriptor = RouteDescriptor::new(
@@ -1011,8 +1011,8 @@ pub mod offline {
         ApiSurface::Public,
         Listener::Torii,
     )
-    .with_feature_gate(FeatureGate::All(&["app_api", "offline"]))
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Descriptor for reading one offline operation.
     pub const OPERATION: RouteDescriptor = RouteDescriptor::new(
@@ -1022,8 +1022,8 @@ pub mod offline {
         ApiSurface::Public,
         Listener::Torii,
     )
-    .with_feature_gate(FeatureGate::All(&["app_api", "offline"]))
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::ALL)
     .with_implicit_head(true)
     .with_cors_options(true);
 
@@ -1246,7 +1246,7 @@ pub mod core {
         reason: "orchestrator liveness-probe convention",
     })
     .with_implicit_head(true);
-    /// Complete node readiness probe, including mandatory offline cash.
+    /// Complete node readiness probe, independent of optional application state.
     pub const READYZ: RouteDescriptor = RouteDescriptor::new(
         "protocol.readyz",
         HttpMethod::Get,
@@ -4999,26 +4999,24 @@ mod tests {
     }
 
     #[test]
-    fn offline_routes_require_the_runtime_capability_in_addition_to_app_api() {
+    fn offline_routes_are_universal_for_app_api_and_project_to_mcp() {
         let catalog = RouteCatalog::new(offline::ROUTES);
-        assert!(
+        assert_eq!(
             catalog
                 .project(
                     CatalogProjection::Mounted,
                     EnabledFeatures::new(&["app_api"]),
                 )
-                .is_empty(),
-            "an app-api node with offline support disabled must expose no offline paths"
+                .len(),
+            offline::ROUTES.len(),
+            "every app-api node must expose the complete offline route family"
         );
         assert_eq!(
             catalog
-                .project(
-                    CatalogProjection::Mounted,
-                    EnabledFeatures::new(&["app_api", "offline"]),
-                )
+                .project(CatalogProjection::Mcp, EnabledFeatures::new(&["app_api"]))
                 .len(),
             offline::ROUTES.len(),
-            "an offline-enabled app-api node must expose the complete route family"
+            "the offline route family must be available to MCP clients"
         );
     }
 

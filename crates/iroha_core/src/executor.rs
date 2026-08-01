@@ -377,21 +377,28 @@ fn native_iterable_query_access(
         }
         return Err(invalid_native_iterable_query());
     }
-    if let Some(payload) = payload_for!(data_model_query::CommittedTransaction, CommittedTransaction)
+    if let Some(payload) =
+        payload_for!(data_model_query::CommittedTransaction, CommittedTransaction)
     {
-        if any_exact!(payload; data_model_query::FindTransactions) {
+        if any_exact!(
+            payload;
+            data_model_query::transaction::prelude::FindTransactions
+        ) {
             return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
     }
     if let Some(payload) = payload_for!(iroha_data_model::block::SignedBlock, SignedBlock) {
-        if any_exact!(payload; data_model_query::FindBlocks) {
+        if any_exact!(payload; data_model_query::block::prelude::FindBlocks) {
             return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
     }
     if let Some(payload) = payload_for!(BlockHeader, BlockHeader) {
-        if any_exact!(payload; data_model_query::FindBlockHeaders) {
+        if any_exact!(
+            payload;
+            data_model_query::block::prelude::FindBlockHeaders
+        ) {
             return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
@@ -16974,14 +16981,14 @@ mod tests {
                 if message.contains("exact mint permission")
         ));
 
-        let offline_key: Name = "offline.enabled".parse().expect("metadata key");
+        let metadata_key: Name = "display.category".parse().expect("metadata key");
         let unprivileged_metadata = executor.execute_instruction(
             &mut stx,
             &retail,
             InstructionBox::from(iroha_data_model::isi::SetKeyValue::asset_definition(
                 pkr.clone(),
-                offline_key.clone(),
-                Json::new(true),
+                metadata_key.clone(),
+                Json::new("retail"),
             )),
         );
         assert!(
@@ -17019,11 +17026,11 @@ mod tests {
                 &retail,
                 InstructionBox::from(iroha_data_model::isi::SetKeyValue::asset_definition(
                     pkr.clone(),
-                    offline_key,
-                    Json::new(true),
+                    metadata_key,
+                    Json::new("retail"),
                 )),
             )
-            .expect("the exact PKR metadata grant must authorize offline metadata changes");
+            .expect("the exact PKR metadata grant must authorize metadata changes");
 
         assert_eq!(
             stx.world
@@ -17038,8 +17045,8 @@ mod tests {
                 .asset_definition(&pkr)
                 .expect("PKR definition")
                 .metadata()
-                .get(&"offline.enabled".parse::<Name>().expect("metadata key")),
-            Some(&Json::new(true)),
+                .get(&"display.category".parse::<Name>().expect("metadata key")),
+            Some(&Json::new("retail")),
         );
     }
 

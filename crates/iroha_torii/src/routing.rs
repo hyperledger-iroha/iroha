@@ -244,11 +244,8 @@ pub const SORANET_PRIVACY_EVENT_ENDPOINT: &str = "/v1/soranet/privacy/event";
 #[cfg(feature = "telemetry")]
 pub const SORANET_PRIVACY_SHARE_ENDPOINT: &str = "/v1/soranet/privacy/share";
 
-pub async fn handler_openapi_spec(State(state): State<crate::SharedAppState>) -> Response {
-    let offline_enabled = state.state.view().settlement.offline.enabled;
-    match norito::json::to_string_pretty(&crate::openapi::generate_spec_for_runtime(
-        offline_enabled,
-    )) {
+pub async fn handler_openapi_spec(State(_state): State<crate::SharedAppState>) -> Response {
+    match norito::json::to_string_pretty(&crate::openapi::generate_spec()) {
         Ok(body) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/json")
@@ -48759,9 +48756,7 @@ mod cursor_mode_tests {
 
     use iroha_core::{
         kura::Kura,
-        query::snapshot::{
-            CursorMode, run_on_snapshot_with_mode_arc_and_start_budget,
-        },
+        query::snapshot::{CursorMode, run_on_snapshot_with_mode_arc_and_start_budget},
         query::store::LiveQueryStore,
         smartcontracts::isi::query::QueryLimits,
         state::{State, World},
@@ -48780,10 +48775,8 @@ mod cursor_mode_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let domains = (0..3).map(|index| {
-            Domain::new(
-                DomainId::try_new(format!("cursor{index}"), "world").expect("domain id"),
-            )
-            .build(authority)
+            Domain::new(DomainId::try_new(format!("cursor{index}"), "world").expect("domain id"))
+                .build(authority)
         });
         let world = World::with(
             domains,
@@ -48804,9 +48797,8 @@ mod cursor_mode_tests {
             },
             ..QueryParams::default()
         };
-        let payload = norito::codec::Encode::encode(
-            &iroha_data_model::query::domain::prelude::FindDomains,
-        );
+        let payload =
+            norito::codec::Encode::encode(&iroha_data_model::query::domain::prelude::FindDomains);
         let query_box: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<Domain>::new(
             CompoundPredicate::PASS,
             SelectorTuple::default(),

@@ -95,7 +95,7 @@ pub(crate) fn sample_credential_randomness_v1<R: CryptoRng + RngCore>(
     let mut seed = Zeroizing::new([0_u8; 32]);
     rng.try_fill_bytes(seed.as_mut())
         .map_err(|_| CredentialRandomnessErrorV1::RandomnessUnavailable)?;
-    sample_credential_randomness_from_seed_v1(seed.as_ref()).map(|(sample, _)| sample)
+    sample_credential_randomness_from_seed_v1(&*seed).map(|(sample, _)| sample)
 }
 
 pub(crate) fn sample_credential_randomness_from_seed_v1(
@@ -131,7 +131,7 @@ fn sample_credential_randomness_from_seed_with_limits_v1(
     let encryption_key = ConstantTimeAes256KeyV1::new(seed);
     let mut sign_cache = GaussianSignCacheV1::new();
     for outer_domain in 0..vector_attempts {
-        let mut centered = Zeroizing::new(Box::new(
+        let mut centered = Box::new(Zeroizing::new(
             [[0_i64; DEGREE_V1]; CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1],
         ));
         let mut norm_squared = 0_u64;

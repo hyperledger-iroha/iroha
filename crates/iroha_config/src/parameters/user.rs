@@ -1109,14 +1109,6 @@ impl Root {
     #[allow(clippy::too_many_lines)]
     pub fn parse(mut self) -> Result<actual::Root, ParseError> {
         let mut emitter = Emitter::new();
-        // Disabled offline cash is intentionally inert on development and
-        // non-Taira profiles. Drop a stale command section before Torii parses
-        // credentials so it cannot activate routes or make an unused optional
-        // capability a startup dependency. Public Taira's explicit capability
-        // requirement is enforced after parsing against the chain id.
-        if !self.settlement.offline.enabled {
-            self.torii.kagemusha_commands = None;
-        }
         let _account_address_scope = AccountAddressParseScope::enter(
             self.default_account_domain_label.value(),
             *self.chain_discriminant.value(),
@@ -8034,19 +8026,11 @@ pub struct Settlement {
 /// User-level Kagemusha escrow and execution configuration.
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Offline {
-    /// Enable Kagemusha offline-cash support for this node profile.
-    ///
-    /// Public Taira profiles must opt in explicitly; development and other
-    /// dataspaces do not inherit an unrelated offline-cash startup obligation.
-    #[config(default = "false")]
-    pub enabled: bool,
-    /// Require Kagemusha cash to be escrow-backed.
-    #[config(default = "true")]
-    pub escrow_required: bool,
-    /// Escrow account bindings keyed by asset definition id.
-    #[config(default = "BTreeMap::new()")]
-    pub escrow_accounts: BTreeMap<String, String>,
     /// Canonical Norito policy authenticating promoted Kagemusha releases.
+    ///
+    /// This optional cache source is used only when an operator explicitly
+    /// validates or promotes a verifier release. It does not enable offline
+    /// support and its absence never prevents node startup.
     pub kagemusha_release_policy_path: Option<PathBuf>,
     /// Directory containing manifest-digest-addressed Kagemusha release artifacts.
     pub kagemusha_artifact_dir: Option<PathBuf>,
@@ -8060,9 +8044,6 @@ pub struct Offline {
 impl Default for Offline {
     fn default() -> Self {
         Self {
-            enabled: false,
-            escrow_required: true,
-            escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
                 defaults::settlement::offline::kagemusha_release_policy_path(),
             kagemusha_artifact_dir: defaults::settlement::offline::kagemusha_artifact_dir(),
@@ -8242,25 +8223,11 @@ impl Offline {
     /// Convert Kagemusha escrow policy into runtime parameters.
     pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Offline {
         let Offline {
-            enabled,
-            escrow_required,
-            escrow_accounts,
             kagemusha_release_policy_path,
             kagemusha_artifact_dir,
             kagemusha_catalog_qualification_seal_path,
             mut kagemusha_max_decoded_bytes,
         } = self;
-        if !enabled {
-            // Canonical disabled state: stale values cannot affect execution
-            // policy hashes, load release material, create escrow bindings, or
-            // turn an unused optional service into a startup dependency.
-            return actual::Offline::default();
-        }
-        if !escrow_required {
-            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
-                "settlement.offline.escrow_required cannot be false when offline cash is enabled",
-            ));
-        }
         if kagemusha_release_policy_path.is_some() != kagemusha_artifact_dir.is_some() {
             emitter.emit(
                 Report::new(ParseError::InvalidSettlementConfig).attach(
@@ -8316,41 +8283,11 @@ impl Offline {
             kagemusha_max_decoded_bytes =
                 defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES;
         }
-        let mut escrow_bindings = BTreeMap::new();
-        for (definition, account) in escrow_accounts {
-            let definition_id = match definition.parse() {
-                Ok(id) => id,
-                Err(err) => {
-                    emitter.emit(
-                        Report::new(ParseError::InvalidSettlementConfig).attach(format!(
-                            "invalid offline escrow asset definition `{definition}`: {err}"
-                        )),
-                    );
-                    continue;
-                }
-            };
-            let account_id = match AccountId::parse_encoded(&account) {
-                Ok(parsed) => parsed.into_account_id(),
-                Err(err) => {
-                    emitter.emit(
-                        Report::new(ParseError::InvalidSettlementConfig)
-                            .attach(format!("invalid offline escrow account `{account}`: {err}")),
-                    );
-                    continue;
-                }
-            };
-            if escrow_bindings.insert(definition_id, account_id).is_some() {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSettlementConfig).attach(format!(
-                        "duplicate offline escrow binding for `{definition}`"
-                    )),
-                );
-            }
-        }
         actual::Offline {
-            enabled,
-            escrow_required,
-            escrow_accounts: escrow_bindings,
+            // Escrow bindings are deterministic runtime state. They are
+            // populated lazily by offline instructions and are never supplied
+            // by node configuration.
+            escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path,
             kagemusha_artifact_dir,
             kagemusha_catalog_qualification_seal_path,
@@ -32272,123 +32209,27 @@ policy_digest_hex = "{policy_digest_hex}"
     }
 
     #[test]
-    fn disabled_offline_profile_canonicalizes_stale_settings_and_commands_during_root_parse() {
-        let mut table = base_table();
-        let settlement = table
-            .entry("settlement")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("settlement table");
-        settlement.insert(
-            "offline".into(),
-            Value::Table(Table::from_iter([
-                ("enabled".into(), Value::Boolean(false)),
-                ("escrow_required".into(), Value::String("bad-bool".into())),
-                ("escrow_accounts".into(), Value::Array(Vec::new())),
-                (
-                    "kagemusha_release_policy_path".into(),
-                    Value::String(String::new()),
-                ),
-                (
-                    "kagemusha_artifact_dir".into(),
-                    Value::String("stale-artifacts".into()),
-                ),
-                (
-                    "kagemusha_catalog_qualification_seal_path".into(),
-                    Value::String("relative-stale-seal".into()),
-                ),
-                (
-                    "kagemusha_max_decoded_bytes".into(),
-                    Value::String("bad-budget".into()),
-                ),
-            ])),
-        );
-
-        let torii = table
-            .get_mut("torii")
-            .and_then(Value::as_table_mut)
-            .expect("torii table");
-        torii.insert(
-            "kagemusha_commands".into(),
-            Value::Table(Table::from_iter([
-                ("enabled".into(), Value::Boolean(true)),
-                ("private_key".into(), Value::Integer(7)),
-                ("minimum_xor_balance".into(), Value::Array(Vec::new())),
-                ("max_tx_value".into(), Value::Boolean(true)),
-                (
-                    "operation_registry_max_entries".into(),
-                    Value::String("bad-limit".into()),
-                ),
-                (
-                    "operation_registry_max_bytes".into(),
-                    Value::Integer(512 * 1_024),
-                ),
-            ])),
-        );
-
-        let actual = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect("disabled offline profile must ignore dormant optional settings");
-        assert!(!actual.settlement.offline.enabled);
-        assert!(actual.settlement.offline.escrow_required);
-        assert!(actual.settlement.offline.escrow_accounts.is_empty());
-        assert!(
-            actual
-                .settlement
-                .offline
-                .kagemusha_release_policy_path
-                .is_none()
-        );
-        assert!(actual.settlement.offline.kagemusha_artifact_dir.is_none());
-        assert!(
-            actual
-                .settlement
-                .offline
-                .kagemusha_catalog_qualification_seal_path
-                .is_none()
-        );
-        assert_eq!(
-            actual.settlement.offline.kagemusha_max_decoded_bytes,
-            defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
-        );
-        assert!(
-            actual.torii.kagemusha_commands.is_none(),
-            "disabled offline cash must not activate command routes"
-        );
-    }
-
-    fn offline_overlay(enabled: bool, malformed_subordinate: bool) -> Table {
-        let mut offline = Table::from_iter([("enabled".into(), Value::Boolean(enabled))]);
-        if malformed_subordinate {
-            offline.insert(
-                "escrow_accounts".into(),
-                Value::String("not-an-escrow-map".into()),
-            );
-            offline.insert(
-                "kagemusha_max_decoded_bytes".into(),
-                Value::String("not-a-byte-budget".into()),
-            );
-        }
-        Table::from_iter([(
-            "settlement".into(),
-            Value::Table(Table::from_iter([(
+    fn legacy_offline_enablement_and_catalog_keys_are_rejected() {
+        for (key, value) in [
+            ("enabled", Value::Boolean(false)),
+            ("escrow_required", Value::Boolean(true)),
+            ("escrow_accounts", Value::Table(Table::new())),
+        ] {
+            let mut table = base_table();
+            let settlement = table
+                .entry("settlement")
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("settlement table");
+            settlement.insert(
                 "offline".into(),
-                Value::Table(offline),
-            )])),
-        )])
-    }
+                Value::Table(Table::from_iter([(key.into(), value)])),
+            );
 
-    #[test]
-    fn enabled_offline_profile_keeps_malformed_subordinates_strict() {
-        let mut table = base_table();
-        table.extend(offline_overlay(true, true));
-
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("enabled offline profile must validate subordinate types");
-        let report = format!("{error:?}");
-        assert!(
-            report.contains("escrow_accounts") || report.contains("kagemusha_max_decoded_bytes"),
-            "{report}"
-        );
+            let error = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect_err("retired offline enablement keys must be rejected");
+            assert!(format!("{error:?}").contains(key), "unexpected error: {error:?}");
+        }
     }
 
     #[test]
@@ -32449,7 +32290,6 @@ policy_digest_hex = "{policy_digest_hex}"
     #[test]
     fn disabled_kagemusha_commands_ignore_malformed_subordinates_when_offline_is_active() {
         let mut table = base_table();
-        table.extend(offline_overlay(true, false));
         let torii = table
             .get_mut("torii")
             .and_then(Value::as_table_mut)
@@ -32469,14 +32309,12 @@ policy_digest_hex = "{policy_digest_hex}"
 
         let actual = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect("disabled command service must ignore dormant subordinate values");
-        assert!(actual.settlement.offline.enabled);
         assert!(actual.torii.kagemusha_commands.is_none());
     }
 
     #[test]
     fn enabled_kagemusha_commands_keep_malformed_subordinates_strict() {
         let mut table = base_table();
-        table.extend(offline_overlay(true, false));
         let torii = table
             .get_mut("torii")
             .and_then(Value::as_table_mut)
@@ -32492,37 +32330,6 @@ policy_digest_hex = "{policy_digest_hex}"
 
         actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("enabled command service must validate subordinate types");
-    }
-
-    #[test]
-    fn ordered_sources_use_the_highest_precedence_offline_switch_before_rewrite() {
-        let disabled_base_enabled_overlay = super::Root::read_and_complete(
-            ConfigReader::new()
-                .with_toml_source(TomlSource::inline({
-                    let mut table = base_table();
-                    table.extend(offline_overlay(false, true));
-                    table
-                }))
-                .with_toml_source(TomlSource::inline(offline_overlay(true, false))),
-        );
-        assert!(
-            disabled_base_enabled_overlay.is_err(),
-            "an enabled overlay must retain strict validation of inherited values"
-        );
-
-        let enabled_base_disabled_overlay = super::Root::read_and_complete(
-            ConfigReader::new()
-                .with_toml_source(TomlSource::inline({
-                    let mut table = base_table();
-                    table.extend(offline_overlay(true, true));
-                    table
-                }))
-                .with_toml_source(TomlSource::inline(offline_overlay(false, false))),
-        )
-        .expect("a disabled overlay must canonicalize the inherited dormant subtree")
-        .parse()
-        .expect("canonical disabled profile must parse");
-        assert!(!enabled_base_disabled_overlay.settlement.offline.enabled);
     }
 
     #[test]

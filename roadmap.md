@@ -53,8 +53,14 @@ signed-mutation path also uses
 middleware-authenticated signer headers only: Torii rejects retired inline
 signing fields and the CLI omits them from every mutation request. Focused
 locked/offline validation of those consensus and restart repairs is complete.
-Compact-commitment validation, source sealing, release generation, and live
-rollout remain open, and public Taira remains on the old deployment. Do not
+Linked-worktree Git provenance now watches the actual common packed ref and
+safe loose-ref ancestor, preventing the stale nonexistent `packed-refs` input
+from cascading every focused command into a full core relink. The two final
+regression fixtures also mirror production semantics for durable post-decision
+CommitQC rebroadcast and startup auxiliary-lane binding. Source-bound focused
+revalidation, compact-commitment validation, source sealing, release
+generation, and live rollout remain open, and public Taira remains on the old
+deployment. Do not
 expose it as a ready offline-cash lane until the guarded reset reports
 `mandatory: true`, `ready: true` and passes the signed public canary. The
 rollout checker now enforces that same `/readyz` invariant on public ingress

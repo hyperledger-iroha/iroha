@@ -9,7 +9,7 @@ use zeroize::Zeroize;
 
 use super::PRNG;
 
-pub(super) struct ChaCha20Prng {
+pub(in crate::privacy_engines::bootle_lantern::falcon512) struct ChaCha20Prng {
     buffer: [u8; 512],
     state: [u8; 56],
     pointer: usize,

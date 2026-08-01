@@ -105,12 +105,10 @@ impl BootleLanternIssuerKeyPairV1 {
         checked
             .try_fill_bytes(seed.as_mut())
             .map_err(|_| BootleLanternIssuanceErrorV1::RandomnessUnavailable)?;
-        let trapdoor = falcon512::generate_from_seed(
-            seed.as_ref(),
-            MAX_BOOTLE_LANTERN_ISSUER_KEYGEN_CANDIDATES_V1,
-        )
-        .ok_or(BootleLanternIssuanceErrorV1::IssuerKeyGenerationExhausted)?;
-        let public_matrix = public_matrix_from_falcon_h_v1(trapdoor.h.as_ref())?;
+        let trapdoor =
+            falcon512::generate_from_seed(&*seed, MAX_BOOTLE_LANTERN_ISSUER_KEYGEN_CANDIDATES_V1)
+                .ok_or(BootleLanternIssuanceErrorV1::IssuerKeyGenerationExhausted)?;
+        let public_matrix = public_matrix_from_falcon_h_v1(&**trapdoor.h)?;
         public_matrix
             .validate_r512_multiplication_structure_v1()
             .map_err(|_| BootleLanternIssuanceErrorV1::InvalidIssuerPublicMatrix)?;
@@ -514,15 +512,15 @@ pub fn issuer_blind_issue_with_rng_v1<RTag: CryptoRng + RngCore, RPreimage: Cryp
             .try_fill_bytes(seed.as_mut())
             .map_err(|_| BootleLanternIssuanceErrorV1::RandomnessUnavailable)?;
         if let Some(candidate) =
-            falcon512::sample_preimage_from_seed(&issuer.trapdoor, &falcon_target, seed.as_ref())
+            falcon512::sample_preimage_from_seed(&issuer.trapdoor, &falcon_target, &*seed)
         {
             preimage = Some(candidate);
             break;
         }
     }
     let preimage = preimage.ok_or(BootleLanternIssuanceErrorV1::PreimageSamplingExhausted)?;
-    let signature_one = centered_r512_to_r64_rank8_v1(preimage.first.as_ref());
-    let signature_two = centered_r512_to_r64_rank8_v1(preimage.second.as_ref());
+    let signature_one = centered_r512_to_r64_rank8_v1(&**preimage.first);
+    let signature_two = centered_r512_to_r64_rank8_v1(&**preimage.second);
     Ok(BootleLanternBlindIssuanceResponseV1 {
         tag,
         signature_one,

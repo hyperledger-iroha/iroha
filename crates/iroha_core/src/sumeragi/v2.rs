@@ -15360,14 +15360,17 @@ mod tests {
             .expect("retire the exact Decision application lifecycle");
         assert_eq!(completed.disposition(), reducer::StepDisposition::Applied);
         assert!(completed.effects().is_empty());
+        let expected_retransmit = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
+        ));
         for attempt in 0..3 {
             let retransmit = adapter
                 .retransmit_elapsed(adapter.current_tag())
                 .unwrap_or_else(|error| panic!("post-drain retransmission {attempt}: {error}"));
-            assert!(
-                retransmit.effects().is_empty(),
-                "a drained exact Decision lifecycle cannot recreate physical Fetch/Store/Validate/Apply work: {:?}",
-                retransmit.effects()
+            assert_eq!(
+                retransmit.effects(),
+                std::slice::from_ref(&expected_retransmit),
+                "a drained exact Decision may retransmit only its exact durable CommitQC control"
             );
         }
         assert!(adapter.deferred_completions.is_empty());

@@ -19,8 +19,6 @@ MIN_VALIDATORS = 4
 # Mirrors `iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT`.
 MAX_VALIDATORS = 128
 TAIRA_CHAIN_DISCRIMINANT = 369
-TAIRA_DS_ASSET_ALIAS = "ds#boi.is"
-TAIRA_DS_ASSET_SCALE = 2
 MIB = 1024 * 1024
 # First-release privacy admission permits one 9 MiB action per 10 MiB
 # transaction and two such actions per block. The body retains another 1 MiB
@@ -111,10 +109,6 @@ class SharedSecrets:
     soracloud_runtime_signer_public_key_hex: str | None = None
     soracloud_runtime_signer_revision: int | None = None
     soracloud_runtime_signer_policy_digest_hex: str | None = None
-    offline_asset_alias: str | None = None
-    offline_asset_definition_id: str | None = None
-    offline_asset_scale: int | None = None
-    offline_escrow_account: str | None = None
     streaming_identity_public_key: str | None = None
     streaming_identity_private_key: str | None = None
     sorafs_council_public_keys: tuple[str, ...] = ()
@@ -497,11 +491,11 @@ def _validate_account_onboarding_secrets(
             )
         if shared.account_onboarding_scope_domain is not None:
             raise ValueError(
-                f"{context} BOI/Taira onboarding must use the deployed `is` dataspace, not a domain"
+                f"{context} BOI/Taira onboarding must use a deployed Taira dataspace, not a domain"
             )
-        if shared.account_onboarding_scope_dataspace != "is":
+        if shared.account_onboarding_scope_dataspace not in {"is", "is2"}:
             raise ValueError(
-                f"{context} BOI/Taira onboarding dataspace must be exactly `is`"
+                f"{context} BOI/Taira onboarding dataspace must be exactly `is` or `is2`"
             )
 
 
@@ -631,51 +625,23 @@ def _validate_mandatory_soracloud_runtime_signer(
         )
 
 
-def _validate_mandatory_offline_secrets(
+def _validate_kagemusha_command_submitter(
     shared: SharedSecrets, context: str
 ) -> None:
-    required = {
-        "kagemusha_commands_private_key": shared.kagemusha_commands_private_key,
-        "offline_asset_alias": shared.offline_asset_alias,
-        "offline_asset_definition_id": shared.offline_asset_definition_id,
-        "offline_asset_scale": shared.offline_asset_scale,
-        "offline_escrow_account": shared.offline_escrow_account,
-    }
-    missing = [key for key, value in required.items() if value is None]
-    if missing:
+    """Validate Taira's optional online command-submitter credential.
+
+    This application-service signer is used by hosted top-up/redemption
+    routes. It is not an offline capability switch, asset enrollment record,
+    or validator-readiness requirement.
+    """
+
+    private_key = shared.kagemusha_commands_private_key
+    if private_key is None:
+        return
+    if private_key.startswith("REPLACE_WITH_"):
         raise ValueError(
-            f"{context} offline cash configuration is mandatory; missing "
-            + ", ".join(missing)
+            f"{context} kagemusha_commands_private_key still contains a placeholder"
         )
-    placeholders = [
-        key
-        for key, value in required.items()
-        if isinstance(value, str) and value.startswith("REPLACE_WITH_")
-    ]
-    if placeholders:
-        raise ValueError(
-            f"{context} offline cash fields still contain placeholders: "
-            + ", ".join(placeholders)
-        )
-    if shared.offline_asset_alias != TAIRA_DS_ASSET_ALIAS:
-        raise ValueError(
-            f"{context} offline_asset_alias must be the registered {TAIRA_DS_ASSET_ALIAS} alias"
-        )
-    if (
-        type(shared.offline_asset_scale) is not int
-        or shared.offline_asset_scale != TAIRA_DS_ASSET_SCALE
-    ):
-        raise ValueError(
-            f"{context} offline_asset_scale must be {TAIRA_DS_ASSET_SCALE}"
-        )
-    _validate_asset_definition_id(
-        shared.offline_asset_definition_id or "",
-        f"{context} offline_asset_definition_id",
-    )
-    _validate_taira_i105_account(
-        shared.offline_escrow_account or "",
-        f"{context} offline_escrow_account",
-    )
 
 
 def _load_validator_tables(payload: dict[str, Any], context: str) -> list[dict[str, Any]]:
@@ -805,6 +771,22 @@ def load_secret_material(path: Path) -> SecretMaterial:
             + ", ".join(legacy_onboarding_fields)
             + "; use account_onboarding_* fields"
         )
+    removed_offline_enrollment_fields = sorted(
+        field
+        for field in (
+            "offline_asset_alias",
+            "offline_asset_definition_id",
+            "offline_asset_scale",
+            "offline_escrow_account",
+        )
+        if field in shared_raw
+    )
+    if removed_offline_enrollment_fields:
+        raise ValueError(
+            f"secrets file `{path}` uses removed offline enrollment fields: "
+            + ", ".join(removed_offline_enrollment_fields)
+            + "; offline capability is universal and has no asset or escrow catalog"
+        )
     sorafs_council_public_keys = _optional_string_list(
         shared_raw,
         "sorafs_council_public_keys",
@@ -900,16 +882,6 @@ def load_secret_material(path: Path) -> SecretMaterial:
             "soracloud_runtime_signer_policy_digest_hex",
             f"secrets file `{path}`",
         ),
-        offline_asset_alias=_optional_string(
-            shared_raw, "offline_asset_alias", f"secrets file `{path}`"
-        ),
-        offline_asset_definition_id=_optional_string(
-            shared_raw, "offline_asset_definition_id", f"secrets file `{path}`"
-        ),
-        offline_asset_scale=shared_raw.get("offline_asset_scale"),
-        offline_escrow_account=_optional_string(
-            shared_raw, "offline_escrow_account", f"secrets file `{path}`"
-        ),
         streaming_identity_public_key=_optional_string(
             shared_raw, "streaming_identity_public_key", f"secrets file `{path}`"
         ),
@@ -928,7 +900,7 @@ def load_secret_material(path: Path) -> SecretMaterial:
     _validate_mandatory_soracloud_runtime_signer(
         shared, f"secrets file `{path}`"
     )
-    _validate_mandatory_offline_secrets(shared, f"secrets file `{path}`")
+    _validate_kagemusha_command_submitter(shared, f"secrets file `{path}`")
     return SecretMaterial(
         validators=secrets,
         shared=shared,
@@ -1418,18 +1390,6 @@ def render_validator_config(
                     f"{field} = {_quote_toml(signer_values[field] or '')}"
                 )
                 continue
-        if (
-            current_section == "[settlement.offline]"
-            and stripped.startswith("escrow_accounts = ")
-            and shared.offline_asset_definition_id is not None
-            and shared.offline_escrow_account is not None
-        ):
-            rendered.append(
-                "escrow_accounts = { "
-                f"{_quote_toml(shared.offline_asset_definition_id)} = "
-                f'{_quote_toml(shared.offline_escrow_account)} }}'
-            )
-            continue
         if (
             current_section == "[settlement.offline]"
             and stripped.startswith("kagemusha_release_policy_path = ")

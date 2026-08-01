@@ -49,23 +49,23 @@ pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Tra
     }
 
     let mut workspace = Workspace::new();
-    let mut f = Zeroizing::new(Box::new([0_i8; DEGREE]));
-    let mut g = Zeroizing::new(Box::new([0_i8; DEGREE]));
-    let mut capital_f = Zeroizing::new(Box::new([0_i8; DEGREE]));
-    let mut capital_g = Zeroizing::new(Box::new([0_i8; DEGREE]));
-    let mut h = Zeroizing::new(Box::new([0_u16; DEGREE]));
+    let mut f = Box::new(Zeroizing::new([0_i8; DEGREE]));
+    let mut g = Box::new(Zeroizing::new([0_i8; DEGREE]));
+    let mut capital_f = Box::new(Zeroizing::new([0_i8; DEGREE]));
+    let mut capital_g = Box::new(Zeroizing::new([0_i8; DEGREE]));
+    let mut h = Box::new(Zeroizing::new([0_u16; DEGREE]));
     let mut generator = comm::shake::SHAKE256_PRNG::new(seed);
 
     for _ in 0..max_candidates {
         if !gauss::sample_f_bounded(
             LOG_DEGREE,
             &mut generator,
-            f.as_mut(),
+            &mut **f,
             MAX_PARITY_ATTEMPTS_PER_POLYNOMIAL,
         ) || !gauss::sample_f_bounded(
             LOG_DEGREE,
             &mut generator,
-            g.as_mut(),
+            &mut **g,
             MAX_PARITY_ATTEMPTS_PER_POLYNOMIAL,
         ) {
             continue;
@@ -86,25 +86,25 @@ pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Tra
         }
         if !comm::mq::mqpoly_small_is_invertible(
             LOG_DEGREE,
-            f.as_ref(),
+            &**f,
             &mut workspace.temporary_u16[..DEGREE],
         ) {
             continue;
         }
         if !ntru::check_ortho_norm(
             LOG_DEGREE,
-            f.as_ref(),
-            g.as_ref(),
+            &**f,
+            &**g,
             &mut workspace.temporary_fxr,
         ) {
             continue;
         }
         if !ntru::solve_NTRU(
             LOG_DEGREE,
-            f.as_ref(),
-            g.as_ref(),
-            capital_f.as_mut(),
-            capital_g.as_mut(),
+            &**f,
+            &**g,
+            &mut **capital_f,
+            &mut **capital_g,
             &mut workspace.temporary_u32,
             &mut workspace.temporary_fxr,
         ) {
@@ -114,13 +114,13 @@ pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Tra
         let (division_temporary, _) = workspace.temporary_u16.split_at_mut(DEGREE);
         comm::mq::mqpoly_div_small(
             LOG_DEGREE,
-            f.as_ref(),
-            g.as_ref(),
-            h.as_mut(),
+            &**f,
+            &**g,
+            &mut **h,
             division_temporary,
         );
-        if ntru_equation_holds(f.as_ref(), g.as_ref(), capital_f.as_ref(), capital_g.as_ref())
-            && public_key_equation_holds(f.as_ref(), g.as_ref(), h.as_ref())
+        if ntru_equation_holds(&**f, &**g, &**capital_f, &**capital_g)
+            && public_key_equation_holds(&**f, &**g, &**h)
         {
             return Some(Trapdoor {
                 f,
@@ -140,9 +140,9 @@ fn ntru_equation_holds(
     capital_f: &[i8; DEGREE],
     capital_g: &[i8; DEGREE],
 ) -> bool {
-    let mut equation = Zeroizing::new(Box::new([0_i64; DEGREE]));
-    negacyclic_accumulate_i8(equation.as_mut(), f, capital_g, 1);
-    negacyclic_accumulate_i8(equation.as_mut(), g, capital_f, -1);
+    let mut equation = Box::new(Zeroizing::new([0_i64; DEGREE]));
+    negacyclic_accumulate_i8(&mut **equation, f, capital_g, 1);
+    negacyclic_accumulate_i8(&mut **equation, g, capital_f, -1);
     equation[0] == i64::from(MODULUS) && equation[1..].iter().all(|value| *value == 0)
 }
 
@@ -152,7 +152,7 @@ fn public_key_equation_holds(
     h: &[u16; DEGREE],
 ) -> bool {
     let modulus = i64::from(MODULUS);
-    let mut product = Zeroizing::new(Box::new([0_i64; DEGREE]));
+    let mut product = Box::new(Zeroizing::new([0_i64; DEGREE]));
     for (left_index, left) in f.iter().copied().enumerate() {
         for (right_index, right) in h.iter().copied().enumerate() {
             let degree = left_index + right_index;

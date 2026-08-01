@@ -3088,8 +3088,6 @@ fn minimal_config_snapshot() {
             },
             settlement: Settlement {
                 offline: Offline {
-                    enabled: true,
-                    escrow_required: true,
                     escrow_accounts: {},
                     kagemusha_release_policy_path: None,
                     kagemusha_artifact_dir: None,

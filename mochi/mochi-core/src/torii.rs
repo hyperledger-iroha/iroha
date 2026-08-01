@@ -106,6 +106,12 @@ pub enum ToriiError {
         /// Optional error message decoded from the response body.
         message: Option<String>,
     },
+    /// Torii throttled the request and may have supplied a retry delay.
+    #[error("Torii request was rate limited")]
+    RateLimited {
+        /// Server-provided `Retry-After` delay, when it was a valid delta in seconds.
+        retry_after: Option<Duration>,
+    },
     /// Builder received an invalid header value.
     #[error("invalid HTTP header `{name}`: {source}")]
     InvalidHeader {
@@ -249,6 +255,17 @@ impl ToriiError {
                 info.reject_code = reject_code.clone();
                 info
             }
+            Self::RateLimited { retry_after } => {
+                let detail = retry_after.map_or_else(
+                    || "HTTP 429 without a valid Retry-After hint".to_owned(),
+                    |delay| format!("HTTP 429; retry after {delay:?}"),
+                );
+                ToriiErrorInfo::with_detail(
+                    ToriiErrorKind::UnexpectedStatus,
+                    "Torii request was rate limited",
+                    detail,
+                )
+            }
             Self::InvalidHeader { name, source } => ToriiErrorInfo::with_detail(
                 ToriiErrorKind::InvalidHeader,
                 format!("Invalid HTTP header `{name}`"),
@@ -309,6 +326,15 @@ impl ToriiError {
             )
         )
     }
+
+    /// Return the server-provided retry delay for a throttled request.
+    #[must_use]
+    pub const fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::RateLimited { retry_after } => *retry_after,
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, norito::NoritoDeserialize, norito::NoritoSerialize)]
@@ -333,6 +359,28 @@ fn reject_code_from_headers(headers: &HeaderMap) -> Option<String> {
         .or_else(|| headers.get("x-iroha-axt-code"))
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
+}
+
+fn retry_after_from_headers(headers: &HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+}
+
+fn response_status_error(response: &reqwest::Response) -> ToriiError {
+    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+        ToriiError::RateLimited {
+            retry_after: retry_after_from_headers(response.headers()),
+        }
+    } else {
+        ToriiError::UnexpectedStatus {
+            status: response.status(),
+            reject_code: reject_code_from_headers(response.headers()),
+            message: None,
+        }
+    }
 }
 
 fn error_message_from_body(body: &[u8]) -> Option<String> {
@@ -3691,11 +3739,7 @@ impl ToriiClient {
     async fn fetch_json(&self, url: Url) -> ToriiResult<json::Value> {
         let response = self.http.get(url).send().await?;
         if !response.status().is_success() {
-            return Err(ToriiError::UnexpectedStatus {
-                status: response.status(),
-                reject_code: None,
-                message: None,
-            });
+            return Err(response_status_error(&response));
         }
         let bytes = response.bytes().await?;
         json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))
@@ -3711,11 +3755,7 @@ impl ToriiClient {
             .send()
             .await?;
         if !response.status().is_success() {
-            return Err(ToriiError::UnexpectedStatus {
-                status: response.status(),
-                reject_code: None,
-                message: None,
-            });
+            return Err(response_status_error(&response));
         }
         let bytes = response.bytes().await?;
         json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))
@@ -3731,11 +3771,7 @@ impl ToriiClient {
             .send()
             .await?;
         if response.status() != StatusCode::ACCEPTED {
-            return Err(ToriiError::UnexpectedStatus {
-                status: response.status(),
-                reject_code: None,
-                message: None,
-            });
+            return Err(response_status_error(&response));
         }
         let bytes = response.bytes().await?;
         if !bytes.is_empty() {
@@ -5897,6 +5933,30 @@ mod tests {
 
     fn mock_json_body(value: norito::json::Value) -> String {
         norito::json::to_string(&value).expect("serialize mock json body")
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_mcp_rate_limit_preserves_retry_after() {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+        let throttled = server.mock(|when, then| {
+            when.method(GET).path("/v1/mcp");
+            then.status(429).header("retry-after", "7");
+        });
+
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let error = client
+            .validate_local_mcp()
+            .await
+            .expect_err("throttled MCP capabilities probe must remain retryable");
+        assert!(matches!(
+            error,
+            ToriiError::RateLimited {
+                retry_after: Some(delay),
+            } if delay == Duration::from_secs(7)
+        ));
+        throttled.assert();
     }
 
     #[tokio::test(flavor = "current_thread")]

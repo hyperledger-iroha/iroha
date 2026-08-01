@@ -3,13 +3,19 @@
 
 use std::{
     env, fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 const VERGEN_GIT_SHA_ENV: &str = "VERGEN_GIT_SHA";
 const VERGEN_CARGO_FEATURES_ENV: &str = "VERGEN_CARGO_FEATURES";
 const VERGEN_CARGO_TARGET_TRIPLE_ENV: &str = "VERGEN_CARGO_TARGET_TRIPLE";
 const GIT_RERUN_ENV_VARS: &[&str] = &[VERGEN_GIT_SHA_ENV];
+
+#[derive(Debug)]
+struct GitDirectories {
+    worktree: PathBuf,
+    common: PathBuf,
+}
 
 /// Emit git and cargo-related metadata expected by workspace crates.
 pub fn emit_git_info() {
@@ -48,8 +54,8 @@ fn git_commit_hash() -> Option<String> {
         return Some(sha);
     }
 
-    let git_dir = resolve_git_dir()?;
-    read_head_commit_hash(&git_dir)
+    let git_dirs = resolve_git_directories()?;
+    read_head_commit_hash(&git_dirs)
 }
 
 fn env_git_commit_hash() -> Option<String> {
@@ -67,17 +73,34 @@ fn emit_git_rerun_hints() {
         println!("cargo:rerun-if-env-changed={env_var}");
     }
 
-    let Some(git_dir) = resolve_git_dir() else {
+    let Some(git_dirs) = resolve_git_directories() else {
         return;
     };
 
-    let head_path = git_dir.join("HEAD");
-    emit_rerun_if_changed(&head_path);
-    emit_rerun_if_changed(&git_dir.join("packed-refs"));
+    let head_path = git_dirs.worktree.join("HEAD");
+    emit_existing_rerun_if_changed(&head_path);
+    emit_existing_rerun_if_changed(&git_dirs.worktree.join("commondir"));
+    emit_existing_rerun_if_changed(&git_dirs.common.join("packed-refs"));
 
     if let Some(head_ref) = read_head_reference(&head_path) {
-        emit_rerun_if_changed(&git_dir.join(head_ref));
+        let Some(head_ref) = head_ref.to_str() else {
+            return;
+        };
+        let reference_root = if reference_is_worktree_local(head_ref) {
+            &git_dirs.worktree
+        } else {
+            &git_dirs.common
+        };
+        if let Some(path) = reference_watch_path(reference_root, head_ref) {
+            emit_existing_rerun_if_changed(&path);
+        }
     }
+}
+
+fn resolve_git_directories() -> Option<GitDirectories> {
+    let worktree = resolve_git_dir()?;
+    let common = resolve_common_git_dir(&worktree);
+    Some(GitDirectories { worktree, common })
 }
 
 fn resolve_git_dir() -> Option<PathBuf> {
@@ -114,23 +137,85 @@ fn parse_gitdir_declaration(contents: &str) -> Option<&str> {
     if path.is_empty() { None } else { Some(path) }
 }
 
-fn read_head_commit_hash(git_dir: &Path) -> Option<String> {
-    let head_contents = fs::read_to_string(git_dir.join("HEAD")).ok()?;
+fn resolve_common_git_dir(git_dir: &Path) -> PathBuf {
+    let Some(path) = fs::read_to_string(git_dir.join("commondir"))
+        .ok()
+        .and_then(|contents| parse_commondir_declaration(&contents).map(PathBuf::from))
+    else {
+        return git_dir.to_path_buf();
+    };
+    let common = if path.is_absolute() {
+        path
+    } else {
+        git_dir.join(path)
+    };
+    fs::canonicalize(&common).unwrap_or(common)
+}
+
+fn parse_commondir_declaration(contents: &str) -> Option<&str> {
+    let path = contents.trim();
+    if path.is_empty() { None } else { Some(path) }
+}
+
+fn read_head_commit_hash(git_dirs: &GitDirectories) -> Option<String> {
+    let head_contents = fs::read_to_string(git_dirs.worktree.join("HEAD")).ok()?;
     parse_head_reference(&head_contents).map_or_else(
         || parse_commit_hash(&head_contents).map(ToOwned::to_owned),
-        |reference| read_reference_hash(git_dir, reference),
+        |reference| read_reference_hash(git_dirs, reference),
     )
 }
 
-fn read_reference_hash(git_dir: &Path, reference: &str) -> Option<String> {
-    let loose_ref_path = git_dir.join(reference);
-    if let Ok(contents) = fs::read_to_string(loose_ref_path)
-        && let Some(hash) = parse_commit_hash(&contents)
-    {
-        return Some(hash.to_owned());
+fn read_reference_hash(git_dirs: &GitDirectories, reference: &str) -> Option<String> {
+    for git_dir in [&git_dirs.worktree, &git_dirs.common] {
+        let loose_ref_path = safe_reference_path(git_dir, reference)?;
+        if let Ok(contents) = fs::read_to_string(loose_ref_path)
+            && let Some(hash) = parse_commit_hash(&contents)
+        {
+            return Some(hash.to_owned());
+        }
     }
 
-    read_packed_reference_hash(git_dir, reference)
+    read_packed_reference_hash(&git_dirs.common, reference)
+}
+
+fn safe_reference_path(git_dir: &Path, reference: &str) -> Option<PathBuf> {
+    let reference = Path::new(reference);
+    if reference.is_absolute()
+        || !reference
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(git_dir.join(reference))
+}
+
+fn reference_is_worktree_local(reference: &str) -> bool {
+    ["refs/bisect/", "refs/worktree/", "refs/rewritten/"]
+        .iter()
+        .any(|prefix| reference.starts_with(prefix))
+}
+
+fn reference_watch_path(git_dir: &Path, reference: &str) -> Option<PathBuf> {
+    let mut candidate = safe_reference_path(git_dir, reference)?;
+    let refs_root = git_dir.join("refs");
+    let boundary = if candidate.starts_with(&refs_root) {
+        refs_root
+    } else {
+        git_dir.to_path_buf()
+    };
+    loop {
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        if candidate == boundary || !candidate.pop() {
+            break;
+        }
+    }
+    boundary
+        .exists()
+        .then_some(boundary)
+        .or_else(|| git_dir.exists().then(|| git_dir.to_path_buf()))
 }
 
 fn read_packed_reference_hash(git_dir: &Path, reference: &str) -> Option<String> {
@@ -191,8 +276,10 @@ fn parse_cfg_features(contents: &str) -> Vec<String> {
     features
 }
 
-fn emit_rerun_if_changed(path: &Path) {
-    println!("cargo:rerun-if-changed={}", path.display());
+fn emit_existing_rerun_if_changed(path: &Path) {
+    if path.exists() {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
 }
 
 /// Warn if mutually exclusive FFI features are enabled simultaneously.
@@ -256,6 +343,109 @@ mod tests {
     #[test]
     fn parse_gitdir_declaration_rejects_empty_path() {
         assert_eq!(parse_gitdir_declaration("gitdir:\n"), None);
+    }
+
+    #[test]
+    fn parse_commondir_declaration_parses_linked_worktree_path() {
+        assert_eq!(parse_commondir_declaration("../..\n"), Some("../.."));
+    }
+
+    #[test]
+    fn parse_commondir_declaration_rejects_empty_path() {
+        assert_eq!(parse_commondir_declaration(" \n"), None);
+    }
+
+    #[test]
+    fn linked_worktree_reads_head_from_common_packed_refs() {
+        const SHA: &str = "6f4e5a2d3a9ab7cd61234b1234f8aadeadbeef00";
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time follows the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "iroha-build-support-{}-{unique}",
+            std::process::id()
+        ));
+        let common = root.join("repo.git");
+        let worktree = common.join("worktrees").join("linked");
+        fs::create_dir_all(&worktree).expect("create linked-worktree metadata fixture");
+        fs::create_dir_all(common.join("refs").join("heads"))
+            .expect("create common loose-ref parent");
+        fs::write(worktree.join("commondir"), "../..\n").expect("write linked-worktree commondir");
+        fs::write(worktree.join("HEAD"), "ref: refs/heads/optimizations\n")
+            .expect("write linked-worktree HEAD");
+        fs::write(
+            common.join("packed-refs"),
+            format!("{SHA} refs/heads/optimizations\n"),
+        )
+        .expect("write common packed refs");
+
+        let resolved_common = resolve_common_git_dir(&worktree);
+        assert_eq!(
+            resolved_common,
+            fs::canonicalize(&common).expect("canonical common git directory")
+        );
+        let git_dirs = GitDirectories {
+            worktree,
+            common: resolved_common.clone(),
+        };
+        assert_eq!(read_head_commit_hash(&git_dirs).as_deref(), Some(SHA));
+        assert_eq!(
+            reference_watch_path(&resolved_common, "refs/heads/optimizations"),
+            Some(resolved_common.join("refs").join("heads"))
+        );
+
+        fs::remove_dir_all(root).expect("remove linked-worktree metadata fixture");
+    }
+
+    #[test]
+    fn unborn_branch_watches_existing_loose_ref_parent() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time follows the Unix epoch")
+            .as_nanos();
+        let git_dir = std::env::temp_dir().join(format!(
+            "iroha-build-support-unborn-{}-{unique}",
+            std::process::id()
+        ));
+        let heads = git_dir.join("refs").join("heads");
+        fs::create_dir_all(&heads).expect("create unborn branch ref parent");
+
+        assert_eq!(
+            reference_watch_path(&git_dir, "refs/heads/main"),
+            Some(heads.clone())
+        );
+        fs::write(
+            heads.join("main"),
+            "1111111111111111111111111111111111111111\n",
+        )
+        .expect("publish first loose branch ref");
+        assert_eq!(
+            reference_watch_path(&git_dir, "refs/heads/main"),
+            Some(heads.join("main"))
+        );
+
+        fs::remove_dir_all(git_dir).expect("remove unborn branch fixture");
+    }
+
+    #[test]
+    fn worktree_local_reference_namespaces_are_classified_exactly() {
+        assert!(reference_is_worktree_local("refs/bisect/good"));
+        assert!(reference_is_worktree_local("refs/worktree/private"));
+        assert!(reference_is_worktree_local("refs/rewritten/topic"));
+        assert!(!reference_is_worktree_local("refs/heads/optimizations"));
+    }
+
+    #[test]
+    fn git_reference_paths_reject_directory_escape() {
+        let git_dir = Path::new("/repo.git");
+        assert_eq!(
+            safe_reference_path(git_dir, "refs/heads/main"),
+            Some(git_dir.join("refs/heads/main"))
+        );
+        assert_eq!(safe_reference_path(git_dir, "../HEAD"), None);
+        assert_eq!(safe_reference_path(git_dir, "/outside"), None);
     }
 
     #[test]

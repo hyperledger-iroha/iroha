@@ -4,6 +4,22 @@ Taira is the Sora Nexus public testnet. This directory
 contains the repo-shipped bootstrap bundle for a public, stake-elected NPoS
 deployment.
 
+## Universal offline capability and BOI dataspaces
+
+Offline cash is an application/device protocol, not a Taira deployment mode.
+Every compatible Iroha validator exposes ABI-21/V4 and `cash_handoff_v1`.
+There is no backend enable flag, asset `offline.enabled` metadata, configured
+escrow catalog, or offline-specific health/admission gate. `/health` and
+`/readyz` describe ordinary validator and consensus readiness only. Missing or
+invalid material referenced by a particular top-up or redemption operation is
+reported as that transaction's validation result.
+
+The checked-in profile contains both BOI dataspaces: `is` for the scenario
+browser and `is2` for the mobile wallet. Their internal routing containers do
+not change this capability contract. The mobile product may expose offline UI
+while the scenario browser does not; both use the same universally capable
+validator fleet.
+
 ## Network identity
 
 - Public Sumeragi-v2 chain ID: `fc56984b-2be7-431d-840e-21514d1883f0`
@@ -509,82 +525,29 @@ material. Provision the same policy as
 as `taira-release/catalog/<manifest_sha256>/`, where `manifest_sha256` is the
 lowercase digest recorded by the finalized `manifest.norito.sha256`.
 
-Finally append the complete state to a clean unsigned Taira genesis. The
-command never overwrites its input. App identities and signing-certificate
-digests must describe the exact BOI builds being admitted; the helper supplies
-only the native Apple App Attest and Android KeyMint roots and keeps both
-platform policies fail-closed.
+Build a fresh Taira reset from the ordinary signed genesis and validator bundle
+workflow. `render_taira_validator_bundle.py` rewrites the checked-in peer-1
+baseline with the complete `trusted_peers` / `trusted_peers_pop` roster, both
+static dataspace definitions, and the operator-provided runtime credentials.
+It rejects the retired offline enrollment fields in secrets rather than
+turning them into node configuration. Use
+`scripts/prepare_taira_empty_reset_bundle.py` to clone an admitted source bundle
+into new empty validator storage; do not use the retired
+offline-specialized reset helpers.
 
-```bash
-fresh_genesis_public_key='<fresh-ed0120-public-key>'
-fresh_authority="$(
-  /absolute/path/from/sealed-build-report/iroha \
-    tools address convert \
-    --profile taira \
-    --format json \
-    "${fresh_genesis_public_key}" |
-  /opt/homebrew/bin/python3 -c \
-    'import json, sys; p=json.load(sys.stdin); assert p["i105"]["network_prefix"] == 369; print(p["i105"]["value"])'
-)"
+The Digital Shekel assets and accounts are ordinary genesis or post-genesis
+state. Register `ds#boi.is` and `ds#boi.is2` at scale 2 as required by their
+applications, but do not attach offline enablement metadata. Top-up and
+redemption derive and validate their exact asset, scale, escrow, authority,
+release, and balance bindings when the operation is submitted. A hosted Torii
+command-submitter key is an application-service credential, not a validator
+capability switch.
 
-cargo run -p iroha_kagami --bin kagami -- \
-  kagemusha prepare-taira-testnet-bootstrap-v4 \
-  --genesis /absolute/path/to/fresh-taira-genesis.json \
-  --release-bundle /absolute/private/path/taira-release \
-  --genesis-authority "${fresh_authority}" \
-  --command-authority "${fresh_authority}" \
-  --fee-mint 1000000 \
-  --ios-team-id '<apple-team-id>' \
-  --ios-bundle-id '<ios-bundle-id>' \
-  --ios-validation-category 4 \
-  --ios-bundle-version '<cf-bundle-version>' \
-  --android-package-name '<android-package>' \
-  --android-signing-certificate-sha256 '<64-lowercase-hex>' \
-  --output /absolute/path/to/genesis.offline.json \
-  --operator-identity-output /absolute/private/path/taira-offline-release-identity.json
-```
-
-The emitted manifest enables `offline.enabled` on the existing scale-2 Taira
-asset `7ZepsJTHCVLKsrFFNZGSRGZgvBhv`, renames it to `ds`, rebinds it as
-`ds#boi.is`, and replaces the legacy display metadata with code `DS`, ISO
-currency `ILS`, symbol `₪`, and display name `Digital Shekel`. It preserves the
-opaque asset ID, fixed scale, mintability, balances, and total supply. Use the
-newly sealed `iroha` binary for the address conversion and require JSON
-`i105.network_prefix = 369`; do not reuse a legacy global-profile conversion.
-The reset uses one freshly generated key pair for both genesis and command
-signing. The helper derives the canonical escrow, treats that shared
-genesis/command authority as the account that `irohad` implicitly creates
-before height one, registers and binds all three base verifiers, grants the
-exact activation/device/escrow permissions, funds the shared authority, and
-atomically activates the authenticated Eq/Ep release. The reset packager must
-receive the same value through `--command-authority`; it independently derives
-the Taira I105 literal from the fresh genesis public key and rejects any
-mismatch or archived command-key reuse.
-It also refuses a source genesis without non-zero public `ds#boi.is` liquidity outside escrow: top-up
-atomically moves that exact user balance into escrow, and redemption can only
-draw against finalized top-up provenance. The builder also replaces the legacy
-1,000 ms source cadence with the authoritative 4,000 ms Sumeragi parameter
-snapshot and verifies that effective cadence before recomputing consensus
-metadata. Point every validator at the reported policy and catalog paths before
-signing and deploying the reset. Preserve the separately emitted operator
-identity outside the source checkout and pass it to rollout verification as
-`--offline-expected-identity`; its artifact digests and five verifier
-projections are derived from the same authenticated activation, not copied
-from live state.
-
-The renderer rewrites the checked-in peer-1 baseline with the full
-`trusted_peers` / `trusted_peers_pop` roster so every validator starts from the
-same bootstrap source of truth. It refuses to emit a config while the SoraFS
-council placeholder remains or the configured quorum is zero, duplicated, or
-larger than the trusted set. It also requires explicit per-validator
-`torii_public_address` values so direct public Torii hostnames are part of the
-checked operator input instead of a hard-coded shared edge default.
-It also refuses every render that omits offline cash inputs, retains a
-`REPLACE_WITH_` placeholder, uses an asset other than the registered scale-2
-`ds#boi.is`, supplies a non-canonical asset-definition ID, or binds escrow to a
-non-canonical Taira I105 account. The checked-in config contains no guessed DS
-asset ID; the operator-provisioned ID is injected into
-`settlement.offline.escrow_accounts` at render time.
+Before cutover, prove that all four validators run the identical admitted
+binary and configuration, share the expected `is` and `is2` catalogs, and
+advance one common committed chain. Health checks use only that ordinary node
+and consensus evidence. Mobile QR/NFC/Nearby acceptance remains an app/device
+release test and never changes validator admission.
 
 ## Private profiles
 
@@ -1282,19 +1245,20 @@ For contract or IVM execution, add the command's positive `--gas-limit`; the
 CLI binds it inside `fee_payment`. Do not put `fee_sponsor`, `gas_asset_id`, or
 `gas_limit` in transaction metadata.
 
-## Qualification-sealed public Taira layout
+## Optional qualification-sealed verifier cache
 
-The public Taira reset does not use the validator-owned Kagemusha directories
-shown in the generic deployment examples below. The reset controller installs
-the exact admitted `irohad` binary and release tree under a release-specific
+Taira may use a root-controlled Kagemusha verifier cache for transactions that
+reference a particular authenticated release. The controller installs the
+exact admitted `irohad` binary and cache tree under a release-specific
 `/Library/SORA/Taira/releases/<release-tree-sha256>/...` root. Every qualified
 directory is owned by root and the validator runtime group with mode `0550`;
 every qualified file has the same ownership and mode `0440`. This keeps the
 tree immutable to the non-root validator while allowing that runtime identity
 to read it. Generated validator configs point only at that installed policy
-and artifact tree.
+and artifact tree when the optional cache is used. Its presence never enables
+offline support and its absence never changes node health.
 
-Before starting a validator, the controller injects the matching
+To qualify a supplied cache, the controller injects the matching
 `settlement.offline.kagemusha_catalog_qualification_seal_path`:
 
 ```text
@@ -1305,17 +1269,17 @@ It then runs the exact installed binary as root with `--check-config`, the
 locally available genesis, and
 `--write-kagemusha-catalog-qualification-seal` set to that same path. This
 no-bind pass performs full catalog and genesis authentication and publishes a
-new root-owned mode `0444` seal without replacing any existing path. Normal
-validator startup may run as its non-root service identity, but the policy,
-artifact, executable, and seal path chains remain root-controlled and only
-readable by that identity. A new release tree always receives a new seal
-filename.
+new root-owned mode `0444` seal without replacing any existing path. The
+validator may run as its non-root service identity whether or not a cache is
+installed. When present, the policy, artifact, executable, and seal path chains
+remain root-controlled and only readable by that identity. A new release tree
+always receives a new seal filename.
 
 Do not recursively `chown` any public-lane qualified source or seal path to uid
 1001 or `iroha`; doing so invalidates the root-trust invariant and makes sealed
-startup fail closed. Keep `/Library/SORA/Taira/seals` separate from the policy,
-artifact, and executable directories because publishing the seal changes its
-parent directory identity.
+cache qualification fail closed. Keep `/Library/SORA/Taira/seals` separate
+from the policy, artifact, and executable directories because publishing the
+seal changes its parent directory identity.
 
 ## Development-only containerized validator deployment
 
