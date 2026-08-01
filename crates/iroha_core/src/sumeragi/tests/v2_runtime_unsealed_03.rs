@@ -887,6 +887,82 @@
     }
 
     #[test]
+    fn distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner() {
+        let directory = TempDir::new().expect("temporary pre-runtime leader-wire directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 2, 2),
+            Some(0),
+        );
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime before Busy-deferred aggregate ingress");
+        let owner_tag = runtime.round_tag();
+        let timeout = runtime
+            .driver
+            .timeout_elapsed(owner_tag)
+            .expect("install a signer fence before aggregate dispatch");
+        assert!(matches!(
+            timeout.effects(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }]
+        ));
+
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate(&context, &keys, 0x7A),
+            ));
+        let first_source = context.roster[2].validator.clone();
+        let second_source = context.roster[1].validator.clone();
+        let (_leader_wire_directory, leader_wire_ingress, ownerships) =
+            preowned_leader_wire_ownerships(
+                &context,
+                &[(message.clone(), first_source)],
+                runtime.ingress.lifecycle_ordinals.clone(),
+            );
+        let [first_ownership]: [FairV2IngressOwnershipEvidence; 1] = ownerships
+            .try_into()
+            .expect("fixture creates one exact runtime-owned carrier");
+        runtime
+            .enqueue_network_with_ingress_ownership(message.clone(), first_ownership)
+            .expect("first leader-wire carrier enters the runtime");
+        assert!(matches!(
+            runtime.step(now),
+            Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+        ));
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("Busy dispatch retains the first exact carrier");
+        assert_eq!(runtime.deferred_ingress_ownership.len(), 1);
+
+        assert!(matches!(
+            leader_wire_ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(message.clone()),
+                Some(second_source),
+            )),
+            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let selected = leader_wire_ingress.try_recv_if(|inbound| {
+            let BlockMessage::V2(candidate) = inbound.message() else {
+                return true;
+            };
+            let ownership = inbound
+                .ingress_ownership()
+                .expect("productive fair ingress attaches exact ownership");
+            runtime.can_admit_network_message_with_ingress_ownership(candidate, ownership)
+        });
+        assert!(
+            selected.is_none(),
+            "a distinct productive leader-wire token must remain physically queued behind the Busy owner"
+        );
+        assert_eq!(runtime.deferred_ingress_ownership.len(), 1);
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
     fn exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot() {
         let directory = TempDir::new().expect("temporary multi-source QC directory");
         let (mut runtime, context, keys) =

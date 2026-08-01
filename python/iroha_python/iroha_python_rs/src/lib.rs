@@ -6802,7 +6802,7 @@ mod tests {
     }
 
     #[test]
-    fn privacy_compiled_profile_catalog_python_validator_calls_the_shared_typed_boundary() {
+    fn privacy_compiled_profile_catalog_python_validator_calls_the_exact_local_typed_boundary() {
         let catalog = privacy_compiled_profile_catalog().expect("compiled-profile catalog");
         let archive = norito::encode_canonical(&catalog).expect("canonical compiled catalog");
         assert_eq!(
@@ -6826,6 +6826,37 @@ mod tests {
         assert_ne!(
             privacy_validate_compiled_profile_catalog_v1_py(&one_byte_fake),
             iroha_data_model::privacy::PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid
+                .code()
+        );
+
+        let mut substituted = catalog;
+        let profile = substituted
+            .protocols
+            .iter_mut()
+            .find_map(|row| match &mut row.compiled_profile {
+                iroha_data_model::privacy::PrivacyCompiledProfileResultV1::Available(profile) => {
+                    Some(profile)
+                }
+                iroha_data_model::privacy::PrivacyCompiledProfileResultV1::Unavailable(_) => None,
+            })
+            .expect("at least one compiled profile");
+        let mut digest = *profile.parameter_digest.as_bytes();
+        digest[0] ^= 0x80;
+        profile.parameter_digest = iroha_data_model::privacy::PrivacyParameterDigestV1::new(digest);
+        profile
+            .validate()
+            .expect("substituted profile remains structurally valid");
+        let substituted = norito::encode_canonical(&substituted).expect("encode substitution");
+        assert_eq!(
+            iroha_data_model::privacy::validate_privacy_compiled_profile_catalog_archive_v1(
+                &substituted,
+            ),
+            iroha_data_model::privacy::PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid,
+            "the generic validator must accept the structurally valid substitution",
+        );
+        assert_eq!(
+            privacy_validate_compiled_profile_catalog_v1_py(&substituted),
+            iroha_data_model::privacy::PrivacyCompiledProfileCatalogArchiveValidationStatusV1::InvalidCatalog
                 .code()
         );
     }
@@ -7636,6 +7667,133 @@ mod tests {
             .expect("signed transaction is non-empty");
         *last ^= 0x01;
         assert!(canonical_signed_transaction_hash_v1(&tampered).is_err());
+    }
+
+    #[test]
+    fn transaction_builder_attachment_limits_are_atomic_and_remain_signable() {
+        ensure_python();
+        let signing = SigningKey::from_bytes(&[0x12_u8; 32]);
+        let private_key = parse_private_key(signing.as_bytes()).expect("private key parses");
+        let authority = AccountId::new(PublicKey::from(private_key.clone()))
+            .canonical_i105()
+            .expect("canonical I105 authority");
+        let mut builder =
+            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
+                .expect("builder constructs");
+        let attachment = |byte| {
+            ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![byte]),
+                VerifyingKeyId::new("halo2/ipa", "python-builder-vk"),
+            )
+        };
+
+        for byte in 0..iroha_data_model::proof::PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1 {
+            builder
+                .try_add_proof_attachment(attachment(
+                    u8::try_from(byte).expect("first-release attachment limit fits in u8"),
+                ))
+                .expect("attachment through the exact verifier batch boundary");
+        }
+        let before = norito::encode_canonical(
+            builder
+                .attachments
+                .as_ref()
+                .expect("maximum attachment list is present"),
+        )
+        .expect("encode maximum attachment list");
+        let error = builder
+            .try_add_proof_attachment(attachment(0xFF))
+            .expect_err("the seventeenth attachment must be rejected");
+        assert!(error.to_string().contains("maximum of 16"));
+        assert_eq!(
+            norito::encode_canonical(
+                builder
+                    .attachments
+                    .as_ref()
+                    .expect("rejected append preserves prior list"),
+            )
+            .expect("encode rolled-back attachment list"),
+            before
+        );
+        let signed = builder
+            .to_model_builder()
+            .try_sign(&private_key)
+            .expect("builder remains signable after rejected append");
+        assert_eq!(
+            signed
+                .attachments()
+                .expect("signed transaction retains attachments")
+                .len(),
+            iroha_data_model::proof::PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1
+        );
+        signed.verify_signature().expect("signature remains valid");
+
+        builder.clear_attachments();
+        assert!(builder.attachments.is_none());
+        builder
+            .try_add_proof_attachment(attachment(7))
+            .expect("builder is reusable after clearing attachments");
+        assert_eq!(
+            builder.attachments.as_ref().map(ProofAttachmentList::len),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn transaction_builder_attachment_frame_rejection_rolls_back() {
+        ensure_python();
+        let signing = SigningKey::from_bytes(&[0x13_u8; 32]);
+        let private_key = parse_private_key(signing.as_bytes()).expect("private key parses");
+        let authority = AccountId::new(PublicKey::from(private_key))
+            .canonical_i105()
+            .expect("canonical I105 authority");
+        let mut builder =
+            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
+                .expect("builder constructs");
+        let attachment = |proof_bytes| {
+            ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0_u8; proof_bytes]),
+                VerifyingKeyId::new("halo2/ipa", "python-builder-vk"),
+            )
+        };
+        let mut low = 1_usize;
+        let mut high = iroha_data_model::proof::PROOF_ATTACHMENT_LIST_MAX_CANONICAL_FRAME_BYTES_V1;
+        while low < high {
+            let midpoint = low + (high - low).div_ceil(2);
+            if ProofAttachmentList::try_from(vec![attachment(midpoint)]).is_ok() {
+                low = midpoint;
+            } else {
+                high = midpoint - 1;
+            }
+        }
+        builder
+            .try_add_proof_attachment(attachment(low))
+            .expect("largest fitting first attachment");
+        let before = norito::encode_canonical(
+            builder
+                .attachments
+                .as_ref()
+                .expect("large attachment list is present"),
+        )
+        .expect("encode exact-cap attachment list");
+        let error = builder
+            .try_add_proof_attachment(attachment(1))
+            .expect_err("append over the frame ceiling must fail");
+        assert!(error.to_string().contains("canonical frame"));
+        assert_eq!(
+            norito::encode_canonical(
+                builder
+                    .attachments
+                    .as_ref()
+                    .expect("rejected append preserves exact-cap list"),
+            )
+            .expect("encode rolled-back exact-cap list"),
+            before
+        );
+        builder.clear_attachments();
+        assert!(builder.attachments.is_none());
     }
 
     #[test]
@@ -12845,7 +13003,14 @@ fn python_privacy_statement_context_v1(
     }
 }
 
-fn python_privacy_placeholder_envelope_v1(
+/// Construct the canonical pre-proof envelope used only for transaction-intent
+/// projection.
+///
+/// The shared intent algorithm erases proof bytes, the statement's intent
+/// digest, and the envelope statement digest before hashing. The zero digest
+/// here is therefore the exact unresolved derived field and is never emitted
+/// in a verifier-visible envelope.
+fn python_privacy_intent_projection_envelope_v1(
     profile: CompiledPrivacyProfileV1,
     statement: PrivacyStatementV1,
     proof: PrivacyProofV1,
@@ -13228,15 +13393,25 @@ struct TransactionBuilder {
     explicit_batch: bool,
     metadata: Metadata,
     executable_override: Option<Executable>,
-    attachments: Vec<ProofAttachment>,
+    attachments: Option<ProofAttachmentList>,
 }
 
 impl TransactionBuilder {
+    fn try_add_proof_attachment(&mut self, attachment: ProofAttachment) -> PyResult<()> {
+        match &mut self.attachments {
+            Some(attachments) => attachments.try_push(attachment),
+            None => ProofAttachmentList::try_from(vec![attachment]).map(|attachments| {
+                self.attachments = Some(attachments);
+            }),
+        }
+        .map_err(|error| PyValueError::new_err(format!("invalid proof attachment list: {error}")))
+    }
+
     fn require_empty_privacy_action_builder_v1(&self, protocol_label: &str) -> PyResult<()> {
         if self.explicit_batch
             || !self.executable_items.is_empty()
             || self.executable_override.is_some()
-            || !self.attachments.is_empty()
+            || self.attachments.is_some()
         {
             return Err(PyValueError::new_err(format!(
                 "native {protocol_label} action requires an otherwise empty transaction builder"
@@ -13429,8 +13604,8 @@ impl TransactionBuilder {
         }
 
         builder = builder.with_metadata(self.metadata.clone());
-        if !self.attachments.is_empty() {
-            builder = builder.with_attachments(ProofAttachmentList(self.attachments.clone()));
+        if let Some(attachments) = self.attachments.clone() {
+            builder = builder.with_attachments(attachments);
         }
         builder
     }
@@ -13465,7 +13640,7 @@ impl TransactionBuilder {
         self.executable_items.clear();
         self.explicit_batch = false;
         self.executable_override = None;
-        self.attachments.clear();
+        self.attachments = None;
     }
 }
 
@@ -13495,7 +13670,7 @@ impl TransactionBuilder {
             explicit_batch: false,
             metadata: Metadata::default(),
             executable_override: None,
-            attachments: Vec::new(),
+            attachments: None,
         })
     }
 
@@ -13541,7 +13716,7 @@ impl TransactionBuilder {
 
     /// Remove all staged proof attachments.
     fn clear_attachments(&mut self) {
-        self.attachments.clear();
+        self.attachments = None;
     }
 
     /// Add a Merkle-based lane privacy proof attachment for Nexus private lanes.
@@ -13634,7 +13809,7 @@ impl TransactionBuilder {
                 "lane privacy attachment {field} {message}"
             )));
         }
-        self.attachments.push(attachment);
+        self.try_add_proof_attachment(attachment)?;
         Ok(())
     }
 
@@ -14109,7 +14284,7 @@ impl TransactionBuilder {
         if self.explicit_batch
             || !self.executable_items.is_empty()
             || self.executable_override.is_some()
-            || !self.attachments.is_empty()
+            || self.attachments.is_some()
         {
             return Err(PyValueError::new_err(
                 "native Jindo action requires an otherwise empty transaction builder",
@@ -14328,7 +14503,7 @@ impl TransactionBuilder {
         let draft_statement = PrivacyStatementV1::VeRangeTransparentRangeV1(statement.clone());
         let transaction_intent_digest = python_privacy_action_intent_v1(
             &context,
-            python_privacy_placeholder_envelope_v1(
+            python_privacy_intent_projection_envelope_v1(
                 profile,
                 draft_statement,
                 PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(Vec::new())),
@@ -14604,7 +14779,7 @@ impl TransactionBuilder {
         };
         let transaction_intent_digest = python_privacy_action_intent_v1(
             &context,
-            python_privacy_placeholder_envelope_v1(
+            python_privacy_intent_projection_envelope_v1(
                 profile,
                 PrivacyStatementV1::IrohaZkAmsV1(statement.clone()),
                 PrivacyProofV1::IrohaZkAmsV1(
@@ -14834,7 +15009,7 @@ impl TransactionBuilder {
         };
         let transaction_intent_digest = python_privacy_action_intent_v1(
             &context,
-            python_privacy_placeholder_envelope_v1(
+            python_privacy_intent_projection_envelope_v1(
                 profile,
                 PrivacyStatementV1::IrohaZkAmsV1(statement.clone()),
                 PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
@@ -14990,7 +15165,7 @@ impl TransactionBuilder {
         let draft_statement = PrivacyStatementV1::VegaExistingCredentialZkV0(statement.clone());
         let transaction_intent_digest = python_privacy_action_intent_v1(
             &context,
-            python_privacy_placeholder_envelope_v1(
+            python_privacy_intent_projection_envelope_v1(
                 profile,
                 draft_statement,
                 PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(Vec::new())),
@@ -15006,7 +15181,7 @@ impl TransactionBuilder {
             python_bind_vega_device_authentication_digest_v1(statement, canonical_genesis_hash)?;
         let rebound_intent = python_privacy_action_intent_v1(
             &context,
-            python_privacy_placeholder_envelope_v1(
+            python_privacy_intent_projection_envelope_v1(
                 profile,
                 PrivacyStatementV1::VegaExistingCredentialZkV0(statement.clone()),
                 PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(Vec::new())),
@@ -15148,7 +15323,7 @@ impl TransactionBuilder {
         };
         let transaction_intent_digest = python_privacy_action_intent_v1(
             &context,
-            python_privacy_placeholder_envelope_v1(
+            python_privacy_intent_projection_envelope_v1(
                 profile,
                 PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone()),
                 PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(Vec::new())),
@@ -15976,7 +16151,7 @@ impl PrivacyVegaActionPreparationV1 {
         let transaction_intent_digest = inner.statement.context.transaction_intent_digest;
         let rebound_intent = python_privacy_action_intent_v1(
             &inner.context,
-            python_privacy_placeholder_envelope_v1(
+            python_privacy_intent_projection_envelope_v1(
                 inner.profile,
                 PrivacyStatementV1::VegaExistingCredentialZkV0(inner.statement.clone()),
                 PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(Vec::new())),

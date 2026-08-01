@@ -12,7 +12,6 @@ import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 import org.hyperledger.iroha.sdk.numeric.NumericV1Codec
 
 private const val PROOF_BOX_MAX_ENCODED_BYTES: Long = 64L * 1024L * 1024L
-private const val PROOF_BOX_CANONICAL_FIELD_OVERHEAD: Long = 32L
 private val LOW_ORDER_X25519_CHECK_PRIVATE_KEY = ByteArray(32) { 1 }
 
 /** Shielded asset registration mode accepted by `zk::RegisterZkAsset`. */
@@ -357,16 +356,36 @@ class ProofAttachment(
             require(backendUtf8ByteCount >= 0L) { "backendUtf8ByteCount must be non-negative" }
             require(proofByteCount >= 0L) { "proofByteCount must be non-negative" }
             return try {
-                Math.addExact(
-                    Math.addExact(PROOF_BOX_CANONICAL_FIELD_OVERHEAD, backendUtf8ByteCount),
-                    proofByteCount,
+                val backendValueLength = Math.addExact(
+                    compactLengthPrefixBytes(backendUtf8ByteCount),
+                    backendUtf8ByteCount,
                 )
+                val backendFieldLength = Math.addExact(
+                    compactLengthPrefixBytes(backendValueLength),
+                    backendValueLength,
+                )
+                val proofValueLength = Math.addExact(8L, proofByteCount)
+                val proofFieldLength = Math.addExact(
+                    compactLengthPrefixBytes(proofValueLength),
+                    proofValueLength,
+                )
+                Math.addExact(backendFieldLength, proofFieldLength)
             } catch (error: ArithmeticException) {
                 throw IllegalArgumentException(
                     "encoded ProofBox length overflows the supported range",
                     error,
                 )
             }
+        }
+
+        private fun compactLengthPrefixBytes(value: Long): Long {
+            var remaining = value
+            var bytes = 1L
+            while (remaining >= 0x80L) {
+                remaining = remaining ushr 7
+                bytes++
+            }
+            return bytes
         }
     }
 }

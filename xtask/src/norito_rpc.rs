@@ -30,7 +30,7 @@ fn json_output(target: JsonTarget) -> JsonOutput {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
 
     use super::*;
 
@@ -57,6 +57,7 @@ mod tests {
     fn fixture_generation_errors_are_forwarded() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let output_root = temp_dir.path().join("output");
+        fs::create_dir(&output_root).expect("create output root");
         let missing = output_root.join("fixtures/norito_rpc/transaction_payloads.json");
         let options = FixtureOptions::new(Some(output_root));
 

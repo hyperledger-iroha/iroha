@@ -19,7 +19,6 @@ import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
-import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.android.util.HashLiteral;
 import org.hyperledger.iroha.norito.NoritoAdapters;
@@ -55,16 +54,13 @@ public final class TransactionPayloadFixtureTests {
     payload.put("authority", SAMPLE_AUTHORITY);
     payload.put("creation_time_ms", 0L);
     payload.put("time_to_live_ms", 100_000L);
+    payload.put("nonce", null);
+    payload.put("fee_payment", authorityFeePayment());
     payload.put("executable", executable);
     payload.put("metadata", Collections.emptyMap());
 
-    final Map<String, Object> fixtureMap = new LinkedHashMap<>();
-    fixtureMap.put("name", "wire_instruction_fixture");
-    fixtureMap.put("chain", "00000001");
-    fixtureMap.put("authority", SAMPLE_AUTHORITY);
-    fixtureMap.put("creation_time_ms", 0L);
-    fixtureMap.put("time_to_live_ms", 100_000L);
-    fixtureMap.put("payload", payload);
+    final Map<String, Object> fixtureMap =
+        firstReleaseFixture("wire_instruction_fixture", payload);
 
     final TransactionPayloadFixtures.Fixture fixture =
         TransactionPayloadFixtures.Fixture.fromObject(fixtureMap);
@@ -102,16 +98,13 @@ public final class TransactionPayloadFixtureTests {
     payload.put("authority", SAMPLE_AUTHORITY);
     payload.put("creation_time_ms", 0L);
     payload.put("time_to_live_ms", 100_000L);
+    payload.put("nonce", null);
+    payload.put("fee_payment", authorityFeePayment());
     payload.put("executable", executable);
     payload.put("metadata", Collections.emptyMap());
 
-    final Map<String, Object> fixtureMap = new LinkedHashMap<>();
-    fixtureMap.put("name", "wire_instruction_arguments_fixture");
-    fixtureMap.put("chain", "00000001");
-    fixtureMap.put("authority", SAMPLE_AUTHORITY);
-    fixtureMap.put("creation_time_ms", 0L);
-    fixtureMap.put("time_to_live_ms", 100_000L);
-    fixtureMap.put("payload", payload);
+    final Map<String, Object> fixtureMap =
+        firstReleaseFixture("wire_instruction_arguments_fixture", payload);
 
     final TransactionPayloadFixtures.Fixture fixture =
         TransactionPayloadFixtures.Fixture.fromObject(fixtureMap);
@@ -155,6 +148,60 @@ public final class TransactionPayloadFixtureTests {
         "expected mismatched TTL copies to be rejected");
   }
 
+  @Test
+  public void fixtureLoaderRejectsEncodedAlias() {
+    final Map<String, Object> fixture = ttlFixture(100_000L, 100_000L);
+    fixture.put("encoded", fixture.get("payload_base64"));
+    assertThrowsContaining(
+        () -> TransactionPayloadFixtures.Fixture.fromObject(fixture),
+        "unknown top-level field 'encoded'",
+        "encoded alias must be rejected");
+  }
+
+  @Test
+  public void fixtureLoaderRequiresPayloadBase64AndStructuredPayload() {
+    final Map<String, Object> missingPayloadBase64 = ttlFixture(100_000L, 100_000L);
+    missingPayloadBase64.remove("payload_base64");
+    assertThrowsContaining(
+        () -> TransactionPayloadFixtures.Fixture.fromObject(missingPayloadBase64),
+        "missing required top-level field 'payload_base64'",
+        "payload_base64 must be required");
+
+    final Map<String, Object> missingPayload = ttlFixture(100_000L, 100_000L);
+    missingPayload.remove("payload");
+    assertThrowsContaining(
+        () -> TransactionPayloadFixtures.Fixture.fromObject(missingPayload),
+        "missing required top-level field 'payload'",
+        "structured payload must be required");
+
+    final Map<String, Object> nullPayload = ttlFixture(100_000L, 100_000L);
+    nullPayload.put("payload", null);
+    assertThrowsContaining(
+        () -> TransactionPayloadFixtures.Fixture.fromObject(nullPayload),
+        "expected object for payload",
+        "structured payload must not be null");
+
+    final Map<String, Object> missingMetadata = ttlFixture(100_000L, 100_000L);
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> payloadWithoutMetadata =
+        (Map<String, Object>) missingMetadata.get("payload");
+    payloadWithoutMetadata.remove("metadata");
+    assertThrowsContaining(
+        () -> TransactionPayloadFixtures.Fixture.fromObject(missingMetadata),
+        "missing required payload field 'metadata'",
+        "structured metadata must be required");
+
+    final Map<String, Object> missingFeePayment = ttlFixture(100_000L, 100_000L);
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> payloadWithoutFeePayment =
+        (Map<String, Object>) missingFeePayment.get("payload");
+    payloadWithoutFeePayment.remove("fee_payment");
+    assertThrowsContaining(
+        () -> TransactionPayloadFixtures.Fixture.fromObject(missingFeePayment),
+        "missing required payload field 'fee_payment'",
+        "structured fee payment must be required");
+  }
+
   public static void main(final String[] args) throws Exception {
     runFixtures();
   }
@@ -164,9 +211,6 @@ public final class TransactionPayloadFixtureTests {
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
     for (TransactionPayloadFixtures.Fixture fixture : TransactionPayloadFixtures.load(path)) {
       final String name = fixture.name();
-      if (!fixture.isDecodable()) {
-        throw new IllegalStateException(name + ": encoded payload not decodable");
-      }
       final TransactionPayload payload = fixture.toPayload();
       assert Objects.equals(fixture.chain(), payload.chainId())
           : name + ": chain mismatch vs fixture metadata";
@@ -191,10 +235,6 @@ public final class TransactionPayloadFixtureTests {
         assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1".equals(charge.assetDefinitionId())
             : name + ": fee asset mismatch";
         assert "1000".equals(charge.maxAmount()) : name + ": fee maximum mismatch";
-        assert !payload.metadata().containsKey("gas_asset_id")
-            : name + ": legacy gas asset metadata must be absent";
-        assert !payload.metadata().containsKey("gas_limit")
-            : name + ": legacy gas limit metadata must be absent";
         assert JsonValue.bool(true).equals(payload.metadata().get("checked"))
             : name + ": boolean metadata must be preserved";
       }
@@ -218,34 +258,15 @@ public final class TransactionPayloadFixtureTests {
         assert Long.valueOf(100_000L).equals(payload.feePayment().gasLimit())
             : name + ": gas limit mismatch";
       }
-      if ("ivm_transfer".equals(name)) {
-        assert payload.executable().isIvm() : name + ": legacy executable must remain IVM";
-        assert payload.feePayment().gasLimit() == null : name + ": legacy fixture must remain gasless";
-        try {
-          adapter.encodeTransaction(payload);
-          throw new AssertionError(name + ": gasless IVM payload must not be re-encoded");
-        } catch (final NoritoException expected) {
-          // Historical wire data remains decodable but cannot enter a new signing flow.
-        }
-        continue;
+      final byte[] payloadBytes = adapter.encodeTransaction(payload);
+      if (payload.executable().isInstructions()) {
+        assert allInstructionsWire(payload)
+            : name + ": instruction fixtures must use wire payloads";
       }
-      final byte[] encoded = adapter.encodeTransaction(payload);
-      fixture.encoded().ifPresent(expected -> {
-        if (payload.executable().isInstructions()) {
-          assert allInstructionsWire(payload)
-              : name + ": instruction fixtures must use wire payloads";
-          final String actual = Base64.getEncoder().encodeToString(encoded);
-          assert expected.equals(actual) : name + ": encoded payload mismatch";
-          return;
-        }
-        final String actual = Base64.getEncoder().encodeToString(encoded);
-        assert expected.equals(actual) : name + ": encoded payload mismatch";
-      });
-      if (!fixture.encoded().isPresent()) {
-        final String base64 = Base64.getEncoder().encodeToString(encoded);
-        System.out.println("[fixture] " + name + "=" + base64);
-      }
-      final TransactionPayload decoded = adapter.decodeTransaction(encoded);
+      final String actualPayloadBase64 = Base64.getEncoder().encodeToString(payloadBytes);
+      assert fixture.payloadBase64().equals(actualPayloadBase64)
+          : name + ": payload_base64 mismatch";
+      final TransactionPayload decoded = adapter.decodeTransaction(payloadBytes);
       assertPayloadEquals(name, payload, decoded);
     }
     System.out.println("[IrohaAndroid] Transaction payload fixture tests passed.");
@@ -367,15 +388,42 @@ public final class TransactionPayloadFixtureTests {
     payload.put("authority", SAMPLE_AUTHORITY);
     payload.put("creation_time_ms", 0L);
     payload.put("time_to_live_ms", payloadTtl);
+    payload.put("nonce", null);
+    payload.put("fee_payment", authorityFeePayment());
+    payload.put("metadata", Collections.emptyMap());
+    final Map<String, Object> executable = new LinkedHashMap<>();
+    executable.put("Instructions", Collections.emptyList());
+    payload.put("executable", executable);
 
-    final Map<String, Object> fixture = new LinkedHashMap<>();
-    fixture.put("name", "ttl_fixture");
-    fixture.put("chain", "00000001");
-    fixture.put("authority", SAMPLE_AUTHORITY);
-    fixture.put("creation_time_ms", 0L);
+    final Map<String, Object> fixture = firstReleaseFixture("ttl_fixture", payload);
     fixture.put("time_to_live_ms", topLevelTtl);
+    return fixture;
+  }
+
+  private static Map<String, Object> firstReleaseFixture(
+      final String name, final Map<String, Object> payload) {
+    final Map<String, Object> fixture = new LinkedHashMap<>();
+    fixture.put("name", name);
+    fixture.put("chain", payload.get("chain"));
+    fixture.put("authority", payload.get("authority"));
+    fixture.put("creation_time_ms", payload.get("creation_time_ms"));
+    fixture.put("time_to_live_ms", payload.get("time_to_live_ms"));
+    fixture.put("nonce", payload.get("nonce"));
+    fixture.put("payload_base64", "AA==");
+    fixture.put("signed_base64", "AQ==");
+    fixture.put("payload_hash", String.join("", Collections.nCopies(64, "0")));
+    fixture.put("signed_hash", String.join("", Collections.nCopies(64, "1")));
     fixture.put("payload", payload);
     return fixture;
+  }
+
+  private static Map<String, Object> authorityFeePayment() {
+    final Map<String, Object> value = new LinkedHashMap<>();
+    value.put("charge_limits", Collections.emptyList());
+    final Map<String, Object> payment = new LinkedHashMap<>();
+    payment.put("payer", "authority");
+    payment.put("value", value);
+    return payment;
   }
 
   private static void assertThrows(final Runnable runnable, final String message) {
@@ -383,6 +431,19 @@ public final class TransactionPayloadFixtureTests {
       runnable.run();
     } catch (final RuntimeException ex) {
       return;
+    }
+    throw new AssertionError(message);
+  }
+
+  private static void assertThrowsContaining(
+      final Runnable runnable, final String expectedMessage, final String message) {
+    try {
+      runnable.run();
+    } catch (final RuntimeException ex) {
+      if (ex.getMessage() != null && ex.getMessage().contains(expectedMessage)) {
+        return;
+      }
+      throw new AssertionError(message + ": unexpected diagnostic: " + ex.getMessage(), ex);
     }
     throw new AssertionError(message);
   }

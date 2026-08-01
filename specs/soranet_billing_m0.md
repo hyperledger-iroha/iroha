@@ -7,7 +7,7 @@ deterministic so PoP drills and governance packets cite the same evidence.
 ## Running the generator
 
 ```bash
-cargo run -p xtask --bin xtask -- soranet-gateway-billing-m0 \
+cargo run -p xtask --features dev-tools --bin xtask -- soranet-gateway-billing-m0 \
   --billing-period 2026-11 \
   --output-dir configs/soranet/gateway_m0/billing
 ```

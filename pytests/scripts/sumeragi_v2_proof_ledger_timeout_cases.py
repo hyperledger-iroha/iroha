@@ -1190,12 +1190,12 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         (
             "timeout_ack_classification_bypasses_kernel",
             Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
-            "on_persisted",
+            "generation_after_timeout_install",
             """self
-                    .durable
-                    .is_strict_same_round_timeout_upgrade(certificate)""",
-            "certificate.highest_prepare().is_some()",
-            "InstallTimeout acknowledgement must classify the exact strict same-round lock-only upgrade before applying durable state",
+            .durable
+            .is_strict_same_round_timeout_upgrade(certificate)""",
+            "false",
+            "InstallTimeout generation must classify the exact strict same-round upgrade and reset only advancing views",
         ),
         (
             "timeout_ack_generation_preflight_removed",
@@ -1208,7 +1208,7 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             _ => self.generation,
         };""",
             "let next_generation = self.generation;",
-            "InstallTimeout acknowledgement must preflight same-round generation exhaustion while allowing an advancing-view reset",
+            "InstallTimeout acknowledgement must preflight same-round generation exhaustion and advancing-view reset before durable mutation",
         ),
         (
             "timeout_ack_ignores_preflighted_generation",
@@ -1252,12 +1252,21 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             "Verus must instantiate the shared strict timeout-upgrade body from its primitive WAL projection",
         ),
         (
-            "strict_same_round_timeout_pool_erased",
+            "bounded_timeout_window_erased",
             Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
             "on_persisted",
-            "if strict_same_round_timeout_upgrade {",
-            "if false && strict_same_round_timeout_upgrade {",
-            "strict same-round InstallTimeout must preserve only the exact current-round timeout pool and formed marker",
+            """let current_view = self.durable.current_view();
+                self.timeout_votes.retain(|round, _| {
+                    round.height() == self.context.height()
+                        && timeout_vote_view_is_admissible(current_view, round.view())
+                });
+                self.formed_timeouts.retain(|round| {
+                    round.height() == self.context.height()
+                        && timeout_vote_view_is_admissible(current_view, round.view())
+                });""",
+            """self.timeout_votes.clear();
+                self.formed_timeouts.clear();""",
+            "InstallTimeout must retain only installed current/adjacent timeout evidence",
         ),
         (
             "timeout_generation_overflow_regression_deleted",
@@ -1265,7 +1274,7 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             "same_round_timeout_generation_overflow_preserves_the_complete_state",
             "fn same_round_timeout_generation_overflow_preserves_the_complete_state() {",
             "fn removed_same_round_timeout_generation_overflow_preserves_the_complete_state() {",
-            "generation overflow must retain a regression for complete reducer-state non-mutation",
+            "same-round generation overflow must retain a regression for complete reducer-state non-mutation",
         ),
         (
             "timeout_generation_overflow_public_state_weakened",
@@ -1297,7 +1306,7 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             "transition_branch_constraints_body",
             "$facts.timeout_vote_pool_unchanged",
             "true",
-            "the production gate must reject same-size timeout-pool substitution and advancing-view retention",
+            "the production gate must reject same-size substitution and require bounded non-inventing timeout retention",
         ),
         (
             "timeout_control_substitution_accepted",
@@ -1316,6 +1325,14 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             "the production gate must preserve exact timeout-control identity across a lock-only install and require absence after advance",
         ),
         (
+            "timeout_window_projection_disconnected",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "transition_projection",
+            "!timeout_vote_view_is_admissible(installed_view, round.view())",
+            "false",
+            "the transition projection must count every timeout-evidence round outside the installed current/adjacent window",
+        ),
+        (
             "timeout_control_key_projection_retargeted",
             Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
             "transition_projection",
@@ -1326,6 +1343,22 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
                 .outbound_control
                 .get(&OutboundControlClass::CommitQc),""",
             "the transition projection must preserve direct timeout-control key occupancy and full message identity",
+        ),
+        (
+            "timeout_window_fact_weakened",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "transition_delta_facts_from_projection_body",
+            "$projection.timeout_evidence_after_outside_installed_window == 0u64",
+            "true",
+            "production must derive timeout identity and the installed current/adjacent window from primitive projections",
+        ),
+        (
+            "advancing_timeout_window_bypassed",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "transition_branch_constraints_body",
+            "$facts.timeout_evidence_after_in_installed_window",
+            "true",
+            "the production gate must reject same-size substitution and require bounded non-inventing timeout retention",
         ),
         (
             "verus_timeout_owner_projection_disconnected",
@@ -1344,6 +1377,14 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             "Verus transition-fact extensionality must include every timeout-owner delta field",
         ),
         (
+            "verus_timeout_round_bound_narrowed",
+            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            "production_action_preserves_volatile_bounds",
+            "facts.volatile_after.timeout_vote_pools <= 2,",
+            "facts.volatile_after.timeout_vote_pools <= 1,",
+            "Verus volatile bounds must cover exactly the current and adjacent timeout rounds",
+        ),
+        (
             "verus_same_round_timeout_pool_forced_empty",
             Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
             "production_action_preserves_volatile_bounds",
@@ -1354,12 +1395,28 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
                         && facts.volatile_after.timeout_vote_entries
                             == facts.volatile_before.timeout_vote_entries
                 } else {
-                    facts.volatile_after.timeout_vote_pools == 0
-                        && facts.volatile_after.timeout_vote_entries == 0
+                    facts.timeout_evidence_after_in_installed_window
+                        && facts.volatile_after.timeout_vote_pools
+                            <= facts.volatile_before.timeout_vote_pools
+                        && facts.volatile_after.timeout_vote_entries
+                            <= facts.volatile_before.timeout_vote_entries
                 })""",
             """&& facts.volatile_after.timeout_vote_pools == 0
                 && facts.volatile_after.timeout_vote_entries == 0""",
-            "Verus volatile preservation must distinguish lock-only timeout ownership from advancing-view reset",
+            "Verus volatile preservation must prove bounded non-inventing timeout retention on advancing installs",
+        ),
+        (
+            "verus_advancing_formed_timeout_invention_accepted",
+            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            "production_action_preserves_volatile_bounds",
+            """} else {
+                    facts.volatile_after.formed_timeouts
+                        <= facts.volatile_before.formed_timeouts
+                })""",
+            """} else {
+                    true
+                })""",
+            "Verus formed-timeout preservation must forbid advancing-install invention",
         ),
         (
             "verus_advancing_timeout_control_retention_accepted",

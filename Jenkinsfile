@@ -46,20 +46,19 @@ stage('Shielded Merkle Determinism') {
     parallel lanes
 }
 
-stage('Dual Profile Builds') {
+stage('Canonical Build') {
     node(amd64Label) {
         ws(dualProfileWorkspace) {
             checkout scm
             sh '''
 set -euo pipefail
-BUILD_PROFILE=deploy bash scripts/build_line.sh --i3
-BUILD_PROFILE=deploy bash scripts/build_line.sh --i2
+BUILD_PROFILE=deploy bash scripts/build_line.sh
 '''
         }
     }
 }
 
-stage('Dual Profile Artifacts') {
+stage('Canonical Build Artifacts') {
     node(amd64Label) {
         ws(dualProfileWorkspace) {
             echo(

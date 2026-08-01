@@ -893,6 +893,78 @@
     }
 
     #[test]
+    fn equivalent_queue_plan_quorums_collapse_to_one_deterministic_admission() {
+        let (state, validator_keypairs, _, parent) = configured_single_lane_merge_state();
+        let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ));
+        let (binding, first_certificate) = queue_plan_admission_certificate_for_state_test(
+            &state,
+            routing_plan,
+            &validator_keypairs,
+            1,
+            0x50,
+        );
+        let coordinator = &binding.admission_context.route_incarnations[0];
+        assert_eq!(coordinator.durability_threshold, 2);
+        let alternate_attestations = [2_usize, 3]
+            .into_iter()
+            .map(|index| {
+                let validator = &coordinator.validator_set[index];
+                let keypair = validator_keypairs
+                    .iter()
+                    .find(|keypair| keypair.public_key() == validator.public_key())
+                    .expect("fixture retains alternate quorum signer");
+                let validator_index = u16::try_from(index).expect("validator index fits u16");
+                let signing_bytes =
+                    crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v2(
+                        binding.canonical_hash(),
+                        validator_index,
+                    )
+                    .expect("alternate quorum signing bytes");
+                crate::torii_proxy::QueuePlanAdmissionAttestationV2 {
+                    version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+                    validator_index,
+                    signature: Signature::try_new(keypair.private_key(), &signing_bytes)
+                        .expect("alternate quorum signature"),
+                }
+            })
+            .collect();
+        let alternate_certificate =
+            norito::to_bytes(&crate::torii_proxy::QueuePlanAdmissionCertificateV2 {
+                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+                binding,
+                attestations: alternate_attestations,
+            })
+            .expect("alternate quorum certificate");
+        assert_ne!(first_certificate, alternate_certificate);
+
+        let expected = first_certificate.clone().min(alternate_certificate.clone());
+        let forward = state
+            .merge_candidate_with_queue_plan_admissions(
+                &parent.header(),
+                0,
+                None,
+                vec![first_certificate.clone(), alternate_certificate.clone()],
+            )
+            .expect("equivalent quorum certificates are idempotent")
+            .expect("QueuePlan controls produce a candidate");
+        let reverse = state
+            .merge_candidate_with_queue_plan_admissions(
+                &parent.header(),
+                0,
+                None,
+                vec![alternate_certificate, first_certificate],
+            )
+            .expect("input order does not affect equivalent quorum collapse")
+            .expect("QueuePlan controls produce a candidate");
+
+        assert_eq!(forward.queue_plan_admissions, vec![expected]);
+        assert_eq!(forward.canonical_bytes(), reverse.canonical_bytes());
+    }
+
+    #[test]
     fn queue_plan_only_carriers_require_exact_committed_active_lane_bindings() {
         let (state, validator_keypairs, commit_keypairs, parent) =
             configured_two_lane_merge_state();

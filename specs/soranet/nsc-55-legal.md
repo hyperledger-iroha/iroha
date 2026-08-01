@@ -7,7 +7,7 @@ summary: Deterministic tables, parity tests, and claim-avoidance notes for NSC-5
 
 **Status:** Completed — deterministic tables, generator tooling, and policy notes now live in-repo.
 
-- Deterministic tables: `codec/rans/tables/rans_seed0.toml` stores the canonical `SignedRansTablesV1` artefact with CC0-1.0 dedication, checksum, seed, and commit hash. The script `tools/rans/gen_tables.py` wraps `cargo run -p xtask -- codec rans-tables` so future refreshes remain reproducible.
+- Deterministic tables: `codec/rans/tables/rans_seed0.toml` stores the canonical `SignedRansTablesV1` artefact with CC0-1.0 dedication, checksum, seed, and commit hash. The script `tools/rans/gen_tables.py` wraps `cargo run -p xtask --features dev-tools --bin xtask -- codec rans-tables` so future refreshes remain reproducible.
 - Patent posture: `PATENTS.md` records the baseline rANS scope and explicitly excludes patented variants (Markov-model table switching, escape-code mechanisms, Microsoft’s US 11,234,023 B2 features). Publication of the tables does not include those claim elements.
 - Export memo: `EXPORT.md` confirms the EAR99 (NLR) classification for the deterministic tables because they do not implement cryptography.
 - Validation hooks: the xtask command now emits TOML artefacts and `tools/rans/gen_tables.py --verify` reuses the built-in verifier to check signatures/checksums. Benchmark harnesses (see `benchmarks/nsc/rans_compare.py`) load either JSON or TOML tables and compare encoders against the published vectors.

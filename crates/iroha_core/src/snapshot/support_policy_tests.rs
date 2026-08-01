@@ -573,6 +573,7 @@
         try_write_snapshot(&state, &store_dir, &signing_key, TEST_CHUNK_SIZE)
             .expect("complete authenticated commit tuple must permit publication");
         assert_canonical_snapshot_generation(&store_dir);
+        SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| passes.set(0));
         let restored = try_read_snapshot(
             &store_dir,
             &kura,
@@ -586,6 +587,13 @@
             StateTelemetry::new(<_>::default(), true),
         )
         .expect("post-height snapshot must remain exactly restart-readable");
+        SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| {
+            assert_eq!(
+                passes.get(),
+                1,
+                "authenticated snapshot restart must reconcile the Kura prefix once"
+            );
+        });
         assert_eq!(
             restored.nexus_snapshot().autoscale.scale_out_window_blocks,
             state.nexus_snapshot().autoscale.scale_out_window_blocks

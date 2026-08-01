@@ -52,7 +52,7 @@ reference docs that stay in lockstep with Rust data-model changes.
 
 ### D3 — Publishing & Validation (Docs/DevRel + Release Engineering)
 - Add `make android-codegen-docs` that executes:
-  1. `cargo run -p norito_codegen_exporter -- --out target-codex/android_codegen`
+  1. `cargo run -p norito_codegen_exporter --features dev-tools -- --out target-codex/android_codegen`
      (existing step).
   2. `python3 scripts/android_codegen_docs.py --manifest target-codex/...`.
   3. `./gradlew :java:iroha_android:dokkaHtml -PcodegenDocs`.

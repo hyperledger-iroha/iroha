@@ -49,7 +49,7 @@ raise the baseline merely to make an unexplained regression pass.
 
 ## Repository structure ratchets
 
-Three fast, read-only checks keep structural debt from returning:
+Four fast, read-only checks keep structural debt from returning:
 
 - `python3 scripts/check_source_file_budget.py` caps new production and test
   source files and applies an exact no-growth ratchet to legacy files that are
@@ -59,6 +59,9 @@ Three fast, read-only checks keep structural debt from returning:
   feature injection and implicit default-feature ownership across every
   workspace member. Capability bundles belong to the crate or binary that
   consumes them.
+- `python3 scripts/check_workspace_target_inventory.py` keeps ordinary
+  workspace builds limited to the first-release shipping executables. Fixture
+  generators, probes, benchmarks, and evidence tools require explicit opt-in.
 - `python3 scripts/check_generated_artifacts.py` validates
   `generated-files.toml`, requires reproducible ownership for checked-in
   generated source, and rejects tracked build, cache, package, and `dist`

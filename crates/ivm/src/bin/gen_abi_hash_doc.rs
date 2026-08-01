@@ -1,8 +1,8 @@
 //! Generate or check ABI/gas hash goldens and runtime samples.
 //! Usage:
-//!   cargo run -p ivm --bin gen_abi_hash_doc -- --write
-//!   cargo run -p ivm --bin gen_abi_hash_doc -- --check
-//!   cargo run -p ivm --bin gen_abi_hash_doc -- --write --root /tmp/ivm-doc-stage
+//!   cargo run -p ivm --features dev-tools --bin gen_abi_hash_doc -- --write
+//!   cargo run -p ivm --features dev-tools --bin gen_abi_hash_doc -- --check
+//!   cargo run -p ivm --features dev-tools --bin gen_abi_hash_doc -- --write --root /tmp/ivm-doc-stage
 
 use std::path::{Path, PathBuf};
 
@@ -134,7 +134,8 @@ fn main() {
         &gas_hash,
     )
     .unwrap_or_else(|error| panic!("render ABI/gas hash outputs: {error}"));
-    let regenerate_command = "cargo run --locked -p ivm --bin gen_abi_hash_doc -- --write";
+    let regenerate_command =
+        "cargo run --locked -p ivm --features dev-tools --bin gen_abi_hash_doc -- --write";
     let updated = sync_generated_outputs(&outputs, options.mode, regenerate_command)
         .unwrap_or_else(|error| panic!("{error}"));
     for path in updated {

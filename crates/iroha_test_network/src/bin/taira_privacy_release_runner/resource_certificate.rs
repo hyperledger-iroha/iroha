@@ -223,7 +223,7 @@ fn exact_positive_kat_v1(measured: &[MeasuredStageV1]) -> Result<(u32, [u8; 32])
     Ok((proof_bytes, artifact.proof_sha256))
 }
 
-pub(super) fn load_pinned_pair_v1(
+pub(super) fn load_capture_pair_v1(
     norito_path: &Path,
     json_path: &Path,
 ) -> Result<LoadedResourceCertificateV1, DynError> {
@@ -252,9 +252,9 @@ pub(super) fn load_pinned_pair_v1(
             "X.509 resource certificate JSON is not typed-equal to authoritative Norito".into(),
         );
     }
-    if !privacy_release_zk_x509_resource_certificate_matches_source_v1(&certificate) {
+    if !validate_privacy_release_zk_x509_resource_capture_v1(&certificate) {
         return Err(
-            "X.509 resource certificate does not match every compiled field and pin".into(),
+            "X.509 resource certificate does not match the current compiled capture profile".into(),
         );
     }
     Ok(LoadedResourceCertificateV1 {
@@ -264,6 +264,120 @@ pub(super) fn load_pinned_pair_v1(
         norito_identity: norito.identity,
         json_identity: json.identity,
     })
+}
+
+pub(super) fn load_pinned_pair_v1(
+    norito_path: &Path,
+    json_path: &Path,
+) -> Result<LoadedResourceCertificateV1, DynError> {
+    let loaded = load_capture_pair_v1(norito_path, json_path)?;
+    if !privacy_release_zk_x509_resource_certificate_matches_source_v1(&loaded.certificate) {
+        return Err(
+            "X.509 resource certificate does not match every compiled field and pin".into(),
+        );
+    }
+    Ok(loaded)
+}
+
+pub(super) fn validate_capture_expectation_binding_v1(
+    certificate: &PrivacyReleaseZkX509ResourceCertificateV1,
+    expectations: &PrivacyReleaseExpectationsV1,
+    expectations_norito_sha256: [u8; 32],
+    expectations_json_sha256: [u8; 32],
+) -> Result<(), DynError> {
+    validate_expectations(expectations)?;
+    if !validate_privacy_release_zk_x509_resource_capture_v1(certificate) {
+        return Err(
+            "X.509 resource certificate is not valid for the current compiled profile".into(),
+        );
+    }
+    if certificate.expectations_norito_sha256 != expectations_norito_sha256
+        || certificate.expectations_json_sha256 != expectations_json_sha256
+    {
+        return Err("X.509 resource certificate binds a different expectation pair".into());
+    }
+
+    let positive = exact_expected_stage_v1(
+        expectations,
+        PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
+    )?;
+    let maximum =
+        exact_expected_stage_v1(expectations, PrivacyReleaseCaseKindV1::MaximumShapeResource)?;
+    let [kat] = positive.evidence.proof_artifacts.as_slice() else {
+        return Err(
+            "X.509 positive expectation must contain exactly one KAT proof artifact".into(),
+        );
+    };
+    let kat_proof_bytes = u32::try_from(kat.canonical_proof_bytes.len())
+        .map_err(|_| "X.509 expectation KAT proof length exceeds u32")?;
+    if kat.artifact_ordinal != 0
+        || kat.proof_sha256 != sha256_bytes(&kat.canonical_proof_bytes)
+        || certificate.kat_proof_bytes != kat_proof_bytes
+        || certificate.kat_proof_sha256 != kat.proof_sha256
+    {
+        return Err("X.509 resource certificate does not bind the expectation KAT proof".into());
+    }
+
+    validate_capture_observation_binding_v1(certificate, positive, certificate.positive)?;
+    validate_capture_observation_binding_v1(certificate, maximum, certificate.maximum)?;
+    Ok(())
+}
+
+fn exact_expected_stage_v1(
+    expectations: &PrivacyReleaseExpectationsV1,
+    case_kind: PrivacyReleaseCaseKindV1,
+) -> Result<&PrivacyReleaseExpectedStageV1, DynError> {
+    let ordinal = usize::from(privacy_release_stage_ordinal_v1(
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+        case_kind,
+    ));
+    let stage = expectations
+        .stages
+        .get(ordinal)
+        .ok_or("X.509 expectation stage ordinal is absent")?;
+    if stage.evidence.protocol_id != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
+        || stage.evidence.case_kind != case_kind
+        || usize::from(stage.evidence.stage_ordinal) != ordinal
+    {
+        return Err("X.509 expectation stage is outside the canonical exact-48 order".into());
+    }
+    Ok(stage)
+}
+
+fn validate_capture_observation_binding_v1(
+    certificate: &PrivacyReleaseZkX509ResourceCertificateV1,
+    expected: &PrivacyReleaseExpectedStageV1,
+    observation: PrivacyReleaseZkX509ResourceObservationV1,
+) -> Result<(), DynError> {
+    let resources = expected.evidence.resources;
+    if observation.case_kind != expected.evidence.case_kind
+        || observation.primary_units != resources.primary_units
+        || observation.primary_ceiling != resources.primary_ceiling
+        || observation.secondary_units != resources.secondary_units
+        || observation.secondary_ceiling != resources.secondary_ceiling
+        || observation.relation_depth != resources.relation_depth
+        || observation.relation_depth_ceiling != resources.relation_depth_ceiling
+    {
+        return Err(
+            "X.509 resource observation does not bind its expectation resource facts".into(),
+        );
+    }
+    if expected.max_elapsed_millis != certificate.process_limits.elapsed_ceiling_millis
+        || expected.max_peak_rss_bytes != certificate.process_limits.peak_rss_ceiling_bytes
+        || expected.max_address_space_bytes
+            != certificate.process_limits.address_space_ceiling_bytes
+        || observation.elapsed_millis == 0
+        || observation.elapsed_millis > expected.max_elapsed_millis
+        || observation.peak_rss_bytes == 0
+        || observation.peak_rss_bytes > expected.max_peak_rss_bytes
+        || observation.peak_address_space_bytes == 0
+        || observation.peak_address_space_bytes > expected.max_address_space_bytes
+    {
+        return Err(
+            "X.509 resource observation is outside its exact expectation process profile".into(),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -338,5 +452,23 @@ mod tests {
         let mut corrupt = positive;
         corrupt.evidence.proof_artifacts[0].proof_sha256[0] ^= 1;
         assert!(exact_positive_kat_v1(&[corrupt, maximum]).is_err());
+    }
+
+    #[test]
+    fn capture_loader_rejects_fake_nrt_bytes() {
+        let directory = tempfile::tempdir().expect("temporary resource fixture directory");
+        let physical_directory = directory
+            .path()
+            .canonicalize()
+            .expect("physical resource fixture directory");
+        let norito_path = physical_directory.join("resource.norito");
+        let json_path = physical_directory.join("resource.json");
+        fs::write(&norito_path, b"NRT0\0not-canonical-norito").expect("write fake resource Norito");
+        fs::write(&json_path, b"{}\n").expect("write resource JSON");
+
+        let error = load_capture_pair_v1(&norito_path, &json_path)
+            .err()
+            .expect("fake resource Norito must reject");
+        assert!(error.to_string().contains("bounded canonical Norito"));
     }
 }

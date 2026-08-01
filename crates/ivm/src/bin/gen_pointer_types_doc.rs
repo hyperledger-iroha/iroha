@@ -1,8 +1,8 @@
 //! Generate or check the generated pointer-ABI sections in docs.
 //! Usage:
-//!   cargo run -p ivm --bin gen_pointer_types_doc -- --write
-//!   cargo run -p ivm --bin gen_pointer_types_doc -- --check
-//!   cargo run -p ivm --bin gen_pointer_types_doc -- --write --root /tmp/ivm-doc-stage
+//!   cargo run -p ivm --features dev-tools --bin gen_pointer_types_doc -- --write
+//!   cargo run -p ivm --features dev-tools --bin gen_pointer_types_doc -- --check
+//!   cargo run -p ivm --features dev-tools --bin gen_pointer_types_doc -- --write --root /tmp/ivm-doc-stage
 
 use std::path::PathBuf;
 
@@ -136,7 +136,8 @@ fn main() {
         )
         .unwrap_or_else(|error| panic!("render pointer type golden: {error}")),
     );
-    let regenerate_command = "cargo run --locked -p ivm --bin gen_pointer_types_doc -- --write";
+    let regenerate_command =
+        "cargo run --locked -p ivm --features dev-tools --bin gen_pointer_types_doc -- --write";
     let updated = sync_generated_outputs(&outputs, options.mode, regenerate_command)
         .unwrap_or_else(|error| panic!("{error}"));
     for path in updated {

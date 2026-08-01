@@ -8343,15 +8343,23 @@ where
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
-                    "--json-out" => {
+                    "--json-out" if json_out.is_none() => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --json-out".into());
                         };
                         json_out = Some(if path == "-" {
                             JsonTarget::Stdout
                         } else {
+                            if path.is_empty() || path.starts_with('-') {
+                                return Err(
+                                    "--json-out requires a non-empty file path or `-`".into()
+                                );
+                            }
                             JsonTarget::File(normalize_path(Path::new(&path))?)
                         });
+                    }
+                    "--json-out" => {
+                        return Err("--json-out was supplied more than once".into());
                     }
                     flag => {
                         return Err(format!("unknown flag for norito-rpc-verify: {flag}").into());
@@ -14613,7 +14621,7 @@ fn run_config_debug(path: &Path) -> Result<(), Box<dyn Error>> {
             return Err("failed to read config source".into());
         }
     };
-    match reader.read_and_complete::<user::Root>() {
+    match user::Root::read_and_complete(reader) {
         Ok(_cfg) => {
             println!("config OK");
             Ok(())
@@ -14630,8 +14638,7 @@ fn load_actual_config(path: &Path) -> eyre::Result<actual::Root> {
     let reader = reader
         .read_toml_with_extends(path)
         .map_err(|err| eyre!("failed to read `{}`: {err}", path.display()))?;
-    let user_cfg = reader
-        .read_and_complete::<user::Root>()
+    let user_cfg = user::Root::read_and_complete(reader)
         .map_err(|err| eyre!("failed to parse `{}`: {err:?}", path.display()))?;
     user_cfg
         .parse()
@@ -14909,6 +14916,9 @@ fn parse_rollout_artifact_spec(spec: &str) -> Result<(String, String), Box<dyn E
     let path = path.ok_or("missing `path=` in --artifact spec")?;
     Ok((kind, path))
 }
+
+const NORITO_RPC_FIXTURES_USAGE_DESCRIPTION: &str = "    Regenerate canonical Norito-RPC fixtures and their Android/Python/Swift mirrors under the selected output root.";
+const NORITO_RPC_VERIFY_USAGE_DESCRIPTION: &str = "    Re-render and compare canonical Norito-RPC fixture bytes, schema hashes, the compact hash vector, and Android/Python/Swift mirrors; optionally emit a JSON verification report.";
 
 fn print_usage() {
     eprintln!("xtask usage:");
@@ -15308,13 +15318,9 @@ fn print_usage() {
         "    Print the SNNet-17B constant-rate presets (core/home) and optional tick→bandwidth tables so relay operators and SDK tooling can apply consistent lane budgets."
     );
     eprintln!("  cargo xtask norito-rpc-fixtures [--output-root <dir>]");
-    eprintln!(
-        "    Regenerate the canonical Norito-RPC fixtures/manifest under fixtures/norito_rpc/"
-    );
+    eprintln!("{NORITO_RPC_FIXTURES_USAGE_DESCRIPTION}");
     eprintln!("  cargo xtask norito-rpc-verify [--json-out <path|->]");
-    eprintln!(
-        "    Start a local Torii router, ensure selected endpoints return identical responses for JSON/Norito payloads, and optionally emit a JSON verification report."
-    );
+    eprintln!("{NORITO_RPC_VERIFY_USAGE_DESCRIPTION}");
     eprintln!("  cargo xtask soranet-testnet-kit [--out <dir>]");
     eprintln!(
         "    Materialise the SoraNet testnet operator kit. Defaults to fixtures/documentation/soranet_testnet_operator_kit"
@@ -15561,6 +15567,70 @@ mod tests {
             assert!(
                 error.to_string().contains("output-root"),
                 "unexpected error for {invalid:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn norito_rpc_verify_accepts_only_one_explicit_report_target() {
+        for arguments in [
+            vec!["xtask", "norito-rpc-verify"],
+            vec!["xtask", "norito-rpc-verify", "--json-out", "-"],
+            vec![
+                "xtask",
+                "norito-rpc-verify",
+                "--json-out",
+                "artifacts/norito-report.json",
+            ],
+        ] {
+            assert!(matches!(
+                parse_command(arguments.into_iter().map(String::from))
+                    .expect("valid verifier options parse"),
+                CommandKind::NoritoRpcVerify { .. }
+            ));
+        }
+
+        for arguments in [
+            vec!["xtask", "norito-rpc-verify", "--json-out"],
+            vec!["xtask", "norito-rpc-verify", "--json-out", ""],
+            vec!["xtask", "norito-rpc-verify", "--json-out", "--unknown"],
+            vec![
+                "xtask",
+                "norito-rpc-verify",
+                "--json-out",
+                "first.json",
+                "--json-out",
+                "second.json",
+            ],
+        ] {
+            assert!(parse_command(arguments.into_iter().map(String::from)).is_err());
+        }
+    }
+
+    #[test]
+    fn norito_rpc_verify_help_describes_the_fixture_only_contract() {
+        let help = NORITO_RPC_VERIFY_USAGE_DESCRIPTION.to_ascii_lowercase();
+        for required in ["fixture", "schema", "compact", "android", "python", "swift"] {
+            assert!(
+                help.contains(required),
+                "missing `{required}` from verifier help"
+            );
+        }
+        for false_claim in ["router", "endpoint", "transport"] {
+            assert!(
+                !help.contains(false_claim),
+                "verifier help must not claim `{false_claim}` behavior"
+            );
+        }
+    }
+
+    #[test]
+    fn norito_rpc_fixture_help_discloses_every_publication_surface() {
+        let help = NORITO_RPC_FIXTURES_USAGE_DESCRIPTION.to_ascii_lowercase();
+        for required in ["canonical", "android", "python", "swift", "output root"] {
+            assert!(
+                help.contains(required),
+                "missing `{required}` from fixture-owner help"
             );
         }
     }

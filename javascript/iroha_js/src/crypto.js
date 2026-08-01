@@ -936,6 +936,7 @@ export function isPrivacyNativeAvailable() {
  * The catalog contains no committed height, governance activation, or network
  * readiness. Use `getPrivacyCapabilitiesV1` with a configured Torii client for
  * the authoritative fresh committed snapshot.
+ * @returns {Buffer}
  */
 export function privacyCompiledProfileCatalogV1() {
   const native = ensurePrivacyNative(

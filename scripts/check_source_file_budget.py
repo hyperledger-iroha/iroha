@@ -41,6 +41,7 @@ SOURCE_SUFFIXES = frozenset(
     }
 )
 DEFAULT_EXCLUDED_PREFIXES = (
+    "docs/portal/node_modules/",
     "target/",
     "vendor/",
 )

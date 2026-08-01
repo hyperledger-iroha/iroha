@@ -57,6 +57,7 @@ run_xtask() {
       --locked \
       --offline \
       -p xtask \
+      --features dev-tools \
       --bin xtask \
       -- \
       "${args[@]}"
@@ -74,6 +75,7 @@ run_xtask_in_repo() {
         --locked \
         --offline \
         -p xtask \
+        --features dev-tools \
         --bin xtask \
         -- \
         "${args[@]}"
@@ -250,13 +252,13 @@ GENERATED_RELEASE_ARTIFACTS=(
 print_refresh_help() {
   cat >&2 <<'EOF'
 Refresh the canonical manifest before syncing snapshots:
-  development: cargo run --locked --offline -p xtask --bin xtask -- openapi --unsigned-manifest
+  development: cargo run --locked --offline -p xtask --features dev-tools --bin xtask -- openapi --unsigned-manifest
                (cd tools/openapi && npm run sync-openapi -- --allow-unsigned)
   release payload:
-               cargo run --locked --offline -p xtask --bin xtask -- openapi \
+               cargo run --locked --offline -p xtask --features dev-tools --bin xtask -- openapi \
                  --unsigned-manifest --signing-payload <operator-staging>/openapi-manifest-v2.payload
   release attach after the Ed25519 HSM signs those exact bytes:
-               cargo run --locked --offline -p xtask --bin xtask -- openapi \
+               cargo run --locked --offline -p xtask --features dev-tools --bin xtask -- openapi \
                  --signature-envelope <operator-staging>/openapi-manifest-v2.signature.json
                (cd tools/openapi && npm run sync-openapi -- --allowed-signers=<operator-allowlist-path>)
 Local private-key signing is intentionally unavailable; release signing is detached-only.

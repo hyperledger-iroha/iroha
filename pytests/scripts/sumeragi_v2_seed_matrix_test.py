@@ -46,9 +46,9 @@ def _install_source_bound_fake_localnet_binaries(
     if attestation.is_file():
         return program_target, hashlib.sha256(attestation.read_bytes()).hexdigest()
     binaries = {
-        "irohad": program_target / "release" / "iroha3d",
+        "irohad": program_target / "release" / "irohad",
         "irohad_message_control": (
-            program_target / "message-control" / "release" / "iroha3d"
+            program_target / "message-control" / "release" / "irohad"
         ),
         "iroha": program_target / "release" / "iroha",
         "kagami": program_target / "release" / "kagami",
@@ -83,8 +83,8 @@ def _install_source_bound_fake_localnet_binaries(
         ("bundle_dir", str(program_target)),
     ]
     for label, relative in (
-        ("irohad", "release/iroha3d"),
-        ("irohad_message_control", "message-control/release/iroha3d"),
+        ("irohad", "release/irohad"),
+        ("irohad_message_control", "message-control/release/irohad"),
         ("iroha", "release/iroha"),
         ("kagami", "release/kagami"),
     ):
@@ -412,9 +412,9 @@ def _expected_seed_command(
         f"IROHA_TEST_TARGET_DIR={program_target} "
         f"IROHA_RELEASE_SOURCE_MANIFEST_SHA256={source_manifest} "
         f"IROHA_RELEASE_PREBUILT_MANIFEST_SHA256={manifest_sha256} "
-        f"TEST_NETWORK_BIN_IROHAD={program_target / 'release' / 'iroha3d'} "
+        f"TEST_NETWORK_BIN_IROHAD={program_target / 'release' / 'irohad'} "
         "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="
-        f"{program_target / 'message-control' / 'release' / 'iroha3d'} "
+        f"{program_target / 'message-control' / 'release' / 'irohad'} "
         f"TEST_NETWORK_BIN_IROHA={program_target / 'release' / 'iroha'} "
         f"KAGAMI_BIN={program_target / 'release' / 'kagami'} "
         "CARGO_NET_OFFLINE=true "
@@ -453,7 +453,7 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
     env, capture, evidence = _stubbed_environment(tmp_path)
     env["IROHA_TEST_REQUIRE_NETWORK"] = "inherited-unsafe"
     env["IROHA_TEST_NETWORK_START_ATTEMPTS"] = "99"
-    env["TEST_NETWORK_BIN_IROHAD"] = "/tmp/inherited-stale-iroha3d"
+    env["TEST_NETWORK_BIN_IROHAD"] = "/tmp/inherited-stale-irohad"
     env["IROHA_TEST_SKIP_BUILD"] = "1"
     env["IROHA_TEST_ALLOW_REENTRANT_BUILD"] = "0"
     completion_pointer = tmp_path / "seed-completion-path"
@@ -479,7 +479,7 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
     expected_program_target = PROGRAM_TARGET
     assert all(
         row[4:7]
-        == [str(expected_program_target / "release" / "iroha3d"), "1", "0"]
+        == [str(expected_program_target / "release" / "irohad"), "1", "0"]
         for row in rows
     )
     source_manifests = {row[7] for row in rows}
@@ -784,7 +784,7 @@ def test_mocked_seed_matrix_rejects_bundle_tampering_before_completion(
         run_mode="tamper-bundle",
         program_target=program_target,
     )
-    binary = program_target / "release" / "iroha3d"
+    binary = program_target / "release" / "irohad"
     original = binary.read_bytes()
     env["SEED_MATRIX_TAMPER_BINARY"] = str(binary)
     completion_pointer = tmp_path / "seed-completion-path"

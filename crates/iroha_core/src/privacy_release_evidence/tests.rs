@@ -144,7 +144,8 @@
                 "FCMP++ release statement omitted one compiled-profile digest"
             );
             assert_ne!(
-                fcmp_release_context_hash_v1(&changed).expect("changed FCMP++ release context hash"),
+                fcmp_release_context_hash_v1(&changed)
+                    .expect("changed FCMP++ release context hash"),
                 baseline_context,
                 "FCMP++ proof context omitted one compiled-profile digest"
             );
@@ -189,30 +190,155 @@
         .expect("canonical provisioning statement");
         let authoritative_chain_id = ChainId::from(ZK_AMS_RELEASE_CHAIN_ID_V1);
 
+        let native_rejection = verify_zk_ams_release_production_envelope_v1(
+            &statement,
+            &[0x01],
+            &authoritative_chain_id,
+            ZK_AMS_RELEASE_GENESIS_HASH_V1,
+            ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
+        );
         assert_eq!(
-            verify_zk_ams_release_production_envelope_v1(
-                &statement,
-                &[0x01],
-                &authoritative_chain_id,
-                ZK_AMS_RELEASE_GENESIS_HASH_V1,
-                ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
-            ),
+            native_rejection,
             Err(PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected),
             "a canonical one-action envelope must reach the native ZK-AMS verifier"
+        );
+        assert_eq!(
+            require_zk_ams_release_production_native_rejection_v1(
+                native_rejection,
+                PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
+            ),
+            Ok(()),
+        );
+
+        let mut impossible_second_action = statement.clone();
+        impossible_second_action.context.action_index = 1;
+        let pre_native_rejection = verify_zk_ams_release_production_envelope_v1(
+            &impossible_second_action,
+            &[0x01],
+            &authoritative_chain_id,
+            ZK_AMS_RELEASE_GENESIS_HASH_V1,
+            ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
+        );
+        assert_eq!(
+            pre_native_rejection,
+            Err(PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected),
+            "Taira's one-action transaction limit must reject before native verification"
+        );
+        assert_eq!(
+            require_zk_ams_release_production_native_rejection_v1(
+                pre_native_rejection,
+                PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
+            ),
+            Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant),
+            "a pre-native rejection cannot count as ZK-AMS corruption coverage"
+        );
+        assert_eq!(
+            require_zk_ams_release_production_admission_rejection_v1(
+                pre_native_rejection,
+                PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
+            ),
+            Ok(()),
+        );
+
+        let oversized_len = usize::try_from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1)
+            .expect("closed Taira proof-byte ceiling fits usize")
+            + 1;
+        let mut oversized = vec![0_u8; oversized_len];
+        oversized[0] = 1;
+        let oversized_rejection = verify_zk_ams_release_production_envelope_v1(
+            &statement,
+            &oversized,
+            &authoritative_chain_id,
+            ZK_AMS_RELEASE_GENESIS_HASH_V1,
+            ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
+        );
+        assert_eq!(
+            oversized_rejection,
+            Err(PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected),
+            "an oversized ZK-AMS proof must fail admission before native decoding"
+        );
+        assert_eq!(
+            require_zk_ams_release_production_native_rejection_v1(
+                oversized_rejection,
+                PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
+            ),
+            Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant),
+        );
+        assert_eq!(
+            require_zk_ams_release_production_admission_rejection_v1(
+                oversized_rejection,
+                PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
+            ),
+            Ok(()),
+        );
+    }
+
+    #[test]
+    fn jindo_release_envelope_requires_the_production_native_dispatch() {
+        let profile =
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
+                .expect("compiled Jindo profile");
+        let authoritative_chain_id = ChainId::from(JINDO_RELEASE_CHAIN_ID_V1);
+        let mut commitment_encoding =
+            vec![0_u8; iroha_data_model::privacy::IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1];
+        commitment_encoding[..4].copy_from_slice(&1_i32.to_le_bytes());
+        let statement = iroha_data_model::privacy::IrohaJindoPolynomialCommitmentStatementV1 {
+            context: release_statement_context_from_compiled_profile_v1(
+                &profile,
+                authoritative_chain_id.clone(),
+                JINDO_RELEASE_ACTION_INDEX_V1,
+                PrivacyTransactionIntentDigestV1::new([0x51; 32]),
+            ),
+            polynomial_commitments: vec![
+                iroha_data_model::privacy::PrivacyJindoLatticeCommitmentV1::new(
+                    commitment_encoding,
+                ),
+            ],
+            evaluation_point: jindo_field_v1(13),
+            claimed_evaluations: vec![jindo_field_v1(17)],
+        };
+
+        let native_rejection = verify_jindo_release_production_envelope_v1(
+            &statement,
+            &[0x01],
+            &authoritative_chain_id,
+            JINDO_RELEASE_GENESIS_HASH_V1,
+            JINDO_RELEASE_ACTION_INDEX_V1,
+        );
+        assert_eq!(
+            native_rejection,
+            Err(PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected),
+            "a canonical Jindo envelope with an invalid wire must reach the native verifier"
+        );
+        assert_eq!(
+            require_jindo_release_production_native_rejection_v1(
+                native_rejection,
+                PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
+            ),
+            Ok(()),
         );
 
         let mut impossible_second_action = statement;
         impossible_second_action.context.action_index = 1;
+        let pre_native_rejection = verify_jindo_release_production_envelope_v1(
+            &impossible_second_action,
+            &[0x01],
+            &authoritative_chain_id,
+            JINDO_RELEASE_GENESIS_HASH_V1,
+            JINDO_RELEASE_ACTION_INDEX_V1,
+        );
         assert_eq!(
-            verify_zk_ams_release_production_envelope_v1(
-                &impossible_second_action,
-                &[0x01],
-                &authoritative_chain_id,
-                ZK_AMS_RELEASE_GENESIS_HASH_V1,
-                ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
-            ),
+            pre_native_rejection,
             Err(PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected),
-            "Taira's one-action transaction limit must reject before native verification"
+            "Taira's sole-action context must reject before native Jindo verification"
+        );
+        assert_eq!(
+            require_jindo_release_production_native_rejection_v1(
+                pre_native_rejection,
+                PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
+            ),
+            Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant),
+            "release evidence must not count a pre-native rejection as native corruption coverage"
         );
     }
 
@@ -265,6 +391,89 @@
                 }
             )
         ));
+    }
+
+    #[test]
+    fn vega_release_envelope_requires_the_production_native_dispatch() {
+        let fixture = vega_release_fixture_v1().expect("canonical Vega release fixture");
+        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
+            .expect("compiled Vega profile");
+        let authoritative_chain_id = ChainId::from(VEGA_RELEASE_CHAIN_ID_V1);
+        let input = fixture.public_input;
+        let record = fixture.issuer_record;
+        let mut statement = VegaExistingCredentialStatementV1 {
+            context: release_statement_context_from_compiled_profile_v1(
+                &profile,
+                authoritative_chain_id.clone(),
+                VEGA_RELEASE_ACTION_INDEX_V1,
+                PrivacyTransactionIntentDigestV1::new([0x27; 32]),
+            ),
+            issuer_id: record.issuer_id,
+            issuer_record_epoch: record.record_epoch,
+            issuer_record_digest: record.record_digest,
+            document_type: record.document_type,
+            namespace: record.namespace,
+            digest_algorithm: record.digest_algorithm,
+            issuer_authentication_algorithm: record.issuer_authentication_algorithm,
+            device_authentication_algorithm: record.device_authentication_algorithm,
+            issuer_public_key: record.issuer_public_key,
+            device_authentication_digest:
+                iroha_data_model::privacy::PrivacyVegaDeviceAuthenticationDigestV1::new([0; 32]),
+            presentation_date: input.presentation_date,
+            minimum_age_years: input.minimum_age_years,
+            reader_challenge: input.reader_challenge,
+            session_transcript_digest: input.session_transcript_digest,
+        };
+        refresh_vega_device_authentication_digest_v1(&mut statement, fixture.genesis_hash)
+            .expect("canonical Vega device binding");
+
+        let native_rejection = verify_vega_release_production_envelope_v1(
+            &statement,
+            Some(&record),
+            &[0x01],
+            &authoritative_chain_id,
+            fixture.genesis_hash,
+            VEGA_RELEASE_ACTION_INDEX_V1,
+            VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
+        );
+        assert_eq!(
+            native_rejection,
+            Err(PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected),
+            "a canonical Vega envelope with an invalid wire must reach the native verifier"
+        );
+        assert_eq!(
+            require_vega_release_production_native_rejection_v1(
+                native_rejection,
+                PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
+            ),
+            Ok(()),
+        );
+
+        statement.context.action_index = 1;
+        refresh_vega_device_authentication_digest_v1(&mut statement, fixture.genesis_hash)
+            .expect("rebound impossible Vega action index");
+        let pre_native_rejection = verify_vega_release_production_envelope_v1(
+            &statement,
+            Some(&record),
+            &[0x01],
+            &authoritative_chain_id,
+            fixture.genesis_hash,
+            VEGA_RELEASE_ACTION_INDEX_V1,
+            VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
+        );
+        assert_eq!(
+            pre_native_rejection,
+            Err(PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected),
+            "Taira's sole-action context must reject before native Vega verification"
+        );
+        assert_eq!(
+            require_vega_release_production_native_rejection_v1(
+                pre_native_rejection,
+                PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
+            ),
+            Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant),
+            "release evidence must not count a pre-native rejection as Vega corruption coverage"
+        );
     }
 
     #[test]

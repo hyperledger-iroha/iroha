@@ -22,7 +22,7 @@ environment, and anycast prefixes. The output is Norito JSON that can be passed
 directly into provisioning pipelines.
 
 ```bash
-cargo run -p soranet-relay --bin soranet-popctl -- \
+cargo run -p soranet-relay --features dev-tools --bin soranet-popctl -- \
   template \
   --name pop-nyc01 \
   --region us-east-1 \
@@ -48,7 +48,7 @@ Once operators customise the template, validate the payload. The command fails
 with a joined error list when required services or policies are missing.
 
 ```bash
-cargo run -p soranet-relay --bin soranet-popctl -- \
+cargo run -p soranet-relay --features dev-tools --bin soranet-popctl -- \
   validate \
   --config environments/us-east/pop-nyc01.json
 ```
@@ -71,7 +71,7 @@ labels raise errors; degraded checks cause a non-zero exit unless the operator
 explicitly allows them.
 
 ```bash
-cargo run -p soranet-relay --bin soranet-popctl -- \
+cargo run -p soranet-relay --features dev-tools --bin soranet-popctl -- \
   health \
   --config environments/us-east/pop-nyc01.json \
   --report artifacts/health/pop-nyc01.json
@@ -89,7 +89,7 @@ annotations declared in the PoP configuration, while the PXE log must capture a
 successful provisioning run for every declared host.
 
 ```bash
-cargo run -p soranet-relay --bin soranet-popctl -- \
+cargo run -p soranet-relay --features dev-tools --bin soranet-popctl -- \
   attest \
   --config environments/us-east/pop-nyc01.json \
   --bundle artifacts/attestations/pop-nyc01.json \

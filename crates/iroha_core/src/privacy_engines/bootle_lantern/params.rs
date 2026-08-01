@@ -190,9 +190,16 @@ pub const MAX_RESPONSE_SAMPLING_ATTEMPTS_PER_PROVE_ATTEMPT_V1: u32 = 1_024;
 /// Maximum Gaussian proposal attempts for one coefficient.
 pub const MAX_GAUSSIAN_COEFFICIENT_ATTEMPTS_V1: u32 = 4_096;
 
-/// Pinned mathematical source profile.
-pub const SOURCE_PROFILE_V1: &[u8] =
-    b"BLNS-CRYPTO-2023-eprint-2023-560:LaZeR-10eafeca4cd53ff4fc54193dce904dbd0026fefd";
+/// Pinned mathematical and implementation source profile.
+///
+/// The issuer is a concrete Falcon-512/NTRU specialization of the BLNS
+/// application relation.  This label deliberately does not claim that the
+/// full BLNS main-construction security reduction applies to the
+/// specialization.  The portable Falcon key-generation and recursive
+/// ffSampling core is derived from the pinned Unlicense `rust-fn-dsa`
+/// workspace revision; the holder sampler and Lantern proof relation follow the pinned
+/// LaZeR revision.
+pub const SOURCE_PROFILE_V1: &[u8] = b"BLNS-specialization-no-main-construction-reduction:eprint-2023-560|LaZeR-10eafeca4cd53ff4fc54193dce904dbd0026fefd|rust-fn-dsa-workspace-0.3-daf14859b5aa3f8d75c42966ba7de83e6eb59997-Unlicense|portable-safe-rust-no-SIMD";
 
 #[cfg(test)]
 mod tests {

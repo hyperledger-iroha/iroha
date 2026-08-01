@@ -4943,7 +4943,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         true
     }
 
-    fn try_reserve_serialized_output<T: NoritoSerialize + ?Sized>(
+    fn try_reserve_serialized_output<T: NoritoSerialize>(
         &mut self,
         value: &T,
         items: usize,
@@ -4966,7 +4966,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let serialization = {
             let _canonical_flags =
                 norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-            value.serialize(&mut writer)
+            norito::core::serialize_to_writer(value, &mut writer)
         };
         if serialization.is_err() {
             self.instruction_queue_violation = Some(HostOutputBudgetViolation::EncodedBytes {

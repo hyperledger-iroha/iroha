@@ -27,6 +27,8 @@ class CommandLineTests(unittest.TestCase):
         defaults = MODULE.parse_args(())
         self.assertFalse(defaults.write)
         self.assertFalse(defaults.check)
+        self.assertEqual(defaults.koto, Path("target/debug/koto"))
+        self.assertEqual(defaults.iroha, Path("target/debug/iroha"))
         self.assertIsNone(defaults.output_root)
         self.assertIsNone(defaults.staging_root)
 
@@ -56,6 +58,16 @@ class CommandLineTests(unittest.TestCase):
             ("--write", "--output-root", "/"),
             ("--output-root", "first", "--output-root", "second"),
             ("--staging-root", "first", "--staging-root", "second"),
+            ("--koto", ""),
+            ("--iroha", ""),
+            ("--koto", "first", "--koto", "second"),
+            ("--iroha", "first", "--iroha", "second"),
+            ("--koto=-h",),
+            ("--iroha=--write",),
+            ("--output-root=-h",),
+            ("--staging-root=--write",),
+            ("--skip-runtime-manifest-check",),
+            ("--skip-contract-tests",),
             ("--unknown",),
         ):
             with self.subTest(arguments=arguments):

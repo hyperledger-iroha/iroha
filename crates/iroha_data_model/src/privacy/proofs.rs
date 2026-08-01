@@ -1754,17 +1754,17 @@ mod exact12_fixture {
 
     #[cfg(test)]
     pub(super) fn bootle_lantern_policy() -> BootleLanternIssuerPolicyV1 {
-        let entries = (0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1
-            * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1)
-            .map(|entry| BootleLanternPolynomialV1 {
-                coefficients: (0..BOOTLE_LANTERN_RING_DEGREE_V1)
-                    .map(|coefficient| {
-                        u16::try_from((entry * 67 + coefficient + 1) % 12_288)
-                            .expect("test residue fits u16")
-                    })
-                    .collect(),
-            })
-            .collect();
+        let first_column = core::array::from_fn(|block| BootleLanternPolynomialV1 {
+            coefficients: (0..BOOTLE_LANTERN_RING_DEGREE_V1)
+                .map(|coefficient| {
+                    u16::try_from((block * 67 + coefficient + 1) % 12_288)
+                        .expect("test residue fits u16")
+                })
+                .collect(),
+        });
+        let issuer_public_matrix =
+            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+                .expect("canonical degree-512 multiplication matrix");
         let allowed_values = (0..BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1)
             .map(|index| BootleLanternAllowedAttributeValuesV1 {
                 values: if index == 1 {
@@ -1784,7 +1784,7 @@ mod exact12_fixture {
             lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
             issuer_parameter_id: PrivacyParameterIdV1::new(raw(173)),
             issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
-            issuer_public_matrix: BootleLanternIssuerPublicMatrixV1 { entries },
+            issuer_public_matrix,
             required_disclosure_bitmap: 0b0001_0010,
             allowed_values,
             record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),

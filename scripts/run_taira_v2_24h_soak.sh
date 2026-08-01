@@ -135,7 +135,7 @@ if [[ ! "$head_commit" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ \
 fi
 readonly source_bound_root="${REPO_ROOT}/target/sumeragi-v2-release/${source_manifest_sha256}"
 readonly evidence_root="${source_bound_root}/evidence/taira-v2-24h"
-unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami
+unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_irohad CARGO_BIN_EXE_kagami
 unset TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA CARGO_BIN_EXE_iroha
 unset TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO
 export IROHA_TEST_SKIP_BUILD=1

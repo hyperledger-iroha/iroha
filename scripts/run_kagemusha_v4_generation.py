@@ -18,27 +18,22 @@ import sys
 import time
 from typing import Sequence
 
+# The reviewed source closure rejects generated cache paths. Prevent local
+# imports below from invalidating the sealed checkout during generation.
+sys.dont_write_bytecode = True
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.formal import run_sumeragi_v2_tlapm_guard as resource_guard
-from scripts.kagemusha_staged_resource_guard import (
-    DEFAULT_FOOTPRINT_INTERVAL_SECONDS,
-    DEFAULT_MAX_MEMORY_GIB,
-    DEFAULT_MINIMUM_HEADROOM_GIB,
-    DEFAULT_SAMPLE_INTERVAL_SECONDS,
-    HeavyJobLockUnavailable,
-    run_guarded_command,
-)
 
 
-ABSOLUTE_MAX_MEMORY_BYTES = 16 * 1024 * 1024 * 1024
-# Every resource sample includes a full-host process inventory so the guard can
-# reject a concurrently started unowned heavy job. Sampling that inventory at
-# 20 Hz can spend most of a busy macOS host's time starting and reaping `ps`,
-# delaying the guarded executable itself. Match the formal guard's bounded
-# 4 Hz cadence; the kernel peak-RSS check remains an independent final gate.
+ABSOLUTE_MAX_MEMORY_BYTES = 64 * 1024 * 1024 * 1024
+# On macOS each resource sample uses a process-group-scoped inventory; full-host
+# inventories remain at admission and the final-success gate. Match the formal
+# guard's bounded 4 Hz cadence; the kernel peak-RSS check remains an independent
+# final gate.
 SAMPLE_INTERVAL_SECONDS = 0.25
 BYTES_PER_GIB = 1024 * 1024 * 1024
 LOCK_PATH = Path("/tmp") / f"iroha-kagemusha-v4-{os.getuid()}.lock"
@@ -688,7 +683,7 @@ def _release_execution_copy(
 
 
 def _physical_memory_bytes() -> int:
-    """Return installed physical memory, or the absolute guard ceiling."""
+    """Return installed physical memory, or zero when it cannot be measured."""
 
     if sys.platform == "darwin":
         try:
@@ -715,13 +710,18 @@ def _physical_memory_bytes() -> int:
             return value
     except (OSError, ValueError, TypeError):
         pass
-    return ABSOLUTE_MAX_MEMORY_BYTES * 2
+    return 0
 
 
 def _effective_memory_limit_bytes(requested_gib: float | None) -> int:
-    """Apply the non-bypassable 16 GiB / half-physical-RAM ceiling."""
+    """Apply the non-bypassable 64 GiB / half-physical-RAM ceiling."""
 
-    physical_half = max(1, _physical_memory_bytes() // 2)
+    physical_memory = _physical_memory_bytes()
+    if physical_memory <= 0:
+        raise resource_guard.GuardError(
+            "could not determine installed physical memory"
+        )
+    physical_half = max(1, physical_memory // 2)
     ceiling = min(ABSOLUTE_MAX_MEMORY_BYTES, physical_half)
     if requested_gib is None:
         return ceiling
@@ -782,7 +782,7 @@ def _validate_generation_command(command: Sequence[str]) -> None:
         raise resource_guard.GuardError(
             "Kagemusha resource guard requires the prebuilt "
             "kagemusha_recursive_spend_v4_bundle executable; build it before "
-            "entering the 16 GiB generation guard"
+            "entering the reviewed generation guard"
         )
     if len(command) < 2 or command[1] != "generate-candidate":
         raise resource_guard.GuardError(
@@ -1793,7 +1793,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run Kagemusha V4 candidate generation beneath the non-raiseable "
-            "lower of the 16 GiB production ceiling or half of physical RAM."
+            "lower of the 64 GiB production ceiling or half of physical RAM."
         )
     )
     parser.add_argument("--resource-report", required=True, type=Path)
@@ -1870,9 +1870,15 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
                         memory_limit_bytes=memory_limit,
                         maximum_memory_bytes=ABSOLUTE_MAX_MEMORY_BYTES,
                         absolute_memory_ceiling_bytes=ABSOLUTE_MAX_MEMORY_BYTES,
+                        memory_enforcement_mode=(
+                            resource_guard.MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT
+                        ),
                         held_lock_descriptors=(heavy_lock, kagemusha_lock),
                         child_directory_descriptors=(output_parent.descriptor,),
                         sample_interval_seconds=SAMPLE_INTERVAL_SECONDS,
+                        physical_footprint_interval_seconds=(
+                            SAMPLE_INTERVAL_SECONDS
+                        ),
                         post_run_cleanup=cleanup_candidate,
                         post_run_validation=lambda: _validate_executable_unchanged(
                             executable_snapshot
@@ -1906,78 +1912,24 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
             executable_snapshot.close()
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse the generic staged-resource runner command line."""
-
-    parser = argparse.ArgumentParser(
-        description=(
-            "Run one Kagemusha V4 generation/acceptance command with a 16 GiB "
-            "maximum and reserved host headroom."
-        )
-    )
-    parser.add_argument("--report", type=Path, required=True)
-    parser.add_argument(
-        "--max-memory-gib",
-        type=float,
-        default=DEFAULT_MAX_MEMORY_GIB,
-        help="requested memory limit; the reviewed absolute maximum is 16 GiB",
-    )
-    parser.add_argument(
-        "--minimum-headroom-gib", type=float, default=DEFAULT_MINIMUM_HEADROOM_GIB
-    )
-    parser.add_argument(
-        "--sample-interval-seconds",
-        type=float,
-        default=DEFAULT_SAMPLE_INTERVAL_SECONDS,
-    )
-    parser.add_argument(
-        "--footprint-interval-seconds",
-        type=float,
-        default=DEFAULT_FOOTPRINT_INTERVAL_SECONDS,
-    )
-    parser.add_argument("command", nargs=argparse.REMAINDER)
-    args = parser.parse_args(argv)
-    if args.command and args.command[0] == "--":
-        args.command = args.command[1:]
-    if not args.command:
-        parser.error("a command is required after --")
-    return args
-
-
-def _generic_main(argv: list[str] | None = None) -> int:
-    """Run a generic staged command and return its guarded status."""
-
-    args = parse_args(argv)
-    try:
-        result = run_guarded_command(
-            args.command,
-            report_path=args.report,
-            max_memory_gib=args.max_memory_gib,
-            minimum_headroom_gib=args.minimum_headroom_gib,
-            sample_interval_seconds=args.sample_interval_seconds,
-            footprint_interval_seconds=args.footprint_interval_seconds,
-        )
-    except (
-        HeavyJobLockUnavailable,
-        OSError,
-        RuntimeError,
-        ValueError,
-        subprocess.SubprocessError,
-    ) as error:
-        print(f"Kagemusha V4 resource guard refused to start: {error}", file=sys.stderr)
-        return 2
-    return result.exit_code
-
-
 def main(argv: Sequence[str] | None = None) -> int:
-    """Dispatch to the strict candidate runner or the generic staged guard."""
+    """Dispatch only to the strict max-RSS-or-footprint candidate runner."""
 
     arguments = list(sys.argv[1:] if argv is None else argv)
     option_prefix = (
         arguments[: arguments.index("--")] if "--" in arguments else arguments
     )
-    if "--report" in option_prefix and "--resource-report" not in option_prefix:
-        return _generic_main(arguments)
+    if "--report" in option_prefix:
+        # TODO: Restore generic acceptance supervision only after it uses the
+        # same scoped 250 ms max(RSS, physical-footprint) enforcement as the
+        # strict candidate path. The retired RSS-only path caused host Jetsam.
+        print(
+            "Kagemusha V4 --report mode is retired because its RSS-only "
+            "supervisor cannot bound Darwin physical footprint; use the "
+            "strict --resource-report candidate workflow",
+            file=sys.stderr,
+        )
+        return 2
     return _candidate_main(arguments)
 
 

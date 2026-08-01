@@ -792,13 +792,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             file: None,
             manifest_json: None,
             expected_hash: None,
-            bootstrap_allowlist: Vec::new(),
-            bootstrap_max_bytes: defaults::genesis::BOOTSTRAP_MAX_BYTES.get(),
-            bootstrap_response_throttle: defaults::genesis::BOOTSTRAP_RESPONSE_THROTTLE,
-            bootstrap_request_timeout: defaults::genesis::BOOTSTRAP_REQUEST_TIMEOUT,
-            bootstrap_retry_interval: defaults::genesis::BOOTSTRAP_RETRY_INTERVAL,
-            bootstrap_max_attempts: defaults::genesis::BOOTSTRAP_MAX_ATTEMPTS,
-            bootstrap_enabled: true,
         },
         torii: A::Torii {
             address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),

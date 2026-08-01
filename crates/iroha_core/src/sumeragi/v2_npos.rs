@@ -144,8 +144,9 @@ pub(crate) enum V2NposError {
     /// The epoch-boundary candidate omitted its mandatory finalized seal.
     #[error("authoritative v2 NPoS epoch boundary requires exactly one current-epoch seal")]
     MissingBoundarySeal,
-    /// The first candidate of an epoch omitted the schedule snapshot that
-    /// freezes commit and reveal windows for every later height in that epoch.
+    /// The first mutable candidate of an epoch omitted the schedule snapshot
+    /// that freezes commit and reveal windows for every later height in that
+    /// epoch. For the genesis epoch, height two is the first mutable candidate.
     #[error("authoritative v2 NPoS epoch start requires exactly one current-epoch record")]
     MissingEpochStartRecord,
     /// A freshly signed local message failed the same boundary used for remote ingress.
@@ -229,6 +230,15 @@ impl V2NposVrfLifecycle {
         if context.mode != wire::ConsensusMode::Npos {
             return Ok(Self::default());
         }
+        // Height one is the fixed, authenticated genesis body. Genesis
+        // validation explicitly rejects NPoS effects because there is no
+        // committed pre-block world state yet, so a height-one VRF lifecycle
+        // cannot contribute to that immutable body. Every successor still
+        // derives its schedule strictly from the parameters committed by
+        // genesis below.
+        if context.height == 1 {
+            return Ok(Self::default());
+        }
         let (params, committed_record) = {
             let world = state.world_view();
             (
@@ -236,9 +246,11 @@ impl V2NposVrfLifecycle {
                 world.vrf_epochs().get(&context.epoch).cloned(),
             )
         };
-        // The first finalized block of every epoch is required to persist this
-        // schedule snapshot. Later on-chain epoch/window changes therefore apply
-        // only to a future epoch and cannot move the active commit/reveal windows.
+        // The first mutable finalized block of every epoch is required to
+        // persist this schedule snapshot. The genesis epoch starts with an
+        // immutable block that cannot carry NPoS effects, so height two is its
+        // first possible carrier. Later on-chain epoch/window changes therefore
+        // apply only to a future epoch and cannot move the active windows.
         let (length, commit_end, reveal_end) = committed_record.as_ref().map_or(
             (
                 params.epoch_length_blocks,
@@ -428,7 +440,11 @@ pub(crate) fn validate_candidate_records(
     if boundary && records.len() != 1 {
         return Err(V2NposError::MissingBoundarySeal);
     }
-    if schedule.position == 1 && existing.is_none() && records.len() != 1 {
+    let first_mutable_genesis_epoch_height = context.epoch == 0 && context.height == 2;
+    if (schedule.position == 1 || first_mutable_genesis_epoch_height)
+        && existing.is_none()
+        && records.len() != 1
+    {
         return Err(V2NposError::MissingEpochStartRecord);
     }
     let Some(record) = records.first() else {
@@ -1574,9 +1590,28 @@ mod tests {
     }
 
     #[test]
-    fn authoritative_schedule_requires_committed_parameters() {
+    fn fresh_npos_genesis_opens_without_precommit_parameters_or_vrf_activity() {
         let keys = keys();
         let context = context(1, &keys);
+        let state = State::new_with_chain_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from("v2-npos-vrf-test"),
+        );
+
+        let mut lifecycle = V2NposVrfLifecycle::open(&context, &state, Some(0), &keys[0])
+            .expect("fixed signed genesis needs no committed pre-block schedule");
+        assert!(lifecycle.active.is_none());
+        assert!(lifecycle.pending_records().is_empty());
+        assert!(lifecycle.take_outbound().is_empty());
+        assert!(lifecycle.retransmission().is_empty());
+    }
+
+    #[test]
+    fn authoritative_schedule_requires_committed_parameters() {
+        let keys = keys();
+        let context = context(2, &keys);
         let world = World::new();
         let missing = State::new_with_chain_for_testing(
             world,
@@ -1594,14 +1629,14 @@ mod tests {
             V2NposVrfLifecycle::open(&context, &state, None, &keys[0]).expect("committed schedule");
         assert_eq!(
             lifecycle.active.as_ref().map(|active| active.schedule),
-            Some(schedule(1))
+            Some(schedule(2))
         );
     }
 
     #[test]
     fn authoritative_schedule_rejects_invalid_committed_windows() {
         let keys = keys();
-        let context = context(1, &keys);
+        let context = context(2, &keys);
         let state = state_with_record(None);
         {
             let mut world = state.world.block();
@@ -1629,9 +1664,9 @@ mod tests {
     }
 
     #[test]
-    fn epoch_start_candidate_must_commit_the_schedule_snapshot() {
+    fn first_mutable_genesis_epoch_candidate_must_commit_the_schedule_snapshot() {
         let keys = keys();
-        let context = context(1, &keys);
+        let context = context(2, &keys);
         let state = state_with_record(None);
 
         assert!(matches!(
@@ -1640,7 +1675,7 @@ mod tests {
         ));
 
         let lifecycle = V2NposVrfLifecycle::open(&context, &state, Some(0), &keys[0])
-            .expect("open epoch-start lifecycle");
+            .expect("open first mutable genesis-epoch height");
         let record = lifecycle
             .pending_records()
             .pop()
@@ -1652,10 +1687,10 @@ mod tests {
     #[test]
     fn mid_epoch_parameter_update_reuses_epoch_start_schedule() {
         let keys = keys();
-        let first_context = context(1, &keys);
+        let first_context = context(2, &keys);
         let state = state_with_record(None);
         let first = V2NposVrfLifecycle::open(&first_context, &state, Some(0), &keys[0])
-            .expect("open first epoch height");
+            .expect("open first mutable genesis-epoch height");
         let first_record = first
             .pending_records()
             .pop()
@@ -1666,7 +1701,7 @@ mod tests {
         // Model one finalized block that both persists the mandatory snapshot
         // and changes the on-chain schedule. The update is valid for a future
         // epoch but is deliberately incompatible with the active context's end
-        // height, so consulting it at height two would fail construction.
+        // height, so consulting it at height three would fail construction.
         {
             let mut world = state.world.block();
             world.vrf_epochs.insert(first_record.epoch, first_record);
@@ -1683,16 +1718,16 @@ mod tests {
             world.commit();
         }
 
-        let second_context = context(2, &keys);
+        let second_context = context(3, &keys);
         let reopened = V2NposVrfLifecycle::open(&second_context, &state, None, &keys[0])
-            .expect("active epoch must reopen from its height-one snapshot");
+            .expect("active genesis epoch must reopen from its height-two snapshot");
         assert_eq!(
             reopened.active.as_ref().map(|active| active.schedule),
             Some(EpochSchedule {
                 length: 10,
                 commit_end: 3,
                 reveal_end: 6,
-                position: 2,
+                position: 3,
             })
         );
         validate_candidate_records(&second_context, &state, None)

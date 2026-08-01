@@ -11681,6 +11681,8 @@ fn try_decode_signed_transaction_adaptive_with_flags(
 }
 
 fn try_decode_signed_transaction_versioned(bytes: &[u8]) -> Result<SignedTransaction, String> {
+    use norito_core::DecodeFromSlice as _;
+
     if let Ok(tx) =
         <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(bytes)
     {
@@ -11701,6 +11703,8 @@ fn try_decode_signed_transaction_versioned(bytes: &[u8]) -> Result<SignedTransac
 }
 
 fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
+    use norito_core::DecodeFromSlice as _;
+
     let mut attempts = Vec::new();
 
     match try_decode_signed_transaction_versioned(bytes) {
@@ -12091,7 +12095,7 @@ fn encode_privacy_compiled_profile_catalog_archive(
 }
 
 #[napi]
-/// Return this binary's canonical typed Norito V1 compiled-profile catalog.
+/// Return this binary's canonical typed Norito V1 privacy compiled-profile catalog.
 ///
 /// This local catalog contains no committed height, governance activation, or
 /// readiness state. Those fields are authoritative only in a fresh
@@ -12105,7 +12109,7 @@ pub fn privacy_compiled_profile_catalog_v1() -> napi::Result<Buffer> {
 }
 
 #[napi]
-/// Validate bytes as this binary's exact local compiled-profile catalog.
+/// Validate an archive as this binary's exact canonical local compiled-profile catalog.
 pub fn privacy_validate_compiled_profile_catalog_v1(archive: Uint8Array) -> i32 {
     validate_local_privacy_compiled_profile_catalog_archive_v1(archive.as_ref()).code()
 }
@@ -13033,7 +13037,7 @@ pub fn sign_quoted_ivm_proved_transaction_payload(
     payload.fee_payment = quoted_fee_payment;
     let builder = TransactionBuilder::from_payload(payload)
         .map_err(norito_to_napi)?
-        .with_attachments(ProofAttachmentList(vec![attachment]));
+        .with_attachments(ProofAttachmentList::try_from(vec![attachment]).map_err(norito_to_napi)?);
     let algorithm = parse_crypto_algorithm(private_key_algorithm.as_deref())?;
     let private_key = PrivateKey::from_bytes(algorithm, secret.as_ref()).map_err(norito_to_napi)?;
     let signed = sign_js_transaction(
@@ -13162,7 +13166,7 @@ pub fn build_ivm_proved_transaction_payload(
         TransactionBuilder::new(chain_id, authority, fee_payment)
             .with_executable(Executable::IvmProved(proved)),
         metadata,
-        Some(ProofAttachmentList(vec![attachment])),
+        Some(ProofAttachmentList::try_from(vec![attachment]).map_err(norito_to_napi)?),
         creation_time_ms,
         ttl_ms,
         nonce,
@@ -13224,7 +13228,7 @@ pub fn build_ivm_proved_transaction(
         Executable::IvmProved(proved),
         fee_payment,
         metadata,
-        Some(ProofAttachmentList(vec![attachment])),
+        Some(ProofAttachmentList::try_from(vec![attachment]).map_err(norito_to_napi)?),
         creation_time_ms,
         ttl_ms,
         nonce,
@@ -14589,7 +14593,7 @@ seiyaku Privacy {
     }
 
     #[test]
-    fn privacy_compiled_profile_catalog_napi_archive_round_trips() {
+    fn privacy_compiled_profile_catalog_napi_archive_round_trips_and_rejects_substitution() {
         let bytes = privacy_compiled_profile_catalog_v1()
             .expect("encode N-API compiled-profile catalog")
             .to_vec();
@@ -14619,6 +14623,37 @@ seiyaku Privacy {
         assert_ne!(
             privacy_validate_compiled_profile_catalog_v1(Uint8Array::from(one_byte_fake)),
             iroha_data_model::privacy::PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid
+                .code()
+        );
+
+        let mut substituted = catalog;
+        let profile = substituted
+            .protocols
+            .iter_mut()
+            .find_map(|row| match &mut row.compiled_profile {
+                iroha_data_model::privacy::PrivacyCompiledProfileResultV1::Available(profile) => {
+                    Some(profile)
+                }
+                iroha_data_model::privacy::PrivacyCompiledProfileResultV1::Unavailable(_) => None,
+            })
+            .expect("at least one compiled profile");
+        let mut digest = *profile.parameter_digest.as_bytes();
+        digest[0] ^= 0x80;
+        profile.parameter_digest = iroha_data_model::privacy::PrivacyParameterDigestV1::new(digest);
+        profile
+            .validate()
+            .expect("substituted profile remains structurally valid");
+        let substituted = norito::encode_canonical(&substituted).expect("encode substitution");
+        assert_eq!(
+            iroha_data_model::privacy::validate_privacy_compiled_profile_catalog_archive_v1(
+                &substituted,
+            ),
+            iroha_data_model::privacy::PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid,
+            "the generic validator must accept the structurally valid substitution",
+        );
+        assert_eq!(
+            privacy_validate_compiled_profile_catalog_v1(Uint8Array::from(substituted)),
+            iroha_data_model::privacy::PrivacyCompiledProfileCatalogArchiveValidationStatusV1::InvalidCatalog
                 .code()
         );
     }
@@ -14699,12 +14734,15 @@ seiyaku Privacy {
     #[test]
     fn keypair_bindings_reject_non_cryptographic_seed_lengths() {
         let short = Uint8Array::from(b"human password".to_vec());
-        let err = ed25519_keypair(Some(short)).expect_err("short Ed25519 seed must fail");
+        let err = ed25519_keypair(Some(short))
+            .err()
+            .expect("short Ed25519 seed must fail");
         assert!(err.reason.contains("exactly 32 bytes"));
 
         let short = Uint8Array::from(b"human password".to_vec());
         let err = crypto_keypair(Some("secp256k1".to_owned()), Some(short))
-            .expect_err("short generic seed must fail");
+            .err()
+            .expect("short generic seed must fail");
         assert!(err.reason.contains("exactly 32 bytes"));
     }
 
@@ -18426,7 +18464,7 @@ seiyaku Privacy {
             .unwrap_or_else(|err| panic!("failed to read {}: {err}", manifest_path.display()));
         let manifest: Value = json::from_slice(&manifest_bytes)
             .unwrap_or_else(|err| panic!("failed to parse {}: {err}", manifest_path.display()));
-        let names = ["ivm_transfer"];
+        let names = ["typed_fee_payment_gas_limit"];
         let fixtures = manifest
             .get("fixtures")
             .and_then(Value::as_array)
@@ -19310,7 +19348,10 @@ seiyaku Privacy {
         assert_eq!(quoted_tx.fee_payment_intent(), &quoted);
         assert_eq!(
             quoted_tx.attachments(),
-            Some(&ProofAttachmentList(vec![attachment.clone()]))
+            Some(
+                &ProofAttachmentList::try_from(vec![attachment.clone()])
+                    .expect("one attachment is a valid bounded proof list"),
+            )
         );
         quoted_tx
             .verify_signature()
@@ -19341,7 +19382,7 @@ seiyaku Privacy {
             other => panic!("expected IvmProved executable, got {other:?}"),
         }
         let attachments = tx.attachments().expect("proof attachments");
-        assert_eq!(attachments.0, vec![attachment]);
+        assert_eq!(attachments.as_slice(), [attachment]);
         assert_eq!(
             result.hash.as_ref(),
             tx.hash().as_ref(),

@@ -152,6 +152,38 @@ def test_lane_privacy_attachment_normalizer_requires_every_declared_field() -> N
             )
 
 
+def test_proof_box_size_helper_tracks_compact_prefix_transitions() -> None:
+    prefix_width = crypto_module._norito_compact_len_prefix_bytes_v1
+    assert prefix_width(127) == 1
+    assert prefix_width(128) == 2
+    assert prefix_width(16_383) == 2
+    assert prefix_width(16_384) == 3
+
+    encoded_len = crypto_module._proof_box_canonical_encoded_len_v1
+    # The proof member includes its eight-byte V1 sequence count, so its
+    # compact framing crosses the same boundaries at proof lengths 120 and
+    # 16_376 respectively.
+    assert encoded_len("a", 120) - encoded_len("a", 119) == 2
+    assert encoded_len("a", 16_376) - encoded_len("a", 16_375) == 2
+
+
+@pytest.mark.parametrize("boundary", (128, 16_384))
+def test_proof_box_size_helper_rejects_negative_lengths_at_prefix_boundaries(
+    boundary: int,
+) -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        crypto_module._proof_box_canonical_encoded_len_v1("a", -boundary)
+
+
+def test_proof_box_max_helper_is_exact_at_closed_64_mib_limit() -> None:
+    backend = "halo2/ipa::transfer_v1"
+    maximum = crypto_module._proof_box_max_proof_bytes_v1(backend)
+    encoded_len = crypto_module._proof_box_canonical_encoded_len_v1
+    assert maximum == 64 * 1024 * 1024 - 36
+    assert encoded_len(backend, maximum) == 64 * 1024 * 1024
+    assert encoded_len(backend, maximum + 1) > 64 * 1024 * 1024
+
+
 def test_supported_crypto_algorithms_include_all_rust_signature_suites() -> None:
     assert supported_crypto_algorithms() == SUPPORTED_CRYPTO_ALGORITHMS
     assert tuple(SUPPORTED_CRYPTO_ALGORITHMS) == EXPECTED_ALGORITHMS
@@ -189,9 +221,10 @@ def test_privacy_compiled_profile_catalog_contract_is_reexported_from_package_ro
         "INVALID_CATALOG": 8,
     }
     for retired in (
+        "privacy_capabilities_v1",
+        "privacy_validate_capabilities_v1",
         "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES",
         "PRIVACY_CAPABILITY_VALIDATION_STATUS_V1",
-        "privacy_capabilities_v1",
         "PRIVACY_FFI_STATUS_ERROR",
         "privacy_proof_request_v1",
         "privacy_build_proof_v1",
@@ -512,6 +545,9 @@ def test_privacy_native_local_catalog_surface_is_minimal(monkeypatch: pytest.Mon
     for surface in (crypto_module, iroha_python):
         for retired in (
             "privacy_capabilities_v1",
+            "privacy_validate_capabilities_v1",
+            "PRIVACY_CAPABILITY_VALIDATION_STATUS_V1",
+            "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES",
             "privacy_proof_request_v1",
             "privacy_build_proof_v1",
             "privacy_verify_proof_v1",

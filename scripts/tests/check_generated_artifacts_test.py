@@ -86,6 +86,46 @@ def test_valid_manifest_and_repository_pass(tmp_path: Path) -> None:
     assert "1 outputs" in result.stdout
 
 
+def test_single_star_input_does_not_cross_directory_boundary(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    subprocess.run(["git", "rm", "-f", "spec/demo.toml"], cwd=repo, check=True)
+    nested = repo / "spec" / "nested" / "demo.toml"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("version = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", str(nested)], cwd=repo, check=True)
+
+    result = _run(repo)
+
+    assert result.returncode == 1
+    assert "inputs pattern matches no tracked regular files" in result.stderr
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_globstar_input_matches_zero_or_more_directories(
+    tmp_path: Path, nested: bool
+) -> None:
+    repo = _init_repo(tmp_path)
+    manifest = repo / "generated-files.toml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            'inputs = ["spec/*.toml"]',
+            'inputs = ["spec/**/*.toml"]',
+        ),
+        encoding="utf-8",
+    )
+    if nested:
+        subprocess.run(["git", "rm", "-f", "spec/demo.toml"], cwd=repo, check=True)
+        fixture = repo / "spec" / "nested" / "demo.toml"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text("version = 1\n", encoding="utf-8")
+        subprocess.run(["git", "add", str(fixture)], cwd=repo, check=True)
+    subprocess.run(["git", "add", str(manifest)], cwd=repo, check=True)
+
+    result = _run(repo)
+
+    assert result.returncode == 0
+
+
 def test_forbidden_tracked_build_artifact_fails(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     path = repo / "dist" / "bundle.js"

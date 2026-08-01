@@ -25,7 +25,7 @@ use super::p256_trace::{P256EcdsaTraceMaterialV1, P256ReductionSourceV1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     p256_air::ZkX509P256ArithmeticKindV1,
-    p256_reduction_air::p256_low_s_limb_cell_v1,
+    p256_reduction_air::{p256_low_s_limb_cell_v1, p256_reduction_limb_cells_v1},
     p256_value_bus::{P256EqualityBindingV1, P256InitialValueKindV1, P256ValueBusBaseSourceV1},
     p256_window_air::{
         P256_WINDOW_ROWS_V1, P256WindowExternalAddressV1, p256_window_external_address_v1,
@@ -36,7 +36,7 @@ use super::{
     p256_air::{P256_BASE_MODULUS_BE_V1, P256_SCALAR_MODULUS_BE_V1, ZkX509P256ModulusV1},
     p256_ecdsa_air::{P256EcdsaRoleV1, P256EcdsaWitnessV1},
     p256_group_air::{P256_CURVE_B_BE_V1, P256_TWO_SCALAR_ARITHMETIC_OPERATIONS_V1},
-    p256_reduction_air::{P256_REDUCTION_ROWS_V1, p256_reduction_limb_cells_v1},
+    p256_reduction_air::P256_REDUCTION_ROWS_V1,
     p256_value_bus::{
         P256_VALUE_BUS_LIMBS_V1, P256ValueBusBaseEndpointTraceV1, P256ValueBusErrorV1,
         P256ValueIdV1, P256ValueKindV1, p256_value_bus_base_writer_limb_cell_v1,
@@ -2053,6 +2053,7 @@ fn writer_cell_v1(
     .map_err(map_writer_error_v1)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_reduction_word_v1(
     trace: &super::p256_reduction_air::P256ReductionTraceV1,
     word_be: [u8; 32],

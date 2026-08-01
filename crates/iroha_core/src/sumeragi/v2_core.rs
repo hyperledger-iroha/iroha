@@ -61,7 +61,8 @@ pub(crate) use refinement::{
     IDENTITY_KIND_SIDECAR_SIBLING_STATE, IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE,
     IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE, IDENTITY_KIND_SNAPSHOT_BOOTSTRAP_RECORD,
     IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
-    IN_FLIGHT_FIRST_RELEASE_ACTION_APPLY_CARRIER, IN_FLIGHT_FIRST_RELEASE_ACTION_AUTHORIZE_READY,
+    IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA, IN_FLIGHT_FIRST_RELEASE_ACTION_APPLY_CARRIER,
+    IN_FLIGHT_FIRST_RELEASE_ACTION_AUTHORIZE_READY,
     IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT,
     IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5,
     IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT,
@@ -147,11 +148,12 @@ pub(crate) use refinement::{
 };
 pub(crate) use scheduler::{ScheduleState, ScheduledWork};
 pub(crate) use types::{
-    CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, EventTag, Generation,
-    HeightContext, HeightContextError, MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest,
-    Phase, Proposal, ProposalJustification, QuorumCertificate, Round, SignatureShare,
-    SignedProposal, SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate,
-    TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote, VotingMode, VotingPower,
+    CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, EventTag,
+    FUTURE_TIMEOUT_VOTE_LOOKAHEAD, Generation, HeightContext, HeightContextError,
+    MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest, Phase, Proposal,
+    ProposalJustification, QuorumCertificate, Round, SignatureShare, SignedProposal,
+    SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate, TimeoutSignatureGroup, TimeoutVote,
+    Validator, ValidatorId, Vote, VotingMode, VotingPower, timeout_vote_view_is_admissible,
 };
 pub(crate) use wal::{
     DurableState, PersistenceId, ReplayError, SAFETY_WAL_HASH_LEN, WalAppendError, WalAppendIo,

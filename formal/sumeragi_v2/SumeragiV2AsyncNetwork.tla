@@ -7087,15 +7087,17 @@ InstalledControl(retained, node, items) ==
      item.source # node
        \/ ControlClass(item) \in AsyncInstallRetainedControlKinds}
 
-CurrentTimeoutControlFor(items, node) ==
-  LET currentClass == RetainedClassItems(items, node, "TimeoutVote")
-      exactCurrentClass ==
-        \A item \in currentClass:
-          /\ item.envelope.vote.context = context
-          /\ item.envelope.vote.height = height
-          /\ item.envelope.vote.view = nodeView[node]
-          /\ item.envelope.vote.signer = node
-  IN IF exactCurrentClass THEN currentClass ELSE {}
+CurrentTimeoutControlFor(items, node, tc) ==
+  LET installedView ==
+        IF StrictSameRoundTcUpgrade(node, tc)
+        THEN nodeView[node]
+        ELSE tc.view + 1
+  IN {item \in RetainedClassItems(items, node, "TimeoutVote"):
+       /\ item.envelope.vote.context = context
+       /\ item.envelope.vote.height = height
+       /\ item.envelope.vote.view >= installedView
+       /\ item.envelope.vote.view <= installedView + 1
+       /\ item.envelope.vote.signer = node}
 
 ReseedExactHighestPrepareControl(retained, node, tc) ==
   LET withoutOwnPrepare ==
@@ -7106,14 +7108,14 @@ ReseedExactHighestPrepareControl(retained, node, tc) ==
      ELSE withoutOwnPrepare \cup QcOutbox(node, highestPrepare)
 
 (***************************************************************************
-InstallTimeout clears volatile local control, except that a strict same-round
-upgrade keeps the exact current TimeoutVote.  It atomically replaces the
-source's retained TimeoutCertificate class with the exact newly installed TC
-batch: a same-view TC may carry different authenticated evidence, so the
-generic view-only `RememberedControl` replacement rule is insufficient here.
-It then restores the complete durable highest PrepareQC object, replacing any
-equal-view/different-evidence occurrence rather than reconstructing it from
-rank and subject.
+InstallTimeout clears volatile local control, then retains only exact local
+TimeoutVotes for the installed view and its one-round catch-up window.  It
+atomically replaces the source's retained TimeoutCertificate class with the
+exact newly installed TC batch: a same-view TC may carry different
+authenticated evidence, so the generic view-only `RememberedControl`
+replacement rule is insufficient here.  It then restores the complete durable
+highest PrepareQC object, replacing any equal-view/different-evidence
+occurrence rather than reconstructing it from rank and subject.
 ***************************************************************************)
 InstalledControlAfterTC(retained, node, tc, items) ==
   LET withoutOwnTc ==
@@ -7124,10 +7126,7 @@ InstalledControlAfterTC(retained, node, tc, items) ==
           item.source # node
             \/ ControlClass(item) \in AsyncInstallRetainedControlKinds}
       withCurrentTimeout ==
-        installed
-          \cup (IF StrictSameRoundTcUpgrade(node, tc)
-                THEN CurrentTimeoutControlFor(remembered, node)
-                ELSE {})
+        installed \cup CurrentTimeoutControlFor(remembered, node, tc)
   IN ReseedExactHighestPrepareControl(withCurrentTimeout, node, tc)
 
 (***************************************************************************

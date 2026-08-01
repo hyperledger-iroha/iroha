@@ -26,6 +26,7 @@ use super::{
 use crate::{
     arithmetic::{CurveAffine, eval_polynomial},
     circuit::Value,
+    helpers::release_allocator_slack,
     plonk::Assigned,
     poly::{
         Basis, Coeff, EvaluationDomain, LagrangeCoeff, Polynomial, ProverQuery,
@@ -350,7 +351,11 @@ where
             let advice_commitments_projective: Vec<_> = (&advice_values)
                 .into_par_iter()
                 .zip((&blinds).into_par_iter())
-                .map(|(poly, blind)| self.params.commit_lagrange(poly, *blind))
+                .map(|(poly, blind)| {
+                    let commitment = self.params.commit_lagrange(poly, *blind);
+                    release_allocator_slack();
+                    commitment
+                })
                 .collect();
             let mut advice_commitments = vec![C::identity(); advice_commitments_projective.len()];
             C::CurveExt::batch_normalize(&advice_commitments_projective, &mut advice_commitments);
@@ -1407,6 +1412,7 @@ where
             let needs_phase_commit = !witness.phases_complete;
             if !needs_phase_commit || witness.current_phase == witness.last_phase {
                 drop(circuit.take());
+                release_allocator_slack();
             }
             if needs_phase_commit {
                 witness.next_phase();
@@ -1434,6 +1440,7 @@ where
     // Defensive for phase-management implementations that return after
     // advancing past the final phase without a post-synthesis commitment.
     drop(circuit.take());
+    release_allocator_slack();
     #[cfg(feature = "profile")]
     end_timer!(phase1_time);
 
@@ -1514,6 +1521,7 @@ where
     // vectors before entering it.
     drop(std::mem::take(&mut pk.fixed_values));
     pk.permutation.drop_lagrange_polynomials();
+    release_allocator_slack();
     let instance = instance
         .into_iter()
         .map(|mut instance| {
@@ -1610,6 +1618,7 @@ where
     drop(std::mem::take(&mut pk.l_active_row.values));
     drop(std::mem::take(&mut pk.ev));
     drop(challenges);
+    release_allocator_slack();
     #[cfg(feature = "profile")]
     end_timer!(phase4_time);
 
@@ -1774,6 +1783,7 @@ where
     #[cfg(feature = "profile")]
     end_timer!(multiopen_time);
     multiopen_res?;
+    release_allocator_slack();
     let ProvingKey { vk, .. } = pk;
     Ok(vk)
 }

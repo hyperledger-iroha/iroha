@@ -500,6 +500,16 @@ allow_tool_prefixes = ["iroha."]
     } else {
         ""
     };
+    let taira_offline_overrides = if spec.slug == "iroha3-taira" {
+        r#"
+[settlement.offline]
+enabled = true
+escrow_required = true
+escrow_accounts = {}
+"#
+    } else {
+        ""
+    };
     let max_transactions = if spec.slug == "iroha3-taira" {
         96
     } else {
@@ -561,6 +571,7 @@ enabled = true
 lane_count = 3
 {taira_nexus_overrides}
 {governance_overrides}
+{taira_offline_overrides}
 
 [genesis]
 public_key = "{genesis_pk}"
@@ -581,6 +592,7 @@ public_key = "{genesis_pk}"
         sorafs_site_bindings = sorafs_site_bindings,
         taira_nexus_overrides = taira_nexus_overrides,
         taira_mcp_overrides = taira_mcp_overrides,
+        taira_offline_overrides = taira_offline_overrides,
         governance_overrides = governance_overrides,
         genesis_pk = genesis_public_key,
         stream_pub = STREAM_ID_PUBLIC,
@@ -1011,6 +1023,66 @@ mod tests {
         assert!(!dev.contains("[torii.mcp]"));
         assert!(!dev.contains("[nexus.fees]"));
         assert!(!dev.contains("[nexus.staking]"));
+    }
+
+    #[test]
+    fn taira_profile_explicitly_enables_offline_capability() {
+        let profile = &PROFILES[1];
+        let peers = build_peers(profile).expect("build deterministic Taira peers");
+        let genesis_key = deterministic_keypair(
+            "config-taira-offline-capability-genesis",
+            Algorithm::Ed25519,
+        )
+        .expect("derive deterministic Taira genesis key");
+        let rendered = render_config(profile, &peers, genesis_key.public_key());
+        let config: toml::Value = toml::from_str(&rendered).expect("parse rendered Taira config");
+        let offline = config
+            .get("settlement")
+            .and_then(toml::Value::as_table)
+            .and_then(|settlement| settlement.get("offline"))
+            .and_then(toml::Value::as_table)
+            .expect("Taira settlement.offline table");
+
+        assert_eq!(
+            offline.get("enabled").and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            offline
+                .get("escrow_required")
+                .and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            offline
+                .get("escrow_accounts")
+                .and_then(toml::Value::as_table)
+                .is_some_and(toml::Table::is_empty),
+            "Taira capability support must not fabricate an opted-in asset"
+        );
+    }
+
+    #[test]
+    fn generic_profiles_do_not_opt_into_offline_capability() {
+        for profile in [&PROFILES[0], &PROFILES[2]] {
+            let peers = build_peers(profile).expect("build deterministic generic peers");
+            let seed = format!("config-{}-offline-default-genesis", profile.slug);
+            let genesis_key = deterministic_keypair(&seed, Algorithm::Ed25519)
+                .expect("derive deterministic generic genesis key");
+            let rendered = render_config(profile, &peers, genesis_key.public_key());
+            let config: toml::Value =
+                toml::from_str(&rendered).expect("parse rendered generic config");
+
+            assert!(
+                config
+                    .get("settlement")
+                    .and_then(toml::Value::as_table)
+                    .and_then(|settlement| settlement.get("offline"))
+                    .is_none(),
+                "profile {} must retain the default offline opt-out",
+                profile.slug
+            );
+        }
     }
 
     #[test]

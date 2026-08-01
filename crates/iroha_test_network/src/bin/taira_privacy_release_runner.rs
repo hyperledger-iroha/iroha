@@ -508,6 +508,14 @@ struct CaptureOptionsV1 {
     max_address_space_bytes: u64,
 }
 
+#[derive(Clone)]
+struct CapturedFixtureValidationOptionsV1 {
+    exact12_path: PathBuf,
+    expectations_norito_path: PathBuf,
+    expectations_json_path: PathBuf,
+    x509_resource_paths: resource_certificate::ResourceInputPathsV1,
+}
+
 #[derive(Clone, Debug)]
 struct MeasuredStageV1 {
     evidence: PrivacyReleaseStageEvidenceV1,
@@ -527,7 +535,7 @@ fn real_main() -> Result<(), DynError> {
     let mut arguments = env::args_os();
     let _program = arguments.next();
     let mode = arguments.next().ok_or(
-        "missing mode; expected generate, verify, capture-expectations, or hidden __stage",
+        "missing mode; expected generate, verify, capture-expectations, validate-captured-fixtures, or hidden __stage",
     )?;
     let mode = mode.to_str().ok_or("mode must be valid UTF-8")?.to_owned();
     let rest: Vec<OsString> = arguments.collect();
@@ -575,6 +583,15 @@ fn real_main() -> Result<(), DynError> {
             };
             capture_expectations(capture)
         }
+        "validate-captured-fixtures" => {
+            let options = parse_options(&rest, &captured_fixture_validation_option_names())?;
+            validate_captured_fixtures(CapturedFixtureValidationOptionsV1 {
+                exact12_path: path_option(&options, "exact12-matrix")?,
+                expectations_norito_path: path_option(&options, "expectations-norito")?,
+                expectations_json_path: path_option(&options, "expectations-json")?,
+                x509_resource_paths: resource_certificate::ResourceInputPathsV1::parse(&options)?,
+            })
+        }
         "__stage" => {
             let options = parse_options(&rest, &process_resources::stage_option_names())?;
             run_hidden_stage(&options)
@@ -621,6 +638,16 @@ fn verify_option_names() -> Vec<&'static str> {
         "receipt-json",
     ]);
     names
+}
+
+fn captured_fixture_validation_option_names() -> Vec<&'static str> {
+    vec![
+        "exact12-matrix",
+        "expectations-norito",
+        "expectations-json",
+        "x509-resource-norito",
+        "x509-resource-json",
+    ]
 }
 
 fn parse_options(
@@ -1023,6 +1050,66 @@ fn capture_expectations(options: CaptureOptionsV1) -> Result<(), DynError> {
     ])?;
     println!(
         "captured {} native stages; review and freeze both expectation projections",
+        PRIVACY_RELEASE_STAGE_COUNT_V1
+    );
+    Ok(())
+}
+
+fn validate_captured_fixtures(options: CapturedFixtureValidationOptionsV1) -> Result<(), DynError> {
+    ensure_taira_release_platform()?;
+    // This corridor is deliberately limited to the attested zero-pin runner.
+    // Once any capture-owned source pin is populated, installed-fixture
+    // validation must use the ordinary generate/verify modes instead.
+    expectation_pins::require_capture_open_v1()?;
+    let runner = prepare_immutable_runner()?;
+    let all_paths = [
+        options.exact12_path.clone(),
+        options.expectations_norito_path.clone(),
+        options.expectations_json_path.clone(),
+        options.x509_resource_paths.norito.clone(),
+        options.x509_resource_paths.json.clone(),
+        runner.source_path.clone(),
+    ];
+    reject_lexical_path_aliases(&all_paths)?;
+    reject_existing_inode_aliases(&all_paths)?;
+
+    let exact12 = secure_read(&options.exact12_path, MAX_EXACT12_BYTES, "exact12 matrix")?;
+    validate_exact12_matrix(&exact12.bytes)?;
+    let (expectations, expectations_norito, expectations_json) =
+        expectation_pins::load_capture_pair_v1(
+            &options.expectations_norito_path,
+            &options.expectations_json_path,
+        )?;
+    let x509_resource = resource_certificate::load_capture_pair_v1(
+        &options.x509_resource_paths.norito,
+        &options.x509_resource_paths.json,
+    )?;
+
+    let identities = [
+        exact12.identity,
+        expectations_norito.identity,
+        expectations_json.identity,
+        x509_resource.norito_identity,
+        x509_resource.json_identity,
+        runner.source_identity,
+    ];
+    if identities.iter().copied().collect::<BTreeSet<_>>().len() != identities.len() {
+        return Err("capture validation inputs alias the same inode".into());
+    }
+    resource_certificate::validate_capture_expectation_binding_v1(
+        &x509_resource.certificate,
+        &expectations,
+        expectations_norito.sha256,
+        expectations_json.sha256,
+    )?;
+
+    // Structural self-consistency is insufficient for a first release: rerun
+    // every production stage through the sealed child corridor and compare all
+    // deterministic evidence with the candidate fixture before installation.
+    let measured = run_all_stages(&expectations, &runner)?;
+    validate_measured_against_expectations(&measured, &expectations)?;
+    println!(
+        "validated four canonical captured fixtures against the current exact12 matrix and {} native stages",
         PRIVACY_RELEASE_STAGE_COUNT_V1
     );
     Ok(())
@@ -3902,8 +3989,14 @@ where
     for<'de> T: norito::NoritoDeserialize<'de>,
 {
     enforce_encoded_size(bytes.len(), maximum_bytes, label)?;
-    norito::decode_canonical_with_limits(bytes, artifact_decode_limits(bytes.len()))
-        .map_err(|error| format!("{label} is not bounded canonical Norito: {error}").into())
+    let value = norito::decode_canonical_with_limits(bytes, artifact_decode_limits(bytes.len()))
+        .map_err(|error| format!("{label} is not bounded canonical Norito: {error}"))?;
+    let canonical = norito::encode_canonical(&value)
+        .map_err(|error| format!("cannot re-encode typed {label}: {error}"))?;
+    if canonical != bytes {
+        return Err(format!("{label} is not its exact canonical typed Norito re-encoding").into());
+    }
+    Ok(value)
 }
 
 fn canonical_json_bytes<T>(value: &T, label: &str) -> Result<Vec<u8>, DynError>
@@ -5209,6 +5302,77 @@ mod tests {
                 peak_address_space_bytes: MIN_STAGE_ADDRESS_SPACE_BYTES,
             })
             .collect()
+    }
+
+    fn captured_resource_certificate_v1(
+        expectations: &PrivacyReleaseExpectationsV1,
+    ) -> (
+        iroha_core::privacy_release_evidence::PrivacyReleaseZkX509ResourceCertificateV1,
+        Vec<u8>,
+        Vec<u8>,
+    ) {
+        let measured = measured_from_expectations(expectations);
+        let measurements = resource_certificate::capture_measurements_v1(&measured)
+            .expect("canonical X.509 capture measurements");
+        let norito = canonical_norito_bytes(expectations, "test expectations")
+            .expect("canonical expectation Norito");
+        let json = canonical_json_bytes(expectations, "test expectations")
+            .expect("canonical expectation JSON");
+        let artifacts = resource_certificate::build_capture_artifacts_v1(
+            measurements,
+            &norito,
+            &json,
+            iroha_core::privacy_release_evidence::privacy_release_zk_x509_resource_environment_v1(),
+        )
+        .expect("canonical resource certificate");
+        let certificate = decode_canonical_norito(
+            &artifacts.norito,
+            64 * 1024,
+            "test X.509 resource certificate",
+        )
+        .expect("typed resource certificate");
+        (certificate, norito, json)
+    }
+
+    #[test]
+    fn capture_validation_binds_resource_certificate_to_exact_expectations() {
+        let expectations = canonical_expectations_v1();
+        let (certificate, norito, json) = captured_resource_certificate_v1(&expectations);
+        resource_certificate::validate_capture_expectation_binding_v1(
+            &certificate,
+            &expectations,
+            sha256_bytes(&norito),
+            sha256_bytes(&json),
+        )
+        .expect("resource certificate binds the exact expectation pair");
+
+        assert!(
+            resource_certificate::validate_capture_expectation_binding_v1(
+                &certificate,
+                &expectations,
+                [0xA5; 32],
+                sha256_bytes(&json),
+            )
+            .is_err()
+        );
+
+        let mut substituted_kat = expectations;
+        let ordinal = usize::from(privacy_release_stage_ordinal_v1(
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
+        ));
+        let artifact = &mut substituted_kat.stages[ordinal].evidence.proof_artifacts[0];
+        artifact.canonical_proof_bytes.push(0xA5);
+        refresh_artifact_hash(artifact);
+        assert!(
+            resource_certificate::validate_capture_expectation_binding_v1(
+                &certificate,
+                &substituted_kat,
+                sha256_bytes(&norito),
+                sha256_bytes(&json),
+            )
+            .is_err()
+        );
     }
 
     #[test]

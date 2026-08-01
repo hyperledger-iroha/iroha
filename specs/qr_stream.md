@@ -174,7 +174,7 @@ Fixtures live under `fixtures/qr_stream/`:
 Regenerate with:
 
 ```
-cargo run -p iroha_data_model --features test-fixtures --bin qr_stream_fixtures
+cargo run -p iroha_data_model --features test-fixtures,dev-tools --bin qr_stream_fixtures
 ```
 
 Use `--check` to verify fixtures are up to date.

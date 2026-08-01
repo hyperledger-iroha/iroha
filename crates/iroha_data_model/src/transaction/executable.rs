@@ -218,7 +218,7 @@ impl TryFrom<Vec<u8>> for ContractArgumentRecord {
 }
 
 impl ncore::NoritoSerialize for ContractArgumentRecord {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ncore::NoritoSerialize::serialize(&self.0, writer)
     }
 

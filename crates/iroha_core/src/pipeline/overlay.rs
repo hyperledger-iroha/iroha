@@ -778,7 +778,7 @@ where
     let attachments = tx
         .attachments()
         .ok_or_else(|| OverlayBuildError::ZkProof("missing proof attachments".to_owned()))?;
-    let [attachment] = attachments.0.as_slice() else {
+    let [attachment] = attachments.as_slice() else {
         return Err(OverlayBuildError::ZkProof(
             "Executable::IvmProved expects exactly one proof attachment".to_owned(),
         ));
@@ -2695,11 +2695,6 @@ where
                     "Executable::IvmProved requires IVM ZK mode bit (mode & ZK != 0)".to_owned(),
                 ));
             }
-            if wants_zk && !(state_ro.zk().halo2.enabled || state_ro.zk().stark.enabled) {
-                return Err(OverlayBuildError::HeaderPolicy(
-                    IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
-                ));
-            }
 
             enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_contract_binding(state_ro, tx, &summary)?;
@@ -3277,12 +3272,6 @@ where
                 .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-            let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
-            if wants_zk && !zk_enabled {
-                return Err(OverlayBuildError::HeaderPolicy(
-                    IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
-                ));
-            }
             enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_contract_binding(state_ro, tx, &summary)?;
             let selector = crate::executor::requested_contract_entrypoint(tx.metadata())
@@ -6767,7 +6756,8 @@ mod tests {
             fixture.proof_box("halo2/ipa"),
             vk_id.clone(),
         );
-        let attachments = ProofAttachmentList(vec![attachment]);
+        let attachments = ProofAttachmentList::try_from(vec![attachment])
+            .expect("one attachment is a valid bounded proof list");
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
@@ -6978,7 +6968,8 @@ seiyaku ProtectedProvedOverlay {
             fixture.proof_box("halo2/ipa"),
             vk_id.clone(),
         );
-        let attachments = ProofAttachmentList(vec![attachment]);
+        let attachments = ProofAttachmentList::try_from(vec![attachment])
+            .expect("one attachment is a valid bounded proof list");
 
         let tx = TransactionBuilder::new(
             state.chain_id.clone(),
@@ -6995,6 +6986,10 @@ seiyaku ProtectedProvedOverlay {
         .with_attachments(attachments)
         .sign(kp.private_key());
 
+        // Proof validity is governed by the on-chain verifier record. Local backend enablement
+        // controls proving/tooling availability and must not fork proof-carrying admission.
+        state.zk.halo2.enabled = false;
+        state.zk.stark.enabled = false;
         let overlay_built =
             build_overlay_for_transaction(&tx, &state.view()).expect("proved execution overlay");
         let prepared_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -7002,7 +6997,7 @@ seiyaku ProtectedProvedOverlay {
             &tx,
             state.view().accounts_snapshot(),
             &state.view(),
-            true,
+            false,
             &prepared_header,
             StreamingOverlayMetadata::default(),
             &mut ivm_cache,
@@ -7035,6 +7030,118 @@ seiyaku ProtectedProvedOverlay {
         .into();
         assert_eq!(built, vec![expected_instruction]);
         assert_eq!(built.as_slice(), proved.overlay.as_ref());
+
+        let execute_with_current_local_verifier_config = |state: &crate::state::State| {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            let executor = state_transaction.world.executor.clone();
+            let mut execution_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+            executor
+                .execute_transaction(
+                    &mut state_transaction,
+                    &authority,
+                    tx.clone(),
+                    &mut execution_cache,
+                )
+                .expect("governed proved execution must not depend on local verifier enablement");
+            let marker_value = state_transaction
+                .world
+                .account(&authority)
+                .expect("authority account after proved execution")
+                .metadata()
+                .get(&marker)
+                .cloned();
+            let durable_state = state_transaction
+                .world
+                .smart_contract_state
+                .iter()
+                .map(|(path, value)| (path.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            (marker_value, durable_state, state_transaction.last_tx_gas_used)
+        };
+        let executor_without_local_backend =
+            execute_with_current_local_verifier_config(&state);
+
+        let prepared_without_local_backend: Vec<InstructionBox> =
+            prepared.overlay.instructions().cloned().collect();
+        let prepared_without_local_backend_durable =
+            prepared.overlay.durable_state_overlay.clone();
+        let prepared_without_local_backend_gas = prepared.overlay.ivm_gas_used;
+        let prepared_without_local_backend_authorization =
+            prepared.overlay.entrypoint_authorization.clone();
+
+        state.zk.halo2.enabled = true;
+        let locally_enabled_overlay = build_overlay_for_transaction(&tx, &state.view())
+            .expect("local Halo2 enablement must not change governed proved admission");
+        let locally_enabled_prepared = build_prepared_overlay_for_transaction_with_accounts_zk(
+            &tx,
+            state.view().accounts_snapshot(),
+            &state.view(),
+            true,
+            &prepared_header,
+            StreamingOverlayMetadata::default(),
+            &mut ivm_cache,
+            true,
+            None,
+        )
+        .expect("local Halo2 enablement must not change prepared proved admission");
+        let executor_with_local_backend = execute_with_current_local_verifier_config(&state);
+        assert_eq!(
+            executor_with_local_backend, executor_without_local_backend,
+            "executor effects and gas must be independent of local verifier enablement"
+        );
+        assert_eq!(
+            locally_enabled_overlay
+                .instructions()
+                .cloned()
+                .collect::<Vec<_>>(),
+            built,
+            "local verifier enablement must not change proved replay instructions"
+        );
+        assert_eq!(
+            &locally_enabled_overlay.durable_state_overlay,
+            &overlay_built.durable_state_overlay,
+            "local verifier enablement must not change proved durable-state replay"
+        );
+        assert_eq!(
+            locally_enabled_overlay.ivm_gas_used, overlay_built.ivm_gas_used,
+            "local verifier enablement must not change proved replay gas"
+        );
+        assert_eq!(
+            &locally_enabled_overlay.entrypoint_authorization,
+            &overlay_built.entrypoint_authorization,
+            "local verifier enablement must not change proved entrypoint authorization"
+        );
+        assert_eq!(
+            locally_enabled_prepared
+                .overlay
+                .instructions()
+                .cloned()
+                .collect::<Vec<_>>(),
+            prepared_without_local_backend,
+            "prepared proved replay instructions must be independent of local verifier enablement"
+        );
+        assert_eq!(
+            &locally_enabled_prepared.overlay.durable_state_overlay,
+            &prepared_without_local_backend_durable,
+            "prepared proved durable-state replay must be independent of local verifier enablement"
+        );
+        assert_eq!(
+            locally_enabled_prepared.overlay.ivm_gas_used,
+            prepared_without_local_backend_gas,
+            "prepared proved replay gas must be independent of local verifier enablement"
+        );
+        assert_eq!(
+            &locally_enabled_prepared.overlay.entrypoint_authorization,
+            &prepared_without_local_backend_authorization,
+            "prepared proved authorization must be independent of local verifier enablement"
+        );
+        assert_eq!(locally_enabled_prepared.access_fence, prepared.access_fence);
+        assert_eq!(
+            locally_enabled_prepared.force_live_rebuild,
+            prepared.force_live_rebuild
+        );
 
         state.pipeline.dynamic_prepass = !state.pipeline.dynamic_prepass;
         state.pipeline.access_set_cache_enabled = !state.pipeline.access_set_cache_enabled;
@@ -7391,7 +7498,10 @@ seiyaku ProtectedProvedOverlay {
                     events_commitment,
                     gas_policy_commitment,
                 }))
-                .with_attachments(ProofAttachmentList(vec![attachment]))
+                .with_attachments(
+                    ProofAttachmentList::try_from(vec![attachment])
+                        .expect("one attachment is a valid bounded proof list"),
+                )
                 .sign(kp.private_key())
         };
 
@@ -7548,7 +7658,8 @@ seiyaku ProtectedProvedOverlay {
         )
         .expect("STARK binding AIR proof");
         let attachment = ProofAttachment::new_ref(backend.into(), proof_box, vk_id);
-        let attachments = ProofAttachmentList(vec![attachment]);
+        let attachments = ProofAttachmentList::try_from(vec![attachment])
+            .expect("one attachment is a valid bounded proof list");
 
         let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
@@ -7838,7 +7949,8 @@ seiyaku ProtectedProvedOverlay {
                 }
                 let attachment =
                     ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
-                let attachments = ProofAttachmentList(vec![attachment]);
+                let attachments = ProofAttachmentList::try_from(vec![attachment])
+                    .expect("one attachment is a valid bounded proof list");
                 TransactionBuilder::new(
                     state.chain_id.clone(),
                     authority.clone(),
@@ -8040,7 +8152,8 @@ seiyaku ProtectedProvedOverlay {
 
         let attachment =
             ProofAttachment::new_ref("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_id);
-        let attachments = ProofAttachmentList(vec![attachment]);
+        let attachments = ProofAttachmentList::try_from(vec![attachment])
+            .expect("one attachment is a valid bounded proof list");
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
@@ -8145,7 +8258,8 @@ seiyaku ProtectedProvedOverlay {
 
         let attachment =
             ProofAttachment::new_ref("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_id);
-        let attachments = ProofAttachmentList(vec![attachment]);
+        let attachments = ProofAttachmentList::try_from(vec![attachment])
+            .expect("one attachment is a valid bounded proof list");
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
@@ -8298,7 +8412,8 @@ seiyaku ProtectedProvedOverlay {
         );
         let attachment =
             ProofAttachment::new_ref("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_id);
-        let attachments = ProofAttachmentList(vec![attachment]);
+        let attachments = ProofAttachmentList::try_from(vec![attachment])
+            .expect("one attachment is a valid bounded proof list");
 
         let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
@@ -10816,7 +10931,7 @@ where
     let attachments = tx
         .attachments()
         .ok_or_else(|| OverlayBuildError::ZkProof("missing proof attachments".to_owned()))?;
-    let list = &attachments.0;
+    let list = attachments.as_slice();
     if list.len() != 1 {
         return Err(OverlayBuildError::ZkProof(
             "Executable::IvmProved expects exactly one proof attachment".to_owned(),

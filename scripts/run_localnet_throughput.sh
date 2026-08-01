@@ -329,7 +329,7 @@ for extra in ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}; do
   ENV_VARS+=("$extra")
 done
 
-if irohad_bin="$(resolve_existing_binary "${target_root}" "iroha3d")"; then
+if irohad_bin="$(resolve_existing_binary "${target_root}" "irohad")"; then
   export_if_unset TEST_NETWORK_BIN_IROHAD "${irohad_bin}"
 fi
 if iroha_bin="$(resolve_existing_binary "${target_root}" "iroha")"; then

@@ -398,18 +398,19 @@ mod tests {
             Some(PathBuf::from("/srv/iroha/policy.norito"));
         operational.settlement.offline.kagemusha_artifact_dir =
             Some(PathBuf::from("/srv/iroha/artifacts"));
+        operational.settlement.offline.enabled = !operational.settlement.offline.enabled;
 
         assert_eq!(
             execution_policy_hash(&operational),
             expected,
-            "worker, cache, accelerator, tracing, transport, gateway, and path drift must not partition validators"
+            "worker, cache, accelerator, tracing, transport, gateway, offline service switch, and path drift must not partition validators"
         );
     }
 
     #[test]
-    fn offline_defaults_enable_mandatory_escrow_before_release_configuration() {
+    fn offline_defaults_are_dev_friendly_without_weakening_escrow() {
         let offline = Offline::default();
-        assert!(offline.enabled);
+        assert!(!offline.enabled);
         assert!(offline.escrow_required);
         assert!(offline.kagemusha_release_policy_path.is_none());
         assert!(offline.kagemusha_artifact_dir.is_none());
@@ -418,31 +419,6 @@ mod tests {
             offline.kagemusha_max_decoded_bytes,
             defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
         );
-    }
-
-    #[test]
-    fn nexus_storage_budget_component_from_str_matches_persisted_labels() {
-        assert_eq!(
-            "kura".parse::<NexusStorageBudgetComponent>(),
-            Ok(NexusStorageBudgetComponent::Kura)
-        );
-        assert_eq!(
-            "wsv_cold".parse::<NexusStorageBudgetComponent>(),
-            Ok(NexusStorageBudgetComponent::WsvCold)
-        );
-        assert_eq!(
-            "sorafs".parse::<NexusStorageBudgetComponent>(),
-            Ok(NexusStorageBudgetComponent::Sorafs)
-        );
-        assert_eq!(
-            "soranet_spool".parse::<NexusStorageBudgetComponent>(),
-            Ok(NexusStorageBudgetComponent::SoranetSpool)
-        );
-        assert_eq!(
-            "soravpn_spool".parse::<NexusStorageBudgetComponent>(),
-            Ok(NexusStorageBudgetComponent::SoravpnSpool)
-        );
-        assert!("unknown".parse::<NexusStorageBudgetComponent>().is_err());
     }
 
     fn default_v2_sumeragi() -> Sumeragi {

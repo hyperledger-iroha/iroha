@@ -6622,6 +6622,7 @@ pub struct TransitionProjection<'a> {
     pub(crate) timeout_votes_after: &'a BTreeMap<Round, BTreeMap<ValidatorId, SignedTimeoutVote>>,
     pub(crate) formed_timeouts_before: &'a BTreeSet<Round>,
     pub(crate) formed_timeouts_after: &'a BTreeSet<Round>,
+    pub(crate) timeout_evidence_after_outside_installed_window: u64,
     pub(crate) timeout_control_before: Option<&'a ConsensusMessageV2>,
     pub(crate) timeout_control_after: Option<&'a ConsensusMessageV2>,
     pub(crate) boundary_claimed: BoundaryCapabilityKey,
@@ -6662,6 +6663,7 @@ struct TransitionFacts {
     install_view_unchanged: bool,
     timeout_vote_pool_unchanged: bool,
     formed_timeouts_unchanged: bool,
+    timeout_evidence_after_in_installed_window: bool,
     timeout_control_unchanged: bool,
     timeout_control_after_absent: bool,
     enter_view_exact: bool,
@@ -6704,6 +6706,7 @@ struct TransitionDeltaFacts {
     install_view_unchanged: bool,
     timeout_vote_pool_unchanged: bool,
     formed_timeouts_unchanged: bool,
+    timeout_evidence_after_in_installed_window: bool,
     timeout_control_unchanged: bool,
     timeout_control_after_absent: bool,
     replay_boundary_exact: bool,
@@ -7003,13 +7006,16 @@ macro_rules! volatile_summary_well_formed_body {
             && $summary.vote_pools <= 2u64
             && $summary.vote_entries >= $summary.vote_pools
             && $summary.vote_entries <= $validator_count * 2u64
-            // Exactly one current-view timeout pool can exist.
-            && $summary.timeout_vote_pools <= 1u64
+            // The current timeout pool plus exactly one adjacent future pool
+            // are retained so staggered honest validators can form the TC
+            // which resynchronizes the pacemaker.
+            && $summary.timeout_vote_pools <= 2u64
             && $summary.timeout_vote_entries >= $summary.timeout_vote_pools
-            && $summary.timeout_vote_entries <= $validator_count
-            // At most one locally formed certificate per phase and one TC.
+            && $summary.timeout_vote_entries <= $validator_count * 2u64
+            // At most one locally formed certificate per phase and one TC per
+            // retained timeout round.
             && $summary.formed_certificates <= 2u64
-            && $summary.formed_timeouts <= 1u64
+            && $summary.formed_timeouts <= 2u64
             // `OutboundControlClass` has seven exhaustive variants.
             && $summary.outbound_control <= 7u64
             // Every pending PrepareQC is also known.  Recovery and a view
@@ -7490,6 +7496,8 @@ macro_rules! transition_delta_facts_from_projection_body {
             $projection.timeout_votes_before == $projection.timeout_votes_after;
         let formed_timeouts_unchanged =
             $projection.formed_timeouts_before == $projection.formed_timeouts_after;
+        let timeout_evidence_after_in_installed_window =
+            $projection.timeout_evidence_after_outside_installed_window == 0u64;
         let timeout_control_unchanged =
             $projection.timeout_control_before == $projection.timeout_control_after;
         let timeout_control_after_absent = $projection.timeout_control_after.is_none();
@@ -7507,6 +7515,7 @@ macro_rules! transition_delta_facts_from_projection_body {
             install_view_unchanged,
             timeout_vote_pool_unchanged,
             formed_timeouts_unchanged,
+            timeout_evidence_after_in_installed_window,
             timeout_control_unchanged,
             timeout_control_after_absent,
             replay_boundary_exact,
@@ -7612,6 +7621,8 @@ macro_rules! transition_facts_from_components_body {
             install_view_unchanged: $delta.install_view_unchanged,
             timeout_vote_pool_unchanged: $delta.timeout_vote_pool_unchanged,
             formed_timeouts_unchanged: $delta.formed_timeouts_unchanged,
+            timeout_evidence_after_in_installed_window: $delta
+                .timeout_evidence_after_in_installed_window,
             timeout_control_unchanged: $delta.timeout_control_unchanged,
             timeout_control_after_absent: $delta.timeout_control_after_absent,
             enter_view_exact: $enter_view_exact,
@@ -7941,8 +7952,16 @@ macro_rules! transition_branch_constraints_body {
                                     && $facts.volatile_after.timeout_vote_entries
                                         == $facts.volatile_before.timeout_vote_entries
                             } else {
-                                $facts.volatile_after.timeout_vote_pools == 0u64
-                                    && $facts.volatile_after.timeout_vote_entries == 0u64
+                                // A view advance retires stale shares but may
+                                // preserve already authenticated shares for
+                                // the installed view and its adjacent future
+                                // catch-up round. A persistence acknowledgement
+                                // cannot invent either pools or entries.
+                                $facts.timeout_evidence_after_in_installed_window
+                                    && $facts.volatile_after.timeout_vote_pools
+                                    <= $facts.volatile_before.timeout_vote_pools
+                                    && $facts.volatile_after.timeout_vote_entries
+                                        <= $facts.volatile_before.timeout_vote_entries
                             })
                             && $facts.volatile_after.formed_certificates == 0u64
                             && (if $facts.install_view_unchanged {
@@ -7950,7 +7969,8 @@ macro_rules! transition_branch_constraints_body {
                                     && $facts.volatile_after.formed_timeouts
                                     == $facts.volatile_before.formed_timeouts
                             } else {
-                                $facts.volatile_after.formed_timeouts == 0u64
+                                $facts.volatile_after.formed_timeouts
+                                    <= $facts.volatile_before.formed_timeouts
                             })
                             && (if $facts.install_view_unchanged {
                                 $facts.timeout_control_unchanged

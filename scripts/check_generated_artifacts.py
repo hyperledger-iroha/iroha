@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -140,11 +141,36 @@ def _git_tracked_paths(root: Path) -> set[str]:
 
 
 def _glob_matches(path: str, pattern: str) -> bool:
-    if fnmatch.fnmatchcase(path, pattern):
-        return True
-    if pattern.startswith("**/"):
-        return fnmatch.fnmatchcase(path, pattern[3:])
-    return False
+    """Match a normalized repository path with segment-aware glob semantics.
+
+    A single ``*`` or ``?`` never crosses a directory separator. A complete
+    ``**`` path segment matches zero or more path segments, including at the
+    repository root. Keeping those two cases distinct prevents a shallow
+    owner input such as ``src/*.rs`` from silently owning nested sources.
+    """
+
+    path_parts = tuple(path.split("/"))
+    pattern_parts = tuple(pattern.split("/"))
+
+    @lru_cache(maxsize=None)
+    def matches(pattern_index: int, path_index: int) -> bool:
+        if pattern_index == len(pattern_parts):
+            return path_index == len(path_parts)
+
+        pattern_part = pattern_parts[pattern_index]
+        if pattern_part == "**":
+            return matches(pattern_index + 1, path_index) or (
+                path_index < len(path_parts)
+                and matches(pattern_index, path_index + 1)
+            )
+
+        return (
+            path_index < len(path_parts)
+            and fnmatch.fnmatchcase(path_parts[path_index], pattern_part)
+            and matches(pattern_index + 1, path_index + 1)
+        )
+
+    return matches(0, 0)
 
 
 def _matching_paths(paths: set[str], pattern: str) -> set[str]:

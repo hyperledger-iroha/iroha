@@ -1,9 +1,7 @@
 #![allow(clippy::manual_div_ceil)]
 //! Tests for encoded_len_hint to ensure capacity reservations are reasonable.
-use std::io::Write;
-
 use iroha_schema::IntoSchema;
-use norito::core::{Error, NoritoSerialize, encoded_payload_len};
+use norito::core::{Encoder, Error, NoritoSerialize, encoded_payload_len};
 
 fn assert_exact_hint<T: NoritoSerialize>(value: &T) {
     assert_eq!(
@@ -36,9 +34,9 @@ fn vec_hint_size() {
 // Custom type that provides no size hint regardless of content
 struct NoHint(u32);
 impl NoritoSerialize for NoHint {
-    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
+    fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
         // Serialize as a fixed 4-byte little-endian value
-        writer.write_all(&self.0.to_le_bytes())?;
+        encoder.write_all(&self.0.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -49,7 +47,7 @@ impl NoritoSerialize for NoHint {
 // Custom type that advertises a very large hint to exercise saturating math
 struct BigHint;
 impl NoritoSerialize for BigHint {
-    fn serialize<W: Write>(&self, _writer: W) -> Result<(), Error> {
+    fn serialize(&self, _encoder: &mut Encoder<'_>) -> Result<(), Error> {
         // Minimal payload; not used in these tests
         Ok(())
     }

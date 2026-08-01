@@ -208,7 +208,8 @@ public final class PrivacyExact12FixtureCodecV1Tests {
             oversizedStatementFrame,
             oversizedStatementVector,
             nonMinimalVersionLength)) {
-      assertTrue("hostile test archive unexpectedly allocated a large payload", hostile.length < 512);
+      assertTrue(
+          "hostile test archive unexpectedly allocated a large payload", hostile.length < 512);
       assertThrows(
           IllegalArgumentException.class,
           () -> PrivacyExact12FixtureCodecV1.decodeCanonical(hostile));

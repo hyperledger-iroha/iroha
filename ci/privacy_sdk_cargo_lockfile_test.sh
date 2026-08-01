@@ -373,7 +373,9 @@ WRAPPER_CARGO_TARGET="${TEST_ROOT}/wrapper-cargo-target"
 WRAPPER_CONFIG_PATH="${REPOSITORY_ROOT}/.cargo/config.toml"
 mkdir -m 700 "${WRAPPER_CARGO_HOME}" "${WRAPPER_CARGO_TARGET}"
 mkdir -p "$(dirname "${WRAPPER_CONFIG_PATH}")"
-printf '%s\n' '[build]' 'jobs = 1' >"${WRAPPER_CONFIG_PATH}"
+printf '%s\n' '[alias]' \
+  'xtask = "run --package xtask --features dev-tools --bin xtask --"' \
+  >"${WRAPPER_CONFIG_PATH}"
 WRAPPER_CONFIG_SEAL="$(privacy_sdk_file_seal "${WRAPPER_CONFIG_PATH}")"
 WRAPPER_CARGO_HOME_STATE="$(
   privacy_sdk_capture_directory_state "${WRAPPER_CARGO_HOME}"
@@ -1139,7 +1141,9 @@ DIRECT_CONFIG_PATH="${REPOSITORY_ROOT}/.cargo/config.toml"
 DIRECT_NESTED_DIRECTORY="${REPOSITORY_ROOT}/nested/project"
 mkdir -p "$(dirname "${DIRECT_CONFIG_PATH}")" \
   "${DIRECT_NESTED_DIRECTORY}/.cargo"
-printf '%s\n' '[build]' 'jobs = 1' >"${DIRECT_CONFIG_PATH}"
+printf '%s\n' '[alias]' \
+  'xtask = "run --package xtask --features dev-tools --bin xtask --"' \
+  >"${DIRECT_CONFIG_PATH}"
 DIRECT_CONFIG_SEAL="$(privacy_sdk_file_seal "${DIRECT_CONFIG_PATH}")"
 printf '%s\n' '[alias]' 'build = "poison"' \
   >"${DIRECT_NESTED_DIRECTORY}/.cargo/config.toml"
@@ -1191,7 +1195,9 @@ expect_wrapper_rejection \
 WRAPPER_CREATED_ROOT="${TEST_ROOT}/wrapper-created-workspace"
 WRAPPER_CREATED_CONFIG="${WRAPPER_CREATED_ROOT}/.cargo/config.toml"
 mkdir -p "$(dirname "${WRAPPER_CREATED_CONFIG}")"
-printf '%s\n' '[build]' 'jobs = 1' >"${WRAPPER_CREATED_CONFIG}"
+printf '%s\n' '[alias]' \
+  'xtask = "run --package xtask --features dev-tools --bin xtask --"' \
+  >"${WRAPPER_CREATED_CONFIG}"
 write_test_rust_toolchain "${WRAPPER_CREATED_ROOT}"
 WRAPPER_CREATED_CONFIG_SEAL="$(privacy_sdk_file_seal "${WRAPPER_CREATED_CONFIG}")"
 WRAPPER_CREATED_TOOLCHAIN="${WRAPPER_CREATED_ROOT}/rust-toolchain.toml"
@@ -3221,7 +3227,7 @@ run_repository_cargo_config_negative_control() {
     *) echo "invalid Cargo config negative control" >&2; exit 1 ;;
   esac
   expect_failure \
-    "repository Cargo configuration may only" \
+    "repository Cargo configuration may only define the approved xtask alias" \
     run_python_guard_for_root "${config_root}" \
     env \
     PRIVACY_PYTHON_SDK_ROOT="${config_root}" \
@@ -3759,8 +3765,11 @@ if arguments(8) != [
     "pytest",
     "-q",
     "tests/privacy_catalog_test.py",
+    "tests/privacy_exact12_fixture_test.py",
     "tests/package_import_fallback_test.py",
     "tests/privacy_native_registry_test.py",
+    "tests/privacy_zk_x509_transport_test.py",
+    "tests/proof_attachment_contract_test.py",
     "tests/crypto_algorithms_test.py",
 ]:
     raise SystemExit("installed-package pytest transcript drifted")

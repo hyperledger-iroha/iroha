@@ -35,8 +35,7 @@ const SHA256_TABLE_ROWS_V4: usize = TABLE16_SPREAD_TABLE_ROWS;
 /// One Boolean cell produced or checked by the SHA-byte provenance API.
 ///
 /// The assigned cell is deliberately private: callers can only obtain this
-/// token through [`KagemushaSha256BitV4::decompose`] or
-/// [`KagemushaSha256BitV4::constrain`], so composing a
+/// token through [`KagemushaSha256BitV4::decompose`], so composing a
 /// [`KagemushaSha256ByteV4`] from eight tokens carries a real Boolean proof.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct KagemushaSha256BitV4<F: ScalarField> {
@@ -55,16 +54,6 @@ impl<F: BigPrimeField> KagemushaSha256BitV4<F> {
             .into_iter()
             .map(|assigned| Self { assigned })
             .collect()
-    }
-
-    /// Check one existing cell is Boolean and retain that provenance.
-    pub(super) fn constrain(
-        ctx: &mut Context<F>,
-        gate: &GateChip<F>,
-        assigned: AssignedValue<F>,
-    ) -> Self {
-        gate.assert_bit(ctx, assigned);
-        Self { assigned }
     }
 
     /// Require this bit to be the constant zero.
@@ -86,8 +75,9 @@ enum KagemushaSha256ByteSourceV4<F: ScalarField> {
 /// A SHA-256 message byte carrying its circuit provenance.
 ///
 /// Constants remain Table16 constants. Dynamic bytes can only be constructed
-/// from eight proven Boolean cells, one explicitly constrained Boolean cell,
-/// or an explicit caller-side Range8 check. Consequently
+/// from eight proven Boolean cells or an explicit caller-side Range8 check.
+/// The test-only generic digest helper applies the same checked fallback.
+/// Consequently
 /// [`KagemushaSha256JobsV4::digest_constrained`] does not repeat a Range8 lookup
 /// for these values.
 #[derive(Clone, Copy, Debug)]
@@ -117,18 +107,6 @@ impl<F: BigPrimeField> KagemushaSha256ByteV4<F> {
         );
         Self {
             source: KagemushaSha256ByteSourceV4::Constrained(assigned),
-        }
-    }
-
-    /// Treat one explicitly Boolean-constrained cell as a byte.
-    pub(super) fn from_boolean(
-        ctx: &mut Context<F>,
-        gate: &GateChip<F>,
-        assigned: AssignedValue<F>,
-    ) -> Self {
-        let bit = KagemushaSha256BitV4::constrain(ctx, gate, assigned);
-        Self {
-            source: KagemushaSha256ByteSourceV4::Constrained(bit.assigned()),
         }
     }
 
@@ -170,6 +148,16 @@ impl<F: BigPrimeField> KagemushaSha256ByteV4<F> {
         range.range_check(ctx, assigned, 8);
         Self {
             source: KagemushaSha256ByteSourceV4::Constrained(assigned),
+        }
+    }
+
+    /// Return this proven byte as a linear-combination input.
+    pub(super) fn quantum_cell(self) -> QuantumCell<F> {
+        match self.source {
+            KagemushaSha256ByteSourceV4::Constant(byte) => {
+                QuantumCell::Constant(F::from(u64::from(byte)))
+            }
+            KagemushaSha256ByteSourceV4::Constrained(assigned) => QuantumCell::Existing(assigned),
         }
     }
 
@@ -333,8 +321,9 @@ where
         })
     }
 
-    /// Conservative per-lane capacity bound for authenticated usable rows.
-    pub(crate) fn validate_capacity(&self, usable_rows: usize) -> Result<(), String> {
+    /// Return the exact queued-job, compression-block, and per-lane row
+    /// geometry used by the authenticated composite-circuit capacity check.
+    pub(crate) fn capacity_profile(&self) -> Result<(usize, usize, usize), String> {
         let blocks = self.compression_blocks()?;
         let lane_blocks = blocks.div_ceil(KAGEMUSHA_SHA256_LANES_V4);
         let required = lane_blocks
@@ -347,6 +336,12 @@ where
             })
             .ok_or_else(|| "Kagemusha SHA-256 row count overflow".to_owned())?
             .max(SHA256_TABLE_ROWS_V4);
+        Ok((self.jobs.len(), blocks, required))
+    }
+
+    /// Conservative per-lane capacity bound for authenticated usable rows.
+    pub(crate) fn validate_capacity(&self, usable_rows: usize) -> Result<(), String> {
+        let (_, blocks, required) = self.capacity_profile()?;
         if required > usable_rows {
             return Err(format!(
                 "Kagemusha SHA-256 requires {required} rows per Table16 lane for {blocks} blocks, \
@@ -413,7 +408,10 @@ where
             .map_err(|_| Error::Synthesis)?;
         Table16Chip::<F>::load(config.lanes[0].clone(), layouter)?;
         let chips = config.lanes.clone().map(Table16Chip::<F>::construct);
-        let physical_cells = copy_manager.lock().unwrap().assigned_advices.clone();
+        // Base synthesis has finished populating this immutable map. Borrow it
+        // for the SHA pass instead of cloning millions of virtual-to-physical
+        // entries while the populated circuit and keygen assembly are live.
+        let physical_cells = copy_manager.lock().unwrap();
         let mut global_block_index = 0_usize;
         #[cfg(test)]
         let mut previous_job_state = None;
@@ -460,8 +458,10 @@ where
                             );
                             Error::Synthesis
                         })?;
-                        let physical_cell =
-                            *physical_cells.get(&virtual_cell).ok_or_else(|| {
+                        let physical_cell = *physical_cells
+                            .assigned_advices
+                            .get(&virtual_cell)
+                            .ok_or_else(|| {
                                 iroha_logger::error!(
                                     job_index,
                                     byte_index,
@@ -569,8 +569,10 @@ where
                             );
                             Error::Synthesis
                         })?;
-                        let physical_cell =
-                            *physical_cells.get(&virtual_cell).ok_or_else(|| {
+                        let physical_cell = *physical_cells
+                            .assigned_advices
+                            .get(&virtual_cell)
+                            .ok_or_else(|| {
                                 iroha_logger::error!(
                                     job_index,
                                     word_index,

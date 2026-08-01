@@ -3,7 +3,6 @@
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    io::Write,
     num::{NonZeroU32, NonZeroUsize},
     sync::{Arc, OnceLock},
     time::{Duration, Instant},
@@ -2843,15 +2842,15 @@ fn decode_transaction_gossip_payload(
 }
 
 impl NoritoSerialize for TransactionGossip {
-    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ensure_transaction_gossip_sequence_len(self.txs.len())?;
         ensure_transaction_gossip_sequence_len(self.routes.len())?;
         ensure_transaction_gossip_sequence_len(self.plans.len())?;
         let mut tmp = ncore::DeriveSmallBuf::new();
-        ncore::write_len_prefixed_exact(&mut writer, &self.txs, &mut tmp)?;
-        ncore::write_len_prefixed_exact(&mut writer, &self.routes, &mut tmp)?;
-        ncore::write_len_prefixed_exact(&mut writer, &self.plans, &mut tmp)?;
-        ncore::write_len_prefixed_exact(&mut writer, &self.plane, &mut tmp)?;
+        ncore::write_len_prefixed_exact(writer, &self.txs, &mut tmp)?;
+        ncore::write_len_prefixed_exact(writer, &self.routes, &mut tmp)?;
+        ncore::write_len_prefixed_exact(writer, &self.plans, &mut tmp)?;
+        ncore::write_len_prefixed_exact(writer, &self.plane, &mut tmp)?;
         Ok(())
     }
 
@@ -3287,7 +3286,7 @@ impl From<SignedTransaction> for GossipTransaction {
 }
 
 impl NoritoSerialize for GossipTransaction {
-    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         writer.write_all(self.encoded.as_slice())?;
         Ok(())
     }
@@ -4676,8 +4675,8 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             plane: GossipPlane::Public,
         };
 
-        let error = message
-            .serialize(Vec::new())
+        let mut payload = Vec::new();
+        let error = ncore::serialize_to_buffer(&message, &mut payload)
             .expect_err("an oversized transaction sequence must not be serialized");
 
         assert!(matches!(

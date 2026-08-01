@@ -643,6 +643,7 @@ validator from the exact source and lockfile that the evidence will bind:
 SCCP_VALIDATOR_TARGET=/absolute/operator/path/sccp-validator-target
 CARGO_TARGET_DIR="$SCCP_VALIDATOR_TARGET" \
   cargo build --locked --offline --no-default-features \
+    --features dev-tools \
     -p iroha_sccp --bin sccp_release_evidence
 python3 scripts/sccp_release_fixture_reseal.py prepare \
   --rust-validator "$SCCP_VALIDATOR_TARGET/debug/sccp_release_evidence" \
@@ -689,6 +690,7 @@ Build the read-only validator without the optional fixture feature:
 ```bash
 CARGO_TARGET_DIR=/absolute/operator/path/sccp-validator-target \
   cargo build --release --locked --offline --no-default-features \
+    --features dev-tools \
     -p iroha_sccp --bin sccp_release_evidence
 ```
 

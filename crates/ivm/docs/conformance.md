@@ -25,8 +25,8 @@ This checklist pins required golden tests/vectors and their locations to keep im
 
 - Predecoder Vectors
   - Mixed 16/32-bit streams decode identically across allowed header/metadata variants.
-  - Generator: `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
-  - Check: `cargo run --locked -p ivm --bin ivm_fixture_export -- --check`
+  - Generator: `cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --write`
+  - Check: `cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --check`
   - Output: `crates/ivm/tests/fixtures/predecoder/mixed/` (`code.bin`, `decoded.json`, `index.json`, `artifacts/*.to`)
 
 - Cross‑Backend Vectors

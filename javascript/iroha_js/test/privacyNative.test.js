@@ -82,6 +82,9 @@ test("privacy native surface contains only the local compiled-profile catalog br
     assert.equal(typeof surface.privacyCompiledProfileCatalogV1, "function");
     for (const retired of [
       "privacyCapabilitiesV1",
+      "privacyValidateCapabilitiesV1",
+      "PRIVACY_CAPABILITY_VALIDATION_STATUS_V1",
+      "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES",
       "privacyProofRequestV1",
       "privacyBuildProofV1",
       "privacyVerifyProofV1",
@@ -141,7 +144,7 @@ test("privacyCompiledProfileCatalogV1 returns a defensive copy of a valid Norito
   );
 });
 
-test("privacyCompiledProfileCatalogV1 rejects every output the shared typed validator rejects", () => {
+test("privacyCompiledProfileCatalogV1 rejects every output the exact local typed validator rejects", () => {
   const malformed = [
     Buffer.alloc(0),
     Buffer.from([0x50]),

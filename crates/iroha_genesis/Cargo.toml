@@ -1,5 +1,6 @@
 [package]
 name = "iroha_genesis"
+autobins = false
 
 edition.workspace = true
 version.workspace = true
@@ -9,6 +10,44 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+dev-tools = []
+
+[[bin]]
+name = "account_literal"
+path = "src/bin/account_literal.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "genesis_dump"
+path = "src/bin/genesis_dump.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "genesis_inspect"
+path = "src/bin/genesis_inspect.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "genesis_probe"
+path = "src/bin/genesis_probe.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "genesis_resign"
+path = "src/bin/genesis_resign.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "manifest_normalize"
+path = "src/bin/manifest_normalize.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "tx_decode"
+path = "src/bin/tx_decode.rs"
+required-features = ["dev-tools"]
 
 [dependencies]
 norito = { workspace = true, default-features = false, features = ["node-codec"] }

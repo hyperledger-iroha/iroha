@@ -98,7 +98,7 @@ ensure_taikai_car() {
     return
   fi
   echo "building taikai_car under $WORKSPACE..."
-  (cd "$WORKSPACE" && cargo build -p sorafs_car --bin taikai_car --features cli)
+  (cd "$WORKSPACE" && cargo build -p sorafs_car --features cli,dev-tools --bin taikai_car)
   if [[ ! -x "$TAIKAI_CAR_BIN" ]]; then
     echo "error: taikai_car binary not found at $TAIKAI_CAR_BIN after build" >&2
     exit 1

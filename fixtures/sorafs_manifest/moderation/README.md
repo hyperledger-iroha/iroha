@@ -8,7 +8,7 @@ canonical `ValidationOutcomeV1` emitted at `generated_at=1700001234`.
 Regenerate it together with the release-wide SDK inventory:
 
 ```sh
-cargo run --locked --offline -p sorafs_manifest --bin generate_por_fixtures -- --write
+cargo run --locked --offline -p sorafs_manifest --features dev-tools --bin generate_por_fixtures -- --write
 ```
 
 The deterministic Ed25519 key is test-only fixture material. Production

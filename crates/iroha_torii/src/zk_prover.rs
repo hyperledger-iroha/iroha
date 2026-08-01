@@ -38,12 +38,16 @@ use iroha_core::{
         verify_backend_with_timing_checked,
     },
 };
+#[cfg(test)]
+use iroha_crypto::Hash;
 use iroha_data_model::proof::{
     ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId,
 };
 use mv::storage::StorageReadOnly;
 use norito::json;
 use parking_lot::{Mutex, RwLock};
+#[cfg(test)]
+use sha2::{Digest as _, Sha256};
 use tokio::{
     runtime::{Handle, RuntimeFlavor},
     sync::Semaphore,
@@ -54,6 +58,11 @@ use tokio::{
 use crate::NoritoQuery;
 use crate::{
     routing::MaybeTelemetry,
+    zk_attachments::{
+        ATTACHMENT_META_FILE_MAX_BYTES, open_attachment_regular_file,
+        read_bounded_attachment_regular_file, validate_attachment_body_contract,
+        validate_attachment_metadata_contract,
+    },
     zk1::{MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT, parse_tags as parse_zk1_tags},
 };
 
@@ -186,6 +195,10 @@ static PROVER_CFG: OnceLock<RwLock<ProverCfg>> = OnceLock::new();
 #[cfg(test)]
 static TEST_PROCESSING_DELAY_MS: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
+static TEST_SNAPSHOT_LOAD_DELAY_MS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static TEST_MAX_SCAN_MILLIS_OVERRIDE: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
 static MAX_INFLIGHT_OBSERVED: AtomicUsize = AtomicUsize::new(0);
 
 /// Configure prover enable, scan period (seconds), and reports TTL (seconds) from Torii config.
@@ -260,6 +273,13 @@ fn cfg_max_scan_bytes() -> u64 {
 }
 
 fn cfg_max_scan_millis() -> u64 {
+    #[cfg(test)]
+    {
+        let override_millis = TEST_MAX_SCAN_MILLIS_OVERRIDE.load(Ordering::Relaxed);
+        if override_millis > 0 {
+            return override_millis;
+        }
+    }
     with_cfg(|c| c.max_scan_millis)
         .unwrap_or(iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_SCAN_MILLIS)
 }
@@ -320,6 +340,8 @@ fn now_ms() -> u64 {
 
 const ATTACHMENT_ID_HEX_LEN: usize = 64;
 const TENANT_KEY_HEX_LEN: usize = 64;
+const PROOF_ATTACHMENT_BODY_MAX_BYTES_V1: u64 =
+    iroha_config::parameters::defaults::torii::ZK_PROVER_ATTACHMENT_BODY_MAX_BYTES_V1;
 const REPORT_FILE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const REPORT_SUMMARY_FILE_MAX_BYTES: u64 = 64 * 1024;
 const REPORT_SUMMARY_ERROR_MAX_BYTES: usize = 4 * 1024;
@@ -327,9 +349,9 @@ const REPORT_SUMMARY_CONTENT_TYPE_MAX_BYTES: usize = 256;
 const REPORT_SUMMARY_TAG_MAX_BYTES: usize = 32;
 static REPORT_SUMMARY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct AttachmentLocation {
-    tenant_key: Option<String>,
+    tenant_key: String,
     id: String,
 }
 
@@ -363,20 +385,16 @@ fn attachments_root_dir() -> PathBuf {
     super::zk_attachments::base_dir().join("zk_attachments")
 }
 
-fn attachment_meta_path(tenant_key: Option<&str>, id: &str) -> PathBuf {
-    match tenant_key {
-        Some(key) => attachments_root_dir()
-            .join(key)
-            .join(format!("{}.json", id)),
-        None => attachments_root_dir().join(format!("{}.json", id)),
-    }
+fn attachment_meta_path(tenant_key: &str, id: &str) -> PathBuf {
+    attachments_root_dir()
+        .join(tenant_key)
+        .join(format!("{}.json", id))
 }
 
-fn attachment_bin_path(tenant_key: Option<&str>, id: &str) -> PathBuf {
-    match tenant_key {
-        Some(key) => attachments_root_dir().join(key).join(format!("{}.bin", id)),
-        None => attachments_root_dir().join(format!("{}.bin", id)),
-    }
+fn attachment_bin_path(tenant_key: &str, id: &str) -> PathBuf {
+    attachments_root_dir()
+        .join(tenant_key)
+        .join(format!("{}.bin", id))
 }
 
 fn report_path_from_sanitized(id: &str) -> PathBuf {
@@ -653,91 +671,180 @@ fn list_attachment_locations() -> Vec<AttachmentLocation> {
             let Some(name) = file_name.to_str() else {
                 continue;
             };
-            if ft.is_dir() {
-                let Some(tenant_key) = sanitize_tenant_key(name) else {
-                    continue;
-                };
-                if let Ok(trd) = fs::read_dir(attachments_root_dir().join(&tenant_key)) {
-                    for te in trd.flatten() {
-                        let file_name = te.file_name();
-                        let Some(tname) = file_name.to_str() else {
-                            continue;
-                        };
-                        let Some(id) = tname.strip_suffix(".json") else {
-                            continue;
-                        };
-                        let Some(clean) = sanitize_attachment_id(id) else {
-                            continue;
-                        };
-                        locs.push(AttachmentLocation {
-                            tenant_key: Some(tenant_key.clone()),
-                            id: clean,
-                        });
+            if !ft.is_dir() {
+                continue;
+            }
+            let Some(tenant_key) = sanitize_tenant_key(name) else {
+                continue;
+            };
+            if let Ok(trd) = fs::read_dir(attachments_root_dir().join(&tenant_key)) {
+                for te in trd.flatten() {
+                    if !te.file_type().is_ok_and(|file_type| file_type.is_file()) {
+                        continue;
                     }
-                }
-                continue;
-            }
-            if !ft.is_file() {
-                continue;
-            }
-            // Legacy layout: `<root>/<id>.json`
-            if let Some(id) = name.strip_suffix(".json") {
-                if let Some(clean) = sanitize_attachment_id(id) {
+                    let file_name = te.file_name();
+                    let Some(tname) = file_name.to_str() else {
+                        continue;
+                    };
+                    let Some(id) = tname.strip_suffix(".json") else {
+                        continue;
+                    };
+                    let Some(clean) = sanitize_attachment_id(id) else {
+                        continue;
+                    };
                     locs.push(AttachmentLocation {
-                        tenant_key: None,
+                        tenant_key: tenant_key.clone(),
                         id: clean,
                     });
                 }
             }
         }
     }
+    locs.sort();
     locs
 }
 
 fn find_attachment_location(id: &str) -> Option<AttachmentLocation> {
     let clean = sanitize_attachment_id(id)?;
-    // Legacy layout first.
-    if attachment_meta_path(None, &clean).exists() {
-        return Some(AttachmentLocation {
-            tenant_key: None,
-            id: clean,
-        });
-    }
-    // Tenant layout.
-    if let Ok(rd) = fs::read_dir(attachments_root_dir()) {
-        for e in rd.flatten() {
-            let Ok(ft) = e.file_type() else { continue };
-            if !ft.is_dir() {
-                continue;
-            }
-            let file_name = e.file_name();
-            let Some(name) = file_name.to_str() else {
-                continue;
-            };
-            let Some(tenant_key) = sanitize_tenant_key(name) else {
-                continue;
-            };
-            if attachment_meta_path(Some(&tenant_key), &clean).exists() {
-                return Some(AttachmentLocation {
-                    tenant_key: Some(tenant_key),
-                    id: clean,
-                });
-            }
-        }
-    }
-    None
+    list_attachment_locations()
+        .into_iter()
+        .find(|location| location.id == clean)
 }
 
 fn load_attachment_meta(loc: &AttachmentLocation) -> Option<super::zk_attachments::AttachmentMeta> {
-    let mut f = fs::File::open(attachment_meta_path(loc.tenant_key.as_deref(), &loc.id)).ok()?;
-    let mut buf = Vec::new();
-    f.read_to_end(&mut buf).ok()?;
+    let path = attachment_meta_path(&loc.tenant_key, &loc.id);
+    let buf = read_bounded_attachment_regular_file(&path, ATTACHMENT_META_FILE_MAX_BYTES).ok()?;
     let s = std::str::from_utf8(&buf).ok()?;
     norito::json::from_json::<super::zk_attachments::AttachmentMeta>(s).ok()
 }
 
-fn load_attachment_body(loc: &AttachmentLocation) -> Option<Vec<u8>> {
-    fs::read(attachment_bin_path(loc.tenant_key.as_deref(), &loc.id)).ok()
+struct AttachmentBodyLoad {
+    observed_size: u64,
+    bytes_read: u64,
+    body: Result<Vec<u8>, String>,
+}
+
+enum AttachmentBodyLoadOutcome {
+    Loaded(AttachmentBodyLoad),
+    DeferredForByteBudget { required_bytes: u64 },
+}
+
+struct AttachmentSnapshot {
+    meta: super::zk_attachments::AttachmentMeta,
+    body_load: AttachmentBodyLoad,
+}
+
+enum AttachmentSnapshotLoad {
+    Ready(AttachmentSnapshot),
+    DeferredForByteBudget { required_bytes: u64 },
+}
+
+fn load_attachment_body_with_read_budget(
+    loc: &AttachmentLocation,
+    read_budget: u64,
+) -> Option<AttachmentBodyLoadOutcome> {
+    let path = attachment_bin_path(&loc.tenant_key, &loc.id);
+    let (file, opened_metadata) = match open_attachment_regular_file(&path) {
+        Ok(opened) => opened,
+        Err(error) => {
+            return Some(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
+                observed_size: 0,
+                bytes_read: 0,
+                body: Err(format!(
+                    "failed to securely open proof attachment body: {error}"
+                )),
+            }));
+        }
+    };
+    let observed_size = opened_metadata.len();
+    if observed_size > PROOF_ATTACHMENT_BODY_MAX_BYTES_V1 {
+        return Some(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
+            observed_size,
+            bytes_read: 0,
+            body: Err(format!(
+                "proof attachment body is {observed_size} bytes, exceeding the {PROOF_ATTACHMENT_BODY_MAX_BYTES_V1}-byte first-release limit"
+            )),
+        }));
+    }
+    if observed_size > read_budget {
+        return Some(AttachmentBodyLoadOutcome::DeferredForByteBudget {
+            required_bytes: observed_size,
+        });
+    }
+
+    // Read from this one opened file description and never reopen the path.
+    // Limiting the read to the opened size makes aggregate accounting exact;
+    // a concurrent grow/shrink is detected from descriptor metadata below.
+    let mut reader = file.take(observed_size);
+    let mut bytes = Vec::with_capacity(usize::try_from(observed_size).ok()?);
+    if let Err(error) = reader.read_to_end(&mut bytes) {
+        let bytes_read = u64::try_from(bytes.len()).ok()?;
+        return Some(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
+            observed_size,
+            bytes_read,
+            body: Err(format!("failed to read proof attachment body: {error}")),
+        }));
+    }
+    let read_size = u64::try_from(bytes.len()).ok()?;
+    let final_size = match reader.get_ref().metadata() {
+        Ok(metadata) => metadata.len(),
+        Err(error) => {
+            return Some(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
+                observed_size: read_size,
+                bytes_read: read_size,
+                body: Err(format!(
+                    "failed to re-inspect opened proof attachment body: {error}"
+                )),
+            }));
+        }
+    };
+    if read_size != observed_size || final_size != observed_size {
+        return Some(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
+            observed_size: final_size,
+            bytes_read: read_size,
+            body: Err(format!(
+                "proof attachment body changed size while being read: opened {observed_size}, read {read_size}, final {final_size}"
+            )),
+        }));
+    }
+    Some(AttachmentBodyLoadOutcome::Loaded(AttachmentBodyLoad {
+        observed_size,
+        bytes_read: read_size,
+        body: Ok(bytes),
+    }))
+}
+
+#[cfg(test)]
+fn load_attachment_body(loc: &AttachmentLocation) -> Option<AttachmentBodyLoad> {
+    match load_attachment_body_with_read_budget(loc, PROOF_ATTACHMENT_BODY_MAX_BYTES_V1)? {
+        AttachmentBodyLoadOutcome::Loaded(body_load) => Some(body_load),
+        AttachmentBodyLoadOutcome::DeferredForByteBudget { .. } => {
+            unreachable!("the intrinsic body ceiling is a sufficient direct-load read budget")
+        }
+    }
+}
+
+fn load_attachment_snapshot(
+    loc: &AttachmentLocation,
+    read_budget: u64,
+) -> Option<AttachmentSnapshotLoad> {
+    let meta = load_attachment_meta(loc)?;
+    let snapshot_load = match load_attachment_body_with_read_budget(loc, read_budget)? {
+        AttachmentBodyLoadOutcome::Loaded(body_load) => {
+            AttachmentSnapshotLoad::Ready(AttachmentSnapshot { meta, body_load })
+        }
+        AttachmentBodyLoadOutcome::DeferredForByteBudget { required_bytes } => {
+            AttachmentSnapshotLoad::DeferredForByteBudget { required_bytes }
+        }
+    };
+    #[cfg(test)]
+    {
+        let delay = TEST_SNAPSHOT_LOAD_DELAY_MS.load(AtomicOrdering::Relaxed);
+        if delay > 0 {
+            std::thread::sleep(Duration::from_millis(delay));
+        }
+    }
+    Some(snapshot_load)
 }
 
 fn save_report(rep: &ProverReport) -> std::io::Result<()> {
@@ -911,11 +1018,11 @@ fn load_vk_bytes(keys_dir: &Path, id: &VerifyingKeyId) -> Result<Vec<u8>, String
 }
 
 fn decode_norito_attachments(body: &[u8]) -> Result<Vec<ProofAttachment>, String> {
-    let list_err = match norito::decode_from_bytes::<ProofAttachmentList>(body) {
-        Ok(list) => return Ok(list.0),
+    let list_err = match norito::decode_canonical::<ProofAttachmentList>(body) {
+        Ok(list) => return Ok(list.into_vec()),
         Err(err) => err.to_string(),
     };
-    let single_err = match norito::decode_from_bytes::<ProofAttachment>(body) {
+    let single_err = match norito::decode_canonical::<ProofAttachment>(body) {
         Ok(single) => return Ok(vec![single]),
         Err(err) => err.to_string(),
     };
@@ -926,19 +1033,15 @@ fn decode_norito_attachments(body: &[u8]) -> Result<Vec<ProofAttachment>, String
 
 fn decode_json_attachments(body: &[u8]) -> Result<Vec<ProofAttachment>, String> {
     let list_err = match norito::json::from_slice::<ProofAttachmentList>(body) {
-        Ok(list) => return Ok(list.0),
+        Ok(list) => return Ok(list.into_vec()),
         Err(err) => err.to_string(),
     };
     let single_err = match norito::json::from_slice::<ProofAttachment>(body) {
         Ok(single) => return Ok(vec![single]),
         Err(err) => err.to_string(),
     };
-    let vec_err = match norito::json::from_slice::<Vec<ProofAttachment>>(body) {
-        Ok(list) => return Ok(list),
-        Err(err) => err.to_string(),
-    };
     Err(format!(
-        "json decode failed (list: {list_err}, single: {single_err}, vec: {vec_err})"
+        "json decode failed (canonical list: {list_err}, single: {single_err})"
     ))
 }
 
@@ -946,44 +1049,42 @@ fn decode_proof_attachments(
     content_type: &str,
     body: &[u8],
 ) -> Result<Vec<ProofAttachment>, String> {
-    const ZK1_MIME_TYPE: &str = "application/x-zk1";
+    if u64::try_from(body.len()).map_or(true, |size| size > PROOF_ATTACHMENT_BODY_MAX_BYTES_V1) {
+        return Err(format!(
+            "proof attachment body exceeds the {PROOF_ATTACHMENT_BODY_MAX_BYTES_V1}-byte first-release limit"
+        ));
+    }
 
-    if content_type.contains(super::utils::NORITO_MIME_TYPE) {
-        if body.len() >= 4 && &body[..4] == b"ZK1\0" {
-            return match parse_zk1_tags(body) {
+    match super::utils::strict_typed_content_format(content_type) {
+        Some(super::utils::TypedRequestContentFormat::Norito) => {
+            if body.len() >= 4 && &body[..4] == b"ZK1\0" {
+                return match parse_zk1_tags(body) {
+                    Ok(_) => {
+                        Err("unsupported ZK1 envelope (expected ProofAttachment payload)".into())
+                    }
+                    Err(err) => Err(err),
+                };
+            }
+            decode_norito_attachments(body).map_err(|err| format!("norito decode error: {err}"))
+        }
+        Some(super::utils::TypedRequestContentFormat::Json) => {
+            decode_json_attachments(body).map_err(|err| format!("json decode error: {err}"))
+        }
+        None if super::utils::is_parameter_free_media_type(
+            content_type,
+            "application",
+            "x-zk1",
+        ) =>
+        {
+            match parse_zk1_tags(body) {
                 Ok(_) => Err("unsupported ZK1 envelope (expected ProofAttachment payload)".into()),
                 Err(err) => Err(err),
-            };
+            }
         }
-        return decode_norito_attachments(body)
-            .map_err(|err| format!("norito decode error: {err}"));
+        None => Err(format!(
+            "unsupported proof attachment content type: {content_type}"
+        )),
     }
-    if content_type.contains(ZK1_MIME_TYPE) {
-        return match parse_zk1_tags(body) {
-            Ok(_) => Err("unsupported ZK1 envelope (expected ProofAttachment payload)".into()),
-            Err(err) => Err(err),
-        };
-    }
-    if content_type.contains("application/json") {
-        return decode_json_attachments(body).map_err(|err| format!("json decode error: {err}"));
-    }
-    let json_attempt = decode_json_attachments(body);
-    if let Ok(decoded) = json_attempt {
-        return Ok(decoded);
-    }
-    let norito_attempt = decode_norito_attachments(body);
-    if let Ok(decoded) = norito_attempt {
-        return Ok(decoded);
-    }
-    let json_err = json_attempt
-        .err()
-        .unwrap_or_else(|| "unknown json error".into());
-    let norito_err = norito_attempt
-        .err()
-        .unwrap_or_else(|| "unknown norito error".into());
-    Err(format!(
-        "unsupported payload (json: {json_err}; norito: {norito_err})"
-    ))
 }
 
 fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -> ProofReportEntry {
@@ -1165,17 +1266,56 @@ pub fn process_attachment_once(id: &str) -> Option<ProverReport> {
 }
 
 fn process_attachment_once_at(loc: &AttachmentLocation) -> Option<ProverReport> {
-    // Skip if report already exists
     if report_path_from_sanitized(&loc.id).exists() {
         return load_report(&loc.id);
     }
-    let meta = load_attachment_meta(loc)?;
-    let body = load_attachment_body(loc)?;
-    let zk1_tags = if body.len() >= 4 && &body[..4] == b"ZK1\0" {
-        parse_zk1_tags(&body).ok()
-    } else {
-        None
-    };
+
+    match load_attachment_snapshot(loc, PROOF_ATTACHMENT_BODY_MAX_BYTES_V1)? {
+        AttachmentSnapshotLoad::Ready(snapshot) => process_attachment_snapshot_at(loc, snapshot),
+        AttachmentSnapshotLoad::DeferredForByteBudget { .. } => {
+            unreachable!("the intrinsic body ceiling is a sufficient direct-load read budget")
+        }
+    }
+}
+
+fn validate_attachment_snapshot<'a>(
+    loc: &AttachmentLocation,
+    meta: &super::zk_attachments::AttachmentMeta,
+    body_load: &'a AttachmentBodyLoad,
+) -> Result<&'a [u8], String> {
+    let body = body_load
+        .body
+        .as_deref()
+        .map_err(std::clone::Clone::clone)?;
+    if meta.size != body_load.observed_size {
+        return Err(format!(
+            "proof attachment metadata size {} does not match the actual {}-byte body",
+            meta.size, body_load.observed_size
+        ));
+    }
+    validate_attachment_metadata_contract(meta, &loc.tenant_key, &loc.id)?;
+    validate_attachment_body_contract(meta, body)?;
+    Ok(body)
+}
+
+fn process_attachment_snapshot_at(
+    loc: &AttachmentLocation,
+    snapshot: AttachmentSnapshot,
+) -> Option<ProverReport> {
+    // A direct request and the background scan may race. The immutable
+    // snapshot is discarded if either side already committed the report.
+    if report_path_from_sanitized(&loc.id).exists() {
+        return load_report(&loc.id);
+    }
+    let AttachmentSnapshot { meta, body_load } = snapshot;
+    let validated_body = validate_attachment_snapshot(loc, &meta, &body_load);
+    let zk1_tags = validated_body.as_ref().ok().and_then(|body| {
+        if body.len() >= 4 && &body[..4] == b"ZK1\0" {
+            parse_zk1_tags(body).ok()
+        } else {
+            None
+        }
+    });
     let ctx = ProverContext {
         keys_dir: cfg_keys_dir(),
         allowed_backends: cfg_allowed_backends(),
@@ -1184,7 +1324,7 @@ fn process_attachment_once_at(loc: &AttachmentLocation) -> Option<ProverReport> 
     };
     let mut proofs: Vec<ProofReportEntry> = Vec::new();
     let (ok, err, backend, vk_ref, proof_hash, circuit_id) =
-        match decode_proof_attachments(&meta.content_type, &body) {
+        match validated_body.and_then(|body| decode_proof_attachments(&meta.content_type, body)) {
             Ok(attachments) => {
                 if attachments.is_empty() {
                     (
@@ -1245,11 +1385,11 @@ fn process_attachment_once_at(loc: &AttachmentLocation) -> Option<ProverReport> 
     let processed_ms = now_ms();
     let latency_ms = processed_ms.saturating_sub(meta.created_ms);
     let rep = ProverReport {
-        id: meta.id.clone(),
+        id: loc.id.clone(),
         ok,
         error: err,
         content_type: meta.content_type,
-        size: meta.size,
+        size: body_load.observed_size,
         created_ms: meta.created_ms,
         processed_ms,
         latency_ms,
@@ -1300,6 +1440,7 @@ async fn run_budgeted_scan() -> ScanStats {
     let inflight = Arc::new(AtomicU64::new(0));
     let start = std::time::Instant::now();
     let mut budget_reason: Option<&'static str> = None;
+    let mut byte_deferred = false;
     let mut bytes_processed = 0u64;
     let mut processed_reports = 0usize;
     let mut join_set = JoinSet::new();
@@ -1332,18 +1473,55 @@ async fn run_budgeted_scan() -> ScanStats {
             break;
         }
 
-        let Some(meta) = load_attachment_meta(&loc) else {
+        let remaining_read_budget = max_bytes.saturating_sub(bytes_processed);
+        let snapshot_loc = loc.clone();
+        let snapshot_load = match task::spawn_blocking(move || {
+            load_attachment_snapshot(&snapshot_loc, remaining_read_budget)
+        })
+        .await
+        {
+            Ok(snapshot_load) => snapshot_load,
+            Err(error) => {
+                iroha_logger::warn!(%error, "Background prover snapshot load failed");
+                continue;
+            }
+        };
+        let crossed_time_budget = start.elapsed().as_millis() as u64 >= max_millis;
+        let Some(snapshot_load) = snapshot_load else {
             remaining = remaining.saturating_sub(1);
             telemetry.with_metrics(|tel| tel.set_torii_zk_prover_pending(remaining));
+            if crossed_time_budget {
+                budget_reason = Some("time");
+                break;
+            }
             continue;
         };
-
-        if bytes_processed.saturating_add(meta.size) > max_bytes {
-            budget_reason = Some("bytes");
-            break;
+        let snapshot = match snapshot_load {
+            AttachmentSnapshotLoad::Ready(snapshot) => snapshot,
+            AttachmentSnapshotLoad::DeferredForByteBudget { required_bytes } => {
+                let _ = required_bytes;
+                byte_deferred = true;
+                if crossed_time_budget {
+                    budget_reason = Some("time");
+                    break;
+                }
+                // Do not let one large entry head-of-line block smaller later
+                // entries that still fit the aggregate read budget.
+                continue;
+            }
+        };
+        let bytes_read = snapshot.body_load.bytes_read;
+        if bytes_read > remaining_read_budget {
+            iroha_logger::error!(
+                bytes_read,
+                remaining_read_budget,
+                "bounded attachment snapshot exceeded its assigned read budget"
+            );
+            byte_deferred = true;
+            continue;
         }
 
-        bytes_processed = bytes_processed.saturating_add(meta.size);
+        bytes_processed = bytes_processed.saturating_add(bytes_read);
         remaining = remaining.saturating_sub(1);
         telemetry.with_metrics(|tel| tel.set_torii_zk_prover_pending(remaining));
 
@@ -1361,14 +1539,21 @@ async fn run_budgeted_scan() -> ScanStats {
             {
                 MAX_INFLIGHT_OBSERVED.fetch_max(prev as usize, AtomicOrdering::SeqCst);
             }
-            let result = task::spawn_blocking(move || process_attachment_once_at(&loc_owned))
-                .await
-                .map_err(|err| err.to_string())?;
+            let result =
+                task::spawn_blocking(move || process_attachment_snapshot_at(&loc_owned, snapshot))
+                    .await
+                    .map_err(|err| err.to_string())?;
             drop(permit);
             let after = inflight.fetch_sub(1, Ordering::SeqCst) - 1;
             telemetry_clone.with_metrics(|tel| tel.set_torii_zk_prover_inflight(after));
             Ok::<_, String>(result.is_some())
         });
+        if crossed_time_budget {
+            // The body bytes have already been read and charged. Complete
+            // this immutable snapshot once, then stop scheduling new work.
+            budget_reason = Some("time");
+            break;
+        }
     }
 
     while let Some(res) = join_set.join_next().await {
@@ -1382,6 +1567,10 @@ async fn run_budgeted_scan() -> ScanStats {
                 iroha_logger::warn!(%err, "Background prover task join failed");
             }
         }
+    }
+
+    if budget_reason.is_none() && byte_deferred {
+        budget_reason = Some("bytes");
     }
 
     telemetry.with_metrics(|tel| {
@@ -1730,7 +1919,7 @@ pub async fn handle_delete_report(AxumPath(id): AxumPath<String>) -> impl IntoRe
 #[cfg(test)]
 mod tests {
     use http_body_util::BodyExt as _;
-    use iroha_core::zk::test_utils::halo2_fixture_envelope;
+    use iroha_core::zk::test_utils::{FixtureEnvelope, halo2_ivm_execution_envelope};
     use iroha_data_model::proof::{ProofAttachment, ProofBox};
 
     use super::*;
@@ -1755,11 +1944,45 @@ mod tests {
             MaybeTelemetry::disabled(),
         );
         super::TEST_PROCESSING_DELAY_MS.store(0, AtomicOrdering::SeqCst);
+        super::TEST_SNAPSHOT_LOAD_DELAY_MS.store(0, AtomicOrdering::SeqCst);
         super::MAX_INFLIGHT_OBSERVED.store(0, AtomicOrdering::SeqCst);
     }
 
     fn init_test_cfg() {
         configure_test_cfg(iroha_config::parameters::defaults::torii::zk_prover_allowed_circuits());
+    }
+
+    struct SnapshotLoadDelayReset;
+
+    impl Drop for SnapshotLoadDelayReset {
+        fn drop(&mut self) {
+            super::TEST_SNAPSHOT_LOAD_DELAY_MS.store(0, AtomicOrdering::SeqCst);
+            super::TEST_MAX_SCAN_MILLIS_OVERRIDE.store(0, AtomicOrdering::SeqCst);
+        }
+    }
+
+    fn attachment_body_id(body: &[u8]) -> String {
+        hex::encode::<[u8; 32]>(Hash::new(body).into())
+    }
+
+    fn fixture_attachment_provenance(
+        body: &[u8],
+        content_type: &str,
+    ) -> super::super::zk_attachments::AttachmentProvenance {
+        super::super::zk_attachments::AttachmentProvenance {
+            declared_type: Some(content_type.to_owned()),
+            sniffed_type: content_type.to_owned(),
+            hashes: super::super::zk_attachments::AttachmentHashes {
+                blake2b_256: attachment_body_id(body),
+                sha256: hex::encode(Sha256::digest(body)),
+            },
+            sanitizer: super::super::zk_attachments::AttachmentSanitizerVerdict {
+                verdict: "accepted".to_owned(),
+                expanded_bytes: body.len() as u64,
+                archive_depth: 0,
+                sandboxed: false,
+            },
+        }
     }
 
     fn corrupt_report_summary(id: &str) {
@@ -1893,32 +2116,202 @@ mod tests {
         }
     }
 
-    fn fixture_attachment_bytes() -> Vec<u8> {
-        let seed = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
-        let vk = seed.vk_box("halo2/ipa").expect("fixture vk bytes");
+    fn fixture_envelope() -> FixtureEnvelope {
+        static FIXTURE: OnceLock<FixtureEnvelope> = OnceLock::new();
+        FIXTURE
+            .get_or_init(|| {
+                halo2_ivm_execution_envelope(
+                    Hash::new(b"torii-prover-fixture/code"),
+                    Hash::new(b"torii-prover-fixture/overlay"),
+                    Hash::new(b"torii-prover-fixture/events"),
+                    Hash::new(b"torii-prover-fixture/gas-policy"),
+                )
+            })
+            .clone()
+    }
+
+    fn fixture_attachment() -> ProofAttachment {
+        let fixture = fixture_envelope();
+        let vk = fixture.vk_box("halo2/ipa").expect("fixture vk bytes");
         let vk_commitment = hash_vk(&vk);
-        let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public", vk_commitment);
         let proof = fixture.proof_box("halo2/ipa");
-        let vk_id = VerifyingKeyId::new("halo2/ipa", "tiny-add-public");
+        let vk_id = VerifyingKeyId::new("halo2/ipa", iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID);
         let mut attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id);
         attachment.vk_commitment = Some(vk_commitment);
-        norito::to_bytes(&attachment).expect("proof attachment bytes")
+        attachment
+    }
+
+    fn fixture_attachment_bytes() -> Vec<u8> {
+        norito::encode_canonical(&fixture_attachment()).expect("canonical proof attachment bytes")
+    }
+
+    #[test]
+    fn json_attachment_ingress_rejects_legacy_array_surface() {
+        let attachment = fixture_attachment();
+        let single_json =
+            norito::json::to_json(&attachment).expect("serialize single proof attachment");
+        assert_eq!(
+            decode_proof_attachments("application/json", single_json.as_bytes())
+                .expect("single proof attachment object must remain accepted"),
+            vec![attachment]
+        );
+
+        let array_json = format!("[{single_json}]");
+        let error = decode_proof_attachments("application/json", array_json.as_bytes())
+            .expect_err("legacy JSON proof-attachment arrays must be rejected");
+        assert!(
+            error.contains("canonical list") && error.contains("single"),
+            "unexpected JSON array rejection: {error}"
+        );
+        assert!(
+            !error.contains("vec:"),
+            "legacy Vec decoder leaked into the accepted JSON surface: {error}"
+        );
+    }
+
+    #[test]
+    fn attachment_ingress_uses_exact_media_types_and_canonical_norito() {
+        let attachment = fixture_attachment();
+        let canonical =
+            norito::encode_canonical(&attachment).expect("canonical proof attachment bytes");
+
+        for content_type in ["application/x-norito", " Application/X-Norito\t"] {
+            assert_eq!(
+                decode_proof_attachments(content_type, &canonical)
+                    .expect("canonical Norito attachment must decode"),
+                vec![attachment.clone()],
+                "content type {content_type}"
+            );
+        }
+
+        for content_type in [
+            "",
+            "application/octet-stream",
+            "text/application/x-norito",
+            "application/x-norito-suffix",
+            "application/x-norito; charset=binary",
+            "application/json, application/x-norito",
+            "application/json;",
+            "application/json; charset=utf-16",
+            "application/json; charset=utf-8; charset=utf-8",
+            "application/json; q=1, text/plain",
+            "text/plain",
+        ] {
+            let error = decode_proof_attachments(content_type, &canonical)
+                .expect_err("ambiguous or unsupported media type must fail closed");
+            assert!(
+                error.contains("unsupported proof attachment content type"),
+                "unexpected {content_type} rejection: {error}"
+            );
+        }
+
+        let mut noncanonical = canonical.clone();
+        let last = noncanonical
+            .last_mut()
+            .expect("canonical attachment frame is non-empty");
+        *last ^= 1;
+        let error = decode_proof_attachments("application/x-norito", &noncanonical)
+            .expect_err("mutated canonical frame must fail closed");
+        assert!(
+            error.contains("norito decode error"),
+            "unexpected error: {error}"
+        );
+
+        let list = ProofAttachmentList::try_from(vec![attachment.clone(), attachment.clone()])
+            .expect("two attachments are a valid bounded proof list");
+        let list_frame =
+            norito::encode_canonical(&list).expect("canonical proof attachment list bytes");
+        assert_eq!(
+            decode_proof_attachments("application/x-norito", &list_frame)
+                .expect("canonical binary list must decode"),
+            vec![attachment.clone(), attachment.clone()]
+        );
+        let list_json = norito::json::to_json(&list).expect("canonical list JSON");
+        assert_eq!(
+            decode_proof_attachments("application/json; charset=UTF-8", list_json.as_bytes())
+                .expect("canonical base64 JSON list must decode"),
+            vec![attachment.clone(), attachment]
+        );
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_single = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::core::to_bytes(&fixture_attachment())
+                .expect("valid alternate-layout single attachment")
+        };
+        assert_ne!(alternate_single, canonical);
+        norito::decode_from_bytes::<ProofAttachment>(&alternate_single)
+            .expect("permissive decoder establishes alternate frame validity");
+        let error = decode_proof_attachments("application/x-norito", &alternate_single)
+            .expect_err("alternate-layout single attachment must be rejected");
+        assert!(
+            error.contains("norito decode error"),
+            "unexpected error: {error}"
+        );
+
+        let alternate_list = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::core::to_bytes(&list).expect("valid alternate-layout attachment list")
+        };
+        assert_ne!(alternate_list, list_frame);
+        norito::decode_from_bytes::<ProofAttachmentList>(&alternate_list)
+            .expect("permissive decoder establishes alternate list validity");
+        let error = decode_proof_attachments("application/x-norito", &alternate_list)
+            .expect_err("alternate-layout attachment list must be rejected");
+        assert!(
+            error.contains("norito decode error"),
+            "unexpected error: {error}"
+        );
+
+        for (label, compressed) in [
+            ("single", {
+                let mut bytes = Vec::new();
+                norito::serialize_into(
+                    &mut bytes,
+                    &fixture_attachment(),
+                    norito::Compression::Zstd,
+                )
+                .expect("compress single attachment");
+                bytes
+            }),
+            ("list", {
+                let mut bytes = Vec::new();
+                norito::serialize_into(&mut bytes, &list, norito::Compression::Zstd)
+                    .expect("compress attachment list");
+                bytes
+            }),
+        ] {
+            let error = decode_proof_attachments("application/x-norito", &compressed)
+                .expect_err("compressed Norito must be rejected as non-canonical");
+            assert!(
+                error.contains("norito decode error"),
+                "unexpected compressed-{label} rejection: {error}"
+            );
+        }
+
+        let oversized = vec![0_u8; PROOF_ATTACHMENT_BODY_MAX_BYTES_V1 as usize + 1];
+        let error = decode_proof_attachments("application/x-norito", &oversized)
+            .expect_err("oversized proof body must fail before decoding");
+        assert!(
+            error.contains("first-release limit"),
+            "unexpected oversized-body rejection: {error}"
+        );
     }
 
     fn fixture_state() -> Arc<CoreState> {
-        let seed = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
-        let vk = seed.vk_box("halo2/ipa").expect("fixture vk bytes");
-        let vk_id = VerifyingKeyId::new("halo2/ipa", "tiny-add-public");
+        let fixture = fixture_envelope();
+        let vk = fixture.vk_box("halo2/ipa").expect("fixture vk bytes");
+        let vk_id = VerifyingKeyId::new("halo2/ipa", iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID);
         let vk_commitment = hash_vk(&vk);
-        let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public", vk_commitment);
         let mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner(
             1,
-            "tiny-add-public",
+            iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             None,
             "test",
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pasta",
-            fixture.schema_hash,
+            iroha_core::zk::ivm_execution_public_inputs_schema_hash(),
             vk_commitment,
         );
         record.vk_len = u32::try_from(vk.bytes.len()).expect("fixture vk length fits");
@@ -1930,9 +2323,10 @@ mod tests {
         world
             .verifying_keys_mut_for_testing()
             .insert(vk_id.clone(), record);
-        world
-            .verifying_keys_by_circuit_mut_for_testing()
-            .insert(("tiny-add-public".into(), 1), vk_id);
+        world.verifying_keys_by_circuit_mut_for_testing().insert(
+            (iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID.into(), 1),
+            vk_id,
+        );
         let mut state = iroha_core::state::State::new_for_testing(
             world,
             iroha_core::kura::Kura::blank_kura_for_testing(),
@@ -4207,8 +4601,8 @@ mod tests {
         configure_test_cfg(Vec::new());
         let _env = TestDataDirGuard::new();
         // Create an attachment manually
-        let id = "deadbeef".repeat(8);
         let body = fixture_attachment_bytes();
+        let id = attachment_body_id(&body);
         let tenant_key = anon_tenant_key();
         let meta = super::super::zk_attachments::AttachmentMeta {
             id: id.clone(),
@@ -4216,13 +4610,13 @@ mod tests {
             size: body.len() as u64,
             created_ms: now_ms(),
             tenant: Some(tenant_key.clone()),
-            provenance: None,
+            provenance: Some(fixture_attachment_provenance(&body, "application/x-norito")),
             zk1_tags: None,
         };
         ensure_tenant_dir(&tenant_key);
-        fs::write(attachment_bin_path(Some(&tenant_key), &id), &body).unwrap();
+        fs::write(attachment_bin_path(&tenant_key, &id), &body).unwrap();
         fs::write(
-            attachment_meta_path(Some(&tenant_key), &id),
+            attachment_meta_path(&tenant_key, &id),
             norito::json::to_json_pretty(&meta).unwrap(),
         )
         .unwrap();
@@ -4244,6 +4638,582 @@ mod tests {
     }
 
     #[test]
+    fn attachment_file_loading_is_bounded_and_metadata_size_is_not_trusted() {
+        configure_test_cfg(Vec::new());
+        let _env = TestDataDirGuard::new();
+        let tenant_key = anon_tenant_key();
+        ensure_tenant_dir(&tenant_key);
+
+        let oversized_id = format!("{:064x}", 0xBAD0u64);
+        let oversized_path = attachment_bin_path(&tenant_key, &oversized_id);
+        fs::write(
+            &oversized_path,
+            vec![0_u8; PROOF_ATTACHMENT_BODY_MAX_BYTES_V1 as usize + 1],
+        )
+        .expect("write oversized body fixture");
+        let oversized = load_attachment_body(&AttachmentLocation {
+            tenant_key: tenant_key.clone(),
+            id: oversized_id,
+        })
+        .expect("oversized regular file is classified");
+        assert_eq!(
+            oversized.observed_size,
+            PROOF_ATTACHMENT_BODY_MAX_BYTES_V1 + 1
+        );
+        assert_eq!(oversized.bytes_read, 0);
+        assert!(
+            oversized
+                .body
+                .expect_err("oversized body must not be read")
+                .contains("first-release limit")
+        );
+
+        let id = format!("{:064x}", 0xBAD1u64);
+        let body = fixture_attachment_bytes();
+        fs::write(attachment_bin_path(&tenant_key, &id), &body)
+            .expect("write canonical attachment body");
+        let meta = super::super::zk_attachments::AttachmentMeta {
+            id: id.clone(),
+            content_type: "application/x-norito".to_owned(),
+            size: 1,
+            created_ms: now_ms(),
+            tenant: Some(tenant_key.clone()),
+            provenance: Some(fixture_attachment_provenance(&body, "application/x-norito")),
+            zk1_tags: None,
+        };
+        fs::write(
+            attachment_meta_path(&tenant_key, &id),
+            norito::json::to_json_pretty(&meta).expect("metadata JSON"),
+        )
+        .expect("write mismatched metadata");
+        let report = process_attachment_once(&id).expect("mismatch produces a rejection report");
+        assert!(!report.ok);
+        assert_eq!(report.size, body.len() as u64);
+        assert!(
+            report
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("metadata size"))
+        );
+    }
+
+    #[test]
+    fn nonregular_attachment_body_produces_a_zero_read_rejection_report() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        let tenant_key = anon_tenant_key();
+        ensure_tenant_dir(&tenant_key);
+        let id = format!("{:064x}", 0xBAD4u64);
+        fs::create_dir(attachment_bin_path(&tenant_key, &id))
+            .expect("create nonregular body entry");
+        let meta = super::super::zk_attachments::AttachmentMeta {
+            id: id.clone(),
+            content_type: "application/x-norito".to_owned(),
+            size: 0,
+            created_ms: now_ms(),
+            tenant: Some(tenant_key.clone()),
+            provenance: Some(fixture_attachment_provenance(&[], "application/x-norito")),
+            zk1_tags: None,
+        };
+        fs::write(
+            attachment_meta_path(&tenant_key, &id),
+            norito::json::to_json_pretty(&meta).expect("metadata JSON"),
+        )
+        .expect("write nonregular-body metadata");
+        let loc = AttachmentLocation {
+            tenant_key,
+            id: id.clone(),
+        };
+
+        let loaded = load_attachment_body(&loc).expect("nonregular body is classified");
+        assert_eq!(loaded.observed_size, 0);
+        assert_eq!(loaded.bytes_read, 0);
+        assert!(
+            loaded
+                .body
+                .expect_err("nonregular body must be rejected")
+                .contains("securely open")
+        );
+        let report = process_attachment_once(&id).expect("nonregular body produces a report");
+        assert!(!report.ok);
+        assert_eq!(report.size, 0);
+        assert!(
+            report
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("securely open"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn attachment_body_secure_open_rejects_symlinks_without_reading() {
+        use std::os::unix::fs::symlink;
+
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        let tenant_key = anon_tenant_key();
+        ensure_tenant_dir(&tenant_key);
+        let id = format!("{:064x}", 0xBAD5u64);
+        let target = attachments_root_dir()
+            .join(&tenant_key)
+            .join("symlink-target.bin");
+        fs::write(&target, fixture_attachment_bytes()).expect("write symlink target");
+        symlink(&target, attachment_bin_path(&tenant_key, &id)).expect("create body symlink");
+
+        let loaded = load_attachment_body(&AttachmentLocation { tenant_key, id })
+            .expect("symlink body is classified");
+        assert_eq!(loaded.bytes_read, 0);
+        assert!(
+            loaded
+                .body
+                .expect_err("symlink body must be rejected")
+                .contains("securely open")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn attachment_body_secure_open_rejects_a_symlinked_tenant_anchor() {
+        use std::os::unix::fs::symlink;
+
+        init_test_cfg();
+        let env = TestDataDirGuard::new();
+        let tenant_key = anon_tenant_key();
+        fs::create_dir_all(attachments_root_dir()).expect("create attachment root");
+        let outside = env.path().join("outside-tenant");
+        fs::create_dir(&outside).expect("create outside tenant directory");
+        let id = format!("{:064x}", 0xBAD8u64);
+        fs::write(
+            outside.join(format!("{id}.bin")),
+            fixture_attachment_bytes(),
+        )
+        .expect("write body outside attachment root");
+        symlink(&outside, attachments_root_dir().join(&tenant_key))
+            .expect("create tenant directory symlink");
+
+        let loaded = load_attachment_body(&AttachmentLocation { tenant_key, id })
+            .expect("symlink-anchored body is classified");
+        assert_eq!(loaded.observed_size, 0);
+        assert_eq!(loaded.bytes_read, 0);
+        assert!(loaded.body.is_err());
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn attachment_body_secure_open_rejects_hard_links_without_reading() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        let tenant_key = anon_tenant_key();
+        ensure_tenant_dir(&tenant_key);
+        let id = format!("{:064x}", 0xBAD7u64);
+        let target = attachments_root_dir()
+            .join(&tenant_key)
+            .join("hard-link-target.bin");
+        fs::write(&target, fixture_attachment_bytes()).expect("write hard-link target");
+        fs::hard_link(&target, attachment_bin_path(&tenant_key, &id))
+            .expect("create body hard link");
+
+        let loaded = load_attachment_body(&AttachmentLocation { tenant_key, id })
+            .expect("hard-linked body is classified");
+        assert_eq!(loaded.observed_size, 0);
+        assert_eq!(loaded.bytes_read, 0);
+        assert!(
+            loaded
+                .body
+                .expect_err("hard-linked body must be rejected")
+                .contains("securely open")
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn attachment_body_secure_open_rejects_fifo_without_blocking_or_reading() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        let tenant_key = anon_tenant_key();
+        ensure_tenant_dir(&tenant_key);
+        let id = format!("{:064x}", 0xBAD6u64);
+        let fifo_path = attachment_bin_path(&tenant_key, &id);
+        rustix::fs::mkfifoat(
+            rustix::fs::CWD,
+            &fifo_path,
+            rustix::fs::Mode::from_raw_mode(0o600),
+        )
+        .expect("create FIFO body entry");
+
+        let started = std::time::Instant::now();
+        let loaded = load_attachment_body(&AttachmentLocation { tenant_key, id })
+            .expect("FIFO body is classified");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(loaded.bytes_read, 0);
+        assert!(loaded.body.is_err());
+    }
+
+    #[test]
+    fn attachment_body_loader_accepts_the_closed_eight_mib_boundary() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        let tenant_key = anon_tenant_key();
+        ensure_tenant_dir(&tenant_key);
+        let id = format!("{:064x}", 0xBAD3u64);
+        fs::write(
+            attachment_bin_path(&tenant_key, &id),
+            vec![0_u8; PROOF_ATTACHMENT_BODY_MAX_BYTES_V1 as usize],
+        )
+        .expect("write exact-cap body fixture");
+
+        let loaded = load_attachment_body(&AttachmentLocation { tenant_key, id })
+            .expect("exact-cap body is present");
+        assert_eq!(loaded.observed_size, PROOF_ATTACHMENT_BODY_MAX_BYTES_V1);
+        assert_eq!(loaded.bytes_read, PROOF_ATTACHMENT_BODY_MAX_BYTES_V1);
+        let body = loaded
+            .body
+            .expect("exact-cap body is within the closed limit");
+        let decode_error = decode_proof_attachments("application/x-norito", &body)
+            .expect_err("zero bytes are not a canonical attachment frame");
+        assert!(
+            !decode_error.contains("exceeds the"),
+            "exact-cap input was rejected as oversized: {decode_error}"
+        );
+    }
+
+    #[test]
+    fn immutable_snapshot_survives_path_replacement_without_reread() {
+        configure_test_cfg(Vec::new());
+        let _env = TestDataDirGuard::new();
+        let tenant_key = anon_tenant_key();
+        ensure_tenant_dir(&tenant_key);
+        let body = fixture_attachment_bytes();
+        let id = attachment_body_id(&body);
+        let loc = AttachmentLocation {
+            tenant_key: tenant_key.clone(),
+            id: id.clone(),
+        };
+        let meta = super::super::zk_attachments::AttachmentMeta {
+            id: id.clone(),
+            content_type: "application/x-norito".to_owned(),
+            size: body.len() as u64,
+            created_ms: now_ms(),
+            tenant: Some(tenant_key.clone()),
+            provenance: Some(fixture_attachment_provenance(&body, "application/x-norito")),
+            zk1_tags: None,
+        };
+        fs::write(attachment_bin_path(&tenant_key, &id), &body)
+            .expect("write canonical attachment snapshot body");
+        fs::write(
+            attachment_meta_path(&tenant_key, &id),
+            norito::json::to_json_pretty(&meta).expect("metadata JSON"),
+        )
+        .expect("write canonical attachment snapshot metadata");
+
+        let snapshot = match load_attachment_snapshot(&loc, body.len() as u64)
+            .expect("snapshot files are present")
+        {
+            AttachmentSnapshotLoad::Ready(snapshot) => snapshot,
+            AttachmentSnapshotLoad::DeferredForByteBudget { .. } => {
+                panic!("canonical fixture fits its exact read budget")
+            }
+        };
+        assert_eq!(snapshot.body_load.bytes_read, body.len() as u64);
+        fs::write(
+            attachment_bin_path(&tenant_key, &id),
+            vec![0_u8; PROOF_ATTACHMENT_BODY_MAX_BYTES_V1 as usize + 1],
+        )
+        .expect("replace path after immutable snapshot acquisition");
+
+        let report = process_attachment_snapshot_at(&loc, snapshot)
+            .expect("immutable snapshot produces a report");
+        assert!(report.ok, "path replacement affected snapshot: {report:?}");
+        assert_eq!(report.size, body.len() as u64);
+    }
+
+    #[test]
+    fn same_size_body_substitution_is_rejected_by_content_address() {
+        configure_test_cfg(Vec::new());
+        let _env = TestDataDirGuard::new();
+        let tenant_key = anon_tenant_key();
+        ensure_tenant_dir(&tenant_key);
+        let body = fixture_attachment_bytes();
+        let id = attachment_body_id(&body);
+        let mut substituted = body.clone();
+        substituted[0] ^= 0x01;
+        assert_eq!(substituted.len(), body.len());
+        let meta = super::super::zk_attachments::AttachmentMeta {
+            id: id.clone(),
+            content_type: "application/x-norito".to_owned(),
+            size: body.len() as u64,
+            created_ms: now_ms(),
+            tenant: Some(tenant_key.clone()),
+            provenance: Some(fixture_attachment_provenance(&body, "application/x-norito")),
+            zk1_tags: None,
+        };
+        fs::write(attachment_bin_path(&tenant_key, &id), substituted)
+            .expect("write same-size substituted body");
+        fs::write(
+            attachment_meta_path(&tenant_key, &id),
+            norito::json::to_json_pretty(&meta).expect("metadata JSON"),
+        )
+        .expect("write original content-address metadata");
+
+        let report = process_attachment_once(&id).expect("substitution produces rejection report");
+        assert!(!report.ok);
+        assert!(
+            report
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("body digest")),
+            "substitution rejected for the wrong reason: {:?}",
+            report.error
+        );
+    }
+
+    #[test]
+    fn snapshot_metadata_and_provenance_invariants_fail_closed() {
+        let body = fixture_attachment_bytes();
+        let id = attachment_body_id(&body);
+        let tenant_key = anon_tenant_key();
+        let loc = AttachmentLocation {
+            tenant_key: tenant_key.clone(),
+            id: id.clone(),
+        };
+        let base = super::super::zk_attachments::AttachmentMeta {
+            id: id.clone(),
+            content_type: "application/x-norito".to_owned(),
+            size: body.len() as u64,
+            created_ms: now_ms(),
+            tenant: Some(tenant_key),
+            provenance: Some(fixture_attachment_provenance(&body, "application/x-norito")),
+            zk1_tags: None,
+        };
+        let body_load = AttachmentBodyLoad {
+            observed_size: body.len() as u64,
+            bytes_read: body.len() as u64,
+            body: Ok(body),
+        };
+        validate_attachment_snapshot(&loc, &base, &body_load)
+            .expect("canonical metadata and provenance must validate");
+
+        let mut forged = base.clone();
+        forged.id = "0".repeat(ATTACHMENT_ID_HEX_LEN);
+        assert!(
+            validate_attachment_snapshot(&loc, &forged, &body_load)
+                .expect_err("metadata id mismatch must reject")
+                .contains("metadata id")
+        );
+
+        let mut forged = base.clone();
+        forged.tenant = Some("0".repeat(TENANT_KEY_HEX_LEN));
+        assert!(
+            validate_attachment_snapshot(&loc, &forged, &body_load)
+                .expect_err("metadata tenant mismatch must reject")
+                .contains("metadata tenant")
+        );
+
+        let mut forged = base.clone();
+        forged.provenance = None;
+        assert!(
+            validate_attachment_snapshot(&loc, &forged, &body_load)
+                .expect_err("missing provenance must reject")
+                .contains("provenance is required")
+        );
+
+        let mut forged = base.clone();
+        forged
+            .provenance
+            .as_mut()
+            .expect("fixture provenance")
+            .sanitizer
+            .verdict = "rejected".to_owned();
+        assert!(
+            validate_attachment_snapshot(&loc, &forged, &body_load)
+                .expect_err("non-accepted sanitizer verdict must reject")
+                .contains("verdict")
+        );
+
+        let mut forged = base.clone();
+        let incorrect_expanded_size = forged.size.saturating_add(1);
+        forged
+            .provenance
+            .as_mut()
+            .expect("fixture provenance")
+            .sanitizer
+            .expanded_bytes = incorrect_expanded_size;
+        assert!(
+            validate_attachment_snapshot(&loc, &forged, &body_load)
+                .expect_err("expanded-size mismatch must reject")
+                .contains("expanded size")
+        );
+
+        let mut forged = base.clone();
+        forged
+            .provenance
+            .as_mut()
+            .expect("fixture provenance")
+            .hashes
+            .blake2b_256 = "0".repeat(ATTACHMENT_ID_HEX_LEN);
+        assert!(
+            validate_attachment_snapshot(&loc, &forged, &body_load)
+                .expect_err("provenance Blake2b mismatch must reject")
+                .contains("Blake2b-256")
+        );
+
+        let mut forged = base.clone();
+        forged
+            .provenance
+            .as_mut()
+            .expect("fixture provenance")
+            .hashes
+            .sha256 = "0".repeat(64);
+        assert!(
+            validate_attachment_snapshot(&loc, &forged, &body_load)
+                .expect_err("provenance SHA-256 mismatch must reject")
+                .contains("SHA-256")
+        );
+
+        let mut forged = base.clone();
+        forged
+            .provenance
+            .as_mut()
+            .expect("fixture provenance")
+            .sniffed_type = "application/json".to_owned();
+        assert!(
+            validate_attachment_snapshot(&loc, &forged, &body_load)
+                .expect_err("provenance media mismatch must reject")
+                .contains("media type")
+        );
+
+        let mut forged = base;
+        forged.content_type = "application/json".to_owned();
+        forged
+            .provenance
+            .as_mut()
+            .expect("fixture provenance")
+            .sniffed_type = "application/json".to_owned();
+        assert!(
+            validate_attachment_snapshot(&loc, &forged, &body_load)
+                .expect_err("forged matching media labels must not override body sniffing")
+                .contains("media type")
+        );
+    }
+
+    #[test]
+    fn first_release_scanner_ignores_retired_root_attachment_layout() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        fs::create_dir_all(attachments_root_dir()).expect("create attachment root");
+        let body = fixture_attachment_bytes();
+        let id = attachment_body_id(&body);
+        let meta = super::super::zk_attachments::AttachmentMeta {
+            id: id.clone(),
+            content_type: "application/x-norito".to_owned(),
+            size: body.len() as u64,
+            created_ms: now_ms(),
+            tenant: None,
+            provenance: Some(fixture_attachment_provenance(&body, "application/x-norito")),
+            zk1_tags: None,
+        };
+        fs::write(attachments_root_dir().join(format!("{id}.bin")), body)
+            .expect("write retired root body");
+        fs::write(
+            attachments_root_dir().join(format!("{id}.json")),
+            norito::json::to_json_pretty(&meta).expect("retired metadata JSON"),
+        )
+        .expect("write retired root metadata");
+
+        assert!(list_attachment_locations().is_empty());
+        assert!(find_attachment_location(&id).is_none());
+        assert!(process_attachment_once(&id).is_none());
+    }
+
+    #[test]
+    fn oversized_first_attachment_cannot_starve_later_valid_work() {
+        configure_test_cfg(Vec::new());
+        let _env = TestDataDirGuard::new();
+        let tenant_key = anon_tenant_key();
+        ensure_tenant_dir(&tenant_key);
+
+        let oversized_id = "0".repeat(ATTACHMENT_ID_HEX_LEN);
+        let oversized_body = vec![0_u8; PROOF_ATTACHMENT_BODY_MAX_BYTES_V1 as usize + 1];
+        let oversized_meta = super::super::zk_attachments::AttachmentMeta {
+            id: oversized_id.clone(),
+            content_type: "application/x-norito".to_owned(),
+            size: oversized_body.len() as u64,
+            created_ms: now_ms(),
+            tenant: Some(tenant_key.clone()),
+            provenance: Some(fixture_attachment_provenance(
+                &oversized_body,
+                "application/x-norito",
+            )),
+            zk1_tags: None,
+        };
+        fs::write(
+            attachment_bin_path(&tenant_key, &oversized_id),
+            oversized_body,
+        )
+        .expect("write oversized first body");
+        fs::write(
+            attachment_meta_path(&tenant_key, &oversized_id),
+            norito::json::to_json_pretty(&oversized_meta).expect("oversized metadata JSON"),
+        )
+        .expect("write oversized first metadata");
+
+        let valid_body = fixture_attachment_bytes();
+        let valid_id = attachment_body_id(&valid_body);
+        let valid_meta = super::super::zk_attachments::AttachmentMeta {
+            id: valid_id.clone(),
+            content_type: "application/x-norito".to_owned(),
+            size: valid_body.len() as u64,
+            created_ms: now_ms(),
+            tenant: Some(tenant_key.clone()),
+            provenance: Some(fixture_attachment_provenance(
+                &valid_body,
+                "application/x-norito",
+            )),
+            zk1_tags: None,
+        };
+        fs::write(attachment_bin_path(&tenant_key, &valid_id), &valid_body)
+            .expect("write later valid body");
+        fs::write(
+            attachment_meta_path(&tenant_key, &valid_id),
+            norito::json::to_json_pretty(&valid_meta).expect("valid metadata JSON"),
+        )
+        .expect("write later valid metadata");
+
+        let stats = super::block_on_scan();
+        assert_eq!(stats.processed_reports, 2);
+        assert_eq!(stats.bytes_processed, valid_body.len() as u64);
+        assert_eq!(stats.remaining_pending, 0);
+        assert_eq!(stats.budget_exhausted, None);
+        assert!(
+            load_report(&oversized_id)
+                .expect("oversized rejection report")
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("first-release limit"))
+        );
+        assert!(load_report(&valid_id).expect("valid later report").ok);
+    }
+
+    #[test]
+    fn attachment_metadata_loading_rejects_oversized_files_before_parsing() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        let tenant_key = anon_tenant_key();
+        ensure_tenant_dir(&tenant_key);
+        let id = format!("{:064x}", 0xBAD2u64);
+        fs::write(
+            attachment_meta_path(&tenant_key, &id),
+            vec![b' '; ATTACHMENT_META_FILE_MAX_BYTES as usize + 1],
+        )
+        .expect("write oversized metadata fixture");
+        assert!(
+            load_attachment_meta(&AttachmentLocation { tenant_key, id }).is_none(),
+            "oversized metadata must fail before JSON parsing"
+        );
+    }
+
+    #[test]
     fn scan_respects_byte_budget() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
@@ -4256,22 +5226,19 @@ mod tests {
         // Create two attachments totalling more than the configured byte budget.
         for (idx, size) in sizes.into_iter().enumerate() {
             let id = format!("{:064x}", idx + 1);
+            let body = vec![b'A'; size];
             let meta = super::super::zk_attachments::AttachmentMeta {
                 id: id.clone(),
                 content_type: "application/json".to_string(),
-                size: size as u64,
+                size: body.len() as u64,
                 created_ms: now_ms(),
                 tenant: Some(tenant_key.clone()),
-                provenance: None,
+                provenance: Some(fixture_attachment_provenance(&body, "application/json")),
                 zk1_tags: None,
             };
+            fs::write(attachment_bin_path(&tenant_key, &id), body).unwrap();
             fs::write(
-                attachment_bin_path(Some(&tenant_key), &id),
-                vec![b'A'; size],
-            )
-            .unwrap();
-            fs::write(
-                attachment_meta_path(Some(&tenant_key), &id),
+                attachment_meta_path(&tenant_key, &id),
                 norito::json::to_json_pretty(&meta).unwrap(),
             )
             .unwrap();
@@ -4284,6 +5251,97 @@ mod tests {
         );
         assert_eq!(stats.budget_exhausted, Some("bytes"));
         assert_eq!(stats.remaining_pending, 1);
+        assert_eq!(stats.bytes_processed, first_size as u64);
+    }
+
+    #[test]
+    fn deferred_attachment_cannot_head_of_line_block_later_fitting_work() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        let budget = cfg_max_scan_bytes();
+        assert!(budget > 8, "test scan budget must leave a tail");
+        let first_size = usize::try_from(budget - 4).expect("test budget fits usize");
+        let sizes = [first_size, 5, 4];
+        let tenant_key = anon_tenant_key();
+        ensure_tenant_dir(&tenant_key);
+
+        for (index, size) in sizes.into_iter().enumerate() {
+            let id = format!("{:064x}", index + 1);
+            let body = vec![b'C' + u8::try_from(index).expect("small index"); size];
+            let meta = super::super::zk_attachments::AttachmentMeta {
+                id: id.clone(),
+                content_type: "application/json".to_owned(),
+                size: body.len() as u64,
+                created_ms: now_ms(),
+                tenant: Some(tenant_key.clone()),
+                provenance: Some(fixture_attachment_provenance(&body, "application/json")),
+                zk1_tags: None,
+            };
+            fs::write(attachment_bin_path(&tenant_key, &id), body)
+                .expect("write budget-order body");
+            fs::write(
+                attachment_meta_path(&tenant_key, &id),
+                norito::json::to_json_pretty(&meta).expect("budget-order metadata JSON"),
+            )
+            .expect("write budget-order metadata");
+        }
+
+        let stats = block_on_scan();
+        assert_eq!(stats.processed_reports, 2);
+        assert_eq!(stats.bytes_processed, budget);
+        assert_eq!(stats.remaining_pending, 1);
+        assert_eq!(stats.budget_exhausted, Some("bytes"));
+        assert!(load_report(&format!("{:064x}", 1)).is_some());
+        assert!(
+            load_report(&format!("{:064x}", 2)).is_none(),
+            "the body that does not fit must remain pending without being read"
+        );
+        assert!(
+            load_report(&format!("{:064x}", 3)).is_some(),
+            "a later body that fits the remaining budget must still be processed"
+        );
+    }
+
+    #[test]
+    fn snapshot_that_crosses_time_budget_is_charged_and_completed_once() {
+        let body = fixture_attachment_bytes();
+        let body_size = body.len() as u64;
+        let max_scan_millis = 100;
+        configure_test_cfg(iroha_config::parameters::defaults::torii::zk_prover_allowed_circuits());
+        let _env = TestDataDirGuard::new();
+        let _delay_reset = SnapshotLoadDelayReset;
+        let tenant_key = anon_tenant_key();
+        ensure_tenant_dir(&tenant_key);
+        let id = attachment_body_id(&body);
+        let meta = super::super::zk_attachments::AttachmentMeta {
+            id: id.clone(),
+            content_type: "application/x-norito".to_owned(),
+            size: body_size,
+            created_ms: now_ms(),
+            tenant: Some(tenant_key.clone()),
+            provenance: Some(fixture_attachment_provenance(&body, "application/x-norito")),
+            zk1_tags: None,
+        };
+        fs::write(attachment_bin_path(&tenant_key, &id), body)
+            .expect("write delayed snapshot body");
+        fs::write(
+            attachment_meta_path(&tenant_key, &id),
+            norito::json::to_json_pretty(&meta).expect("delayed snapshot metadata JSON"),
+        )
+        .expect("write delayed snapshot metadata");
+        super::TEST_MAX_SCAN_MILLIS_OVERRIDE.store(max_scan_millis, AtomicOrdering::SeqCst);
+        super::TEST_SNAPSHOT_LOAD_DELAY_MS.store(150, AtomicOrdering::SeqCst);
+
+        let stats = block_on_scan();
+        assert_eq!(stats.processed_reports, 1);
+        assert_eq!(stats.bytes_processed, body_size);
+        assert_eq!(stats.remaining_pending, 0);
+        assert_eq!(stats.budget_exhausted, Some("time"));
+        assert!(stats.duration_ms >= max_scan_millis);
+        assert!(
+            load_report(&id).expect("cross-budget snapshot report").ok,
+            "an immutable snapshot read before the time check must complete exactly once"
+        );
     }
 
     #[test]
@@ -4296,18 +5354,19 @@ mod tests {
         // Create four small attachments to trigger overlapping work.
         for idx in 0..4 {
             let id = format!("{:064x}", idx + 10);
+            let body = vec![b'B'; 16];
             let meta = super::super::zk_attachments::AttachmentMeta {
                 id: id.clone(),
                 content_type: "application/json".to_string(),
-                size: 16,
+                size: body.len() as u64,
                 created_ms: now_ms(),
                 tenant: Some(tenant_key.clone()),
-                provenance: None,
+                provenance: Some(fixture_attachment_provenance(&body, "application/json")),
                 zk1_tags: None,
             };
-            fs::write(attachment_bin_path(Some(&tenant_key), &id), vec![b'B'; 16]).unwrap();
+            fs::write(attachment_bin_path(&tenant_key, &id), body).unwrap();
             fs::write(
-                attachment_meta_path(Some(&tenant_key), &id),
+                attachment_meta_path(&tenant_key, &id),
                 norito::json::to_json_pretty(&meta).unwrap(),
             )
             .unwrap();
@@ -4377,19 +5436,22 @@ mod tests {
         ensure_tenant_dir(&tenant_key);
 
         let ok_body = fixture_attachment_bytes();
-        let ok_id = format!("{:064x}", 0x42u64);
-        fs::write(attachment_bin_path(Some(&tenant_key), &ok_id), &ok_body).expect("write ok body");
+        let ok_id = attachment_body_id(&ok_body);
+        fs::write(attachment_bin_path(&tenant_key, &ok_id), &ok_body).expect("write ok body");
         let ok_meta = super::super::zk_attachments::AttachmentMeta {
             id: ok_id.clone(),
             content_type: "application/x-norito".to_string(),
             size: ok_body.len() as u64,
             created_ms: super::now_ms(),
             tenant: Some(tenant_key.clone()),
-            provenance: None,
+            provenance: Some(fixture_attachment_provenance(
+                &ok_body,
+                "application/x-norito",
+            )),
             zk1_tags: None,
         };
         fs::write(
-            attachment_meta_path(Some(&tenant_key), &ok_id),
+            attachment_meta_path(&tenant_key, &ok_id),
             norito::json::to_json_pretty(&ok_meta).expect("ok meta json"),
         )
         .expect("write ok meta");
@@ -4397,20 +5459,22 @@ mod tests {
         let mut err_body = b"ZK1\0".to_vec();
         err_body.extend_from_slice(b"PROF");
         err_body.extend_from_slice(&10u32.to_le_bytes());
-        let err_id = format!("{:064x}", 0x43u64);
-        fs::write(attachment_bin_path(Some(&tenant_key), &err_id), &err_body)
-            .expect("write err body");
+        let err_id = attachment_body_id(&err_body);
+        fs::write(attachment_bin_path(&tenant_key, &err_id), &err_body).expect("write err body");
         let err_meta = super::super::zk_attachments::AttachmentMeta {
             id: err_id.clone(),
             content_type: "application/x-norito".to_string(),
             size: err_body.len() as u64,
             created_ms: super::now_ms(),
             tenant: Some(tenant_key.clone()),
-            provenance: None,
+            provenance: Some(fixture_attachment_provenance(
+                &err_body,
+                "application/x-norito",
+            )),
             zk1_tags: None,
         };
         fs::write(
-            attachment_meta_path(Some(&tenant_key), &err_id),
+            attachment_meta_path(&tenant_key, &err_id),
             norito::json::to_json_pretty(&err_meta).expect("err meta json"),
         )
         .expect("write err meta");

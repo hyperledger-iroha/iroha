@@ -348,6 +348,8 @@ static SNAPSHOT_PUBLICATION_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::n
 #[cfg(test)]
 std::thread_local! {
     static SNAPSHOT_GC_FAILURE_STAGE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static SNAPSHOT_HASH_RECONCILIATION_PASSES: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 /// Default chunk size used to derive snapshot Merkle metadata.
 const _DEFAULT_MERKLE_CHUNK_SIZE: NonZeroUsize = defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES;
@@ -1506,6 +1508,9 @@ fn reconcile_snapshot_hashes_with_kura(
     snapshot_hashes: &[HashOf<BlockHeader>],
     kura: &Kura,
 ) -> Result<(), TryReadError> {
+    #[cfg(test)]
+    SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| passes.set(passes.get() + 1));
+
     let kura_height = kura.blocks_count();
     for (idx, snapshot_block_hash) in snapshot_hashes.iter().copied().enumerate() {
         let height = idx + 1;
@@ -1769,7 +1774,6 @@ where
     validate_snapshot_wsv_checkpoint(&state, &snapshot_hashes, kura)?;
     generation.verify_selection_unchanged()?;
     let hash_reconcile_started_at = Instant::now();
-    reconcile_snapshot_hashes_with_kura(&snapshot_hashes, kura)?;
     reconcile_snapshot_hash_height_with_kura(
         &snapshot_hashes,
         block_count,

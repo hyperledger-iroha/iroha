@@ -304,8 +304,6 @@ volatility_class = "stable"
 
 [genesis]
 public_key = "ed0120CEF83A365F125EF1CB8F040290A4C5D23561A24CC4C6782AC07506C77003AF00"
-# Joining nodes must set the exact expected_hash and enable remote bootstrap explicitly.
-bootstrap_enabled = false
 
 [streaming]
 identity_public_key = "REPLACE_WITH_STREAMING_IDENTITY_PUBLIC_KEY"

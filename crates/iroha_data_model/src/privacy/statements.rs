@@ -204,6 +204,217 @@ pub struct BootleLanternIssuerPublicMatrixV1 {
     pub entries: Vec<BootleLanternPolynomialV1>,
 }
 
+/// Minimum number of non-zero coefficients in the canonical degree-512
+/// issuer public key `h` reconstructed from the eight first-column blocks.
+///
+/// Genuine Falcon/NTRU public keys are dense. This conservative floor rejects
+/// zero, monomial, identity, and deliberately sparse matrices at the
+/// authoritative policy boundary without attempting to prove possession of
+/// the issuer secret key.
+pub const BOOTLE_LANTERN_ISSUER_PUBLIC_KEY_MIN_NONZERO_COEFFICIENTS_V1: usize = 256;
+
+impl BootleLanternIssuerPublicMatrixV1 {
+    /// Expand the eight canonical first-column blocks of one degree-512
+    /// Falcon/NTRU public key into its exact 8-by-8 multiplication matrix over
+    /// `Z_12289[Y]/(Y^64 + 1)`.
+    ///
+    /// For `h` in `Z_12289[X]/(X^512 + 1)`, the interleaved coefficient
+    /// isomorphism is exactly `H_i[j] = h[8*j+i]` for `0 <= i < 8` and
+    /// `0 <= j < 64`; callers pass `[H_0, ..., H_7]` as `first_column`.
+    ///
+    /// If `H_i = B[i, 0]`, the unique row-major matrix is
+    /// `B[r, c] = H_{r-c}` for `r >= c` and
+    /// `B[r, c] = Y * H_{r-c+8}` otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a first-column block with the wrong degree or a coefficient
+    /// outside the canonical `0..12289` residue range.
+    pub fn from_r512_first_column_blocks_v1(
+        first_column: [BootleLanternPolynomialV1; BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1],
+    ) -> Result<Self, BootleLanternIssuerPolicyValidationErrorV1> {
+        for (row, polynomial) in first_column.iter().enumerate() {
+            if polynomial.coefficients.len() != BOOTLE_LANTERN_RING_DEGREE_V1 {
+                return Err(
+                    BootleLanternIssuerPolicyValidationErrorV1::InvalidPolynomialCoefficientCount {
+                        polynomial: u8::try_from(row * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1)
+                            .expect("fixed first-column matrix index fits u8"),
+                        count: u32::try_from(polynomial.coefficients.len()).map_err(|_| {
+                            BootleLanternIssuerPolicyValidationErrorV1::
+                                PolynomialCoefficientCountOverflow
+                        })?,
+                        expected: u32::try_from(BOOTLE_LANTERN_RING_DEGREE_V1)
+                            .expect("fixed ring degree fits u32"),
+                    },
+                );
+            }
+            for (coefficient, value) in polynomial.coefficients.iter().copied().enumerate() {
+                if value >= BOOTLE_LANTERN_APPLICATION_MODULUS_V1 {
+                    return Err(
+                        BootleLanternIssuerPolicyValidationErrorV1::NonCanonicalMatrixCoefficient {
+                            row: u8::try_from(row).expect("fixed first-column row fits u8"),
+                            column: 0,
+                            coefficient: u8::try_from(coefficient)
+                                .expect("fixed ring coefficient fits u8"),
+                            value,
+                        },
+                    );
+                }
+            }
+        }
+
+        let mut entries = Vec::with_capacity(
+            BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
+        );
+        for row in 0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 {
+            for column in 0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 {
+                if row >= column {
+                    entries.push(first_column[row - column].clone());
+                } else {
+                    let source =
+                        &first_column[row + BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 - column];
+                    let mut coefficients = vec![0_u16; BOOTLE_LANTERN_RING_DEGREE_V1];
+                    let final_coefficient = source.coefficients[BOOTLE_LANTERN_RING_DEGREE_V1 - 1];
+                    coefficients[0] = if final_coefficient == 0 {
+                        0
+                    } else {
+                        BOOTLE_LANTERN_APPLICATION_MODULUS_V1 - final_coefficient
+                    };
+                    coefficients[1..]
+                        .copy_from_slice(&source.coefficients[..BOOTLE_LANTERN_RING_DEGREE_V1 - 1]);
+                    entries.push(BootleLanternPolynomialV1 { coefficients });
+                }
+            }
+        }
+        Ok(Self { entries })
+    }
+
+    /// Validate the exact degree-512-to-eight-degree-64 negacyclic
+    /// multiplication-block structure and conservative public-key density.
+    ///
+    /// This method validates entry counts, coefficient counts, canonical
+    /// residues, and the all-zero sentinel before indexing any matrix entry,
+    /// so it is safe to call directly on untrusted decoded values.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-Toeplitz block, an incorrect negacyclic `Y` shift, or a
+    /// public key whose eight first-column blocks are too sparse.
+    pub fn validate_r512_multiplication_structure_v1(
+        &self,
+    ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
+        let dimension = BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1;
+        let degree = BOOTLE_LANTERN_RING_DEGREE_V1;
+        let expected_entries = dimension * dimension;
+        if self.entries.len() != expected_entries {
+            return Err(
+                BootleLanternIssuerPolicyValidationErrorV1::InvalidIssuerMatrixEntryCount {
+                    count: u32::try_from(self.entries.len()).map_err(|_| {
+                        BootleLanternIssuerPolicyValidationErrorV1::IssuerMatrixEntryCountOverflow
+                    })?,
+                    expected: u32::try_from(expected_entries)
+                        .expect("fixed matrix entry count fits u32"),
+                },
+            );
+        }
+        let mut matrix_is_zero = true;
+        for (entry_index, polynomial) in self.entries.iter().enumerate() {
+            if polynomial.coefficients.len() != degree {
+                return Err(
+                    BootleLanternIssuerPolicyValidationErrorV1::InvalidPolynomialCoefficientCount {
+                        polynomial: u8::try_from(entry_index)
+                            .expect("fixed matrix entry index fits u8"),
+                        count: u32::try_from(polynomial.coefficients.len()).map_err(|_| {
+                            BootleLanternIssuerPolicyValidationErrorV1::
+                                PolynomialCoefficientCountOverflow
+                        })?,
+                        expected: u32::try_from(degree).expect("fixed ring degree fits u32"),
+                    },
+                );
+            }
+            for (coefficient_index, coefficient) in
+                polynomial.coefficients.iter().copied().enumerate()
+            {
+                if coefficient >= BOOTLE_LANTERN_APPLICATION_MODULUS_V1 {
+                    return Err(
+                        BootleLanternIssuerPolicyValidationErrorV1::NonCanonicalMatrixCoefficient {
+                            row: u8::try_from(entry_index / dimension)
+                                .expect("fixed matrix row fits u8"),
+                            column: u8::try_from(entry_index % dimension)
+                                .expect("fixed matrix column fits u8"),
+                            coefficient: u8::try_from(coefficient_index)
+                                .expect("fixed ring coefficient fits u8"),
+                            value: coefficient,
+                        },
+                    );
+                }
+                matrix_is_zero &= coefficient == 0;
+            }
+        }
+        if matrix_is_zero {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::AllZeroIssuerMatrix);
+        }
+
+        for row in 0..dimension {
+            for column in 0..dimension {
+                let actual = &self.entries[row * dimension + column].coefficients;
+                let (source_row, shifted) = if row >= column {
+                    (row - column, false)
+                } else {
+                    (row + dimension - column, true)
+                };
+                let source = &self.entries[source_row * dimension].coefficients;
+                for coefficient in 0..degree {
+                    let expected = if !shifted {
+                        source[coefficient]
+                    } else if coefficient == 0 {
+                        let final_coefficient = source[degree - 1];
+                        if final_coefficient == 0 {
+                            0
+                        } else {
+                            BOOTLE_LANTERN_APPLICATION_MODULUS_V1 - final_coefficient
+                        }
+                    } else {
+                        source[coefficient - 1]
+                    };
+                    if actual[coefficient] != expected {
+                        return Err(
+                            BootleLanternIssuerPolicyValidationErrorV1::
+                                InvalidR512MultiplicationMatrix {
+                                    row: u8::try_from(row).expect("fixed matrix row fits u8"),
+                                    column: u8::try_from(column)
+                                        .expect("fixed matrix column fits u8"),
+                                    coefficient: u8::try_from(coefficient)
+                                        .expect("fixed ring coefficient fits u8"),
+                                    expected,
+                                    actual: actual[coefficient],
+                                },
+                        );
+                    }
+                }
+            }
+        }
+
+        let nonzero_coefficients = (0..dimension)
+            .flat_map(|row| &self.entries[row * dimension].coefficients)
+            .filter(|coefficient| **coefficient != 0)
+            .count();
+        if nonzero_coefficients < BOOTLE_LANTERN_ISSUER_PUBLIC_KEY_MIN_NONZERO_COEFFICIENTS_V1 {
+            return Err(
+                BootleLanternIssuerPolicyValidationErrorV1::SparseIssuerPublicKey {
+                    nonzero_coefficients: u16::try_from(nonzero_coefficients)
+                        .expect("degree-512 nonzero count fits u16"),
+                    minimum: u16::try_from(
+                        BOOTLE_LANTERN_ISSUER_PUBLIC_KEY_MIN_NONZERO_COEFFICIENTS_V1,
+                    )
+                    .expect("fixed density floor fits u16"),
+                },
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Governed allowed values for one required public attribute.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -355,62 +566,8 @@ impl BootleLanternIssuerPolicyV1 {
     fn validate_issuer_public_matrix(
         &self,
     ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
-        let mut matrix_is_zero = true;
-        let matrix_entries = self.issuer_public_matrix.entries.len();
-        let expected_matrix_entries =
-            BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1;
-        if matrix_entries != expected_matrix_entries {
-            return Err(
-                BootleLanternIssuerPolicyValidationErrorV1::InvalidIssuerMatrixEntryCount {
-                    count: u32::try_from(matrix_entries).map_err(|_| {
-                        BootleLanternIssuerPolicyValidationErrorV1::IssuerMatrixEntryCountOverflow
-                    })?,
-                    expected: u32::try_from(expected_matrix_entries)
-                        .expect("fixed matrix entry count fits u32"),
-                },
-            );
-        }
-        for (entry_index, polynomial) in self.issuer_public_matrix.entries.iter().enumerate() {
-            if polynomial.coefficients.len() != BOOTLE_LANTERN_RING_DEGREE_V1 {
-                return Err(
-                    BootleLanternIssuerPolicyValidationErrorV1::InvalidPolynomialCoefficientCount {
-                        polynomial: u8::try_from(entry_index)
-                            .expect("fixed matrix entry index fits u8"),
-                        count: u32::try_from(polynomial.coefficients.len()).map_err(|_| {
-                            BootleLanternIssuerPolicyValidationErrorV1::
-                                    PolynomialCoefficientCountOverflow
-                        })?,
-                        expected: u32::try_from(BOOTLE_LANTERN_RING_DEGREE_V1)
-                            .expect("fixed ring degree fits u32"),
-                    },
-                );
-            }
-            for (coefficient_index, coefficient) in
-                polynomial.coefficients.iter().copied().enumerate()
-            {
-                if coefficient >= BOOTLE_LANTERN_APPLICATION_MODULUS_V1 {
-                    return Err(
-                        BootleLanternIssuerPolicyValidationErrorV1::NonCanonicalMatrixCoefficient {
-                            row: u8::try_from(
-                                entry_index / BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
-                            )
-                            .expect("fixed matrix row fits u8"),
-                            column: u8::try_from(
-                                entry_index % BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
-                            )
-                            .expect("fixed matrix column fits u8"),
-                            coefficient: u8::try_from(coefficient_index)
-                                .expect("fixed ring coefficient fits u8"),
-                            value: coefficient,
-                        },
-                    );
-                }
-                matrix_is_zero &= coefficient == 0;
-            }
-        }
-        if matrix_is_zero {
-            return Err(BootleLanternIssuerPolicyValidationErrorV1::AllZeroIssuerMatrix);
-        }
+        self.issuer_public_matrix
+            .validate_r512_multiplication_structure_v1()?;
         let expected_issuer_parameter_digest =
             self.computed_issuer_parameter_digest().map_err(|_| {
                 BootleLanternIssuerPolicyValidationErrorV1::IssuerParameterEncodingFailure
@@ -650,6 +807,34 @@ pub enum BootleLanternIssuerPolicyValidationErrorV1 {
     /// Issuer matrix is the all-zero sentinel.
     #[error("Bootle/Lantern issuer matrix must not be all zero")]
     AllZeroIssuerMatrix,
+    /// One block or coefficient does not match the canonical degree-512
+    /// Falcon/NTRU multiplication-matrix embedding.
+    #[error(
+        "Bootle/Lantern issuer matrix B[{row}][{column}][{coefficient}]={actual} does not match canonical R512 multiplication coefficient {expected}"
+    )]
+    InvalidR512MultiplicationMatrix {
+        /// Matrix row.
+        row: u8,
+        /// Matrix column.
+        column: u8,
+        /// Polynomial coefficient.
+        coefficient: u8,
+        /// Canonical coefficient derived from the first-column public key.
+        expected: u16,
+        /// Observed substituted coefficient.
+        actual: u16,
+    },
+    /// The reconstructed degree-512 public key is too sparse to be a genuine
+    /// first-release Falcon/NTRU issuer key.
+    #[error(
+        "Bootle/Lantern issuer public key has {nonzero_coefficients} non-zero coefficients; minimum is {minimum}"
+    )]
+    SparseIssuerPublicKey {
+        /// Non-zero coefficients across the eight first-column blocks.
+        nonzero_coefficients: u16,
+        /// Conservative first-release density floor.
+        minimum: u16,
+    },
     /// Canonical encoding of the issuer verification matrix failed.
     #[error("Bootle/Lantern issuer parameter encoding failed")]
     IssuerParameterEncodingFailure,
@@ -1796,11 +1981,6 @@ fn validate_jindo(
     }
     Ok(())
 }
-
-const IROHA_JINDO_FIELD_MODULUS_LE_V1: [u8; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1] = [
-    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x81, 0x32, 0x37, 0x8c, 0xdc, 0x30, 0x96, 0x8e,
-    0x55, 0x65, 0xfb, 0xe6, 0xd9, 0x43, 0x56, 0xd6, 0xc2, 0xaf, 0x62, 0x6b, 0x99, 0x45, 0x0d, 0x43,
-];
 
 fn is_canonical_jindo_field_element(element: &PrivacyJindoFieldElementV1) -> bool {
     for index in (0..IROHA_JINDO_FIELD_ELEMENT_BYTES_V1).rev() {

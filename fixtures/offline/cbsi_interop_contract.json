@@ -235,7 +235,7 @@
     "payload_sha256_hex": "9d5bb422a8eb7c11515babd93f69e088daadb60bc5948278649b246c9745f159",
     "required_unique_frames": 23
   },
-  "generator": "cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin cbsi_offline_vectors",
+  "generator": "cargo run -p iroha_data_model --features test-fixtures,transparent_api,dev-tools --bin cbsi_offline_vectors",
   "offline_fi_public_key_base64": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc=",
   "payment_token": {
     "amount": "5",

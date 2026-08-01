@@ -1647,7 +1647,7 @@ mod wire {
     }
 
     impl<T: NoritoSerialize> NoritoSerialize for MembershipValues<T> {
-        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), Error> {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
             self.0.serialize(writer)
         }
 
@@ -1953,7 +1953,7 @@ mod wire {
 }
 
 impl norito::core::NoritoSerialize for CommittedTxPredicate {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let nodes = wire::flatten(self)?;
         norito::core::NoritoSerialize::serialize(&nodes, writer)
     }

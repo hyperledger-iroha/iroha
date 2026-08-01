@@ -8,7 +8,7 @@
 //! Run:
 //!
 //! ```text
-//! cargo run -p iroha_data_model --features test-fixtures,transparent_api \
+//! cargo run -p iroha_data_model --features dev-tools,test-fixtures,transparent_api \
 //!   --bin cbsi_offline_vectors
 //! ```
 //!
@@ -642,7 +642,7 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
         (
             "generator",
             Value::from(
-                "cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin cbsi_offline_vectors",
+                "cargo run -p iroha_data_model --features dev-tools,test-fixtures,transparent_api --bin cbsi_offline_vectors",
             ),
         ),
         (

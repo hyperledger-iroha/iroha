@@ -209,16 +209,13 @@ fn expose_ffi(attrs: Vec<syn::Attribute>, item: &TokenStream) -> TokenStream {
         };
     };
 
-    let (ffi_type, ffi_export): (Attribute, Option<Attribute>) = match ffi_type {
+    let (ffi_type, export_accessors): (Meta, bool) = match ffi_type {
         // A bare marker opts the model item into FFI generation without
         // promising a stable structural layout. Keep that default fail-closed
         // by exporting the item through the opaque representation. Opaque
         // model items deliberately expose no field accessors.
-        Meta::Path(_) => (parse_quote!(#[ffi_type(opaque)]), None),
-        ffi_type @ Meta::List(_) => (
-            parse_quote!(#[#ffi_type]),
-            Some(parse_quote!(#[iroha_ffi::ffi_export])),
-        ),
+        Meta::Path(_) => (parse_quote!(ffi_type(opaque)), false),
+        ffi_type @ Meta::List(_) => (ffi_type, true),
         ffi_type @ Meta::NameValue(_) => {
             return syn::Error::new_spanned(
                 ffi_type,
@@ -227,26 +224,18 @@ fn expose_ffi(attrs: Vec<syn::Attribute>, item: &TokenStream) -> TokenStream {
             .into_compile_error();
         }
     };
+    let ffi_export = export_accessors.then(|| {
+        quote! {
+            #[cfg_attr(feature = "ffi_export", iroha_ffi::ffi_export)]
+        }
+    });
 
     quote! {
-        #[cfg(all(not(feature = "ffi_export"), not(feature = "ffi_import")))]
-        #(#attrs)*
-        #item
-
-        #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
-        #[derive(iroha_ffi::FfiType)]
+        #[cfg_attr(feature = "ffi_export", derive(iroha_ffi::FfiType))]
         #ffi_export
-        #ffi_type
+        #[cfg_attr(feature = "ffi_export", #ffi_type)]
         #(#attrs)*
         #item
-
-        #[cfg(feature = "ffi_import")]
-        iroha_ffi::ffi! {
-            #[iroha_ffi::ffi_import]
-            #ffi_type
-            #(#attrs)*
-            #item
-        }
     }
 }
 
@@ -254,9 +243,8 @@ fn expose_ffi(attrs: Vec<syn::Attribute>, item: &TokenStream) -> TokenStream {
 /// `FfiType` derive.
 ///
 /// Model declarations gate this helper with `cfg_attr` so it is not visible
-/// when neither FFI feature is enabled. The model macro owns that feature
-/// split, so it removes the wrapper and restores the helper only in the export
-/// and import branches.
+/// when FFI generation is disabled. The model macro owns that feature split,
+/// so it removes the source wrapper and restores the helper only for exports.
 fn extract_ffi_type(attrs: Vec<Attribute>) -> syn::Result<(Option<Meta>, Vec<Attribute>)> {
     let mut ffi_type = None;
     let mut retained = Vec::with_capacity(attrs.len());
@@ -529,42 +517,35 @@ mod tests {
     }
 
     #[test]
-    fn wrapped_ffi_type_expands_for_default_export_and_import() {
+    fn wrapped_ffi_type_emits_one_item_with_export_attributes() {
         let input: syn::DeriveInput = parse_quote! {
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
             pub struct Sample;
         };
 
         let output: File = syn::parse2(process_pub_item(input)).expect("FFI model output");
-        assert!(
-            matches!(
-                output.items.as_slice(),
-                [Item::Struct(_), Item::Struct(_), Item::Macro(_)]
-            ),
-            "expected default, export, and import branches"
-        );
+        let [Item::Struct(item)] = output.items.as_slice() else {
+            panic!("an FFI model must emit exactly one struct")
+        };
 
         let rendered = output.to_token_stream().to_string();
-        assert!(
-            !rendered.contains("cfg_attr"),
-            "the source-only cfg_attr wrapper leaked into generated output"
-        );
+        let payloads = export_cfg_payloads(&item.attrs);
         assert_eq!(
-            rendered.matches("ffi_type").count(),
-            2,
-            "a bare marker must become an opaque policy in both FFI branches"
+            payloads,
+            [
+                normalized_meta(parse_quote!(derive(iroha_ffi::FfiType))),
+                normalized_meta(parse_quote!(ffi_type(opaque))),
+            ],
+            "a bare marker must configure one opaque export:\n{rendered}"
         );
-        assert_eq!(
-            rendered.matches("ffi_type (opaque)").count(),
-            2,
-            "the default FFI representation must remain opaque:\n{rendered}"
-        );
-        assert!(rendered.contains("iroha_ffi :: FfiType"));
         assert!(
             !rendered.contains("iroha_ffi :: ffi_export"),
             "default opaque models must not generate field accessors:\n{rendered}"
         );
-        assert!(rendered.contains("iroha_ffi :: ffi_import"));
+        assert!(
+            !rendered.contains("ffi_import"),
+            "generated model output must not retain the removed import branch:\n{rendered}"
+        );
     }
 
     #[test]
@@ -574,14 +555,14 @@ mod tests {
                 #[cfg_attr(any(feature = "ffi_import", feature = "ffi_export"), ffi_type(opaque))]
                 pub struct Opaque;
             },
-            parse_quote!(#[ffi_type(opaque)]),
+            parse_quote!(ffi_type(opaque)),
         );
         assert_ffi_policy(
             parse_quote! {
                 #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(local))]
                 pub struct Local;
             },
-            parse_quote!(#[ffi_type(local)]),
+            parse_quote!(ffi_type(local)),
         );
         assert_ffi_policy(
             parse_quote! {
@@ -592,8 +573,48 @@ mod tests {
                 #[repr(transparent)]
                 pub struct Robust(u32);
             },
-            parse_quote!(#[ffi_type(unsafe { robust })]),
+            parse_quote!(ffi_type(unsafe { robust })),
         );
+    }
+
+    #[test]
+    fn ffi_type_diagnostics_remain_actionable() {
+        let cases: [(syn::DeriveInput, &str); 3] = [
+            (
+                parse_quote! {
+                    #[ffi_type = "opaque"]
+                    pub struct NameValue;
+                },
+                "`ffi_type` must be bare or use list-form representation arguments",
+            ),
+            (
+                parse_quote! {
+                    #[cfg_attr(feature = "std", ffi_type)]
+                    pub struct WrongGate;
+                },
+                "`ffi_type` on a model item must be gated by",
+            ),
+            (
+                parse_quote! {
+                    #[ffi_type]
+                    #[ffi_type(opaque)]
+                    pub struct Duplicate;
+                },
+                "a model item may declare `ffi_type` only once",
+            ),
+        ];
+
+        for (input, expected) in cases {
+            let rendered = process_pub_item(input).to_string();
+            assert!(
+                rendered.contains("compile_error"),
+                "expected a compile error for `{expected}`: {rendered}"
+            );
+            assert!(
+                rendered.contains(expected),
+                "missing diagnostic `{expected}`: {rendered}"
+            );
+        }
     }
 
     #[test]
@@ -810,24 +831,58 @@ mod tests {
             .collect()
     }
 
-    fn assert_ffi_policy(input: syn::DeriveInput, expected: Attribute) {
+    fn export_cfg_payloads(attrs: &[Attribute]) -> Vec<String> {
+        attrs
+            .iter()
+            .filter(|attr| attr.path().is_ident("cfg_attr"))
+            .flat_map(|attr| {
+                let nested = attr
+                    .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+                    .expect("generated cfg_attr must parse");
+                let mut nested = nested.into_iter();
+                let predicate = nested.next().expect("generated cfg_attr predicate");
+                assert_eq!(
+                    normalized_tokens(&predicate),
+                    normalized_meta(parse_quote!(feature = "ffi_export")),
+                    "generated FFI attributes must be export-only"
+                );
+                nested.map(|meta| normalized_tokens(&meta))
+            })
+            .collect()
+    }
+
+    fn normalized_meta(meta: Meta) -> String {
+        normalized_tokens(&meta)
+    }
+
+    fn assert_ffi_policy(input: syn::DeriveInput, expected: Meta) {
         let output: File = syn::parse2(process_pub_item(input)).expect("FFI model output");
+        let [Item::Struct(item)] = output.items.as_slice() else {
+            panic!("an FFI model must emit exactly one struct")
+        };
         let rendered = output.to_token_stream().to_string();
-        let expected = expected.into_token_stream().to_string();
+        let expected = normalized_tokens(&expected);
+        let payloads = export_cfg_payloads(&item.attrs);
 
         assert_eq!(
-            rendered.matches(&expected).count(),
-            2,
-            "FFI policy `{expected}` was not preserved in export and import branches:\n{rendered}"
-        );
-        assert!(
-            !rendered.contains("cfg_attr"),
-            "the source-only cfg_attr wrapper leaked into generated output: {rendered}"
+            payloads
+                .iter()
+                .filter(|payload| **payload == expected)
+                .count(),
+            1,
+            "FFI policy `{expected}` was not preserved in the export attributes:\n{rendered}"
         );
         assert_eq!(
-            rendered.matches("iroha_ffi :: ffi_export").count(),
+            payloads
+                .iter()
+                .filter(|payload| **payload == "iroha_ffi::ffi_export")
+                .count(),
             1,
             "an explicit FFI policy must retain the type-level export generator:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("ffi_import"),
+            "generated model output must not retain the removed import branch:\n{rendered}"
         );
     }
 }

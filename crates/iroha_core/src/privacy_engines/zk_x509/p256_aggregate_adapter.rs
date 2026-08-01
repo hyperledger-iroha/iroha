@@ -64,6 +64,7 @@ use super::{
         P256CrossTraceBoundaryFixedV1, P256CrossTraceBusErrorV1, P256CrossTraceChallengesV1,
         P256CrossTraceEndpointV1, P256CrossTraceEventFixedV1, P256CrossTraceSinkFixedV1,
         P256CrossTraceTagV1, P256CrossTraceWriterAuxRowV1, P256CrossTraceWriterSourceFixedV1,
+        evaluate_zk_x509_p256_cross_trace_terminal_constraints_v1,
         evaluate_zk_x509_p256_cross_trace_writer_row_constraints_v1,
     },
     p256_ecdsa_air::P256EcdsaRoleV1,
@@ -1149,9 +1150,10 @@ pub(crate) fn evaluate_p256_cross_trace_terminal_claim_equalities_v1(
     let final_source = sources
         .last()
         .ok_or(P256AggregateAdapterErrorV1::Topology)?;
-    for (lane, sink) in sink.into_iter().enumerate() {
-        residues.push(final_source.terminal[lane].sub(sink));
-    }
+    residues.extend(evaluate_zk_x509_p256_cross_trace_terminal_constraints_v1(
+        final_source.terminal,
+        sink,
+    ));
     Ok(residues)
 }
 

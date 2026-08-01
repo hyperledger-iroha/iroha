@@ -106,7 +106,7 @@ where
         <T as norito::core::NoritoSerialize>::schema_hash()
     }
 
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         <T as norito::core::NoritoSerialize>::serialize(&self.0, writer)
     }
 

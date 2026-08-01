@@ -111,7 +111,7 @@ jobs:
         with:
           cache-on-failure: "true"
       - name: Norito-RPC fixture parity
-        run: cargo run --locked -p xtask -- norito-rpc-verify
+        run: cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
 
   numeric_v1_architecture_parity:
     name: Numeric V1 parity (${{ matrix.runner }})
@@ -153,7 +153,9 @@ jobs:
         working-directory: java/iroha_android
         run: |
           chmod +x ./gradlew
-          ./gradlew :core:test --tests org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests
+          ./gradlew :core:test \
+            --tests org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests \
+            --tests org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests
 
   rust_changes:
     name: Classify affected Rust lanes
@@ -184,10 +186,13 @@ jobs:
           python3 -m pytest -q pytests/scripts/rust_ci_test.py
           python3 -m pytest -q \
             pytests/scripts/check_cargo_feature_hygiene_test.py \
+            pytests/scripts/check_workspace_target_inventory_test.py \
+            scripts/tests/profile_build_test.py \
             scripts/tests/check_source_file_budget_test.py \
             scripts/tests/check_compile_unit_budget_test.py \
             scripts/tests/check_generated_artifacts_test.py
           python3 scripts/check_cargo_feature_hygiene.py
+          python3 scripts/check_workspace_target_inventory.py
           python3 scripts/check_source_file_budget.py
           python3 scripts/check_generated_artifacts.py
       - name: Classify the PR reverse-dependency closure

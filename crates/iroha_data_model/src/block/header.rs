@@ -154,7 +154,7 @@ pub mod wire {
     );
 
     impl ncore::NoritoSerialize for BlockHeaderWire {
-        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             let tuple = (
                 self.0,
                 self.1,
@@ -325,7 +325,7 @@ pub mod wire {
     );
 
     impl ncore::NoritoSerialize for ConfidentialFeatureDigestWire {
-        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             <ConfidentialFeatureDigestTuple as ncore::NoritoSerialize>::serialize(
                 &(self.0, self.1, self.2, self.3, self.4),
                 writer,
@@ -405,7 +405,7 @@ pub mod wire {
     );
 
     impl ncore::NoritoSerialize for BlockSignatureWire {
-        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             <(u64, Vec<u8>) as ncore::NoritoSerialize>::serialize(&(self.0, self.1.clone()), writer)
         }
 
@@ -715,7 +715,7 @@ impl BlockSignature {
 }
 
 impl ncore::NoritoSerialize for BlockSignature {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let wire_repr = wire::BlockSignatureWire::from(self);
         ncore::NoritoSerialize::serialize(&wire_repr, writer)
     }

@@ -66,7 +66,8 @@ use governance::{
     qualify_governance_dag_runtime_signer_provider,
 };
 pub use governance_service::{
-    GovernanceDagServiceError, GovernanceDagServiceLauncherError, GovernanceDagServiceRunner,
+    GovernanceDagSealedHttpRequestReceiverV1, GovernanceDagServiceError,
+    GovernanceDagServiceLauncherError, GovernanceDagServiceRunner,
     GovernanceDagServiceRuntimeProviderBindingsV1,
     GovernanceDagServiceRuntimeProviderRegistryErrorV1,
     GovernanceDagServiceRuntimeProviderRegistryV1, GovernanceDagServiceRuntimeProviders,

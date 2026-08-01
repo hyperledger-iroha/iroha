@@ -293,6 +293,14 @@ evidence-bearing `BodyStored` and `ValidationSucceeded` Busy/applied phases.
 The four-phase Rust test extends exact-retry suppression—not the matrix's
 conflict or Busy-owner claim—to `BodyAvailable` and `SignatureCompleted`.
 
+An admitted `FetchBody` becomes passive while it waits on the network. The
+executor retains its exact lifecycle owner, but does not publish that wait as a
+runnable actor-global scheduler minimum. Otherwise a missing response can
+block the timeout, retransmit, Proposal, or QC which supplies or supersedes the
+same acquisition. Before retiring the fetch, the executor reserves and commits
+`BodyAvailable` with the original owner; that concrete completion therefore
+re-enters scheduling at the exact old ordinal, ahead of unrelated later work.
+
 Authenticated consensus-message ownership likewise spans the runtime queue and
 the adapter's Busy-deferred lanes through one generic production path. The
 adapter compares the complete canonical envelope with the retained
@@ -452,20 +460,27 @@ The adapter's deferred Progress reserve is partitioned by consumer ownership:
 one locked-Commit slot and one independent TimeoutVote slot per frozen
 validator, plus one slot for each PrepareQC, CommitQC, and TC class. Its exact
 capacity is therefore `2 * roster_len + 3`. Exact retransmissions coalesce
-before this capacity check. Vote ownership is signer-injective: a distinct
-Commit or TimeoutVote from the same signer cannot consume a second slot or
-displace the admitted owner, and becomes admissible only after that owner's
-slot is serviced. Once a progress item is admitted, later equal- or
+before this capacity check. Vote ownership is signer-injective: the one
+TimeoutVote slot is shared by the current and adjacent-future rounds, so a
+distinct Commit or TimeoutVote from the same signer cannot consume a second
+slot or displace the admitted owner and becomes admissible only after that
+owner's slot is serviced. Once a progress item is admitted, later equal- or
 higher-ranked traffic cannot displace it; a full class rejects the new item
 while preserving the already admitted vote, reconstruction, or certificate
 owner.
 
 The semantic-admission table applies the same partition before the reducer is
-called. A full ordinary-history budget cannot reject a current-view
-TimeoutVote: at most one key per frozen signer bypasses that budget, remains
-available for equivocation/delivery checks while the view is current, and is
-retired when the view advances. Thus the reserved deferred slot is reachable
-even when ordinary semantic history is saturated.
+called. A full ordinary-history budget cannot reject a TimeoutVote in the
+bounded current/adjacent-future window: at most two keys per frozen signer
+bypass that budget, remain available for equivocation/delivery checks while
+their rounds are in the window, and are retired when they fall behind it. The
+exact live semantic bound is therefore `1024 + 3 * roster_len`: ordinary
+history, one locked-Commit set, and two TimeoutVote sets. On TC installation,
+authenticated shares and retained local TimeoutVote control are filtered
+against the newly installed current/adjacent window, so an early adjacent
+share becomes immediately useful instead of being discarded. Thus the single
+deferred TimeoutVote slot remains reachable without allowing unbounded future
+rounds even when ordinary semantic history is saturated.
 
 The roster-aware transport ingress also prevents auxiliary I/O backpressure
 from becoming a per-validator head-of-line stall. On each source's fair turn it
@@ -1591,9 +1606,9 @@ persistence macro-step below the eight-effect bound, exactly one serviceable
 deferred adapter step per runtime turn, and refusal of terminal readiness while
 any deferred Completion, Progress input, or ordinary input remains. The adapter
 leg also realizes the complete
-`1024 + 2N` semantic-admission bound, retains current-view signer slots,
-retires old-view TimeoutVote delivery records, and exercises non-poisoning
-same-owner retry across TC installation. The block-sync leg pins
+`1024 + 3N` semantic-admission bound, retains current/adjacent-future signer
+keys, retires out-of-window TimeoutVote delivery records, and exercises
+non-poisoning same-owner retry across TC installation. The block-sync leg pins
 reducer-enqueue ownership, strictly sequential context catch-up, and canonical
 Kura body service by a frozen-roster archive. The archive need not have signed
 the historical QC: the QC authenticates the exact subject, the archive signs

@@ -60,9 +60,9 @@ pub mod schema;
 pub mod streaming;
 // Expose heuristics configuration helpers for hosts
 pub use core::{
-    Archived, ArchivedBox, Compression, CompressionConfig, DecodeLimits, Error, NoritoDeserialize,
-    NoritoSerialize, crc64_fallback, default_encode_flags, from_bytes, from_compressed_bytes,
-    hardware_crc64,
+    Archived, ArchivedBox, Compression, CompressionConfig, DecodeLimits, Encoder, Error,
+    NoritoDeserialize, NoritoSerialize, crc64_fallback, default_encode_flags, from_bytes,
+    from_compressed_bytes, hardware_crc64,
     heuristics::{
         Heuristics as HeuristicsConfig, get as get_heuristics,
         select_layout_flags_for_size_with as select_layout_flags_with,
@@ -426,7 +426,8 @@ pub mod codec {
         let __t0 = std::time::Instant::now();
         {
             let _fg = core::DecodeFlagsGuard::enter(flags);
-            NoritoSerialize::serialize(value, &mut payload).expect("encode pass 1");
+            let mut encoder = core::Encoder::for_buffer(&mut payload);
+            NoritoSerialize::serialize(value, &mut encoder).expect("encode pass 1");
         }
         #[cfg(feature = "adaptive-telemetry")]
         let __pass1_ns = __t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
@@ -491,7 +492,8 @@ pub mod codec {
         let mut counting = CountingWriter::new(writer);
         {
             let _fg = core::DecodeFlagsGuard::enter(flags);
-            NoritoSerialize::serialize(value, &mut counting).expect("encode pass 1");
+            let mut encoder = core::Encoder::new(&mut counting);
+            NoritoSerialize::serialize(value, &mut encoder).expect("encode pass 1");
         }
         #[cfg(feature = "adaptive-telemetry")]
         let __pass1_ns = __t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
@@ -542,8 +544,11 @@ pub mod codec {
         struct Hinted(u8);
 
         impl NoritoSerialize for Hinted {
-            fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), crate::Error> {
-                writer.write_all(&[self.0])?;
+            fn serialize(
+                &self,
+                encoder: &mut crate::core::Encoder<'_>,
+            ) -> Result<(), crate::Error> {
+                encoder.write_all(&[self.0])?;
                 Ok(())
             }
 
@@ -560,8 +565,11 @@ pub mod codec {
         struct ExactLenOnly(u8);
 
         impl NoritoSerialize for ExactLenOnly {
-            fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), crate::Error> {
-                writer.write_all(&[self.0])?;
+            fn serialize(
+                &self,
+                encoder: &mut crate::core::Encoder<'_>,
+            ) -> Result<(), crate::Error> {
+                encoder.write_all(&[self.0])?;
                 Ok(())
             }
 
@@ -4189,7 +4197,16 @@ pub mod json {
             }
         }
         /// Create a new parser starting at byte position `pos`.
+        ///
+        /// # Panics
+        ///
+        /// Panics when `pos` is outside the input or is not a UTF-8 character
+        /// boundary.
         pub fn new_at(s: &'a str, pos: usize) -> Self {
+            assert!(
+                pos <= s.len() && s.is_char_boundary(pos),
+                "JSON parser start must be a UTF-8 character boundary"
+            );
             Self {
                 s: s.as_bytes(),
                 i: pos,
@@ -4200,12 +4217,20 @@ pub mod json {
             self.i
         }
         /// Borrow the remaining input as a `&str` from the current position to the end.
+        ///
+        /// # Panics
+        ///
+        /// Panics if a caller used the byte-level [`Self::bump`] API to stop
+        /// inside a raw multi-byte UTF-8 scalar.
         pub fn input_from_pos(&self) -> &'a str {
-            // Safety: `self.s` is constructed from a `&str` and thus is valid UTF‑8.
-            unsafe { std::str::from_utf8_unchecked(&self.s[self.i..]) }
+            self.input()
+                .get(self.i..)
+                .expect("JSON parser position must remain a UTF-8 character boundary")
         }
         /// Borrow the full original input as a `&str`.
         pub fn input(&self) -> &'a str {
+            // SAFETY: `self.s` is borrowed immutably from the `&str` supplied
+            // to `new` or `new_at`; only the cursor changes.
             unsafe { std::str::from_utf8_unchecked(self.s) }
         }
         /// Return true if no more input remains.
@@ -4219,7 +4244,9 @@ pub mod json {
         /// Consume and return the next byte.
         pub fn bump(&mut self) -> Option<u8> {
             let b = self.s.get(self.i).copied();
-            self.i = self.i.saturating_add(1);
+            if b.is_some() {
+                self.i += 1;
+            }
             b
         }
         /// Skip any ASCII whitespace.
@@ -4546,14 +4573,28 @@ pub mod json {
         }
         /// Parse and skip a JSON string without allocating; validates structure.
         pub fn skip_string(&mut self) -> Result<(), Error> {
+            self.skip_string_bounded(usize::MAX).map(|_| ())
+        }
+
+        /// Parse and skip a JSON string while enforcing its exact decoded
+        /// UTF-8 byte length before any owned string allocation.
+        ///
+        /// Returns the decoded byte length. JSON escapes and surrogate pairs
+        /// count as the bytes of their decoded Unicode scalar value rather
+        /// than their source spelling.
+        pub fn skip_string_bounded(
+            &mut self,
+            maximum_decoded_bytes: usize,
+        ) -> Result<usize, Error> {
             self.skip_ws();
             self.expect(b'"')?;
+            let mut decoded_bytes = 0usize;
             loop {
                 let b = self.bump().ok_or_else(|| {
                     let (byte, line, col) = self.pos_meta(self.i);
                     Error::UnterminatedString { byte, line, col }
                 })?;
-                match b {
+                let added = match b {
                     b'"' => break,
                     b'\\' => {
                         let esc = self.bump().ok_or_else(|| {
@@ -4561,26 +4602,9 @@ pub mod json {
                             Error::EofEscape { byte, line, col }
                         })?;
                         match esc {
-                            b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => {}
+                            b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => 1,
                             b'u' => {
-                                let mut hi = 0u32;
-                                for _ in 0..4 {
-                                    let hex = self.bump().ok_or_else(|| {
-                                        let (byte, line, col) = self.pos_meta(self.i);
-                                        Error::EofHex { byte, line, col }
-                                    })?;
-                                    hi = (hi << 4)
-                                        | match hex {
-                                            b'0'..=b'9' => u32::from(hex - b'0'),
-                                            b'a'..=b'f' => u32::from(hex - b'a' + 10),
-                                            b'A'..=b'F' => u32::from(hex - b'A' + 10),
-                                            _ => {
-                                                let (byte, line, col) =
-                                                    self.pos_meta(self.i.saturating_sub(1));
-                                                return Err(Error::InvalidHex { byte, line, col });
-                                            }
-                                        };
-                                }
+                                let hi = self.skip_string_hex_quad()?;
                                 if (0xD800..=0xDBFF).contains(&hi) {
                                     if self.peek() != Some(b'\\') {
                                         let (byte, line, col) = self.pos_meta(self.i);
@@ -4601,28 +4625,7 @@ pub mod json {
                                             col,
                                         });
                                     }
-                                    let mut lo = 0u32;
-                                    for _ in 0..4 {
-                                        let hex = self.bump().ok_or_else(|| {
-                                            let (byte, line, col) = self.pos_meta(self.i);
-                                            Error::EofHex { byte, line, col }
-                                        })?;
-                                        lo = (lo << 4)
-                                            | match hex {
-                                                b'0'..=b'9' => u32::from(hex - b'0'),
-                                                b'a'..=b'f' => u32::from(hex - b'a' + 10),
-                                                b'A'..=b'F' => u32::from(hex - b'A' + 10),
-                                                _ => {
-                                                    let (byte, line, col) =
-                                                        self.pos_meta(self.i.saturating_sub(1));
-                                                    return Err(Error::InvalidHex {
-                                                        byte,
-                                                        line,
-                                                        col,
-                                                    });
-                                                }
-                                            };
-                                    }
+                                    let lo = self.skip_string_hex_quad()?;
                                     if !(0xDC00..=0xDFFF).contains(&lo) {
                                         let (byte, line, col) =
                                             self.pos_meta(self.i.saturating_sub(1));
@@ -4633,6 +4636,10 @@ pub mod json {
                                             col,
                                         });
                                     }
+                                    let scalar = 0x1_0000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+                                    char::from_u32(scalar)
+                                        .expect("validated JSON surrogate pair")
+                                        .len_utf8()
                                 } else if (0xDC00..=0xDFFF).contains(&hi) {
                                     let (byte, line, col) = self.pos_meta(self.i.saturating_sub(1));
                                     return Err(Error::WithPos {
@@ -4641,6 +4648,10 @@ pub mod json {
                                         line,
                                         col,
                                     });
+                                } else {
+                                    char::from_u32(hi)
+                                        .expect("validated non-surrogate JSON scalar")
+                                        .len_utf8()
                                 }
                             }
                             _ => {
@@ -4658,10 +4669,61 @@ pub mod json {
                         let (byte, line, col) = self.pos_meta(self.i.saturating_sub(1));
                         return Err(Error::ControlInString { byte, line, col });
                     }
-                    _ => {}
+                    raw if raw.is_ascii() => 1,
+                    _ => {
+                        // The scanner starts at a character boundary. Advance
+                        // over the complete raw scalar before checking the
+                        // limit so even an error leaves the public parser at a
+                        // valid UTF-8 boundary.
+                        let scalar_start = self.i - 1;
+                        let width = match b {
+                            0xC2..=0xDF => 2,
+                            0xE0..=0xEF => 3,
+                            0xF0..=0xF4 => 4,
+                            _ => return Err(Error::InvalidUtf8),
+                        };
+                        let scalar_end =
+                            scalar_start.checked_add(width).ok_or(Error::InvalidUtf8)?;
+                        let scalar_bytes = self
+                            .s
+                            .get(scalar_start..scalar_end)
+                            .ok_or(Error::InvalidUtf8)?;
+                        debug_assert!(std::str::from_utf8(scalar_bytes).is_ok());
+                        self.i = scalar_end;
+                        width
+                    }
+                };
+                decoded_bytes = decoded_bytes.checked_add(added).ok_or_else(|| {
+                    Error::Message("decoded JSON string byte length overflow".into())
+                })?;
+                if decoded_bytes > maximum_decoded_bytes {
+                    return Err(Error::Message(format!(
+                        "decoded JSON string exceeds the {maximum_decoded_bytes}-byte limit"
+                    )));
                 }
             }
-            Ok(())
+            Ok(decoded_bytes)
+        }
+
+        fn skip_string_hex_quad(&mut self) -> Result<u32, Error> {
+            let mut value = 0u32;
+            for _ in 0..4 {
+                let hex = self.bump().ok_or_else(|| {
+                    let (byte, line, col) = self.pos_meta(self.i);
+                    Error::EofHex { byte, line, col }
+                })?;
+                value = (value << 4)
+                    | match hex {
+                        b'0'..=b'9' => u32::from(hex - b'0'),
+                        b'a'..=b'f' => u32::from(hex - b'a' + 10),
+                        b'A'..=b'F' => u32::from(hex - b'A' + 10),
+                        _ => {
+                            let (byte, line, col) = self.pos_meta(self.i.saturating_sub(1));
+                            return Err(Error::InvalidHex { byte, line, col });
+                        }
+                    };
+            }
+            Ok(value)
         }
 
         fn skip_object_key(&mut self) -> Result<String, Error> {
@@ -9522,294 +9584,8 @@ pub mod json {
         }
     }
 
-    pub struct MapVisitor<'a, 'p> {
-        parser: &'p mut Parser<'a>,
-        finished: bool,
-        value_pending: bool,
-    }
-
-    impl<'a, 'p> MapVisitor<'a, 'p> {
-        pub fn new(parser: &'p mut Parser<'a>) -> Result<Self, Error> {
-            parser.skip_ws();
-            parser.expect(b'{')?;
-            let mut visitor = Self {
-                parser,
-                finished: false,
-                value_pending: false,
-            };
-            if visitor.parser.try_consume_char(b'}')? {
-                visitor.finished = true;
-            }
-            Ok(visitor)
-        }
-
-        #[inline]
-        pub fn parser(&mut self) -> &mut Parser<'a> {
-            self.parser
-        }
-
-        #[inline]
-        pub fn is_finished(&self) -> bool {
-            self.finished && !self.value_pending
-        }
-
-        pub fn next_key(&mut self) -> Result<Option<KeyRef<'a>>, Error> {
-            if self.finished {
-                return Ok(None);
-            }
-            if self.value_pending {
-                return Err(Error::Message(
-                    "attempted to read a new key before consuming the previous value".into(),
-                ));
-            }
-            if self.parser.try_consume_char(b'}')? {
-                self.finished = true;
-                return Ok(None);
-            }
-            let key = self.parser.parse_key()?;
-            self.value_pending = true;
-            Ok(Some(key))
-        }
-
-        pub fn parse_value<T: JsonDeserialize>(&mut self) -> Result<T, Error> {
-            if !self.value_pending {
-                return Err(Error::Message("no pending value for current key".into()));
-            }
-            let value = T::json_deserialize(self.parser)?;
-            self.finish_value()?;
-            Ok(value)
-        }
-
-        pub fn parse_value_with<V>(&mut self, visitor: V) -> Result<V::Value, Error>
-        where
-            V: Visitor<'a>,
-        {
-            if !self.value_pending {
-                return Err(Error::Message("no pending value for current key".into()));
-            }
-            let value = visit_value(self.parser, visitor)?;
-            self.finish_value()?;
-            Ok(value)
-        }
-
-        pub fn skip_value(&mut self) -> Result<(), Error> {
-            if !self.value_pending {
-                return Err(Error::Message("no pending value for current key".into()));
-            }
-            self.parser.skip_value()?;
-            self.finish_value()
-        }
-
-        pub fn next_entry<T: JsonDeserialize>(&mut self) -> Result<Option<(String, T)>, Error> {
-            match self.next_key()? {
-                Some(key) => {
-                    let owned = match key {
-                        KeyRef::Borrowed(s) => s.to_owned(),
-                        KeyRef::Owned(s) => s,
-                    };
-                    let value = self.parse_value::<T>()?;
-                    Ok(Some((owned, value)))
-                }
-                None => Ok(None),
-            }
-        }
-
-        /// Fetch the next key and coerce it into `T` using `FromStr`.
-        ///
-        /// Returns `Ok(None)` when the object has no more entries. Any parse
-        /// failure from `T::from_str` is wrapped in a deterministic JSON
-        /// [`Error`].
-        pub fn coerce_key<T>(&mut self) -> Result<Option<T>, Error>
-        where
-            T: core::str::FromStr,
-            T::Err: core::fmt::Display,
-        {
-            match self.next_key()? {
-                Some(key) => {
-                    let parsed = CoerceKey::from(key).parse::<T>()?;
-                    Ok(Some(parsed))
-                }
-                None => Ok(None),
-            }
-        }
-
-        /// Fetch the next key/value pair, coercing the key via `FromStr` and
-        /// deserializing the value using `JsonDeserialize`.
-        pub fn next_entry_coerced<T, V>(&mut self) -> Result<Option<(T, V)>, Error>
-        where
-            T: core::str::FromStr,
-            T::Err: core::fmt::Display,
-            V: JsonDeserialize,
-        {
-            match self.next_key()? {
-                Some(key) => {
-                    let parsed_key = CoerceKey::from(key).parse::<T>()?;
-                    let value = self.parse_value::<V>()?;
-                    Ok(Some((parsed_key, value)))
-                }
-                None => Ok(None),
-            }
-        }
-
-        pub fn finish(mut self) -> Result<(), Error> {
-            if self.value_pending {
-                return Err(Error::Message(
-                    "object ended before consuming value for current key".into(),
-                ));
-            }
-            if !self.finished {
-                self.parser.skip_ws();
-                if self.parser.try_consume_char(b'}')? {
-                    self.finished = true;
-                } else {
-                    let (byte, line, col) =
-                        crate::json::pos_from_offset(self.parser.input(), self.parser.position());
-                    return Err(Error::ExpectedCommaOrObjectEnd { byte, line, col });
-                }
-            }
-            Ok(())
-        }
-
-        #[inline]
-        pub fn missing_field(field: &'static str) -> Error {
-            Error::missing_field(field)
-        }
-
-        #[inline]
-        pub fn duplicate_field(field: &str) -> Error {
-            Error::duplicate_field(field)
-        }
-
-        #[inline]
-        pub fn unknown_field(field: &str) -> Error {
-            Error::unknown_field(field)
-        }
-
-        fn finish_value(&mut self) -> Result<(), Error> {
-            self.parser.skip_ws();
-            match self.parser.peek() {
-                Some(b',') => {
-                    self.parser.bump();
-                    self.value_pending = false;
-                    Ok(())
-                }
-                Some(b'}') => {
-                    self.parser.bump();
-                    self.finished = true;
-                    self.value_pending = false;
-                    Ok(())
-                }
-                Some(_) => {
-                    let (byte, line, col) =
-                        crate::json::pos_from_offset(self.parser.input(), self.parser.position());
-                    Err(Error::ExpectedCommaOrObjectEnd { byte, line, col })
-                }
-                None => {
-                    let (byte, line, col) =
-                        crate::json::pos_from_offset(self.parser.input(), self.parser.position());
-                    Err(Error::UnexpectedEof { byte, line, col })
-                }
-            }
-        }
-    }
-
-    pub struct SeqVisitor<'a, 'p> {
-        parser: &'p mut Parser<'a>,
-        finished: bool,
-    }
-
-    impl<'a, 'p> SeqVisitor<'a, 'p> {
-        pub fn new(parser: &'p mut Parser<'a>) -> Result<Self, Error> {
-            parser.skip_ws();
-            parser.expect(b'[')?;
-            let mut visitor = Self {
-                parser,
-                finished: false,
-            };
-            if visitor.parser.try_consume_char(b']')? {
-                visitor.finished = true;
-            }
-            Ok(visitor)
-        }
-
-        #[inline]
-        pub fn parser(&mut self) -> &mut Parser<'a> {
-            self.parser
-        }
-
-        #[inline]
-        pub fn is_finished(&self) -> bool {
-            self.finished
-        }
-
-        pub fn next_element<T: JsonDeserialize>(&mut self) -> Result<Option<T>, Error> {
-            if self.finished {
-                return Ok(None);
-            }
-            let value = T::json_deserialize(self.parser)?;
-            self.finish_element()?;
-            Ok(Some(value))
-        }
-
-        pub fn next_element_with<V>(&mut self, visitor: V) -> Result<Option<V::Value>, Error>
-        where
-            V: Visitor<'a>,
-        {
-            if self.finished {
-                return Ok(None);
-            }
-            let value = visit_value(self.parser, visitor)?;
-            self.finish_element()?;
-            Ok(Some(value))
-        }
-
-        pub fn skip_element(&mut self) -> Result<(), Error> {
-            if self.finished {
-                return Ok(());
-            }
-            self.parser.skip_value()?;
-            self.finish_element()
-        }
-
-        pub fn finish(mut self) -> Result<(), Error> {
-            if !self.finished {
-                self.parser.skip_ws();
-                if self.parser.try_consume_char(b']')? {
-                    self.finished = true;
-                } else {
-                    let (byte, line, col) =
-                        crate::json::pos_from_offset(self.parser.input(), self.parser.position());
-                    return Err(Error::ExpectedCommaOrArrayEnd { byte, line, col });
-                }
-            }
-            Ok(())
-        }
-
-        fn finish_element(&mut self) -> Result<(), Error> {
-            self.parser.skip_ws();
-            match self.parser.peek() {
-                Some(b',') => {
-                    self.parser.bump();
-                    Ok(())
-                }
-                Some(b']') => {
-                    self.parser.bump();
-                    self.finished = true;
-                    Ok(())
-                }
-                Some(_) => {
-                    let (byte, line, col) =
-                        crate::json::pos_from_offset(self.parser.input(), self.parser.position());
-                    Err(Error::ExpectedCommaOrArrayEnd { byte, line, col })
-                }
-                None => {
-                    let (byte, line, col) =
-                        crate::json::pos_from_offset(self.parser.input(), self.parser.position());
-                    Err(Error::UnexpectedEof { byte, line, col })
-                }
-            }
-        }
-    }
+    mod visitors;
+    pub use visitors::{MapVisitor, SeqVisitor};
 
     pub trait Visitor<'a> {
         type Value;
@@ -10238,20 +10014,22 @@ where
     core::to_bytes(value)
 }
 
-/// Return conservative decode limits derived from one complete Norito frame.
+/// Return conservative decode limits derived from one complete encoded value.
 ///
 /// Packed boolean sequences may carry eight logical elements per encoded byte,
 /// so sequence and cumulative element budgets use an eightfold allowance.
-/// Allocation receives a wider multiplier plus a fixed 64 KiB floor for small
-/// structural values. Saturating arithmetic keeps malformed length inputs
-/// fail-closed.
+/// Allocation is capped at 34 times the encoded length plus a fixed 64 KiB floor
+/// for small structural values. The extra linear allowance covers owned
+/// container bookkeeping in large canonical values while the independent
+/// field, element, and nesting limits remain in force. Saturating arithmetic
+/// keeps malformed length inputs fail-closed.
 #[must_use]
 pub const fn canonical_decode_limits(payload_len: usize) -> DecodeLimits {
     DecodeLimits::new(
         payload_len.saturating_mul(8),
         payload_len,
         payload_len.saturating_mul(8),
-        payload_len.saturating_mul(32).saturating_add(64 * 1024),
+        payload_len.saturating_mul(34).saturating_add(64 * 1024),
         core::MAX_OWNED_VALUE_DECODE_DEPTH,
     )
 }
@@ -10369,6 +10147,34 @@ mod canonical_codec_tests {
         let unit = encode_canonical(&()).expect("encode canonical unit");
         decode_canonical_with_limits::<()>(&unit, canonical_decode_limits(unit.len()))
             .expect("decode canonical unit");
+    }
+
+    #[test]
+    fn canonical_allocation_budget_covers_large_signed_genesis() {
+        // A production signed-genesis payload of this size accounts for slightly
+        // more than the former 32x-plus-64-KiB allocation envelope while it is
+        // reconstructed into owned containers.
+        const PAYLOAD_BYTES: usize = 55_766;
+        const ACCOUNTED_ALLOCATION_BYTES: usize = 1_850_832;
+
+        let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
+
+        assert_eq!(allocation_budget, PAYLOAD_BYTES * 34 + 64 * 1024);
+        assert!(allocation_budget >= ACCOUNTED_ALLOCATION_BYTES);
+    }
+
+    #[test]
+    fn canonical_allocation_budget_covers_large_resultless_genesis_candidate() {
+        // The canonical resultless projection has a smaller frame than its
+        // result-bearing signed genesis, but reconstructing its owned graph
+        // crosses the 33x-plus-64-KiB envelope used by the former policy.
+        const PAYLOAD_BYTES: usize = 54_586;
+        const FIRST_REJECTED_ALLOCATION_BYTES: usize = 1_867_001;
+
+        let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
+
+        assert_eq!(allocation_budget, PAYLOAD_BYTES * 34 + 64 * 1024);
+        assert!(allocation_budget >= FIRST_REJECTED_ALLOCATION_BYTES);
     }
 
     #[test]

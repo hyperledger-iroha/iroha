@@ -3,8 +3,9 @@
 //! The Base circuit records one canonical Pasta point and scalar per source,
 //! proves a 128-bit normalized GLV decomposition, and retains limb-aligned
 //! segment cells.  A source-major state machine then consumes each recorded
-//! cell exactly once.  It uses one fixed selector, one equality-enabled advice
-//! bus, no lookup tables, and only current/next rotations.
+//! cell exactly once.  Each physical lane uses one fixed enable column and
+//! equality-enabled advice columns for its bus and accumulator coordinates,
+//! with no lookup tables and only current/next rotations.
 //!
 //! For each source the machine loads `R`, consumes the two normalized scalars
 //! least-significant bit first, adds the joint digit to the accumulator, and
@@ -12,12 +13,14 @@
 //! with a zero terminal quotient, range-constrain and bind every bit without a
 //! separate packing region.
 //!
-//! The accumulator starts at a prover-chosen on-curve non-identity offset `D`
-//! and must finish at the same `D`.  This is sound because `D` is carried
-//! unchanged through the authenticated trace.  Witness generation chooses a
-//! deterministic generator multiple which avoids every exceptional affine
-//! addition, and the circuit independently requires a nonzero denominator for
-//! each active addition.
+//! A large logical MSM is split into at most three source-ordered physical
+//! lanes.  The accumulator starts at a deterministic on-curve non-identity
+//! offset `D`; equality constraints copy every lane endpoint into the next
+//! lane start and close the last endpoint back to `D`.  The ring closes exactly
+//! when the original unsplit MSM is the identity.  Offset selection scans the
+//! complete source order to avoid every exceptional affine addition, and the
+//! circuit independently requires a nonzero denominator for each active
+//! addition.
 
 use ff::{Field as _, PrimeField, WithSmallOrderMulGroup};
 use halo2_base::{
@@ -46,7 +49,11 @@ const SEGMENT_BITS: usize = 7;
 const SEGMENTS_PER_SCALAR: usize = 19;
 const SCALARS_PER_SOURCE: usize = 2;
 const ROWS_PER_SOURCE: usize = 2 + SEGMENTS_PER_SCALAR * SCALARS_PER_SOURCE + GLV_BITS;
-const DENSE_COLUMNS: usize = 38;
+const DENSE_COLUMNS: usize = 37;
+const DENSE_LANES: usize = 3;
+const K17_USABLE_ROWS: usize = (1 << 17) - 9;
+const ROWS_PER_JOB: usize = 3;
+const K17_MAX_SOURCES_PER_LANE: usize = (K17_USABLE_ROWS - ROWS_PER_JOB) / ROWS_PER_SOURCE;
 const OFFSET_RETRIES: u64 = 256;
 const LIMB_BITS: usize = 86;
 
@@ -87,7 +94,6 @@ const DIGIT_ACTIVE: usize = 33;
 const DIGIT_X: usize = 34;
 const DIGIT_Y: usize = 35;
 const SOURCE_ENDPOINT: usize = 36;
-const FINAL_ENDPOINT: usize = 37;
 
 type Base<C> = <C as CurveAffine>::Base;
 type Scalar<C> = <C as CurveAffine>::ScalarExt;
@@ -159,7 +165,7 @@ where
     Base<C>: BigPrimeField,
 {
     start_tag: AssignedValue<Base<C>>,
-    source_count_tag: AssignedValue<Base<C>>,
+    source_count_tags: Vec<AssignedValue<Base<C>>>,
     sources: Vec<ConstrainedDenseSource<C>>,
 }
 
@@ -187,12 +193,18 @@ where
     }
 }
 
-/// One fixed selector and the advice columns for the dense audit.
+/// Three disjoint fixed-selector lanes for the dense audit.
 ///
-/// Only the first column is equality enabled.  All remaining columns are
-/// trace-local state or scratch values and add no permutation columns.
+/// The bus and accumulator coordinates are equality enabled.  The bus binds
+/// each lane to the Base graph; accumulator copies join lane endpoints into a
+/// ring whose closure enforces the original logical MSM identity.
 #[derive(Clone, Debug)]
 pub(crate) struct KagemushaDenseMsmConfigV5 {
+    lanes: [KagemushaDenseMsmLaneConfigV5; DENSE_LANES],
+}
+
+#[derive(Clone, Debug)]
+struct KagemushaDenseMsmLaneConfigV5 {
     columns: [Column<Advice>; DENSE_COLUMNS],
     q_enable: Column<Fixed>,
 }
@@ -204,20 +216,25 @@ impl KagemushaDenseMsmConfigV5 {
         C: CurveAffineExt,
         Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
     {
-        let columns = std::array::from_fn(|_| meta.advice_column());
-        Self::configure_on::<C>(meta, columns)
+        Self {
+            lanes: std::array::from_fn(|_| {
+                let columns = std::array::from_fn(|_| meta.advice_column());
+                Self::configure_lane_on::<C>(meta, columns)
+            }),
+        }
     }
 
-    /// Install the dense gate on an existing custom region.
-    pub(crate) fn configure_on<C>(
+    fn configure_lane_on<C>(
         meta: &mut ConstraintSystem<Base<C>>,
         columns: [Column<Advice>; DENSE_COLUMNS],
-    ) -> Self
+    ) -> KagemushaDenseMsmLaneConfigV5
     where
         C: CurveAffineExt,
         Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
     {
         meta.enable_equality(columns[BUS]);
+        meta.enable_equality(columns[ACC_X]);
+        meta.enable_equality(columns[ACC_Y]);
         let q_enable = meta.fixed_column();
         meta.create_gate("Kagemusha dense MSM machine", |meta| {
             let enabled = meta.query_fixed(q_enable, Rotation::cur());
@@ -250,7 +267,7 @@ impl KagemushaDenseMsmConfigV5 {
             constraints
         });
 
-        Self { columns, q_enable }
+        KagemushaDenseMsmLaneConfigV5 { columns, q_enable }
     }
 }
 
@@ -328,7 +345,6 @@ where
     let digit_x = current[DIGIT_X].clone();
     let digit_y = current[DIGIT_Y].clone();
     let source_endpoint = current[SOURCE_ENDPOINT].clone();
-    let final_endpoint = current[FINAL_ENDPOINT].clone();
 
     let segment_phase = load_p2.clone() + op.clone();
 
@@ -355,7 +371,6 @@ where
         digit_x.clone() - op.clone() * expected_digit_x,
         digit_y.clone() - op.clone() * expected_digit_y,
         source_endpoint.clone() - op.clone() * last_bit.clone() * last_segment.clone(),
-        final_endpoint.clone() - source_endpoint.clone() * last_source.clone(),
     ]);
 
     constraints.extend([
@@ -477,8 +492,6 @@ where
                 - (one.clone() - last_source.clone())),
         source_endpoint.clone() * sources_minus_one * last_source.clone(),
         source_endpoint.clone() * last_source.clone() * (last_source.clone() - one.clone()),
-        final_endpoint.clone() * (next[ACC_X].clone() - next[OFFSET_X].clone()),
-        final_endpoint * (next[ACC_Y].clone() - next[OFFSET_Y].clone()),
     ]);
 
     let segments_minus_seven = remaining_segments - Expression::Constant(Base::<C>::from(7));
@@ -491,6 +504,28 @@ where
     ]);
 
     constraints
+}
+
+fn dense_lane_count(source_count: usize) -> Result<usize, String> {
+    if source_count == 0 {
+        return Err("Kagemusha dense MSM requires at least one source".to_owned());
+    }
+    let lanes = source_count.div_ceil(K17_MAX_SOURCES_PER_LANE);
+    if lanes > DENSE_LANES {
+        return Err(format!(
+            "Kagemusha dense MSM requires {lanes} physical lanes for {source_count} sources; only {DENSE_LANES} are configured"
+        ));
+    }
+    Ok(lanes)
+}
+
+fn dense_shard_bounds(source_count: usize, lane_count: usize, lane: usize) -> (usize, usize) {
+    debug_assert!(lane_count > 0 && lane < lane_count && lane_count <= source_count);
+    let base = source_count / lane_count;
+    let remainder = source_count % lane_count;
+    let start = lane * base + lane.min(remainder);
+    let len = base + usize::from(lane < remainder);
+    (start, start + len)
 }
 
 impl<C> KagemushaDenseMsmJobsV5<C>
@@ -521,16 +556,24 @@ where
                     .map_err(|error| format!("dense MSM source {source_index}: {error}"))?,
             );
         }
-        // Offset selection is also an early completeness check.
+        let lane_count = dense_lane_count(constrained.len())?;
+        // Global offset selection is also an early completeness check.  It is
+        // deliberately performed over the original source order before the
+        // trace is split across physical lanes.
         choose_offset::<C>(&constrained)?;
         let start_tag = ctx.load_constant(Base::<C>::ONE);
-        let source_count_tag = ctx.load_constant(Base::<C>::from(
-            u64::try_from(constrained.len())
-                .map_err(|_| "dense MSM source count exceeds u64".to_owned())?,
-        ));
+        let source_count_tags = (0..lane_count)
+            .map(|lane| {
+                let (start, end) = dense_shard_bounds(constrained.len(), lane_count, lane);
+                u64::try_from(end - start)
+                    .map(Base::<C>::from)
+                    .map(|count| ctx.load_constant(count))
+                    .map_err(|_| "dense MSM source count exceeds u64".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         self.jobs.push(DenseMsmJob {
             start_tag,
-            source_count_tag,
+            source_count_tags,
             sources: constrained,
         });
         Ok(())
@@ -543,19 +586,34 @@ where
         clone
     }
 
-    /// Return the exact raw-row count across all queued jobs.
+    /// Return the exact maximum raw-row count across the physical lanes.
     pub(super) fn required_rows(&self) -> Result<usize, String> {
-        self.jobs.iter().try_fold(0_usize, |total, job| {
-            let rows = job
-                .sources
-                .len()
-                .checked_mul(ROWS_PER_SOURCE)
-                .and_then(|rows| rows.checked_add(3))
-                .ok_or_else(|| "dense MSM row count overflow".to_owned())?;
+        let mut lane_rows = [0_usize; DENSE_LANES];
+        for job in &self.jobs {
+            let lane_count = job.source_count_tags.len();
+            for (lane, rows) in lane_rows.iter_mut().take(lane_count).enumerate() {
+                let (start, end) = dense_shard_bounds(job.sources.len(), lane_count, lane);
+                let job_rows = (end - start)
+                    .checked_mul(ROWS_PER_SOURCE)
+                    .and_then(|rows| rows.checked_add(ROWS_PER_JOB))
+                    .ok_or_else(|| "dense MSM row count overflow".to_owned())?;
+                *rows = rows
+                    .checked_add(job_rows)
+                    .ok_or_else(|| "dense MSM row count overflow".to_owned())?;
+            }
+        }
+        Ok(lane_rows.into_iter().max().unwrap_or(0))
+    }
+
+    /// Return the exact queued-job, source, and row geometry used by the
+    /// authenticated composite-circuit capacity check.
+    pub(super) fn capacity_profile(&self) -> Result<(usize, usize, usize), String> {
+        let sources = self.jobs.iter().try_fold(0_usize, |total, job| {
             total
-                .checked_add(rows)
-                .ok_or_else(|| "dense MSM row count overflow".to_owned())
-        })
+                .checked_add(job.sources.len())
+                .ok_or_else(|| "dense MSM source count overflow".to_owned())
+        })?;
+        Ok((self.jobs.len(), sources, self.required_rows()?))
     }
 
     /// Reject jobs which exceed the authenticated usable-row budget.
@@ -583,68 +641,125 @@ where
         let physical_cells = if witness_gen_only {
             None
         } else {
-            Some(
-                copy_manager
-                    .lock()
-                    .map_err(|_| Error::Synthesis)?
-                    .assigned_advices
-                    .clone(),
-            )
+            // Base synthesis is complete, so the virtual-to-physical map is
+            // immutable for this pass. Keep a guard instead of cloning the
+            // multi-million-entry map beside the dense trace.
+            Some(copy_manager.lock().map_err(|_| Error::Synthesis)?)
         };
 
-        let mut all_rows = Vec::new();
+        let mut lane_rows: [Vec<RawRow<Base<C>>>; DENSE_LANES] =
+            std::array::from_fn(|_| Vec::new());
+        let mut rings = Vec::<Vec<LaneEndpoint>>::with_capacity(self.jobs.len());
         for (job_index, job) in self.jobs.iter().enumerate() {
-            let mut rows = build_job_rows::<C>(job, job_index)?;
-            all_rows.append(&mut rows);
+            let lane_count = job.source_count_tags.len();
+            let mut offset = choose_offset::<C>(&job.sources).map_err(|_| Error::Synthesis)?;
+            let mut endpoints = Vec::with_capacity(lane_count);
+            for (lane, rows_for_lane) in lane_rows.iter_mut().take(lane_count).enumerate() {
+                let (source_start, source_end) =
+                    dense_shard_bounds(job.sources.len(), lane_count, lane);
+                let row_start = rows_for_lane.len();
+                let (mut rows, terminal) = build_job_lane_rows::<C>(
+                    job,
+                    job_index,
+                    lane,
+                    source_start,
+                    source_end,
+                    offset,
+                )?;
+                endpoints.push(LaneEndpoint {
+                    lane,
+                    start_row: row_start + 1,
+                    terminal_row: row_start + rows.len() - 1,
+                });
+                rows_for_lane.append(&mut rows);
+                offset = terminal;
+            }
+            rings.push(endpoints);
         }
 
         layouter.assign_region(
             || "Kagemusha dense normalized-GLV MSM",
             |mut region| {
-                let mut buses = Vec::<Cell>::with_capacity(all_rows.len());
-                for (row_index, row) in all_rows.iter().enumerate() {
-                    region.assign_fixed(
-                        config.q_enable,
-                        row_index,
-                        Base::<C>::from(row.enable_tag),
-                    );
-                    for column in 0..DENSE_COLUMNS {
-                        let value = if self.use_unknown {
-                            Value::unknown()
-                        } else {
-                            Value::known(row.values[column])
-                        };
-                        let cell = region
-                            .assign_advice(config.columns[column], row_index, value)
-                            .cell();
-                        if column == BUS {
-                            buses.push(cell);
+                let mut buses: [Vec<Cell>; DENSE_LANES] = std::array::from_fn(|_| Vec::new());
+                let mut accumulator_x: [Vec<Cell>; DENSE_LANES] =
+                    std::array::from_fn(|_| Vec::new());
+                let mut accumulator_y: [Vec<Cell>; DENSE_LANES] =
+                    std::array::from_fn(|_| Vec::new());
+                for (lane, rows) in lane_rows.iter().enumerate() {
+                    let lane_config = &config.lanes[lane];
+                    buses[lane].reserve(rows.len());
+                    accumulator_x[lane].reserve(rows.len());
+                    accumulator_y[lane].reserve(rows.len());
+                    for (row_index, row) in rows.iter().enumerate() {
+                        region.assign_fixed(
+                            lane_config.q_enable,
+                            row_index,
+                            Base::<C>::from(row.enable_tag),
+                        );
+                        for column in 0..DENSE_COLUMNS {
+                            let value = if self.use_unknown {
+                                Value::unknown()
+                            } else {
+                                Value::known(row.values[column])
+                            };
+                            let cell = region
+                                .assign_advice(lane_config.columns[column], row_index, value)
+                                .cell();
+                            match column {
+                                BUS => buses[lane].push(cell),
+                                ACC_X => accumulator_x[lane].push(cell),
+                                ACC_Y => accumulator_y[lane].push(cell),
+                                _ => {}
+                            }
                         }
                     }
                 }
 
                 if let Some(physical_cells) = &physical_cells {
-                    for (row_index, row) in all_rows.iter().enumerate() {
-                        let Some(binding) = row.binding else {
-                            continue;
-                        };
-                        let virtual_value = match binding {
-                            BusBinding::Start { job } => self.jobs[job].start_tag,
-                            BusBinding::SourceCount { job } => self.jobs[job].source_count_tag,
-                            BusBinding::SourceX { job, source } => {
-                                self.jobs[job].sources[source].r_x
-                            }
-                            BusBinding::SourceY { job, source } => {
-                                self.jobs[job].sources[source].r_y
-                            }
-                            BusBinding::Segment {
-                                job,
-                                source,
-                                scalar,
-                                segment,
-                            } => self.jobs[job].sources[source].segments[scalar][segment],
-                        };
-                        bind_virtual(&mut region, buses[row_index], virtual_value, physical_cells)?;
+                    for (lane, rows) in lane_rows.iter().enumerate() {
+                        for (row_index, row) in rows.iter().enumerate() {
+                            let Some(binding) = row.binding else {
+                                continue;
+                            };
+                            let virtual_value = match binding {
+                                BusBinding::Start { job } => self.jobs[job].start_tag,
+                                BusBinding::SourceCount { job, lane } => {
+                                    self.jobs[job].source_count_tags[lane]
+                                }
+                                BusBinding::SourceX { job, source } => {
+                                    self.jobs[job].sources[source].r_x
+                                }
+                                BusBinding::SourceY { job, source } => {
+                                    self.jobs[job].sources[source].r_y
+                                }
+                                BusBinding::Segment {
+                                    job,
+                                    source,
+                                    scalar,
+                                    segment,
+                                } => self.jobs[job].sources[source].segments[scalar][segment],
+                            };
+                            bind_virtual(
+                                &mut region,
+                                buses[lane][row_index],
+                                virtual_value,
+                                &physical_cells.assigned_advices,
+                            )?;
+                        }
+                    }
+                }
+
+                for endpoints in &rings {
+                    for (index, endpoint) in endpoints.iter().enumerate() {
+                        let next = endpoints[(index + 1) % endpoints.len()];
+                        region.constrain_equal(
+                            accumulator_x[endpoint.lane][endpoint.terminal_row],
+                            accumulator_x[next.lane][next.start_row],
+                        );
+                        region.constrain_equal(
+                            accumulator_y[endpoint.lane][endpoint.terminal_row],
+                            accumulator_y[next.lane][next.start_row],
+                        );
                     }
                 }
                 Ok(())
@@ -654,12 +769,20 @@ where
 }
 
 #[derive(Clone, Copy, Debug)]
+struct LaneEndpoint {
+    lane: usize,
+    start_row: usize,
+    terminal_row: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
 enum BusBinding {
     Start {
         job: usize,
     },
     SourceCount {
         job: usize,
+        lane: usize,
     },
     SourceX {
         job: usize,
@@ -1194,13 +1317,20 @@ where
     })
 }
 
-fn build_job_rows<C>(job: &DenseMsmJob<C>, job_index: usize) -> Result<Vec<RawRow<Base<C>>>, Error>
+fn build_job_lane_rows<C>(
+    job: &DenseMsmJob<C>,
+    job_index: usize,
+    lane: usize,
+    source_start: usize,
+    source_end: usize,
+    offset: C::Curve,
+) -> Result<(Vec<RawRow<Base<C>>>, C::Curve), Error>
 where
     C: CurveAffineExt,
     Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
     Scalar<C>: BigPrimeField,
 {
-    let offset = choose_offset::<C>(&job.sources).map_err(|_| Error::Synthesis)?;
+    debug_assert!(source_start < source_end && source_end <= job.sources.len());
     let (offset_x, offset_y) = affine_coordinates::<C>(&offset).map_err(|_| Error::Synthesis)?;
     let mut rows = Vec::new();
     let mut state = MachineWitness::<Base<C>>::default();
@@ -1220,18 +1350,22 @@ where
     state.acc_y = offset_y;
     state.offset_x = offset_x;
     state.offset_y = offset_y;
-    let source_count = u64::try_from(job.sources.len()).map_err(|_| Error::Synthesis)?;
+    let source_count = u64::try_from(source_end - source_start).map_err(|_| Error::Synthesis)?;
     rows.push(raw_row(
         state,
         Base::<C>::from(source_count),
         Some(MODE_COUNT),
-        Some(BusBinding::SourceCount { job: job_index }),
+        Some(BusBinding::SourceCount {
+            job: job_index,
+            lane,
+        }),
     ));
     state.remaining_sources = Base::<C>::from(source_count);
     state.remaining_segments = Base::<C>::from(SEGMENTS_PER_SCALAR as u64);
 
     let mut accumulator = offset;
-    for (source_index, source) in job.sources.iter().enumerate() {
+    for (source_offset, source) in job.sources[source_start..source_end].iter().enumerate() {
+        let source_index = source_start + source_offset;
         let (r_x, r_y) = source.r.into_coordinates();
         rows.push(raw_row(
             state,
@@ -1323,7 +1457,6 @@ where
                 operation.values[LAST_SOURCE] = last_source;
                 operation.values[LAST_SOURCE_INVERSE] = last_source_inverse;
                 operation.values[SOURCE_ENDPOINT] = last_bit * last_segment;
-                operation.values[FINAL_ENDPOINT] = last_bit * last_segment * last_source;
 
                 let (source_current_x, source_current_y) =
                     affine_coordinates::<C>(&running_source).map_err(|_| Error::Synthesis)?;
@@ -1376,8 +1509,22 @@ where
     }
 
     rows.push(raw_row(state, Base::<C>::ZERO, None, None));
-    debug_assert_eq!(rows.len(), job.sources.len() * ROWS_PER_SOURCE + 3);
-    Ok(rows)
+    debug_assert_eq!(
+        rows.len(),
+        (source_end - source_start) * ROWS_PER_SOURCE + ROWS_PER_JOB
+    );
+    Ok((rows, accumulator))
+}
+
+#[cfg(test)]
+fn build_job_rows<C>(job: &DenseMsmJob<C>, job_index: usize) -> Result<Vec<RawRow<Base<C>>>, Error>
+where
+    C: CurveAffineExt,
+    Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+    Scalar<C>: BigPrimeField,
+{
+    let offset = choose_offset::<C>(&job.sources).map_err(|_| Error::Synthesis)?;
+    build_job_lane_rows::<C>(job, job_index, 0, 0, job.sources.len(), offset).map(|(rows, _)| rows)
 }
 
 fn bind_virtual<F: BigPrimeField>(
@@ -1525,12 +1672,41 @@ mod tests {
     fn configuration_stays_at_degree_five() {
         let mut meta = ConstraintSystem::<Fq>::default();
         let _config = KagemushaDenseMsmConfigV5::configure::<EqAffine>(&mut meta);
-        assert_eq!(meta.num_advice_columns(), DENSE_COLUMNS);
-        assert_eq!(meta.num_fixed_columns(), 1);
+        assert_eq!(meta.num_advice_columns(), DENSE_LANES * DENSE_COLUMNS);
+        assert_eq!(meta.num_fixed_columns(), DENSE_LANES);
         assert_eq!(meta.num_selectors(), 0);
-        assert_eq!(meta.permutation().get_columns().len(), 1);
+        assert_eq!(meta.permutation().get_columns().len(), DENSE_LANES * 3);
         assert_eq!(meta.degree(), 5);
         assert_eq!(248 * ROWS_PER_SOURCE + 3, 41_667);
+    }
+
+    #[test]
+    fn k17_lane_geometry_fits_the_production_source_count() {
+        assert_eq!(K17_MAX_SOURCES_PER_LANE, 780);
+        assert_eq!(dense_lane_count(1_867), Ok(3));
+        let shard_rows = (0..3)
+            .map(|lane| {
+                let (start, end) = dense_shard_bounds(1_867, 3, lane);
+                (end - start) * ROWS_PER_SOURCE + ROWS_PER_JOB
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(shard_rows, vec![104_667, 104_499, 104_499]);
+        assert!(shard_rows.into_iter().all(|rows| rows <= K17_USABLE_ROWS));
+
+        let point = Eq::generator().to_affine();
+        let jobs = KagemushaDenseMsmJobsV5 {
+            jobs: vec![DenseMsmJob {
+                start_tag: assigned(Fq::ONE),
+                source_count_tags: vec![
+                    assigned(Fq::from(623)),
+                    assigned(Fq::from(622)),
+                    assigned(Fq::from(622)),
+                ],
+                sources: vec![unit_scalar_source(point); 1_867],
+            }],
+            use_unknown: false,
+        };
+        assert_eq!(jobs.capacity_profile(), Ok((1, 1_867, 104_667)));
     }
 
     const QUEUE_TEST_K: u32 = 9;
@@ -1718,7 +1894,7 @@ mod tests {
 
     #[derive(Clone)]
     struct DenseRowsCircuit {
-        rows: Vec<RawRow<Fq>>,
+        lane_rows: Vec<Vec<RawRow<Fq>>>,
     }
 
     impl Circuit<Fq> for DenseRowsCircuit {
@@ -1742,20 +1918,110 @@ mod tests {
             layouter.assign_region(
                 || "dense test rows",
                 |mut region| {
-                    for (row_index, row) in self.rows.iter().enumerate() {
-                        region.assign_fixed(config.q_enable, row_index, Fq::from(row.enable_tag));
-                        for (column, value) in row.values.iter().copied().enumerate() {
-                            region.assign_advice(
-                                config.columns[column],
+                    let mut accumulator_x = Vec::with_capacity(self.lane_rows.len());
+                    let mut accumulator_y = Vec::with_capacity(self.lane_rows.len());
+                    for (lane, rows) in self.lane_rows.iter().enumerate() {
+                        let lane_config = &config.lanes[lane];
+                        let mut lane_accumulator_x = Vec::with_capacity(rows.len());
+                        let mut lane_accumulator_y = Vec::with_capacity(rows.len());
+                        for (row_index, row) in rows.iter().enumerate() {
+                            region.assign_fixed(
+                                lane_config.q_enable,
                                 row_index,
-                                Value::known(value),
+                                Fq::from(row.enable_tag),
                             );
+                            for (column, value) in row.values.iter().copied().enumerate() {
+                                let cell = region
+                                    .assign_advice(
+                                        lane_config.columns[column],
+                                        row_index,
+                                        Value::known(value),
+                                    )
+                                    .cell();
+                                match column {
+                                    ACC_X => lane_accumulator_x.push(cell),
+                                    ACC_Y => lane_accumulator_y.push(cell),
+                                    _ => {}
+                                }
+                            }
                         }
+                        accumulator_x.push(lane_accumulator_x);
+                        accumulator_y.push(lane_accumulator_y);
+                    }
+                    for lane in 0..self.lane_rows.len() {
+                        let next = (lane + 1) % self.lane_rows.len();
+                        let terminal = self.lane_rows[lane].len() - 1;
+                        region
+                            .constrain_equal(accumulator_x[lane][terminal], accumulator_x[next][1]);
+                        region
+                            .constrain_equal(accumulator_y[lane][terminal], accumulator_y[next][1]);
                     }
                     Ok(())
                 },
             )
         }
+    }
+
+    fn build_test_lane_rows(
+        sources: Vec<ConstrainedDenseSource<EqAffine>>,
+        lane_count: usize,
+    ) -> Vec<Vec<RawRow<Fq>>> {
+        let source_count = sources.len();
+        let job = DenseMsmJob {
+            start_tag: assigned(Fq::ONE),
+            source_count_tags: (0..lane_count)
+                .map(|lane| {
+                    let (start, end) = dense_shard_bounds(source_count, lane_count, lane);
+                    assigned(Fq::from((end - start) as u64))
+                })
+                .collect(),
+            sources,
+        };
+        let mut offset = choose_offset::<EqAffine>(&job.sources).expect("complete global offset");
+        (0..lane_count)
+            .map(|lane| {
+                let (start, end) = dense_shard_bounds(source_count, lane_count, lane);
+                let (rows, terminal) =
+                    build_job_lane_rows::<EqAffine>(&job, 0, lane, start, end, offset)
+                        .expect("complete lane trace");
+                offset = terminal;
+                rows
+            })
+            .collect()
+    }
+
+    #[test]
+    fn accumulator_ring_accepts_a_cross_lane_cancellation() {
+        let point = Eq::generator().to_affine();
+        let lane_rows = build_test_lane_rows(
+            vec![
+                unit_scalar_source(point),
+                unit_scalar_source(point),
+                unit_scalar_source(-point),
+                unit_scalar_source(-point),
+            ],
+            2,
+        );
+        let prover = MockProver::run(9, &DenseRowsCircuit { lane_rows }, vec![])
+            .expect("two-lane mock prover runs");
+        prover.assert_satisfied();
+    }
+
+    #[test]
+    fn accumulator_ring_rejects_a_nonzero_cross_lane_result() {
+        let point = Eq::generator().to_affine();
+        let lane_rows = build_test_lane_rows(
+            vec![
+                unit_scalar_source(point),
+                unit_scalar_source(point),
+                unit_scalar_source(-point),
+                unit_scalar_source(point),
+            ],
+            2,
+        );
+        let prover = MockProver::run(9, &DenseRowsCircuit { lane_rows }, vec![])
+            .expect("two-lane mock prover runs");
+        assert!(prover.verify().is_err());
     }
 
     #[test]
@@ -1764,13 +2030,19 @@ mod tests {
         let sources = vec![unit_scalar_source(point), unit_scalar_source(-point)];
         let job = DenseMsmJob {
             start_tag: assigned(Fq::ONE),
-            source_count_tag: assigned(Fq::from(2)),
+            source_count_tags: vec![assigned(Fq::from(2))],
             sources,
         };
         let rows = build_job_rows::<EqAffine>(&job, 0).expect("complete affine trace");
         assert_eq!(rows.len(), 2 * ROWS_PER_SOURCE + 3);
-        let prover =
-            MockProver::run(9, &DenseRowsCircuit { rows }, vec![]).expect("mock prover runs");
+        let prover = MockProver::run(
+            9,
+            &DenseRowsCircuit {
+                lane_rows: vec![rows],
+            },
+            vec![],
+        )
+        .expect("mock prover runs");
         prover.assert_satisfied();
     }
 
@@ -1779,12 +2051,18 @@ mod tests {
         let point = Eq::generator().to_affine();
         let job = DenseMsmJob {
             start_tag: assigned(Fq::ONE),
-            source_count_tag: assigned(Fq::ONE),
+            source_count_tags: vec![assigned(Fq::ONE)],
             sources: vec![unit_scalar_source(point)],
         };
         let rows = build_job_rows::<EqAffine>(&job, 0).expect("complete affine trace");
-        let prover =
-            MockProver::run(9, &DenseRowsCircuit { rows }, vec![]).expect("mock prover runs");
+        let prover = MockProver::run(
+            9,
+            &DenseRowsCircuit {
+                lane_rows: vec![rows],
+            },
+            vec![],
+        )
+        .expect("mock prover runs");
         assert!(prover.verify().is_err());
     }
 
@@ -1794,14 +2072,20 @@ mod tests {
         let sources = vec![unit_scalar_source(point), unit_scalar_source(-point)];
         let job = DenseMsmJob {
             start_tag: assigned(Fq::ONE),
-            source_count_tag: assigned(Fq::from(2)),
+            source_count_tags: vec![assigned(Fq::from(2))],
             sources,
         };
         let mut rows = build_job_rows::<EqAffine>(&job, 0).expect("complete affine trace");
         rows[0].values[MODE_COUNT] = Fq::ONE;
         rows[0].values[START] = Fq::ZERO;
-        let prover =
-            MockProver::run(9, &DenseRowsCircuit { rows }, vec![]).expect("mock prover runs");
+        let prover = MockProver::run(
+            9,
+            &DenseRowsCircuit {
+                lane_rows: vec![rows],
+            },
+            vec![],
+        )
+        .expect("mock prover runs");
         assert!(prover.verify().is_err());
     }
 }

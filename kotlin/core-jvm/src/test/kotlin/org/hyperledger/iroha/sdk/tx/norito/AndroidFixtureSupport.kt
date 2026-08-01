@@ -23,27 +23,14 @@ internal data class TransactionPayloadFixture(
     val creationTimeMs: Long,
     val timeToLiveMs: Long,
     val nonce: Long?,
-    val payload: Map<String, Any?>?,
-    val encodedBase64: String?,
-    val payloadHash: String?,
-    val signedBase64: String?,
-    val signedHash: String?,
+    val payload: Map<String, Any?>,
+    val payloadBase64: String,
+    val payloadHash: String,
+    val signedBase64: String,
+    val signedHash: String,
 ) {
-    fun materializePayload(adapter: NoritoJavaCodecAdapter): TransactionPayload {
-        if (name == LEGACY_GASLESS_IVM_FIXTURE && encodedBase64 != null) {
-            return adapter.decodeTransaction(
-                AndroidFixtureSupport.decodeCanonicalBase64(encodedBase64, "$name.encoded"),
-            )
-        }
-        payload?.let { return AndroidFixtureSupport.buildPayload(name, it) }
-        check(!encodedBase64.isNullOrBlank()) { "$name: fixture missing payload and encoded data" }
-        return adapter.decodeTransaction(
-            AndroidFixtureSupport.decodeCanonicalBase64(encodedBase64, "$name.encoded"),
-        )
-    }
+    fun materializePayload(): TransactionPayload = AndroidFixtureSupport.buildPayload(name, payload)
 }
-
-internal const val LEGACY_GASLESS_IVM_FIXTURE = "ivm_transfer"
 
 internal data class TransactionManifestFixture(
     val name: String,
@@ -62,7 +49,46 @@ internal data class TransactionManifestFixture(
 )
 
 internal object AndroidFixtureSupport {
-    private const val ANDROID_RESOURCE_ROOT = "java/iroha_android/src/test/resources"
+    private const val CANONICAL_FIXTURE_ROOT = "fixtures/norito_rpc"
+    private val PAYLOAD_FIXTURE_FIELDS = setOf(
+        "name",
+        "chain",
+        "authority",
+        "creation_time_ms",
+        "time_to_live_ms",
+        "nonce",
+        "payload",
+        "payload_base64",
+        "payload_hash",
+        "signed_base64",
+        "signed_hash",
+    )
+    private val PAYLOAD_FIELDS = setOf(
+        "chain",
+        "authority",
+        "creation_time_ms",
+        "executable",
+        "time_to_live_ms",
+        "nonce",
+        "fee_payment",
+        "metadata",
+    )
+    private val MANIFEST_FIXTURE_FIELDS = setOf(
+        "name",
+        "chain",
+        "authority",
+        "creation_time_ms",
+        "time_to_live_ms",
+        "nonce",
+        "payload_base64",
+        "payload_hash",
+        "encoded_file",
+        "encoded_len",
+        "signed_base64",
+        "signed_hash",
+        "signed_len",
+    )
+    private val EXECUTABLE_VARIANTS = setOf("Ivm", "Instructions", "ContractCall", "Batch")
 
     fun loadPayloadFixtures(): List<TransactionPayloadFixture> {
         val path = resolveSharedResource("transaction_payloads.json")
@@ -82,18 +108,35 @@ internal object AndroidFixtureSupport {
         val creationTimeMs = requiredLong(map["creation_time_ms"], "$name.creation_time_ms")
         val timeToLiveMs = requiredPositiveLong(map, "time_to_live_ms", "$name.time_to_live_ms")
         val nonce = optionalLong(map["nonce"], "$name.nonce")
-        val payload = map["payload"]?.let { asMap(it, "$name.payload") }
-        payload?.let {
-            val payloadTimeToLiveMs = requiredPositiveLong(
-                it,
-                "time_to_live_ms",
-                "$name.payload.time_to_live_ms",
-            )
-            check(payloadTimeToLiveMs == timeToLiveMs) {
-                "$name: top-level and payload time_to_live_ms values must match"
-            }
+        check(!map.containsKey("encoded")) {
+            "$name: retired encoded alias is not accepted"
         }
-        val encodedBase64 = optionalString(map["encoded"]) ?: optionalString(map["payload_base64"])
+        val payload = asMap(map["payload"], "$name.payload")
+        val payloadTimeToLiveMs = requiredPositiveLong(
+            payload,
+            "time_to_live_ms",
+            "$name.payload.time_to_live_ms",
+        )
+        check(payloadTimeToLiveMs == timeToLiveMs) {
+            "$name: top-level and payload time_to_live_ms values must match"
+        }
+        requireExactFields(map, PAYLOAD_FIXTURE_FIELDS, "payload fixture $name")
+        requireExactFields(payload, PAYLOAD_FIELDS, "$name.payload")
+        require(requiredString(payload["chain"], "$name.payload.chain") == chain) {
+            "$name: top-level and payload chain values must match"
+        }
+        require(requiredString(payload["authority"], "$name.payload.authority") == authority) {
+            "$name: top-level and payload authority values must match"
+        }
+        require(
+            requiredLong(payload["creation_time_ms"], "$name.payload.creation_time_ms") ==
+                creationTimeMs,
+        ) {
+            "$name: top-level and payload creation_time_ms values must match"
+        }
+        require(optionalLong(payload["nonce"], "$name.payload.nonce") == nonce) {
+            "$name: top-level and payload nonce values must match"
+        }
         return TransactionPayloadFixture(
             name = name,
             chain = chain,
@@ -102,10 +145,10 @@ internal object AndroidFixtureSupport {
             timeToLiveMs = timeToLiveMs,
             nonce = nonce,
             payload = payload,
-            encodedBase64 = encodedBase64,
-            payloadHash = optionalString(map["payload_hash"]),
-            signedBase64 = optionalString(map["signed_base64"]),
-            signedHash = optionalString(map["signed_hash"]),
+            payloadBase64 = requiredString(map["payload_base64"], "$name.payload_base64"),
+            payloadHash = requiredString(map["payload_hash"], "$name.payload_hash"),
+            signedBase64 = requiredString(map["signed_base64"], "$name.signed_base64"),
+            signedHash = requiredString(map["signed_hash"], "$name.signed_hash"),
         )
     }
 
@@ -113,6 +156,7 @@ internal object AndroidFixtureSupport {
         val path = resolveSharedResource("transaction_fixtures.manifest.json")
         val parsed = JsonParser.parse(path.readText())
         val manifest = asMap(parsed, path.toString())
+        requireExactFields(manifest, setOf("fixtures"), "manifest")
         val fixtures = asList(manifest["fixtures"], "manifest.fixtures").map {
             manifestFixtureFromValue(it)
         }
@@ -123,20 +167,39 @@ internal object AndroidFixtureSupport {
     internal fun manifestFixtureFromValue(value: Any?): TransactionManifestFixture {
         val map = asMap(value, "manifest.fixture")
         val name = requiredString(map["name"], "manifest.fixture.name")
+        val chain = requiredString(map["chain"], "$name.chain")
+        val authority = requiredString(map["authority"], "$name.authority")
+        val creationTimeMs = requiredLong(map["creation_time_ms"], "$name.creation_time_ms")
+        val timeToLiveMs = requiredPositiveLong(map, "time_to_live_ms", "$name.time_to_live_ms")
+        val nonce = optionalLong(map["nonce"], "$name.nonce")
+        val payloadBase64 = requiredString(map["payload_base64"], "$name.payload_base64")
+        val payloadHash = requiredString(map["payload_hash"], "$name.payload_hash")
+        val encodedFile = requiredString(map["encoded_file"], "$name.encoded_file")
+        val encodedLen = requiredLong(map["encoded_len"], "$name.encoded_len")
+        val signedBase64 = requiredString(map["signed_base64"], "$name.signed_base64")
+        val signedHash = requiredString(map["signed_hash"], "$name.signed_hash")
+        val signedLen = requiredLong(map["signed_len"], "$name.signed_len")
+        requireExactFields(map, MANIFEST_FIXTURE_FIELDS, "manifest fixture $name")
+        require(encodedFile == "$name.norito") {
+            "$name.encoded_file must be exactly $name.norito"
+        }
+        require('/' !in encodedFile && '\\' !in encodedFile) {
+            "$name.encoded_file must be a fixture-root filename"
+        }
         return TransactionManifestFixture(
             name = name,
-            chain = requiredString(map["chain"], "$name.chain"),
-            authority = requiredString(map["authority"], "$name.authority"),
-            creationTimeMs = requiredLong(map["creation_time_ms"], "$name.creation_time_ms"),
-            timeToLiveMs = requiredPositiveLong(map, "time_to_live_ms", "$name.time_to_live_ms"),
-            nonce = optionalLong(map["nonce"], "$name.nonce"),
-            payloadBase64 = requiredString(map["payload_base64"], "$name.payload_base64"),
-            payloadHash = requiredString(map["payload_hash"], "$name.payload_hash"),
-            encodedFile = requiredString(map["encoded_file"], "$name.encoded_file"),
-            encodedLen = requiredLong(map["encoded_len"], "$name.encoded_len"),
-            signedBase64 = requiredString(map["signed_base64"], "$name.signed_base64"),
-            signedHash = requiredString(map["signed_hash"], "$name.signed_hash"),
-            signedLen = requiredLong(map["signed_len"], "$name.signed_len"),
+            chain = chain,
+            authority = authority,
+            creationTimeMs = creationTimeMs,
+            timeToLiveMs = timeToLiveMs,
+            nonce = nonce,
+            payloadBase64 = payloadBase64,
+            payloadHash = payloadHash,
+            encodedFile = encodedFile,
+            encodedLen = encodedLen,
+            signedBase64 = signedBase64,
+            signedHash = signedHash,
+            signedLen = signedLen,
         )
     }
 
@@ -160,30 +223,29 @@ internal object AndroidFixtureSupport {
         val signedBytes = mutableSetOf<ByteBuffer>()
         for (fixture in fixtures) {
             check(names.add(fixture.name)) { "Duplicate fixture name: ${fixture.name}" }
-            val encoded = checkNotNull(fixture.encodedBase64) {
-                "${fixture.name}: fixture missing encoded payload"
+            check(payloadHashes.add(fixture.payloadHash)) {
+                "Duplicate fixture payload_hash: ${fixture.payloadHash}"
             }
-            val payloadHash = checkNotNull(fixture.payloadHash) {
-                "${fixture.name}: fixture missing payload_hash"
-            }
-            val signedBase64 = checkNotNull(fixture.signedBase64) {
-                "${fixture.name}: fixture missing signed_base64"
-            }
-            val signedHash = checkNotNull(fixture.signedHash) {
-                "${fixture.name}: fixture missing signed_hash"
-            }
-            check(payloadHashes.add(payloadHash)) { "Duplicate fixture payload_hash: $payloadHash" }
             check(
                 payloadBytes.add(
-                    ByteBuffer.wrap(decodeCanonicalBase64(encoded, "${fixture.name}.encoded"))
-                        .asReadOnlyBuffer(),
+                    ByteBuffer.wrap(
+                        decodeCanonicalBase64(
+                            fixture.payloadBase64,
+                            "${fixture.name}.payload_base64",
+                        ),
+                    ).asReadOnlyBuffer(),
                 ),
             ) { "Duplicate fixture payload bytes: ${fixture.name}" }
-            check(signedHashes.add(signedHash)) { "Duplicate fixture signed_hash: $signedHash" }
+            check(signedHashes.add(fixture.signedHash)) {
+                "Duplicate fixture signed_hash: ${fixture.signedHash}"
+            }
             check(
                 signedBytes.add(
                     ByteBuffer.wrap(
-                        decodeCanonicalBase64(signedBase64, "${fixture.name}.signed_base64"),
+                        decodeCanonicalBase64(
+                            fixture.signedBase64,
+                            "${fixture.name}.signed_base64",
+                        ),
                     ).asReadOnlyBuffer(),
                 ),
             ) { "Duplicate fixture signed bytes: ${fixture.name}" }
@@ -234,30 +296,37 @@ internal object AndroidFixtureSupport {
     fun resolveSharedResource(name: String): Path {
         var current = Paths.get("").toAbsolutePath().normalize()
         while (true) {
-            val candidate = current.resolve(ANDROID_RESOURCE_ROOT).resolve(name)
+            val candidate = current.resolve(CANONICAL_FIXTURE_ROOT).resolve(name)
             if (Files.exists(candidate)) {
                 return candidate
             }
             val parent = current.parent ?: break
             current = parent
         }
-        error("Unable to locate $ANDROID_RESOURCE_ROOT/$name from ${Paths.get("").toAbsolutePath()}")
+        error("Unable to locate $CANONICAL_FIXTURE_ROOT/$name from ${Paths.get("").toAbsolutePath()}")
     }
 
     internal fun buildPayload(name: String, payload: Map<String, Any?>): TransactionPayload {
         val executableMap = asMap(payload["executable"], "$name.payload.executable")
-        val executable = when {
-            executableMap.containsKey("Ivm") -> {
+        require(executableMap.size == 1) {
+            "$name.payload.executable must contain exactly one externally tagged variant"
+        }
+        val (variant, value) = executableMap.entries.single()
+        require(variant in EXECUTABLE_VARIANTS) {
+            "$name.payload.executable has unknown variant $variant"
+        }
+        val executable = when (variant) {
+            "Ivm" -> {
                 val bytes = decodeCanonicalBase64(
-                    requiredString(executableMap["Ivm"], "$name.payload.executable.Ivm"),
+                    requiredString(value, "$name.payload.executable.Ivm"),
                     "$name.payload.executable.Ivm",
                 )
                 Executable.ivm(bytes)
             }
 
-            executableMap.containsKey("Instructions") -> {
+            "Instructions" -> {
                 val instructions = asList(
-                    executableMap["Instructions"],
+                    value,
                     "$name.payload.executable.Instructions",
                 ).mapIndexed { index, raw ->
                     parseInstruction(raw, "$name.payload.executable.Instructions[$index]", name)
@@ -265,16 +334,16 @@ internal object AndroidFixtureSupport {
                 Executable.instructions(instructions)
             }
 
-            executableMap.containsKey("ContractCall") -> Executable.contractCall(
+            "ContractCall" -> Executable.contractCall(
                 parseContractInvocation(
-                    executableMap["ContractCall"],
+                    value,
                     "$name.payload.executable.ContractCall",
                 ),
             )
 
-            executableMap.containsKey("Batch") -> {
+            "Batch" -> {
                 val entries = asList(
-                    executableMap["Batch"],
+                    value,
                     "$name.payload.executable.Batch",
                 ).mapIndexed { index, raw ->
                     val context = "$name.payload.executable.Batch[$index]"
@@ -297,14 +366,12 @@ internal object AndroidFixtureSupport {
                 Executable.batch(entries)
             }
 
-            else -> error("$name: executable variant missing")
+            else -> error("$name.payload.executable has unknown variant $variant")
         }
 
-        val metadata = payload["metadata"]?.let { raw ->
-            asMap(raw, "$name.payload.metadata").mapValues { (_, value) ->
-                jsonValue(value)
-            }
-        } ?: emptyMap<String, JsonValue>()
+        val metadata = asMap(payload["metadata"], "$name.payload.metadata").mapValues { (_, value) ->
+            jsonValue(value)
+        }
 
         return TransactionPayload(
             chainId = requiredString(payload["chain"], "$name.payload.chain"),
@@ -386,11 +453,6 @@ internal object AndroidFixtureSupport {
         return string
     }
 
-    private fun optionalString(value: Any?): String? {
-        val string = value as? String ?: return null
-        return string
-    }
-
     private fun jsonValue(value: Any?): JsonValue = when (value) {
         null -> JsonValue.raw("null")
         is String -> JsonValue.string(value)
@@ -436,13 +498,24 @@ internal object AndroidFixtureSupport {
 
     private fun asMap(value: Any?, field: String): Map<String, Any?> {
         require(value is Map<*, *>) { "Expected object for $field" }
-        return value.entries.associate { (key, entryValue) ->
-            key.toString() to entryValue
-        }
+        require(value.keys.all { it is String }) { "$field keys must be strings" }
+        @Suppress("UNCHECKED_CAST")
+        return value as Map<String, Any?>
     }
 
     private fun asList(value: Any?, field: String): List<Any?> {
         require(value is List<*>) { "Expected array for $field" }
         return value
+    }
+
+    private fun requireExactFields(
+        value: Map<String, Any?>,
+        expected: Set<String>,
+        field: String,
+    ) {
+        val unknown = value.keys - expected
+        require(unknown.isEmpty()) { "$field contains unknown fields: ${unknown.sorted()}" }
+        val missing = expected - value.keys
+        require(missing.isEmpty()) { "$field is missing required fields: ${missing.sorted()}" }
     }
 }

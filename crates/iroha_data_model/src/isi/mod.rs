@@ -2140,7 +2140,7 @@ impl norito::core::NoritoSerialize for InstructionBox {
         norito::core::type_name_schema_hash::<(String, Vec<u8>)>()
     }
 
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = encoded_instruction_payload(self).ok_or_else(|| {
             norito::core::Error::Message("failed to encode instruction payload".to_owned())
         })?;
@@ -4458,7 +4458,7 @@ mod tests {
 
     fn bare_instruction_pair(name: &str, framed_payload: Vec<u8>) -> Vec<u8> {
         let mut bytes = Vec::new();
-        norito::core::NoritoSerialize::serialize(&(name.to_owned(), framed_payload), &mut bytes)
+        norito::core::serialize_to_buffer(&(name.to_owned(), framed_payload), &mut bytes)
             .expect("serialize instruction pair");
         bytes
     }
@@ -4796,11 +4796,11 @@ mod tests {
             let expected_pair = (name.to_owned(), payload);
 
             let mut expected = Vec::new();
-            norito::core::NoritoSerialize::serialize(&expected_pair, &mut expected)
+            norito::core::serialize_to_buffer(&expected_pair, &mut expected)
                 .expect("serialize expected tuple");
 
             let mut actual = Vec::new();
-            norito::core::NoritoSerialize::serialize(&boxed, &mut actual)
+            norito::core::serialize_to_buffer(&boxed, &mut actual)
                 .expect("serialize instruction box");
 
             assert_eq!(actual, expected, "flags=0x{flags:02x}");
@@ -4879,7 +4879,7 @@ mod tests {
         let _guard = RegistryGuard::set(instruction_registry![Log]);
         let expected = InstructionBox::from(Log::new(Level::INFO, "borrowed pair".to_owned()));
         let mut bytes = Vec::new();
-        norito::core::NoritoSerialize::serialize(&expected, &mut bytes)
+        norito::core::serialize_to_buffer(&expected, &mut bytes)
             .expect("serialize instruction box tuple");
 
         let (decoded, used) =
@@ -4925,7 +4925,7 @@ mod tests {
         let _guard = RegistryGuard::set(instruction_registry![Log]);
         let expected = InstructionBox::from(Log::new(Level::INFO, "misaligned pair".to_owned()));
         let mut bytes = vec![0xAA];
-        norito::core::NoritoSerialize::serialize(&expected, &mut bytes)
+        norito::core::serialize_to_buffer(&expected, &mut bytes)
             .expect("serialize instruction box tuple");
 
         let (decoded, used) =
@@ -5170,7 +5170,7 @@ mod tests {
         let _guard = RegistryGuard::set(instruction_registry![Log]);
         let boxed = InstructionBox::from(Log::new(Level::INFO, "pair tail".to_owned()));
         let mut bare_pair = Vec::new();
-        norito::core::NoritoSerialize::serialize(&boxed, &mut bare_pair)
+        norito::core::serialize_to_buffer(&boxed, &mut bare_pair)
             .expect("serialize instruction box pair");
         bare_pair.extend_from_slice(&[0xAA, 0x55]);
 
@@ -5190,7 +5190,7 @@ mod tests {
         let _guard = RegistryGuard::set(instruction_registry![Log]);
         let boxed = InstructionBox::from(Log::new(Level::INFO, "framed pair tail".to_owned()));
         let mut bare_pair = Vec::new();
-        norito::core::NoritoSerialize::serialize(&boxed, &mut bare_pair)
+        norito::core::serialize_to_buffer(&boxed, &mut bare_pair)
             .expect("serialize instruction box pair");
         bare_pair.extend_from_slice(&[0xAA, 0x55]);
         let framed = norito::core::frame_bare_with_header_flags::<InstructionBox>(
@@ -5220,7 +5220,7 @@ mod tests {
             encoded_instruction_pair_payload(&boxed).expect("encoded instruction payload");
         assert_eq!(wire_id, Log::WIRE_ID);
         let mut bare_pair = Vec::new();
-        norito::core::NoritoSerialize::serialize(&boxed, &mut bare_pair)
+        norito::core::serialize_to_buffer(&boxed, &mut bare_pair)
             .expect("serialize instruction box pair");
         bare_pair.extend_from_slice(&[0xAA, 0x55]);
         let framed = norito::core::frame_bare_with_header_flags::<InstructionBox>(

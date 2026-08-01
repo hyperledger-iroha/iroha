@@ -65,7 +65,7 @@ outputs = [
   "crates/ivm_abi/src/gas_spec.rs",
   "crates/ivm_abi/src/syscalls_doc_gen.rs",
 ]
-generator = "cargo run --locked -p ivm --bin gen_syscalls_doc -- --write"
+generator = "cargo run --locked -p ivm --features dev-tools --bin gen_syscalls_doc -- --write"
 generator_sources = [
   "crates/ivm/src/bin/gen_syscalls_doc.rs",
   "crates/ivm/src/bin/support/mod.rs",
@@ -75,7 +75,7 @@ inputs = [
   "crates/ivm/src/syscalls.rs",
   "crates/ivm_abi/src/syscalls.rs",
 ]
-check = "cargo run --locked -p ivm --bin gen_syscalls_doc -- --check"
+check = "cargo run --locked -p ivm --features dev-tools --bin gen_syscalls_doc -- --check"
 
 [[generated]]
 name = "ivm-syscall-documentation-regions"
@@ -84,7 +84,7 @@ outputs = [
   "crates/ivm/docs/syscalls.md",
   "crates/ivm/tests/abi_syscall_list_golden.rs",
 ]
-generator = "cargo run --locked -p ivm --bin gen_syscalls_doc -- --write"
+generator = "cargo run --locked -p ivm --features dev-tools --bin gen_syscalls_doc -- --write"
 generator_sources = [
   "crates/ivm/src/bin/gen_syscalls_doc.rs",
   "crates/ivm/src/bin/support/mod.rs",
@@ -94,7 +94,7 @@ inputs = [
   "crates/ivm/src/syscalls.rs",
   "crates/ivm_abi/src/syscalls.rs",
 ]
-check = "cargo run --locked -p ivm --bin gen_syscalls_doc -- --check"
+check = "cargo run --locked -p ivm --features dev-tools --bin gen_syscalls_doc -- --check"
 
 [[generated]]
 name = "kotodama-v1-policy-regions"
@@ -134,6 +134,7 @@ name = "sorafs-sf1-fixtures"
 kind = "file"
 outputs = [
   "fixtures/sorafs_chunker/manifest_blake3.json",
+  "fixtures/sorafs_chunker/manifest_signatures.json",
   "fixtures/sorafs_chunker/sf1_profile_v1.go",
   "fixtures/sorafs_chunker/sf1_profile_v1.json",
   "fixtures/sorafs_chunker/sf1_profile_v1.rs",
@@ -141,11 +142,10 @@ outputs = [
   "fuzz/sorafs_chunker/sf1_profile_v1_backpressure.json",
   "fuzz/sorafs_chunker/sf1_profile_v1_input.bin",
 ]
-generator = "cargo run --locked -p sorafs_chunker --bin export_vectors -- --allow-unsigned"
+generator = "cargo run --locked -p sorafs_chunker --features dev-tools --bin export_vectors"
 generator_sources = ["crates/sorafs_chunker/src/bin/export_vectors.rs"]
 inputs = [
   "crates/sorafs_chunker/Cargo.toml",
-  "crates/sorafs_chunker/src/*.rs",
   "crates/sorafs_chunker/src/**/*.rs",
 ]
 check = "node scripts/check_sf1_vectors.mjs"
@@ -158,7 +158,7 @@ outputs = [
   "crates/ivm/tests/pointer_type_ids_golden.rs",
   "ivm.md",
 ]
-generator = "cargo run --locked -p ivm --bin gen_pointer_types_doc -- --write"
+generator = "cargo run --locked -p ivm --features dev-tools --bin gen_pointer_types_doc -- --write"
 generator_sources = [
   "crates/ivm/src/bin/gen_pointer_types_doc.rs",
   "crates/ivm/src/bin/support/mod.rs",
@@ -167,7 +167,7 @@ inputs = [
   "crates/ivm_abi/src/lib.rs",
   "crates/ivm_abi/src/pointer_abi.rs",
 ]
-check = "cargo run --locked -p ivm --bin gen_pointer_types_doc -- --check"
+check = "cargo run --locked -p ivm --features dev-tools --bin gen_pointer_types_doc -- --check"
 
 [[generated]]
 name = "ivm-header-and-abi-hash-regions"
@@ -178,22 +178,30 @@ outputs = [
   "specs/ivm_header.md",
   "specs/samples/runtime_abi_hash.md",
 ]
-generator = "cargo run --locked -p ivm --bin gen_header_doc -- --write && cargo run --locked -p ivm --bin gen_abi_hash_doc -- --write"
+generator = "cargo run --locked -p ivm --features dev-tools --bin gen_header_doc -- --write && cargo run --locked -p ivm --features dev-tools --bin gen_abi_hash_doc -- --write"
 generator_sources = [
   "crates/ivm/src/bin/gen_header_doc.rs",
   "crates/ivm/src/bin/gen_abi_hash_doc.rs",
   "crates/ivm/src/bin/support/mod.rs",
 ]
 inputs = [
+  "crates/iroha_crypto/src/**/*.rs",
+  "crates/iroha_data_model/src/**/*.rs",
+  "crates/iroha_primitives/src/**/*.rs",
   "crates/ivm/src/gas.rs",
   "crates/ivm/src/host.rs",
   "crates/ivm/src/instruction.rs",
+  "crates/ivm/src/memory.rs",
+  "crates/ivm/src/numeric_gas.rs",
+  "crates/ivm/src/syscall_metering.rs",
+  "crates/ivm/src/syscalls.rs",
   "crates/ivm_abi/src/host_payload.rs",
   "crates/ivm_abi/src/lib.rs",
   "crates/ivm_abi/src/metadata.rs",
   "crates/ivm_abi/src/syscalls.rs",
+  "crates/norito/src/**/*.rs",
 ]
-check = "cargo run --locked -p ivm --bin gen_header_doc -- --check && cargo run --locked -p ivm --bin gen_abi_hash_doc -- --check"
+check = "cargo run --locked -p ivm --features dev-tools --bin gen_header_doc -- --check && cargo run --locked -p ivm --features dev-tools --bin gen_abi_hash_doc -- --check"
 
 [[generated]]
 name = "ivm-repository-fixtures"
@@ -208,7 +216,7 @@ outputs = [
   "javascript/iroha_js/test/fixtures/contract_manifest_v1.json",
   "specs/sdk/android/generated/fixtures/smart_contract_code_executor_hashes.json",
 ]
-generator = "cargo run --locked -p ivm --bin ivm_fixture_export -- --write"
+generator = "cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --write"
 generator_sources = [
   "crates/ivm/src/bin/ivm_fixture_export.rs",
   "crates/ivm/src/bin/ivm_predecoder_export.rs",
@@ -216,13 +224,14 @@ generator_sources = [
   "crates/ivm/src/predecoder_fixtures.rs",
 ]
 inputs = [
-  "crates/iroha_data_model/src/*.rs",
+  "crates/iroha_crypto/src/**/*.rs",
   "crates/iroha_data_model/src/**/*.rs",
+  "crates/iroha_primitives/src/**/*.rs",
+  "crates/ivm/src/**/*.rs",
   "crates/ivm_abi/src/*.rs",
-  "crates/norito/src/*.rs",
   "crates/norito/src/**/*.rs",
 ]
-check = "cargo run --locked -p ivm --bin ivm_fixture_export -- --check"
+check = "cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --check"
 
 [[generated]]
 name = "ivm-public-syscall-table"
@@ -244,7 +253,6 @@ check = "python3 scripts/gen_syscall_doc.py --check"
 name = "norito-rpc-fixtures"
 kind = "file"
 outputs = [
-  "fixtures/norito_rpc/ivm_transfer.norito",
   "fixtures/norito_rpc/typed_fee_payment_gas_limit.norito",
   "fixtures/norito_rpc/register_asset_definition.norito",
   "fixtures/norito_rpc/transfer_asset.norito",
@@ -276,7 +284,6 @@ outputs = [
   "fixtures/norito_rpc/schema_hashes.json",
   "fixtures/norito_rpc/transaction_payloads.json",
   "fixtures/norito_rpc/transaction_fixtures.manifest.json",
-  "java/iroha_android/src/test/resources/ivm_transfer.norito",
   "java/iroha_android/src/test/resources/typed_fee_payment_gas_limit.norito",
   "java/iroha_android/src/test/resources/register_asset_definition.norito",
   "java/iroha_android/src/test/resources/transfer_asset.norito",
@@ -311,7 +318,7 @@ outputs = [
   "IrohaSwift/Fixtures/transaction_payloads.json",
   "IrohaSwift/Fixtures/transaction_fixtures.manifest.json",
 ]
-generator = "cargo run --locked -p xtask --bin xtask -- norito-rpc-fixtures"
+generator = "cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures"
 generator_sources = [
   "tools/norito_codegen_exporter/src/lib.rs",
   "tools/norito_codegen_exporter/src/norito_rpc.rs",
@@ -319,15 +326,35 @@ generator_sources = [
   "xtask/src/norito_rpc.rs",
 ]
 inputs = [
-  "crates/iroha_crypto/src/*.rs",
   "crates/iroha_crypto/src/**/*.rs",
-  "crates/iroha_data_model/src/*.rs",
   "crates/iroha_data_model/src/**/*.rs",
-  "crates/norito/src/*.rs",
+  "crates/iroha_primitives/src/**/*.rs",
   "crates/norito/src/**/*.rs",
   "fixtures/norito_rpc/transaction_payloads.json",
 ]
-check = "cargo run --locked -p xtask --bin xtask -- norito-rpc-verify"
+check = "cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify"
+
+[[generated]]
+name = "swift-parity-fixtures"
+kind = "file"
+outputs = [
+  "IrohaSwift/Fixtures/swift_burn_asset_basic.norito",
+  "IrohaSwift/Fixtures/swift_mint_asset_basic.norito",
+  "IrohaSwift/Fixtures/swift_transfer_asset_basic.norito",
+  "IrohaSwift/Fixtures/swift_parity_manifest.json",
+]
+generator = "cargo run --locked --offline -p connect_norito_bridge --features dev-tools --bin swift_parity_regen -- --write"
+generator_sources = [
+  "crates/connect_norito_bridge/src/bin/swift_parity_regen.rs",
+]
+inputs = [
+  "IrohaSwift/Fixtures/swift_parity_payloads.json",
+  "crates/iroha_crypto/src/**/*.rs",
+  "crates/iroha_data_model/src/**/*.rs",
+  "crates/iroha_primitives/src/**/*.rs",
+  "crates/norito/src/**/*.rs",
+]
+check = "cargo run --locked --offline -p connect_norito_bridge --features dev-tools --bin swift_parity_regen -- --check"
 
 [[generated]]
 name = "sumeragi-v2-wire-and-native-amx-fixtures"
@@ -336,20 +363,18 @@ outputs = [
   "fixtures/sumeragi_v2/native_amx_v2_grouped.json",
   "fixtures/sumeragi_v2/wire_v2.tsv",
 ]
-generator = "cargo run --locked --offline -p iroha_data_model --bin sumeragi_v2_wire_fixtures"
+generator = "cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures"
 generator_sources = [
   "crates/iroha_data_model/src/bin/native_amx_grouped.rs",
   "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
 ]
 inputs = [
-  "crates/iroha_crypto/src/*.rs",
   "crates/iroha_crypto/src/**/*.rs",
-  "crates/iroha_data_model/src/*.rs",
   "crates/iroha_data_model/src/**/*.rs",
-  "crates/norito/src/*.rs",
+  "crates/iroha_primitives/src/**/*.rs",
   "crates/norito/src/**/*.rs",
 ]
-check = "cargo run --locked --offline -p iroha_data_model --bin sumeragi_v2_wire_fixtures -- --check"
+check = "cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures -- --check"
 
 [[generated]]
 name = "kotodama-v1-artifacts-and-manifests"
@@ -424,11 +449,13 @@ generator_sources = [
 ]
 inputs = [
   "**/*.ko",
-  "crates/ivm/src/*.rs",
+  "crates/iroha_crypto/src/**/*.rs",
+  "crates/iroha_data_model/src/**/*.rs",
+  "crates/iroha_primitives/src/**/*.rs",
   "crates/ivm/src/**/*.rs",
   "crates/ivm_abi/src/*.rs",
-  "crates/kotodama_lang/src/*.rs",
   "crates/kotodama_lang/src/**/*.rs",
+  "crates/norito/src/**/*.rs",
   "scripts/ivm_artifacts.tsv",
   "scripts/kotodama_v1_size_baseline.json",
 ]
@@ -442,8 +469,9 @@ outputs = [
   "defaults/docker-compose.single.yml",
   "defaults/docker-compose.yml",
 ]
-generator = "cargo run --locked -p iroha_kagami -- docker"
+generator = "bash scripts/tests/consistency.sh --update docker-compose"
 generator_sources = [
+  "scripts/tests/consistency.sh",
   "crates/iroha_kagami/src/main.rs",
   "crates/iroha_kagami/src/swarm.rs",
 ]
@@ -451,7 +479,7 @@ inputs = [
   "defaults/*.json",
   "defaults/*.toml",
 ]
-check = "bash scripts/tests/consistency.sh"
+check = "bash scripts/tests/consistency.sh docker-compose"
 
 # TODO: Restore scripts/etenraku_analysis.py and the licensed reference
 # recording so this historical trace can be reproduced inside the repository.

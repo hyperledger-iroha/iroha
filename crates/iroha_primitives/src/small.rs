@@ -5,7 +5,7 @@
 //! buffer, while [`SmallVec`] can be tuned to store a handful of elements on
 //! the stack before spilling onto the heap.
 use core::fmt;
-use std::{format, io::Write, string::String, vec::Vec};
+use std::{format, string::String, vec::Vec};
 
 use iroha_schema::{IntoSchema, TypeId};
 use norito::{
@@ -89,7 +89,7 @@ mod small_string {
     }
 
     impl NoritoSerialize for SmallStr {
-        fn serialize<W: Write>(&self, writer: W) -> Result<(), ncore::Error> {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             <&str as NoritoSerialize>::serialize(&self.as_str(), writer)
         }
     }
@@ -112,8 +112,6 @@ mod small_string {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
     use norito::{
         NoritoDeserialize, NoritoSerialize,
         codec::{Decode, Encode},
@@ -155,7 +153,7 @@ mod tests {
     fn smallstr_decode_from_slice_reports_used_bytes() {
         let value = SmallStr::from_str("slice-value");
         let mut bytes = Vec::new();
-        value.serialize(&mut bytes).expect("serialize SmallStr");
+        ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize SmallStr");
 
         let (decoded, used) =
             <SmallStr as ncore::DecodeFromSlice>::decode_from_slice(&bytes).expect("decode slice");
@@ -256,7 +254,10 @@ mod tests {
         struct Zst;
 
         impl NoritoSerialize for Zst {
-            fn serialize<W: Write>(&self, _writer: W) -> Result<(), ncore::Error> {
+            fn serialize(
+                &self,
+                _writer: &mut norito::core::Encoder<'_>,
+            ) -> Result<(), ncore::Error> {
                 Ok(())
             }
         }
@@ -499,12 +500,12 @@ mod small_vector {
     where
         A::Item: NoritoSerialize,
     {
-        fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             use ncore::WriteBytesExt;
             writer.write_u64::<ncore::LittleEndian>(self.0.len() as u64)?;
             for item in &self.0 {
                 let mut buf = Vec::new();
-                item.serialize(&mut buf)?;
+                ncore::serialize_to_buffer(item, &mut buf)?;
                 writer.write_u64::<ncore::LittleEndian>(buf.len() as u64)?;
                 writer.write_all(&buf)?;
             }

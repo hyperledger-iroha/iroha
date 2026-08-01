@@ -57,9 +57,11 @@ cd "${ROOT_DIR}"
 "${SWIFTC_BIN}" -parse -parse-as-library \
   IrohaSwift/Sources/IrohaSwift/NativeBridge.swift \
   IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift \
+  IrohaSwift/Sources/IrohaSwift/PrivacyExact12FixtureBundle.swift \
   IrohaSwift/Sources/IrohaSwift/ProofAttachment.swift \
   IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift \
   IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/PrivacyExact12FixtureBundleTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ProofAttachmentNoritoTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift

@@ -51,8 +51,7 @@ fn signed_block_roundtrip_via_norito() {
 
     for (idx, tx) in txs.iter().enumerate() {
         let mut buf = Vec::new();
-        norito::core::NoritoSerialize::serialize(tx, &mut buf)
-            .expect("serialize signed transaction");
+        norito::core::serialize_to_buffer(tx, &mut buf).expect("serialize signed transaction");
         println!(
             "tx {} encoded len {} first bytes {:?}",
             idx,
@@ -107,8 +106,7 @@ fn signed_block_roundtrip_via_norito() {
     let tx_sig_len = {
         let tx = block.transactions_vec().first().expect("tx");
         let mut buf = Vec::new();
-        norito::core::NoritoSerialize::serialize(tx.signature(), &mut buf)
-            .expect("serialize signature");
+        norito::core::serialize_to_buffer(tx.signature(), &mut buf).expect("serialize signature");
         buf.len()
     };
     println!("transaction signature serialized len {tx_sig_len}");

@@ -12,32 +12,21 @@ the current Taira chain
 `sbd#cbsi`, whose typed asset definition ID is
 `7ZepsJTHCVLKsrFFNZGSRGZgvBhv`. Neither identity may be substituted.
 
-This degree-20 workflow is a supervised production job, not an ordinary Rust
-test. Never invoke the ignored test directly: its Eq/Ep Halo2 construction can
-consume workstation-scale memory before a late layout failure. Generate into
-an absent or empty absolute directory through the resource guard:
+This degree-20 workflow is a production job, not an ordinary Rust test. Never
+invoke the ignored test directly: its Eq/Ep Halo2 construction can consume
+workstation-scale memory before a late layout failure. The former `--report`
+launcher enforced process-tree RSS while treating Darwin physical footprint as
+diagnostic; it allowed a 133.653 GiB footprint to exhaust a 128 GiB host. That
+launcher now fails closed. The acceptance bundle must not be regenerated until
+its generic command path uses the same process-group-scoped 250 ms
+`max(RSS, physical footprint)` enforcement as the strict candidate generator.
 
-```sh
-python3 scripts/run_kagemusha_v4_generation.py \
-  --report /absolute/private/kagemusha-sbd-resource-report.json \
-  -- \
-  env IROHA_KAGEMUSHA_SBD_ACCEPTANCE_BUNDLE_DIR=/absolute/private/output \
-    cargo test --release --locked -p connect_norito_bridge \
-    --features privacy-production-enabled \
-    recursive_spend_v4_production_feature_installs_and_executes_real_release \
-    -- --ignored --nocapture
-```
-
-The runner permits at most one guarded Kagemusha job, sets single-worker Cargo
-and Rayon defaults, preserves at least 4 GiB or 10% of physical RAM for the
-host, and enforces a maximum 16 GiB process-tree envelope. Linux also installs
-an address-space rlimit. Because macOS rejects finite `RLIMIT_AS`, the macOS
-supervisor stops at 13 GiB to leave termination margin below the maximum. It
-stops its own child process group, never signals unrelated processes, and
-writes an owner-private JSON resource receipt. A limit or
-headroom stop exits with status 137 and is not release evidence. The ignored
-test also requires the runner's live inherited handshake and fails before
-artifact generation when started raw.
+Production candidate generation remains available only through
+`run_kagemusha_v4_generation.py --resource-report ...` with a prebuilt
+`kagemusha_recursive_spend_v4_bundle` executable and the exact
+`generate-candidate` subcommand. Its supervisor stops and remeasures only its
+owned process group before termination, and it refuses evidence publication
+after a memory or host-headroom stop.
 
 Do not raise the limit when the guarded workflow stops. Treat that result as a
 circuit-layout release blocker, keep the output unpublished, and use the

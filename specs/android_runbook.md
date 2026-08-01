@@ -313,7 +313,7 @@ any non-allowlisted signal slipped into the build. Capture those decisions
 directly in the JSON by running:
 
 ```bash
-cargo run -p telemetry-schema-diff -- \
+cargo run -p telemetry-schema-diff --features dev-tools -- \
   --android-config configs/android_telemetry.json \
   --rust-config configs/rust_telemetry.json \
   --format json \

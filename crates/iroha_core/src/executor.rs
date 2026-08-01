@@ -50,7 +50,10 @@ use iroha_data_model::{
     parameter::CustomParameterId,
     permission::Permission,
     prelude::{Account, Burn, DomainId, Mint, Register, Transfer, Trigger, Unregister},
-    query::{AnyQueryBox, QueryRequest, SingularQueryBox},
+    query::{
+        self as data_model_query, AnyQueryBox, QueryItemKind, QueryRequest, QueryWithParams,
+        SingularQueryBox,
+    },
     role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
     state_path::StatePath,
@@ -103,6 +106,501 @@ const EXECUTOR_LENGTH_PREFIX_BYTES_U64: u64 = 8;
 /// prevents a guest-controlled length prefix from requesting an unbounded host
 /// allocation, while retaining the entire addressable result envelope.
 const MAX_EXECUTOR_OUTPUT_BYTES: u64 = Memory::HEAP_MAX_SIZE;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NativeQueryAccess {
+    /// Control-plane or public-definition data available to any registered account.
+    Registered,
+    /// Private data for one exact account.
+    Account(AccountId),
+    /// Ledger-wide state requiring the genesis-issued read root.
+    AllLedger,
+}
+
+fn decode_native_iterable_payload_exact<Q>(payload: &[u8]) -> Option<Q>
+where
+    Q: Decode + Encode,
+{
+    let mut input = payload;
+    let query = Q::decode(&mut input).ok()?;
+    (query.encode() == payload).then_some(query)
+}
+
+#[allow(clippy::too_many_lines)]
+fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
+    match query {
+        SingularQueryBox::FindAccountById(query) => {
+            NativeQueryAccess::Account(query.account_id().clone())
+        }
+        SingularQueryBox::FindAliasesByAccountId(query) => {
+            NativeQueryAccess::Account(query.account_id().clone())
+        }
+        SingularQueryBox::FindAssetById(query) => {
+            NativeQueryAccess::Account(query.asset_id().account().clone())
+        }
+        SingularQueryBox::FindFeeSponsorProgramById(query) => {
+            NativeQueryAccess::Account(query.id().sponsor.clone())
+        }
+
+        // Runtime/control-plane definitions and explicitly routed subsystem state do not expose
+        // the general account roster, balances, or transaction history. Alias reads still pass
+        // through their separate exact-scope gate below, and protected SoraFS records pass
+        // through the subsystem-specific gates.
+        SingularQueryBox::FindExecutorDataModel(_)
+        | SingularQueryBox::FindParameters(_)
+        | SingularQueryBox::FindAccountRecoveryPolicyByAlias(_)
+        | SingularQueryBox::FindAccountRecoveryRequestByAlias(_)
+        | SingularQueryBox::FindContractManifestByCodeHash(_)
+        | SingularQueryBox::FindAbiVersion(_)
+        | SingularQueryBox::FindAssetDefinitionById(_)
+        | SingularQueryBox::FindOracleFeedById(_)
+        | SingularQueryBox::FindDomainEndorsementPolicy(_)
+        | SingularQueryBox::FindDomainCommittee(_)
+        | SingularQueryBox::FindSorafsProviderOwner(_)
+        | SingularQueryBox::FindSorafsPinManifest(_)
+        | SingularQueryBox::FindSorafsOrderbookPolicy(_)
+        | SingularQueryBox::FindSorafsOrderbookOrderById(_)
+        | SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_)
+        | SingularQueryBox::FindSorafsOrderbookReceiptById(_)
+        | SingularQueryBox::FindSorafsOrderbookTradeById(_)
+        | SingularQueryBox::FindSorafsOrderbookChannelById(_)
+        | SingularQueryBox::FindSorafsOrderbookStatus(_)
+        | SingularQueryBox::FindSorafsOrderbookOrders(_)
+        | SingularQueryBox::FindSorafsOrderbookReceipts(_)
+        | SingularQueryBox::FindSorafsOrderbookTrades(_)
+        | SingularQueryBox::FindSorafsOrderbookChannels(_)
+        | SingularQueryBox::FindSorafsOrderbookEvents(_)
+        | SingularQueryBox::FindSorafsReservePolicy(_)
+        | SingularQueryBox::FindSorafsReserveProviderById(_)
+        | SingularQueryBox::FindSorafsReserveMovementById(_)
+        | SingularQueryBox::FindSorafsReserveAppealById(_)
+        | SingularQueryBox::FindSorafsReserveProviders(_)
+        | SingularQueryBox::FindSorafsReserveMovements(_)
+        | SingularQueryBox::FindSorafsReserveAppeals(_)
+        | SingularQueryBox::FindSorafsReserveEvents(_)
+        | SingularQueryBox::FindSorafsPopIssuerPolicy(_)
+        | SingularQueryBox::FindSorafsPopCredentialCommitmentByDigest(_)
+        | SingularQueryBox::FindSorafsPopCommitmentRootByVersion(_)
+        | SingularQueryBox::FindSorafsPopRevocationPublicationByVersion(_)
+        | SingularQueryBox::FindSorafsPopRevocationByNonceCommitment(_)
+        | SingularQueryBox::FindSorafsPopAuditDigestBySequence(_)
+        | SingularQueryBox::FindSorafsPopRegistryStatus(_)
+        | SingularQueryBox::FindSorafsRepairTask(_)
+        | SingularQueryBox::FindSorafsRepairTasks(_)
+        | SingularQueryBox::FindSorafsRepairStatus(_)
+        | SingularQueryBox::FindSorafsRepairEvents(_)
+        | SingularQueryBox::FindSorafsProofOutcome(_)
+        | SingularQueryBox::FindSorafsProofOutcomeEvents(_)
+        | SingularQueryBox::FindSorafsReputationJournalAuthorityPolicy(_)
+        | SingularQueryBox::FindSorafsReputationJournalEventBySourceId(_)
+        | SingularQueryBox::FindSorafsReputationJournalEvents(_)
+        | SingularQueryBox::FindSorafsModerationPolicy(_)
+        | SingularQueryBox::FindSorafsModerationAppeal(_)
+        | SingularQueryBox::FindSorafsModerationJurorEligibility(_)
+        | SingularQueryBox::FindSorafsModerationCase(_)
+        | SingularQueryBox::FindSorafsModerationCommit(_)
+        | SingularQueryBox::FindSorafsModerationReveal(_)
+        | SingularQueryBox::FindSorafsModerationChallenge(_)
+        | SingularQueryBox::FindSorafsModerationOutcome(_)
+        | SingularQueryBox::FindSorafsModerationNoShow(_)
+        | SingularQueryBox::FindSorafsModerationStatus(_)
+        | SingularQueryBox::FindSorafsModerationSnapshot(_)
+        | SingularQueryBox::FindSorafsModerationEvents(_)
+        | SingularQueryBox::FindDataspaceNameOwnerById(_)
+        | SingularQueryBox::FindMusubiReleaseByRef(_)
+        | SingularQueryBox::FindMusubiPackageVersions(_)
+        | SingularQueryBox::FindMusubiPackageReleases(_)
+        | SingularQueryBox::SearchMusubiPackages(_)
+        | SingularQueryBox::FindMusubiShortAliasByName(_)
+        | SingularQueryBox::FindAccountByAlias(_)
+        | SingularQueryBox::FindDomainById(_) => NativeQueryAccess::Registered,
+
+        SingularQueryBox::FindProofRecordById(_)
+        | SingularQueryBox::FindAssetEscrowById(_)
+        | SingularQueryBox::FindAnonymousAssetEscrowById(_)
+        | SingularQueryBox::FindTriggerById(_)
+        | SingularQueryBox::FindTwitterBindingByHash(_)
+        | SingularQueryBox::FindOracleDisputeById(_)
+        | SingularQueryBox::FindOracleChangeById(_)
+        | SingularQueryBox::FindOracleProviderStatsByKey(_)
+        | SingularQueryBox::FindLatestDefiOracleAttestation(_)
+        | SingularQueryBox::FindDomainEndorsements(_)
+        | SingularQueryBox::FindDaPinIntentByTicket(_)
+        | SingularQueryBox::FindDaPinIntentByManifest(_)
+        | SingularQueryBox::FindDaPinIntentByAlias(_)
+        | SingularQueryBox::FindDaPinIntentByLaneEpochSequence(_)
+        | SingularQueryBox::FindLaneRelayEnvelopeByRef(_)
+        | SingularQueryBox::FindFxCorridorPolicyRegistry(_)
+        | SingularQueryBox::FindFxCorridorPolicyById(_)
+        | SingularQueryBox::FindNftById(_) => NativeQueryAccess::AllLedger,
+
+        #[cfg(test)]
+        SingularQueryBox::__TestFallback => NativeQueryAccess::AllLedger,
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn native_iterable_query_access(
+    query: &QueryWithParams,
+) -> Result<NativeQueryAccess, ValidationFail> {
+    macro_rules! payload_for {
+        ($item:ty, $kind:ident) => {{
+            if let Some(query_box) = query.query_box() {
+                data_model_query::iter_query_inner::<$item>(query_box)
+                    .map(|erased| erased.payload())
+            } else {
+                query.fast_dsl_parts().and_then(|(kind, _, _, payload)| {
+                    (kind == QueryItemKind::$kind).then_some(payload)
+                })
+            }
+        }};
+    }
+    macro_rules! any_exact {
+        ($payload:expr; $($query_ty:path),+ $(,)?) => {
+            false $(|| decode_native_iterable_payload_exact::<$query_ty>($payload).is_some())+
+        };
+    }
+
+    if let Some(payload) = payload_for!(iroha_data_model::role::Role, Role) {
+        if any_exact!(payload; data_model_query::role::prelude::FindRoles) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(RoleId, RoleId) {
+        if any_exact!(payload; data_model_query::role::prelude::FindRoleIds) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        if let Some(query) = decode_native_iterable_payload_exact::<
+            data_model_query::role::prelude::FindRolesByAccountId,
+        >(payload)
+        {
+            return Ok(NativeQueryAccess::Account(query.account_id().clone()));
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(Permission, Permission) {
+        if let Some(query) = decode_native_iterable_payload_exact::<
+            data_model_query::permission::prelude::FindPermissionsByAccountId,
+        >(payload)
+        {
+            return Ok(NativeQueryAccess::Account(query.account_id().clone()));
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(Account, Account) {
+        if any_exact!(
+            payload;
+            data_model_query::account::prelude::FindAccounts,
+            data_model_query::account::prelude::FindAccountsWithAsset,
+        ) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(AccountId, AccountId) {
+        if any_exact!(payload; data_model_query::account::prelude::FindAccountIds) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(iroha_data_model::asset::value::Asset, Asset) {
+        if any_exact!(payload; data_model_query::asset::prelude::FindAssets) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        if let Some(query) = decode_native_iterable_payload_exact::<
+            data_model_query::asset::prelude::FindAssetsByAccountId,
+        >(payload)
+        {
+            return Ok(NativeQueryAccess::Account(query.account_id().clone()));
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::asset::definition::AssetDefinition,
+        AssetDefinition
+    ) {
+        if any_exact!(payload; data_model_query::asset::prelude::FindAssetsDefinitions) {
+            return Ok(NativeQueryAccess::Registered);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(iroha_data_model::repo::RepoAgreement, RepoAgreement) {
+        if any_exact!(payload; data_model_query::repo::FindRepoAgreements) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(iroha_data_model::nft::Nft, Nft) {
+        if any_exact!(payload; data_model_query::nft::prelude::FindNfts) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        if let Some(query) = decode_native_iterable_payload_exact::<
+            data_model_query::nft::prelude::FindNftsByAccountId,
+        >(payload)
+        {
+            return Ok(NativeQueryAccess::Account(query.account_id().clone()));
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(iroha_data_model::rwa::Rwa, Rwa) {
+        if any_exact!(payload; data_model_query::rwa::prelude::FindRwas) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(iroha_data_model::domain::Domain, Domain) {
+        if any_exact!(payload; data_model_query::domain::prelude::FindDomains) {
+            return Ok(NativeQueryAccess::Registered);
+        }
+        if let Some(query) = decode_native_iterable_payload_exact::<
+            data_model_query::domain::prelude::FindDomainsByAccountId,
+        >(payload)
+        {
+            return Ok(NativeQueryAccess::Account(query.account_id().clone()));
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(iroha_data_model::peer::PeerId, PeerId) {
+        if any_exact!(payload; data_model_query::peer::prelude::FindPeers) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(TriggerId, TriggerId) {
+        if any_exact!(payload; data_model_query::trigger::prelude::FindActiveTriggerIds) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(Trigger, Trigger) {
+        if any_exact!(payload; data_model_query::trigger::prelude::FindTriggers) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) =
+        payload_for!(data_model_query::CommittedTransaction, CommittedTransaction)
+    {
+        if any_exact!(payload; data_model_query::FindTransactions) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(iroha_data_model::block::SignedBlock, SignedBlock) {
+        if any_exact!(payload; data_model_query::FindBlocks) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(BlockHeader, BlockHeader) {
+        if any_exact!(payload; data_model_query::FindBlockHeaders) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(iroha_data_model::proof::ProofRecord, ProofRecord) {
+        if any_exact!(
+            payload;
+            data_model_query::proof::prelude::FindProofRecords,
+            data_model_query::proof::prelude::FindProofRecordsByBackend,
+            data_model_query::proof::prelude::FindProofRecordsByStatus,
+        ) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::nexus::FeeSponsorProgram,
+        FeeSponsorProgram
+    ) {
+        if any_exact!(payload; data_model_query::nexus::prelude::FindFeeSponsorPrograms) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        if let Some(query) = decode_native_iterable_payload_exact::<
+            data_model_query::nexus::prelude::FindFeeSponsorProgramsBySponsor,
+        >(payload)
+        {
+            return Ok(NativeQueryAccess::Account(query.sponsor().clone()));
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::nexus::FeeSponsorProgramId,
+        FeeSponsorProgramId
+    ) {
+        if any_exact!(payload; data_model_query::nexus::prelude::FindFeeSponsorProgramIds) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(iroha_data_model::oracle::FeedConfig, OracleFeedConfig) {
+        if any_exact!(payload; data_model_query::oracle::prelude::FindOracleFeeds) {
+            return Ok(NativeQueryAccess::Registered);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::events::data::oracle::FeedEventRecord,
+        OracleFeedEventRecord
+    ) {
+        if any_exact!(payload; data_model_query::oracle::prelude::FindOracleHistoryByFeedId) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::oracle::OracleProviderStatsRecord,
+        OracleProviderStatsRecord
+    ) {
+        if any_exact!(payload; data_model_query::oracle::prelude::FindOracleProviderStatsByFeedId) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(iroha_data_model::oracle::OracleDispute, OracleDispute) {
+        if any_exact!(
+            payload;
+            data_model_query::oracle::prelude::FindOracleDisputes,
+            data_model_query::oracle::prelude::FindOracleDisputesByFeedId,
+        ) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::oracle::OracleChangeProposal,
+        OracleChangeProposal
+    ) {
+        if any_exact!(payload; data_model_query::oracle::prelude::FindOracleChanges) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::oracle::TwitterBindingRecord,
+        TwitterBindingRecord
+    ) {
+        if any_exact!(payload; data_model_query::oracle::prelude::FindTwitterBindingsByUaid) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::oracle::DefiOracleAttestation,
+        DefiOracleAttestation
+    ) {
+        if any_exact!(payload; data_model_query::oracle::prelude::FindDefiOracleAttestationsByKey) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::escrow::AssetEscrowRecord,
+        AssetEscrowRecord
+    ) {
+        if any_exact!(
+            payload;
+            data_model_query::escrow::prelude::FindAssetEscrows,
+            data_model_query::escrow::prelude::FindAssetEscrowsByStatus,
+        ) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        if let Some(query) = decode_native_iterable_payload_exact::<
+            data_model_query::escrow::prelude::FindAssetEscrowsBySeller,
+        >(payload)
+        {
+            return Ok(NativeQueryAccess::Account(query.seller.clone()));
+        }
+        if let Some(query) = decode_native_iterable_payload_exact::<
+            data_model_query::escrow::prelude::FindAssetEscrowsByBuyer,
+        >(payload)
+        {
+            return Ok(NativeQueryAccess::Account(query.buyer.clone()));
+        }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::escrow::AnonymousAssetEscrowRecord,
+        AnonymousAssetEscrowRecord
+    ) {
+        if any_exact!(
+            payload;
+            data_model_query::escrow::prelude::FindAnonymousAssetEscrows,
+            data_model_query::escrow::prelude::FindAnonymousAssetEscrowsByStatus,
+        ) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        if let Some(query) = decode_native_iterable_payload_exact::<
+            data_model_query::escrow::prelude::FindAnonymousAssetEscrowsBySeller,
+        >(payload)
+        {
+            return Ok(NativeQueryAccess::Account(query.seller.clone()));
+        }
+        if let Some(query) = decode_native_iterable_payload_exact::<
+            data_model_query::escrow::prelude::FindAnonymousAssetEscrowsByBuyer,
+        >(payload)
+        {
+            return Ok(NativeQueryAccess::Account(query.buyer.clone()));
+        }
+        return Err(invalid_native_iterable_query());
+    }
+
+    Err(invalid_native_iterable_query())
+}
+
+fn invalid_native_iterable_query() -> ValidationFail {
+    ValidationFail::NotPermitted(
+        "iterable query is malformed or is not part of the native authorization matrix".to_owned(),
+    )
+}
+
+fn validate_builtin_native_query_permission(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    query: &QueryRequest,
+) -> Result<(), ValidationFail> {
+    world.account(authority).map_err(|_| {
+        ValidationFail::NotPermitted(format!(
+            "query authority `{authority}` is not a registered account"
+        ))
+    })?;
+
+    let access = match query {
+        QueryRequest::Singular(query) => native_singular_query_access(query),
+        QueryRequest::Start(query) => native_iterable_query_access(query)?,
+        // The store-aware continuation corridor revalidates the archived Start request before
+        // validating and advancing this cursor. Raw public validation cannot construct Continue.
+        QueryRequest::Continue(_) => return Ok(()),
+    };
+
+    let global_permission: Permission = executor_permission::query::CanReadAllLedgerData.into();
+    let has_global = || authority_has_permission(world, authority, &global_permission);
+    match access {
+        NativeQueryAccess::Registered => Ok(()),
+        NativeQueryAccess::AllLedger => has_global()?.then_some(()).ok_or_else(|| {
+            ValidationFail::NotPermitted(
+                "CanReadAllLedgerData permission is required for this query".to_owned(),
+            )
+        }),
+        NativeQueryAccess::Account(account) => {
+            if account == *authority || has_global()? {
+                return Ok(());
+            }
+            let permission: Permission = executor_permission::query::CanReadAccountData {
+                account: account.clone(),
+            }
+            .into();
+            authority_has_permission(world, authority, &permission)?
+                .then_some(())
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "exact CanReadAccountData permission is required to read account `{account}`"
+                    ))
+                })
+        }
+    }
+}
 
 fn validate_builtin_account_alias_query_permission(
     world: &impl WorldReadOnly,
@@ -191,17 +689,14 @@ fn validate_builtin_account_alias_query_permission(
     }
 }
 
-fn validate_builtin_initial_query_permission(
+fn validate_builtin_subsystem_query_permission(
     world: &impl WorldReadOnly,
     latest_block: Option<&BlockHeader>,
     authority: &AccountId,
     query: &QueryRequest,
 ) -> Result<(), ValidationFail> {
-    // Mirror the query visitors supplied by the default executor while a chain
-    // still runs the native Initial executor. Standard Iroha queries are public;
-    // only authoritative SoraFS finance state, the governed reputation
-    // authority policy, complete moderation snapshots, and per-juror
-    // eligibility records carry additional confidentiality rules.
+    // Preserve the stricter SoraFS confidentiality gates independently of the
+    // mandatory native account/global read policy and the pluggable executor.
     if latest_block.is_none_or(BlockHeader::is_genesis) {
         return Ok(());
     }
@@ -2097,19 +2592,21 @@ fn overlay_build_error_to_validation_fail(
     }
 }
 
-/// Apply the canonical first-release IVM admission policy to an already prepared program.
-///
-/// Preparation authenticates and predecodes the image, while this check binds execution to the
-/// live node/governance limits. Keeping it shared prevents direct, trigger, and proved dispatch
-/// from assigning different meaning to the same ABI V1 header. The metadata-only interface also
-/// prevents warm dispatch from rewalking authenticated opcode bytes.
-pub(crate) fn validate_prepared_ivm_execution_policy<R: StateReadOnly>(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreparedIvmZkAvailability {
+    RequireLocalBackend,
+    GovernedProof,
+}
+
+fn validate_prepared_ivm_execution_policy_with_availability<R: StateReadOnly>(
     state: &R,
     metadata: &ivm::ProgramMetadata,
+    zk_availability: PreparedIvmZkAvailability,
 ) -> Result<std::num::NonZeroU64, ValidationFail> {
     crate::pipeline::overlay::validate_header_policy(metadata)
         .map_err(ValidationFail::IvmAdmission)?;
-    if metadata.mode & ivm::ivm_mode::ZK != 0
+    if zk_availability == PreparedIvmZkAvailability::RequireLocalBackend
+        && metadata.mode & ivm::ivm_mode::ZK != 0
         && !(state.zk().halo2.enabled || state.zk().stark.enabled)
     {
         return Err(ValidationFail::IvmAdmission(
@@ -2130,6 +2627,36 @@ pub(crate) fn validate_prepared_ivm_execution_policy<R: StateReadOnly>(
     )
     .map_err(overlay_build_error_to_validation_fail)?;
     Ok(effective_cycles)
+}
+
+/// Apply the canonical first-release IVM admission policy to an already prepared program.
+///
+/// Preparation authenticates and predecodes the image, while this check binds local execution to
+/// the node/governance limits and requires a locally enabled backend for ZK-mode execution. The
+/// metadata-only interface prevents warm dispatch from rewalking authenticated opcode bytes.
+pub(crate) fn validate_prepared_ivm_execution_policy<R: StateReadOnly>(
+    state: &R,
+    metadata: &ivm::ProgramMetadata,
+) -> Result<std::num::NonZeroU64, ValidationFail> {
+    validate_prepared_ivm_execution_policy_with_availability(
+        state,
+        metadata,
+        PreparedIvmZkAvailability::RequireLocalBackend,
+    )
+}
+
+// Proof-carrying execution uses the same deterministic header/resource limits, while native
+// verification is selected by the governed on-chain verifier record rather than local proving
+// availability toggles. `verify_ivm_proved_execution` performs that governed verification.
+fn validate_governed_ivm_proved_execution_policy<R: StateReadOnly>(
+    state: &R,
+    metadata: &ivm::ProgramMetadata,
+) -> Result<std::num::NonZeroU64, ValidationFail> {
+    validate_prepared_ivm_execution_policy_with_availability(
+        state,
+        metadata,
+        PreparedIvmZkAvailability::GovernedProof,
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -5812,7 +6339,7 @@ impl Executor {
         )?;
         #[cfg(feature = "zk-preverify")]
         {
-            use iroha_data_model::proof::{ProofAttachment, ProofAttachmentList};
+            use iroha_data_model::proof::ProofAttachment;
             let namespace_hint = md
                 .get("contract_alias")
                 .and_then(|value| value.try_into_any_norito::<String>().ok())
@@ -5841,14 +6368,9 @@ impl Executor {
                 });
 
             // Process ZK attachments embedded in V2 transactions.
-            if let Some(ProofAttachmentList(list)) = transaction.attachments().cloned() {
+            if let Some(attachments) = transaction.attachments() {
                 // Canonicalize verification order for determinism
-                let mut list_sorted = list;
-                if list_sorted.is_empty() {
-                    return Err(ValidationFail::NotPermitted(
-                        "proof attachment list must not be empty".to_owned(),
-                    ));
-                }
+                let mut list_sorted = attachments.as_slice().to_vec();
                 list_sorted.sort_by(|a, b| {
                     let ah = crate::zk::hash_proof(&a.proof);
                     let bh = crate::zk::hash_proof(&b.proof);
@@ -6008,25 +6530,7 @@ impl Executor {
                 .summarize_program(proved.bytecode.as_ref())
                 .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
             let meta = summary.metadata.clone();
-            crate::pipeline::overlay::validate_header_policy(&meta)
-                .map_err(ValidationFail::IvmAdmission)?;
-
-            let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
-            if wants_zk
-                && !(state_transaction.zk.halo2.enabled || state_transaction.zk.stark.enabled)
-            {
-                return Err(ValidationFail::IvmAdmission(
-                    iroha_data_model::executor::IvmAdmissionError::UnsupportedFeatureBits(
-                        ivm::ivm_mode::ZK,
-                    ),
-                ));
-            }
-
-            crate::pipeline::overlay::enforce_pre_execution_policy(
-                state_transaction.pipeline.ivm_max_cycles_upper_bound,
-                &meta,
-            )
-            .map_err(overlay_build_error_to_validation_fail)?;
+            validate_governed_ivm_proved_execution_policy(state_transaction, &meta)?;
 
             crate::pipeline::overlay::validate_contract_binding(
                 state_transaction,
@@ -7292,7 +7796,7 @@ impl Executor {
     /// - Failed to prepare the IVM runtime;
     /// - Failed to execute the entrypoint of the IVM bytecode;
     /// - Executor denied the operation.
-    pub fn validate_query<S: StateReadOnly>(
+    pub(crate) fn validate_query<S: StateReadOnly>(
         &self,
         state_ro: &S,
         authority: &AccountId,
@@ -7312,7 +7816,7 @@ impl Executor {
     /// - Failed to prepare the IVM runtime;
     /// - Failed to execute the entrypoint of the IVM bytecode;
     /// - Executor denied the operation.
-    pub fn validate_query_with_world_parts(
+    pub(crate) fn validate_query_with_world_parts(
         &self,
         world_ro: &impl WorldReadOnly,
         latest_block: Option<BlockHeader>,
@@ -7320,6 +7824,10 @@ impl Executor {
         query: &QueryRequest,
     ) -> Result<(), ValidationFail> {
         trace!("Running query validation");
+
+        // This native boundary is mandatory for Initial and user-provided executors alike.
+        // A custom executor may further restrict a query, but can never widen these grants.
+        validate_builtin_native_query_permission(world_ro, authority, query)?;
 
         let query_box = match query {
             QueryRequest::Singular(singular) => AnyQueryBox::Singular(singular.clone()),
@@ -7342,13 +7850,15 @@ impl Executor {
             query,
         )?;
 
+        validate_builtin_subsystem_query_permission(
+            world_ro,
+            latest_block.as_ref(),
+            authority,
+            query,
+        )?;
+
         match self {
-            Self::Initial => validate_builtin_initial_query_permission(
-                world_ro,
-                latest_block.as_ref(),
-                authority,
-                query,
-            ),
+            Self::Initial => Ok(()),
             Self::UserProvided(loaded_executor) => {
                 let curr_block = latest_block.map_or_else(
                     || BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0),
@@ -8050,6 +8560,7 @@ const INITIAL_GENESIS_ONLY_PERMISSION_NAMES: &[&str] = &[
     "CanManageRoles",
     "CanUpgradeExecutor",
     "CanRegisterSmartContractCode",
+    "CanReadAllLedgerData",
     "CanReadRestrictedDataspace",
     "CanManageFxCorridors",
     "CanManageOfflineEscrow",
@@ -8176,6 +8687,10 @@ fn initial_permission_capability_root_authority(
         }
         "CanReplaceAccountController" => {
             let token = decode!(executor_permission::account::CanReplaceAccountController);
+            token.account == *authority
+        }
+        "CanReadAccountData" => {
+            let token = decode!(executor_permission::query::CanReadAccountData);
             token.account == *authority
         }
         "CanResolveAccountAlias" => {
@@ -8434,7 +8949,9 @@ fn initial_permission_delegation_allowed(
         permission,
         contract_runtime_context,
     )?;
-    if authority_has_permission(&state_transaction.world, authority, permission)? {
+    if permission.name() != "CanReadAccountData"
+        && authority_has_permission(&state_transaction.world, authority, permission)?
+    {
         return Ok(true);
     }
     Ok(capability_root.unwrap_or(false))
@@ -9790,7 +10307,7 @@ where
                 &selector,
                 &identity,
             )?;
-            validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
+            validate_governed_ivm_proved_execution_policy(state, &summary.metadata)?;
             crate::pipeline::overlay::validate_contract_binding(state, transaction, &summary)
                 .map_err(overlay_build_error_to_validation_fail)?;
             Ok(())
@@ -10000,6 +10517,8 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageAccountAlias",
     "CanDelegateAccountAliasResolution",
     "CanResolveAccountAlias",
+    "CanReadAllLedgerData",
+    "CanReadAccountData",
     "CanReadRestrictedDataspace",
     "CanMintAssetWithDefinition",
     "CanBurnAssetWithDefinition",
@@ -15812,8 +16331,10 @@ mod tests {
         );
         let mut attachment = ProofAttachment::new_ref(backend, proof, vk_id);
         attachment.vk_commitment = Some(vk_commitment);
-        let attachments = ProofAttachmentList(vec![attachment.clone()]);
-        let attachments_dup = ProofAttachmentList(vec![attachment]);
+        let attachments = ProofAttachmentList::try_from(vec![attachment.clone()])
+            .expect("one attachment is a valid bounded proof list");
+        let attachments_dup = ProofAttachmentList::try_from(vec![attachment])
+            .expect("one attachment is a valid bounded proof list");
 
         let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
         let tx1 = TransactionBuilder::new(
@@ -15919,7 +16440,10 @@ mod tests {
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_executable(Executable::Instructions(Vec::new().into()))
-            .with_attachments(ProofAttachmentList(vec![attachment]))
+            .with_attachments(
+                ProofAttachmentList::try_from(vec![attachment])
+                    .expect("one attachment is a valid bounded proof list"),
+            )
             .sign(ALICE_KEYPAIR.private_key());
 
             let state = State::new_with_chain(
@@ -16013,7 +16537,10 @@ mod tests {
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_executable(Executable::Instructions(Vec::new().into()))
-            .with_attachments(ProofAttachmentList(vec![attachment]))
+            .with_attachments(
+                ProofAttachmentList::try_from(vec![attachment])
+                    .expect("one attachment is a valid bounded proof list"),
+            )
             .sign(ALICE_KEYPAIR.private_key());
 
             let mut state_tx = block.transaction();
@@ -16081,52 +16608,58 @@ mod tests {
         forged_hash[0] ^= 0x80;
         forged_envelope_hash.envelope_hash = Some(forged_hash);
 
+        assert!(matches!(
+            ProofAttachmentList::try_from(Vec::new()),
+            Err(iroha_data_model::proof::ProofAttachmentListError::Empty)
+        ));
+
         let cases = [
             (
-                "empty-list",
-                ProofAttachmentList(Vec::new()),
-                "must not be empty",
-            ),
-            (
                 "proof-backend-mismatch",
-                ProofAttachmentList(vec![ProofAttachment::new_ref(
+                ProofAttachmentList::try_from(vec![ProofAttachment::new_ref(
                     "halo2/ipa".into(),
                     ProofBox::new("stark/fri".into(), vec![1, 2, 3]),
                     VerifyingKeyId::new("halo2/ipa", "vk_preverify"),
-                )]),
+                )])
+                .expect("one attachment is a valid bounded proof list"),
                 "proof.backend",
             ),
             (
                 "nonportable-vk-ref-name",
-                ProofAttachmentList(vec![ProofAttachment::new_ref(
+                ProofAttachmentList::try_from(vec![ProofAttachment::new_ref(
                     "halo2/ipa".into(),
                     ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
                     VerifyingKeyId::new("halo2/ipa", "VkPreverify"),
-                )]),
+                )])
+                .expect("one attachment is a valid bounded proof list"),
                 "vk_ref",
             ),
             (
                 "empty-proof-bytes",
-                ProofAttachmentList(vec![ProofAttachment::new_ref(
+                ProofAttachmentList::try_from(vec![ProofAttachment::new_ref(
                     "halo2/ipa".into(),
                     ProofBox::new("halo2/ipa".into(), Vec::new()),
                     VerifyingKeyId::new("halo2/ipa", "vk_preverify"),
-                )]),
+                )])
+                .expect("one attachment is a valid bounded proof list"),
                 "proof.bytes",
             ),
             (
                 "zero-vk-commitment",
-                ProofAttachmentList(vec![zero_vk_commitment]),
+                ProofAttachmentList::try_from(vec![zero_vk_commitment])
+                    .expect("one attachment is a valid bounded proof list"),
                 "vk_commitment",
             ),
             (
                 "zero-envelope-hash",
-                ProofAttachmentList(vec![zero_envelope_hash]),
+                ProofAttachmentList::try_from(vec![zero_envelope_hash])
+                    .expect("one attachment is a valid bounded proof list"),
                 "envelope_hash",
             ),
             (
                 "forged-envelope-hash",
-                ProofAttachmentList(vec![forged_envelope_hash]),
+                ProofAttachmentList::try_from(vec![forged_envelope_hash])
+                    .expect("one attachment is a valid bounded proof list"),
                 "envelope_hash",
             ),
         ];
@@ -20201,7 +20734,7 @@ seiyaku IdentityRequired {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let world = World::new();
+        let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
@@ -20446,7 +20979,7 @@ seiyaku IdentityRequired {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let world = World::new();
+        let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
@@ -20476,7 +21009,7 @@ seiyaku IdentityRequired {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let world = World::new();
+        let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));

@@ -56,7 +56,7 @@ to the release/upgrade ticket and keep the bundle in
 
 1. **Capture GPU benchmarks.**
    - Run the canonical workload (20 000 logical rows, 32 768 padded rows) via
-     `cargo run -p fastpq_prover --bin fastpq_metal_bench -- --rows 20000 --pretty`.
+     `cargo run -p fastpq_prover --features dev-tools --bin fastpq_metal_bench -- --rows 20000 --pretty`.
    - Wrap the result with `scripts/fastpq/wrap_benchmark.py` using `--row-usage <decoded witness>` so the bundle carries the gadget evidence alongside the GPU telemetry. Pass `--require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 --sign-output` so the wrapper fails fast if either accelerator exceeds the target or if the Poseidon queue/profile telemetry is missing, and to generate the detached signature.
    - Repeat on the CUDA host so the manifest contains both GPU families.
    - Do **not** strip the `benchmarks.metal_dispatch_queue` or

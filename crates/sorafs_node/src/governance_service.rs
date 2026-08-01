@@ -597,6 +597,162 @@ impl OpaqueCheckpointStore {
     }
 }
 
+/// Qualified receiver boundary for authenticated Governance DAG HTTP ingress.
+///
+/// The receiver retains only public endpoint policy and one opaque, qualified
+/// sealed-store adapter. It canonicalizes and verifies a complete request with
+/// the shared V1 HTTP receiver, then uses the scope-specific sealed CAS slot as
+/// the sole replay authority. A fresh process-local cache is created for each
+/// call only because the shared signature verifier requires one; it is never
+/// consulted across calls and cannot authorize backend dispatch.
+///
+/// Independently administered Kubo/IPFS/IPNS and signed-head frontends can
+/// reuse this type at their last pre-dispatch boundary. Constructing it does
+/// not install, package, or supervise such a frontend.
+#[derive(Clone)]
+pub struct GovernanceDagSealedHttpRequestReceiverV1 {
+    scope: GovernanceDagAuthenticationScope,
+    max_body_bytes: u64,
+    verification_policy: GovernanceDagRequestAuthenticationPolicyV1,
+    replay_store: OpaqueCheckpointStore,
+}
+
+impl fmt::Debug for GovernanceDagSealedHttpRequestReceiverV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GovernanceDagSealedHttpRequestReceiverV1")
+            .field("scope", &self.scope)
+            .field("max_body_bytes", &self.max_body_bytes)
+            .field(
+                "public_key",
+                &hex::encode(self.verification_policy.public_key()),
+            )
+            .field(
+                "max_envelope_lifetime_secs",
+                &self.verification_policy.max_envelope_lifetime_secs(),
+            )
+            .field(
+                "max_future_skew_secs",
+                &self.verification_policy.max_future_skew_secs(),
+            )
+            .field("sealed_store_handle", &self.replay_store.handle)
+            .finish_non_exhaustive()
+    }
+}
+
+impl GovernanceDagSealedHttpRequestReceiverV1 {
+    /// Bind public request policy to one exact production sealed-store adapter.
+    ///
+    /// Constructor inputs are limited to an endpoint scope, public request
+    /// bounds and key policy, a stable credential-free store handle, its public
+    /// qualification, and the opaque store adapter. Credentials and private
+    /// keys do not cross this boundary.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a zero body bound or a missing, substituted, stale,
+    /// test-marked, unavailable, or ambiguously qualified sealed-store adapter.
+    pub fn try_new(
+        scope: GovernanceDagAuthenticationScope,
+        max_body_bytes: u64,
+        verification_policy: GovernanceDagRequestAuthenticationPolicyV1,
+        checkpoint_store_handle: &str,
+        checkpoint_store_qualification: GovernanceDagRuntimeProviderQualificationV1,
+        checkpoint_store: Option<Arc<dyn GovernanceDagSealedCheckpointStore>>,
+    ) -> Result<Self, GovernanceDagServiceError> {
+        if max_body_bytes == 0 {
+            return Err(GovernanceDagServiceError::Config(
+                "Governance DAG ingress request body bound must be non-zero".to_owned(),
+            ));
+        }
+        let replay_store = OpaqueCheckpointStore::try_new(
+            checkpoint_store_handle,
+            checkpoint_store_qualification,
+            checkpoint_store.ok_or_else(|| {
+                GovernanceDagServiceError::Config(
+                    "Governance DAG ingress sealed replay store was not injected".to_owned(),
+                )
+            })?,
+        )?;
+        Ok(Self {
+            scope,
+            max_body_bytes,
+            verification_policy,
+            replay_store,
+        })
+    }
+
+    /// Authenticate and durably consume one complete inbound HTTP request.
+    ///
+    /// The exact method, canonical URL, selected public headers, framing, and
+    /// byte body are verified before any sealed state is touched. A descriptor
+    /// is returned only after the nonce has committed through strict monotonic
+    /// compare-and-swap and passed qualified post-CAS readback.
+    ///
+    /// # Errors
+    ///
+    /// Returns a payload-free request or sealed-state rejection. Every request
+    /// failure preceding replay consumption leaves sealed state unchanged;
+    /// store conflict, drift, corruption, rollback, or readback ambiguity fails
+    /// closed without authorizing backend dispatch.
+    pub fn verify_http_request<'h>(
+        &self,
+        method: &str,
+        canonical_url: &str,
+        headers: impl IntoIterator<Item = (&'h str, &'h [u8])>,
+        body: &[u8],
+        now_unix_secs: u64,
+    ) -> Result<GovernanceDagCanonicalRequestV1, GovernanceDagServiceError> {
+        // This one-call cache is only the signature verifier's scratch replay
+        // surface. The sealed store below is the sole cross-call authority.
+        let mut verification_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
+        let mut verifier = GovernanceDagHttpRequestReceiverV1::try_new(
+            self.scope,
+            self.max_body_bytes,
+            &self.verification_policy,
+            &mut verification_cache,
+        )
+        .map_err(|error| GovernanceDagServiceError::Network(error.to_string()))?;
+        let (request, envelope) = verifier
+            .verify_http_request_with_envelope(method, canonical_url, headers, body, now_unix_secs)
+            .map_err(|error| GovernanceDagServiceError::Network(error.to_string()))?;
+        consume_sealed_request_auth_nonce(
+            &self.replay_store,
+            request_auth_replay_slot(self.scope),
+            envelope.nonce(),
+            envelope.expires_at_unix_secs(),
+            now_unix_secs,
+        )?;
+        Ok(request)
+    }
+
+    /// Endpoint scope bound to this receiver.
+    #[must_use]
+    pub const fn scope(&self) -> GovernanceDagAuthenticationScope {
+        self.scope
+    }
+
+    /// Maximum complete body size accepted by this receiver.
+    #[must_use]
+    pub const fn max_body_bytes(&self) -> u64 {
+        self.max_body_bytes
+    }
+
+    /// Stable credential-free handle of the authoritative sealed replay store.
+    #[must_use]
+    pub fn checkpoint_store_handle(&self) -> &str {
+        &self.replay_store.handle
+    }
+
+    /// Exact public qualification pinned for the sealed replay store.
+    #[must_use]
+    pub const fn checkpoint_store_qualification(
+        &self,
+    ) -> GovernanceDagRuntimeProviderQualificationV1 {
+        self.replay_store.qualification
+    }
+}
+
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct PublishedBlockV1 {
     sequence: u64,
@@ -6192,9 +6348,13 @@ mod tests {
         qualification_revision: AtomicU64,
         qualification_refuse: AtomicBool,
         drift_during_operation: AtomicBool,
+        drift_during_replay_cas: AtomicBool,
         refuse: AtomicBool,
         replay_load_barrier: Option<Arc<Barrier>>,
         replay_initial_loads_remaining: AtomicU64,
+        replay_cas_calls: AtomicU64,
+        replay_cas_completed: AtomicBool,
+        diverge_replay_readback: AtomicBool,
     }
 
     impl fmt::Debug for TestSealedStore {
@@ -6214,9 +6374,13 @@ mod tests {
                 qualification_revision: AtomicU64::new(1),
                 qualification_refuse: AtomicBool::new(false),
                 drift_during_operation: AtomicBool::new(false),
+                drift_during_replay_cas: AtomicBool::new(false),
                 refuse: AtomicBool::new(false),
                 replay_load_barrier: None,
                 replay_initial_loads_remaining: AtomicU64::new(0),
+                replay_cas_calls: AtomicU64::new(0),
+                replay_cas_completed: AtomicBool::new(false),
+                diverge_replay_readback: AtomicBool::new(false),
             }
         }
 
@@ -6297,8 +6461,28 @@ mod tests {
                 return Err("kms_access_token=must-never-escape".to_owned());
             }
             let inner = self.inner.lock().map_err(|_| "poisoned".to_owned())?;
-            let record = Self::slot(&inner, slot).clone();
+            let mut record = Self::slot(&inner, slot).clone();
             drop(inner);
+            if matches!(
+                slot,
+                GovernanceDagSealedStateSlot::IpfsRequestReplay
+                    | GovernanceDagSealedStateSlot::SignedHeadRequestReplay
+            ) && self.replay_cas_completed.load(AtomicOrdering::SeqCst)
+                && self
+                    .diverge_replay_readback
+                    .swap(false, AtomicOrdering::SeqCst)
+                && let Some(observed) = &record
+            {
+                record = Some(GovernanceDagSealedStateRecord::new(
+                    slot,
+                    observed.generation,
+                    norito::to_bytes(&RequestAuthReplayStateV1 {
+                        version: REQUEST_AUTH_REPLAY_STATE_VERSION_V1,
+                        entries: Vec::new(),
+                    })
+                    .expect("encode divergent replay readback"),
+                ));
+            }
             if matches!(
                 slot,
                 GovernanceDagSealedStateSlot::IpfsRequestReplay
@@ -6324,6 +6508,21 @@ mod tests {
             expected_revision: Option<[u8; 32]>,
             next: GovernanceDagSealedStateRecord,
         ) -> Result<(), String> {
+            let is_replay_slot = matches!(
+                slot,
+                GovernanceDagSealedStateSlot::IpfsRequestReplay
+                    | GovernanceDagSealedStateSlot::SignedHeadRequestReplay
+            );
+            if is_replay_slot {
+                self.replay_cas_calls.fetch_add(1, AtomicOrdering::SeqCst);
+                if self
+                    .drift_during_replay_cas
+                    .swap(false, AtomicOrdering::SeqCst)
+                {
+                    self.qualification_revision
+                        .fetch_add(1, AtomicOrdering::SeqCst);
+                }
+            }
             self.maybe_drift();
             if self.refuse.load(AtomicOrdering::SeqCst) {
                 return Err("kms_access_token=must-never-escape".to_owned());
@@ -6391,6 +6590,10 @@ mod tests {
                 }
             }
             *Self::slot_mut(&mut inner, slot) = Some(next);
+            if is_replay_slot {
+                self.replay_cas_completed
+                    .store(true, AtomicOrdering::SeqCst);
+            }
             Ok(())
         }
 
@@ -6514,6 +6717,54 @@ mod tests {
             provider,
         )
         .expect("bind test sealed checkpoint store")
+    }
+
+    fn test_sealed_http_receiver(
+        scope: GovernanceDagAuthenticationScope,
+        provider: Arc<TestSealedStore>,
+    ) -> GovernanceDagSealedHttpRequestReceiverV1 {
+        let authenticator_handle = match scope {
+            GovernanceDagAuthenticationScope::Ipfs => TEST_IPFS_AUTH_HANDLE,
+            GovernanceDagAuthenticationScope::SignedHead => TEST_HEAD_AUTH_HANDLE,
+        };
+        GovernanceDagSealedHttpRequestReceiverV1::try_new(
+            scope,
+            1024 * 1024,
+            test_request_auth_policy(test_request_auth_public_key(authenticator_handle)),
+            TEST_CHECKPOINT_STORE_HANDLE,
+            TEST_STORE_QUALIFICATION,
+            Some(provider),
+        )
+        .expect("bind sealed HTTP ingress receiver")
+    }
+
+    fn sealed_receiver_request_parts(
+        scope: GovernanceDagAuthenticationScope,
+        method: &str,
+        url: &str,
+        selected_headers: &[(&str, &str)],
+        body: &[u8],
+        now: u64,
+        nonce: [u8; 32],
+    ) -> (GovernanceDagCanonicalRequestV1, Vec<(String, Vec<u8>)>) {
+        let request = canonical_test_request(scope, method, url, selected_headers, body);
+        let authenticator_handle = match scope {
+            GovernanceDagAuthenticationScope::Ipfs => TEST_IPFS_AUTH_HANDLE,
+            GovernanceDagAuthenticationScope::SignedHead => TEST_HEAD_AUTH_HANDLE,
+        };
+        let envelope =
+            signed_test_request_auth_envelope(authenticator_handle, &request, now, now + 15, nonce);
+        let mut headers = request_auth_header_fields(&envelope);
+        headers.extend(
+            selected_headers
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), value.as_bytes().to_vec())),
+        );
+        headers.push((
+            "content-length".to_owned(),
+            body.len().to_string().into_bytes(),
+        ));
+        (request, headers)
     }
 
     fn test_authenticator_with_store(
@@ -9490,6 +9741,591 @@ enabled = false
             .expect_err("corrupted replay state must fail closed");
             assert!(error.to_string().contains(expected_error));
         }
+    }
+
+    #[test]
+    fn sealed_http_receiver_accepts_canonical_ipfs_and_signed_head_requests() {
+        let now = 1_700_000_000;
+        let store = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        let cases = [
+            (
+                GovernanceDagAuthenticationScope::Ipfs,
+                "POST",
+                "https://example.invalid/api/v0/add?pin=false",
+                vec![
+                    ("accept-encoding", "identity"),
+                    ("content-type", "application/vnd.ipld.raw"),
+                ],
+                b"canonical-block".as_slice(),
+                [0x41; 32],
+            ),
+            (
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head",
+                vec![
+                    ("accept-encoding", "identity"),
+                    ("content-type", "application/vnd.iroha.norito"),
+                    ("if-match", "\"generation-7\""),
+                ],
+                b"canonical-head".as_slice(),
+                [0x42; 32],
+            ),
+        ];
+
+        for (scope, method, url, selected, body, nonce) in cases {
+            let receiver = test_sealed_http_receiver(scope, store.clone());
+            assert_eq!(receiver.scope(), scope);
+            assert_eq!(receiver.max_body_bytes(), 1024 * 1024);
+            assert_eq!(
+                receiver.checkpoint_store_handle(),
+                TEST_CHECKPOINT_STORE_HANDLE
+            );
+            assert_eq!(
+                receiver.checkpoint_store_qualification(),
+                TEST_STORE_QUALIFICATION
+            );
+            let (expected, headers) =
+                sealed_receiver_request_parts(scope, method, url, &selected, body, now, nonce);
+            let observed = receiver
+                .verify_http_request(
+                    method,
+                    url,
+                    headers
+                        .iter()
+                        .map(|(name, value)| (name.as_str(), value.as_slice())),
+                    body,
+                    now,
+                )
+                .expect("canonical sealed ingress request");
+            assert_eq!(observed, expected);
+        }
+
+        let inner = store.inner.lock().expect("lock sealed replay state");
+        assert!(inner.ipfs_request_replay.is_some());
+        assert!(inner.signed_head_request_replay.is_some());
+    }
+
+    #[test]
+    fn sealed_http_receiver_constructor_rejects_missing_or_unqualified_store() {
+        let policy = test_request_auth_policy(test_request_auth_public_key(TEST_IPFS_AUTH_HANDLE));
+        let construct =
+            |max_body_bytes,
+             handle: &str,
+             qualification,
+             store: Option<Arc<dyn GovernanceDagSealedCheckpointStore>>| {
+                GovernanceDagSealedHttpRequestReceiverV1::try_new(
+                    GovernanceDagAuthenticationScope::Ipfs,
+                    max_body_bytes,
+                    policy,
+                    handle,
+                    qualification,
+                    store,
+                )
+            };
+
+        assert!(
+            construct(
+                1024,
+                TEST_CHECKPOINT_STORE_HANDLE,
+                TEST_STORE_QUALIFICATION,
+                None,
+            )
+            .expect_err("missing sealed store")
+            .to_string()
+            .contains("was not injected")
+        );
+        assert!(
+            construct(
+                0,
+                TEST_CHECKPOINT_STORE_HANDLE,
+                TEST_STORE_QUALIFICATION,
+                Some(Arc::new(
+                    TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE,)
+                )),
+            )
+            .expect_err("zero request bound")
+            .to_string()
+            .contains("must be non-zero")
+        );
+        assert!(
+            construct(
+                1024,
+                TEST_CHECKPOINT_STORE_HANDLE,
+                TEST_STORE_QUALIFICATION,
+                Some(Arc::new(TestSealedStore::new(
+                    "kms:governance/checkpoint:substituted",
+                ))),
+            )
+            .expect_err("substituted sealed store")
+            .to_string()
+            .contains("does not match configured handle")
+        );
+        assert!(
+            construct(
+                1024,
+                "test://governance/checkpoint",
+                TEST_STORE_QUALIFICATION,
+                Some(Arc::new(TestSealedStore::new(
+                    "test://governance/checkpoint",
+                ))),
+            )
+            .expect_err("test-marked sealed store")
+            .to_string()
+            .contains("test-marked")
+        );
+
+        let stale = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        stale
+            .qualification_refuse
+            .store(true, AtomicOrdering::SeqCst);
+        let error = construct(
+            1024,
+            TEST_CHECKPOINT_STORE_HANDLE,
+            TEST_STORE_QUALIFICATION,
+            Some(stale),
+        )
+        .expect_err("stale sealed store");
+        assert!(
+            error
+                .to_string()
+                .contains("unavailable, stale, or unqualified")
+        );
+        assert!(!error.to_string().contains("kms_access_token"));
+    }
+
+    #[test]
+    fn sealed_http_receiver_rejects_duplicate_across_receiver_instances() {
+        let now = 1_700_000_000;
+        let store = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        let first =
+            test_sealed_http_receiver(GovernanceDagAuthenticationScope::Ipfs, store.clone());
+        let second =
+            test_sealed_http_receiver(GovernanceDagAuthenticationScope::Ipfs, store.clone());
+        let (request, headers) = sealed_receiver_request_parts(
+            GovernanceDagAuthenticationScope::Ipfs,
+            "POST",
+            "https://example.invalid/api/v0/pin/add?arg=cid&recursive=true",
+            &[("accept-encoding", "identity")],
+            b"",
+            now,
+            [0x43; 32],
+        );
+        let verify = |receiver: &GovernanceDagSealedHttpRequestReceiverV1| {
+            receiver.verify_http_request(
+                request.method(),
+                request.canonical_url(),
+                headers
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_slice())),
+                b"",
+                now,
+            )
+        };
+
+        assert_eq!(verify(&first).expect("first receiver accepts"), request);
+        let replay = verify(&second).expect_err("second receiver rejects durable replay");
+        assert!(replay.to_string().contains("replay was rejected"));
+        assert_eq!(store.replay_cas_calls.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    #[test]
+    fn sealed_http_receiver_cas_race_accepts_exactly_one_replica() {
+        let now = 1_700_000_000;
+        let barrier = Arc::new(Barrier::new(2));
+        let store = Arc::new(
+            TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE).with_replay_load_barrier(barrier),
+        );
+        let request_parts = sealed_receiver_request_parts(
+            GovernanceDagAuthenticationScope::Ipfs,
+            "POST",
+            "https://example.invalid/api/v0/pin/add?arg=cid&recursive=true",
+            &[("accept-encoding", "identity")],
+            b"",
+            now,
+            [0x44; 32],
+        );
+        let mut threads = Vec::new();
+        for _ in 0..2 {
+            let receiver =
+                test_sealed_http_receiver(GovernanceDagAuthenticationScope::Ipfs, store.clone());
+            let (request, headers) = request_parts.clone();
+            threads.push(std::thread::spawn(move || {
+                receiver.verify_http_request(
+                    request.method(),
+                    request.canonical_url(),
+                    headers
+                        .iter()
+                        .map(|(name, value)| (name.as_str(), value.as_slice())),
+                    b"",
+                    now,
+                )
+            }));
+        }
+        let results = threads
+            .into_iter()
+            .map(|thread| thread.join().expect("join sealed receiver replica"))
+            .collect::<Vec<_>>();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+        assert_eq!(store.replay_cas_calls.load(AtomicOrdering::SeqCst), 2);
+    }
+
+    #[test]
+    fn sealed_http_receiver_rejects_request_failures_before_state_mutation() {
+        let now = 1_700_000_000;
+        let store = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        let receiver =
+            test_sealed_http_receiver(GovernanceDagAuthenticationScope::Ipfs, store.clone());
+        let (request, valid_headers) = sealed_receiver_request_parts(
+            GovernanceDagAuthenticationScope::Ipfs,
+            "POST",
+            "https://example.invalid/api/v0/add?pin=false",
+            &[("accept-encoding", "identity")],
+            b"body",
+            now,
+            [0x45; 32],
+        );
+        let verify = |method: &str,
+                      url: &str,
+                      headers: &[(String, Vec<u8>)],
+                      body: &[u8],
+                      verification_time: u64| {
+            receiver.verify_http_request(
+                method,
+                url,
+                headers
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_slice())),
+                body,
+                verification_time,
+            )
+        };
+
+        let mut missing = valid_headers.clone();
+        missing.remove(0);
+        assert!(
+            verify(
+                request.method(),
+                request.canonical_url(),
+                &missing,
+                b"body",
+                now
+            )
+            .is_err()
+        );
+        assert!(verify("PUT", request.canonical_url(), &valid_headers, b"body", now,).is_err());
+        assert!(
+            verify(
+                request.method(),
+                "https://example.invalid/api/v0/add?pin=true",
+                &valid_headers,
+                b"body",
+                now,
+            )
+            .is_err()
+        );
+        assert!(
+            verify(
+                request.method(),
+                request.canonical_url(),
+                &valid_headers,
+                b"tampered-body",
+                now,
+            )
+            .is_err()
+        );
+        assert!(
+            verify(
+                request.method(),
+                request.canonical_url(),
+                &valid_headers,
+                b"body",
+                now + 16,
+            )
+            .is_err()
+        );
+
+        let wrong_key_envelope = signed_test_request_auth_envelope(
+            TEST_HEAD_AUTH_HANDLE,
+            &request,
+            now,
+            now + 15,
+            [0x46; 32],
+        );
+        let mut wrong_key_headers = request_auth_header_fields(&wrong_key_envelope);
+        wrong_key_headers.extend([
+            ("accept-encoding".to_owned(), b"identity".to_vec()),
+            ("content-length".to_owned(), b"4".to_vec()),
+        ]);
+        assert!(
+            verify(
+                request.method(),
+                request.canonical_url(),
+                &wrong_key_headers,
+                b"body",
+                now,
+            )
+            .is_err()
+        );
+
+        let mut tampered_signature = valid_headers.clone();
+        let signature = tampered_signature
+            .iter_mut()
+            .find(|(name, _value)| name == "x-sorafs-governance-auth-signature")
+            .expect("signature header is present");
+        signature.1[0] = if signature.1[0] == b'0' { b'1' } else { b'0' };
+        assert!(
+            verify(
+                request.method(),
+                request.canonical_url(),
+                &tampered_signature,
+                b"body",
+                now,
+            )
+            .is_err()
+        );
+
+        let mut unknown_header = valid_headers.clone();
+        unknown_header.push((
+            "x-sorafs-governance-auth-extension".to_owned(),
+            b"1".to_vec(),
+        ));
+        assert!(
+            verify(
+                request.method(),
+                request.canonical_url(),
+                &unknown_header,
+                b"body",
+                now,
+            )
+            .is_err()
+        );
+
+        let head_receiver =
+            test_sealed_http_receiver(GovernanceDagAuthenticationScope::SignedHead, store.clone());
+        assert!(
+            head_receiver
+                .verify_http_request(
+                    request.method(),
+                    request.canonical_url(),
+                    valid_headers
+                        .iter()
+                        .map(|(name, value)| (name.as_str(), value.as_slice())),
+                    b"body",
+                    now,
+                )
+                .is_err()
+        );
+
+        assert_eq!(store.replay_cas_calls.load(AtomicOrdering::SeqCst), 0);
+        let inner = store.inner.lock().expect("lock unchanged sealed state");
+        assert!(inner.ipfs_request_replay.is_none());
+        assert!(inner.signed_head_request_replay.is_none());
+    }
+
+    #[test]
+    fn sealed_http_receiver_fails_closed_on_store_drift_and_readback_divergence() {
+        let now = 1_700_000_000;
+        for failure in ["cas-drift", "readback-divergence"] {
+            let store = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+            match failure {
+                "cas-drift" => store
+                    .drift_during_replay_cas
+                    .store(true, AtomicOrdering::SeqCst),
+                "readback-divergence" => store
+                    .diverge_replay_readback
+                    .store(true, AtomicOrdering::SeqCst),
+                _ => unreachable!(),
+            }
+            let receiver =
+                test_sealed_http_receiver(GovernanceDagAuthenticationScope::Ipfs, store.clone());
+            let (request, headers) = sealed_receiver_request_parts(
+                GovernanceDagAuthenticationScope::Ipfs,
+                "POST",
+                "https://example.invalid/api/v0/pin/add?arg=cid&recursive=true",
+                &[("accept-encoding", "identity")],
+                b"",
+                now,
+                if failure == "cas-drift" {
+                    [0x47; 32]
+                } else {
+                    [0x48; 32]
+                },
+            );
+            let error = receiver
+                .verify_http_request(
+                    request.method(),
+                    request.canonical_url(),
+                    headers
+                        .iter()
+                        .map(|(name, value)| (name.as_str(), value.as_slice())),
+                    b"",
+                    now,
+                )
+                .expect_err("store ambiguity cannot authorize ingress");
+            let message = error.to_string();
+            if failure == "cas-drift" {
+                assert!(message.contains("identity or policy changed"));
+            } else {
+                assert!(message.contains("readback diverged"));
+            }
+            assert_eq!(store.replay_cas_calls.load(AtomicOrdering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn sealed_http_receiver_rejects_corrupt_and_noncanonical_replay_payloads() {
+        let now = 1_700_000_000;
+        let mut noncanonical = norito::to_bytes(&RequestAuthReplayStateV1 {
+            version: REQUEST_AUTH_REPLAY_STATE_VERSION_V1,
+            entries: Vec::new(),
+        })
+        .expect("encode canonical empty replay state");
+        noncanonical.push(0);
+        for payload in [vec![0xff], noncanonical] {
+            let store = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+            {
+                let mut inner = store.inner.lock().expect("lock replay state");
+                inner.ipfs_request_replay = Some(GovernanceDagSealedStateRecord::new(
+                    GovernanceDagSealedStateSlot::IpfsRequestReplay,
+                    1,
+                    payload,
+                ));
+                inner.ipfs_request_replay_generation_floor = 1;
+            }
+            let receiver =
+                test_sealed_http_receiver(GovernanceDagAuthenticationScope::Ipfs, store.clone());
+            let (request, headers) = sealed_receiver_request_parts(
+                GovernanceDagAuthenticationScope::Ipfs,
+                "GET",
+                "https://example.invalid/api/v0/cat?arg=cid",
+                &[("accept-encoding", "identity")],
+                b"",
+                now,
+                [0x49; 32],
+            );
+            let error = receiver
+                .verify_http_request(
+                    request.method(),
+                    request.canonical_url(),
+                    headers
+                        .iter()
+                        .map(|(name, value)| (name.as_str(), value.as_slice())),
+                    b"",
+                    now,
+                )
+                .expect_err("invalid sealed payload cannot authorize ingress");
+            assert!(error.to_string().contains("canonical"));
+            assert_eq!(store.replay_cas_calls.load(AtomicOrdering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn sealed_http_receiver_prunes_expiry_without_evicting_live_capacity() {
+        let now = 1_700_000_000;
+        let entries = (0..GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1)
+            .map(|index| RequestAuthReplayEntryV1 {
+                nonce: {
+                    let mut nonce = [0; 32];
+                    nonce[24..].copy_from_slice(&(index as u64 + 1).to_be_bytes());
+                    nonce
+                },
+                expires_at_unix_secs: now + 20,
+            })
+            .collect::<Vec<_>>();
+        let store = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        {
+            let payload = norito::to_bytes(&RequestAuthReplayStateV1 {
+                version: REQUEST_AUTH_REPLAY_STATE_VERSION_V1,
+                entries: entries.clone(),
+            })
+            .expect("encode full live replay state");
+            let mut inner = store.inner.lock().expect("lock replay state");
+            inner.ipfs_request_replay = Some(GovernanceDagSealedStateRecord::new(
+                GovernanceDagSealedStateSlot::IpfsRequestReplay,
+                1,
+                payload,
+            ));
+            inner.ipfs_request_replay_generation_floor = 1;
+        }
+        let receiver =
+            test_sealed_http_receiver(GovernanceDagAuthenticationScope::Ipfs, store.clone());
+        let (request, headers) = sealed_receiver_request_parts(
+            GovernanceDagAuthenticationScope::Ipfs,
+            "GET",
+            "https://example.invalid/api/v0/cat?arg=cid",
+            &[("accept-encoding", "identity")],
+            b"",
+            now,
+            [0xff; 32],
+        );
+        let full = receiver
+            .verify_http_request(
+                request.method(),
+                request.canonical_url(),
+                headers
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_slice())),
+                b"",
+                now,
+            )
+            .expect_err("live replay capacity must not evict");
+        assert!(full.to_string().contains("bounded capacity"));
+        assert_eq!(store.replay_cas_calls.load(AtomicOrdering::SeqCst), 0);
+
+        {
+            let mut expired = entries;
+            expired[0].expires_at_unix_secs = now;
+            let payload = norito::to_bytes(&RequestAuthReplayStateV1 {
+                version: REQUEST_AUTH_REPLAY_STATE_VERSION_V1,
+                entries: expired,
+            })
+            .expect("encode replay state with one expired entry");
+            let mut inner = store.inner.lock().expect("lock replay state");
+            inner.ipfs_request_replay = Some(GovernanceDagSealedStateRecord::new(
+                GovernanceDagSealedStateSlot::IpfsRequestReplay,
+                2,
+                payload,
+            ));
+            inner.ipfs_request_replay_generation_floor = 2;
+        }
+        receiver
+            .verify_http_request(
+                request.method(),
+                request.canonical_url(),
+                headers
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_slice())),
+                b"",
+                now,
+            )
+            .expect("one expired entry makes bounded room");
+        assert_eq!(store.replay_cas_calls.load(AtomicOrdering::SeqCst), 1);
+        let observed = store
+            .inner
+            .lock()
+            .expect("lock committed replay state")
+            .ipfs_request_replay
+            .clone()
+            .expect("committed replay state");
+        let state = decode_request_auth_replay_state(
+            &observed,
+            GovernanceDagSealedStateSlot::IpfsRequestReplay,
+            now,
+        )
+        .expect("decode committed replay state");
+        assert_eq!(
+            state.entries.len(),
+            GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1
+        );
+        assert!(
+            state
+                .entries
+                .iter()
+                .all(|entry| entry.expires_at_unix_secs > now)
+        );
+        assert!(state.entries.iter().any(|entry| entry.nonce == [0xff; 32]));
     }
 
     #[test]

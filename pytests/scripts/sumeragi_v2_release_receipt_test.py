@@ -949,8 +949,8 @@ def make_prebuilt_binary_bundle(
     release.mkdir(parents=True)
     message_control_release.mkdir(parents=True)
     binary_specs = (
-        ("irohad", "release/iroha3d"),
-        ("irohad_message_control", "message-control/release/iroha3d"),
+        ("irohad", "release/irohad"),
+        ("irohad_message_control", "message-control/release/irohad"),
         ("iroha", "release/iroha"),
         ("kagami", "release/kagami"),
     )
@@ -2066,9 +2066,9 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                     "IROHA_RELEASE_PREBUILT_MANIFEST_SHA256="
                     f"{prebuilt_manifest_sha256} "
                     "TEST_NETWORK_BIN_IROHAD="
-                    f"{seed_program_target / 'release' / 'iroha3d'} "
+                    f"{seed_program_target / 'release' / 'irohad'} "
                     "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="
-                    f"{seed_program_target / 'message-control' / 'release' / 'iroha3d'} "
+                    f"{seed_program_target / 'message-control' / 'release' / 'irohad'} "
                     f"TEST_NETWORK_BIN_IROHA={seed_program_target / 'release' / 'iroha'} "
                     f"KAGAMI_BIN={seed_program_target / 'release' / 'kagami'} "
                     "CARGO_NET_OFFLINE=true "
@@ -2837,10 +2837,10 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         }
         for (role, relative), path in zip(
             (
-                ("irohad", "release/iroha3d"),
+                ("irohad", "release/irohad"),
                 (
                     "irohad_message_control",
-                    "message-control/release/iroha3d",
+                    "message-control/release/irohad",
                 ),
                 ("iroha", "release/iroha"),
                 ("kagami", "release/kagami"),
@@ -5438,7 +5438,7 @@ def test_receipt_requires_exact_nocapture_seed_diagnostic(tmp_path: Path) -> Non
         ),
         (
             r"TEST_NETWORK_BIN_IROHAD=[^ ]+",
-            "TEST_NETWORK_BIN_IROHAD=/tmp/escaped-iroha3d",
+            "TEST_NETWORK_BIN_IROHAD=/tmp/escaped-irohad",
         ),
     ),
 )

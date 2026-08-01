@@ -1,5 +1,5 @@
 //! Contains message structures for p2p communication during consensus.
-use std::{collections::BTreeMap, io::Write, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 use iroha_crypto::{Hash, HashOf, PublicKey, Signature};
 use iroha_data_model::{
@@ -392,7 +392,7 @@ impl From<BlockMessage> for BlockMessageWire {
 }
 
 impl NoritoSerialize for BlockMessageWire {
-    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.message.ensure_live_outbound()?;
         if let Some(encoded) = self.encoded.as_ref() {
             writer.write_all(encoded)?;
@@ -501,7 +501,7 @@ pub enum ControlFlow {
 }
 
 impl NoritoSerialize for ControlFlow {
-    fn serialize<W: Write>(&self, _writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, _writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         Err(ncore::Error::Message(
             "refusing to emit decode-only global Sumeragi v1 control-flow message".to_owned(),
         ))

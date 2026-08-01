@@ -541,13 +541,6 @@ fn minimal_config_snapshot() {
                 file: None,
                 manifest_json: None,
                 expected_hash: None,
-                bootstrap_allowlist: [],
-                bootstrap_max_bytes: 16777216,
-                bootstrap_response_throttle: 1s,
-                bootstrap_request_timeout: 3s,
-                bootstrap_retry_interval: 1s,
-                bootstrap_max_attempts: 5,
-                bootstrap_enabled: true,
             },
             torii: Torii {
                 address: WithOrigin {
@@ -2014,11 +2007,12 @@ fn minimal_config_snapshot() {
             nexus: Nexus {
                 enabled: true,
                 storage: NexusStorage {
-                    max_disk_usage_bytes: Bytes(
+                    local_budget_bytes: Some(Bytes(
                         274877906944,
-                    ),
-                    budget_source: Unset,
-                    auto_default: None,
+                    )),
+                    effective_local_budget_bytes: Some(Bytes(
+                        274877906944,
+                    )),
                     budget_enforce_interval_blocks: 10,
                     max_wsv_memory_bytes: Bytes(
                         8589934592,
@@ -3664,6 +3658,36 @@ fn nexus_storage_weights_require_full_budget() {
         .expect_err("invalid storage weights must be rejected");
     let debug = strip_ansi_codes(&format!("{err:?}"));
     assert_contains!(debug, "nexus.storage.disk_budget_weights");
+}
+
+#[test]
+fn nexus_storage_weights_require_positive_subsystem_shares() {
+    use iroha_config::parameters::user::{Nexus, NexusStorage, NexusStorageWeights};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        storage: NexusStorage {
+            disk_budget_weights: NexusStorageWeights {
+                kura_blocks_bps: 4_000,
+                wsv_snapshots_bps: 2_500,
+                sorafs_bps: 1_500,
+                soranet_spool_bps: 2_000,
+                soravpn_spool_bps: 0,
+            },
+            ..NexusStorage::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter
+        .into_result()
+        .expect_err("a zero subsystem storage share must be rejected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "nexus.storage.disk_budget_weights");
+    assert_contains!(debug, "soravpn_spool_bps");
+    assert_contains!(debug, "greater than zero");
 }
 
 #[test]

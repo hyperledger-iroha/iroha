@@ -672,7 +672,7 @@ impl LiveQueryStoreHandle {
     /// - Returns [`QueryExecutionFail::CapacityLimit`] if [`LiveQueryStore`] capacity is reached.
     /// - Returns [`QueryExecutionFail::AuthorityQuotaExceeded`] when the per-authority quota is reached.
     /// - Otherwise throws up query output handling errors.
-    pub fn handle_iter_start(
+    pub(crate) fn handle_iter_start(
         &self,
         mut live_query: ErasedQueryIterator,
         authority: &AccountId,
@@ -781,7 +781,7 @@ impl LiveQueryStoreHandle {
     /// cursors must not be reusable after the context ends.
     /// # Errors
     /// Returns an error if the first batch cannot be produced by the iterator.
-    pub fn handle_iter_start_ephemeral(
+    pub(crate) fn handle_iter_start_ephemeral(
         &self,
         mut live_query: ErasedQueryIterator,
     ) -> Result<QueryOutput, QueryExecutionFail> {
@@ -800,7 +800,7 @@ impl LiveQueryStoreHandle {
     ///   indistinguishable so cursor IDs cannot be used as an existence oracle.
     /// - Returns an [`QueryExecutionFail`] if the cursor position does not match
     ///   or cannot continue.
-    pub fn handle_iter_continue(
+    pub(crate) fn handle_iter_continue(
         &self,
         ForwardCursor {
             query,

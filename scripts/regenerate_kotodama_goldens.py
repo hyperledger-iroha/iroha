@@ -940,16 +940,26 @@ class _UniquePathAction(argparse.Action):
         values: Path,
         option_string: str | None = None,
     ) -> None:
-        if getattr(namespace, self.dest) is not None:
+        supplied_marker = f"_{self.dest}_supplied"
+        if getattr(namespace, supplied_marker, False):
             parser.error(f"{option_string or self.dest} was supplied more than once")
+        setattr(namespace, supplied_marker, True)
         setattr(namespace, self.dest, values)
+
+
+def _non_empty_path(value: str) -> Path:
+    """Parse a required tool path without accepting an empty argument."""
+
+    if not value or value.startswith("-"):
+        raise argparse.ArgumentTypeError("path must be non-empty and must not be a flag")
+    return Path(value)
 
 
 def _explicit_root_path(value: str) -> Path:
     """Parse a deliberate non-broad root without normalizing symlinks."""
 
-    if not value:
-        raise argparse.ArgumentTypeError("root path must not be empty")
+    if not value or value.startswith("-"):
+        raise argparse.ArgumentTypeError("root path must be non-empty and must not be a flag")
     path = Path(value)
     if path in {Path("."), Path(path.anchor)} or ".." in path.parts:
         raise argparse.ArgumentTypeError(
@@ -965,8 +975,18 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="verify without publishing (default)")
     mode.add_argument("--write", action="store_true", help="publish all prevalidated changes")
-    parser.add_argument("--koto", type=Path, default=Path("target/debug/koto"))
-    parser.add_argument("--iroha", type=Path, default=Path("target/debug/iroha"))
+    parser.add_argument(
+        "--koto",
+        type=_non_empty_path,
+        action=_UniquePathAction,
+        default=Path("target/debug/koto"),
+    )
+    parser.add_argument(
+        "--iroha",
+        type=_non_empty_path,
+        action=_UniquePathAction,
+        default=Path("target/debug/iroha"),
+    )
     parser.add_argument(
         "--output-root",
         type=_explicit_root_path,
@@ -978,16 +998,6 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         type=_explicit_root_path,
         action=_UniquePathAction,
         help="create the temporary compiler tree below this root",
-    )
-    parser.add_argument(
-        "--skip-runtime-manifest-check",
-        action="store_true",
-        help="skip independent iroha manifest verification for local iteration",
-    )
-    parser.add_argument(
-        "--skip-contract-tests",
-        action="store_true",
-        help="skip the canonical koto test JSON/JUnit run for local iteration",
     )
     arguments = list(argv)
     if sum(argument in {"--check", "--write"} for argument in arguments) > 1:
@@ -1090,11 +1100,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sources = tracked_sources(root)
         validate_output_inventory(rows, sources, tracked_outputs(root))
         koto = _resolve_tool(root, args.koto, "koto")
-        iroha = (
-            None
-            if args.skip_runtime_manifest_check
-            else _resolve_tool(root, args.iroha, "iroha")
-        )
+        iroha = _resolve_tool(root, args.iroha, "iroha")
         validate_sources(koto, root, sources)
         with tempfile.TemporaryDirectory(
             prefix="v1-goldens.",
@@ -1107,7 +1113,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 root,
                 stage,
                 rows,
-                not args.skip_contract_tests,
+                True,
             )
             changed = publish_or_check(output_root, stage, rows, args.write)
     except (GoldenError, OSError) as error:

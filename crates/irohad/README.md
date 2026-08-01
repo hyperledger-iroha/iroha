@@ -43,7 +43,7 @@ This flag can be combined with the `--features` flag in order to precisely speci
 ### Deployment runtime-provider launcher
 
 `irohad` is also a library target. A deployment-owned binary can use the same
-CLI/config/bootstrap path as the stock binaries while supplying HSM, KMS,
+CLI/config/bootstrap path as the stock binary while supplying HSM, KMS,
 WebAuthn, authenticated transport, immutable-query, publication, and sealed
 checkpoint adapters:
 
@@ -62,9 +62,9 @@ provider credentials, API tokens, or private evidence. Registry selection is a
 compile-time/launcher decision; the standard launcher has no environment or
 config selector that dynamically loads executable provider code.
 
-The stock `iroha2d`, `iroha3d`, and `irohad` binaries do not embed deployment
-providers. With the default empty binding catalog they start without external
-adapters. With a non-empty catalog they use the stock local-broker client and
+The stock `irohad` binary does not embed deployment providers. With the default
+empty binding catalog it starts without external adapters. With a non-empty
+catalog it uses the stock local-broker client and
 fail before subsystem startup if the broker or any exact requested role is
 missing, substituted, stale, or unsupported.
 

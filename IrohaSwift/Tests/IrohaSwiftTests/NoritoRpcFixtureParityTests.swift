@@ -7,17 +7,11 @@ import NoritoBridge
 
 final class NoritoRpcFixtureParityTests: XCTestCase {
     private static let signedTransactionType = "iroha_data_model::transaction::signed::SignedTransaction"
-    private static let fixtureNames = [
-        "mint_asset", // numeric + asset
-        "register_asset_definition", // asset definition governance
-        "grant_revoke_role_permission", // governance role bindings
-        "set_parameter_next_mode", // governance parameter change
-        "mixed_executable_batch", // instruction + contract call ordering
-    ]
 
     func testSignedTransactionFixturesRoundTrip() throws {
         let loader = try NoritoRpcFixtureLoader()
-        for name in Self.fixtureNames {
+        XCTAssertFalse(loader.names.isEmpty, "the shared fixture corpus must not be empty")
+        for name in loader.names {
             try assertFixtureIntegrity(loader: loader, name: name)
         }
 
@@ -30,7 +24,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
             21,
             "required transaction fixture decode must execute through ABI-21"
         )
-        for name in Self.fixtureNames {
+        for name in loader.names {
             try assertFixtureNativeRoundTrip(loader: loader, name: name)
         }
     }
@@ -288,7 +282,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         XCTAssertEqual(decodedChain, fixture.entry.chain, "chain mismatch in decode for \(name)")
         if let creation = payload["creation_time_ms"] as? NSNumber {
             XCTAssertEqual(
-                creation.int64Value,
+                creation.uint64Value,
                 fixture.entry.creationTimeMs,
                 "creation_time_ms mismatch in decode for \(name)"
             )
@@ -303,7 +297,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         )
         assertOptionalNumberEquals(
             payload["nonce"],
-            expected: fixture.entry.nonce,
+            expected: fixture.entry.nonce.map(UInt64.init),
             name: name,
             field: "nonce"
         )
@@ -315,15 +309,29 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
 private struct NoritoRpcFixtureLoader {
     struct Manifest: Decodable {
         let fixtures: [Entry]
+
+        private enum CodingKeys: String, CodingKey {
+            case fixtures
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactFixtureKeys(
+                decoder,
+                ["fixtures"],
+                context: "shared transaction manifest"
+            )
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            fixtures = try container.decode([Entry].self, forKey: .fixtures)
+        }
     }
 
     struct Entry: Decodable {
         let name: String
         let authority: String
         let chain: String
-        let creationTimeMs: Int64
-        let timeToLiveMs: Int64
-        let nonce: Int64?
+        let creationTimeMs: UInt64
+        let timeToLiveMs: UInt64
+        let nonce: UInt32?
         let encodedFile: String
         let encodedLen: Int
         let signedLen: Int
@@ -347,10 +355,399 @@ private struct NoritoRpcFixtureLoader {
             case payloadHash = "payload_hash"
             case signedHash = "signed_hash"
         }
+
+        init(
+            name: String,
+            authority: String,
+            chain: String,
+            creationTimeMs: UInt64,
+            timeToLiveMs: UInt64,
+            nonce: UInt32?,
+            encodedFile: String,
+            encodedLen: Int,
+            signedLen: Int,
+            payloadBase64: String,
+            signedBase64: String,
+            payloadHash: String,
+            signedHash: String
+        ) {
+            self.name = name
+            self.authority = authority
+            self.chain = chain
+            self.creationTimeMs = creationTimeMs
+            self.timeToLiveMs = timeToLiveMs
+            self.nonce = nonce
+            self.encodedFile = encodedFile
+            self.encodedLen = encodedLen
+            self.signedLen = signedLen
+            self.payloadBase64 = payloadBase64
+            self.signedBase64 = signedBase64
+            self.payloadHash = payloadHash
+            self.signedHash = signedHash
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactFixtureKeys(
+                decoder,
+                [
+                    "authority", "chain", "creation_time_ms", "encoded_file",
+                    "encoded_len", "name", "nonce", "payload_base64", "payload_hash",
+                    "signed_base64", "signed_hash", "signed_len", "time_to_live_ms",
+                ],
+                context: "shared transaction manifest fixture"
+            )
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            name = try container.decode(String.self, forKey: .name)
+            authority = try container.decode(String.self, forKey: .authority)
+            chain = try container.decode(String.self, forKey: .chain)
+            creationTimeMs = try container.decode(UInt64.self, forKey: .creationTimeMs)
+            timeToLiveMs = try container.decode(UInt64.self, forKey: .timeToLiveMs)
+            nonce = try container.decodeIfPresent(UInt32.self, forKey: .nonce)
+            encodedFile = try container.decode(String.self, forKey: .encodedFile)
+            encodedLen = try container.decode(Int.self, forKey: .encodedLen)
+            signedLen = try container.decode(Int.self, forKey: .signedLen)
+            payloadBase64 = try container.decode(String.self, forKey: .payloadBase64)
+            signedBase64 = try container.decode(String.self, forKey: .signedBase64)
+            payloadHash = try container.decode(String.self, forKey: .payloadHash)
+            signedHash = try container.decode(String.self, forKey: .signedHash)
+        }
+    }
+
+    private struct PayloadDocumentEntry: Decodable {
+        let name: String
+        let authority: String
+        let chain: String
+        let creationTimeMs: UInt64
+        let timeToLiveMs: UInt64
+        let nonce: UInt32?
+        let payload: SharedPayload
+        let payloadBase64: String
+        let signedBase64: String
+        let payloadHash: String
+        let signedHash: String
+
+        private enum CodingKeys: String, CodingKey {
+            case name
+            case authority
+            case chain
+            case creationTimeMs = "creation_time_ms"
+            case timeToLiveMs = "time_to_live_ms"
+            case nonce
+            case payload
+            case payloadBase64 = "payload_base64"
+            case signedBase64 = "signed_base64"
+            case payloadHash = "payload_hash"
+            case signedHash = "signed_hash"
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactFixtureKeys(
+                decoder,
+                [
+                    "authority", "chain", "creation_time_ms", "name", "nonce", "payload",
+                    "payload_base64", "payload_hash", "signed_base64", "signed_hash",
+                    "time_to_live_ms",
+                ],
+                context: "shared transaction payload descriptor"
+            )
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            name = try container.decode(String.self, forKey: .name)
+            authority = try container.decode(String.self, forKey: .authority)
+            chain = try container.decode(String.self, forKey: .chain)
+            creationTimeMs = try container.decode(UInt64.self, forKey: .creationTimeMs)
+            timeToLiveMs = try container.decode(UInt64.self, forKey: .timeToLiveMs)
+            nonce = try container.decodeIfPresent(UInt32.self, forKey: .nonce)
+            payload = try container.decode(SharedPayload.self, forKey: .payload)
+            payloadBase64 = try container.decode(String.self, forKey: .payloadBase64)
+            signedBase64 = try container.decode(String.self, forKey: .signedBase64)
+            payloadHash = try container.decode(String.self, forKey: .payloadHash)
+            signedHash = try container.decode(String.self, forKey: .signedHash)
+        }
+    }
+
+    private struct SharedPayload: Decodable {
+        let authority: String
+        let chain: String
+        let creationTimeMs: UInt64
+        let timeToLiveMs: UInt64
+        let nonce: UInt32?
+        let executable: SharedExecutable
+        let metadata: [String: ToriiJSONValue]
+
+        private enum CodingKeys: String, CodingKey {
+            case authority
+            case chain
+            case creationTimeMs = "creation_time_ms"
+            case timeToLiveMs = "time_to_live_ms"
+            case nonce
+            case executable
+            case feePayment = "fee_payment"
+            case metadata
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactFixtureKeys(
+                decoder,
+                [
+                    "authority", "chain", "creation_time_ms", "executable", "fee_payment",
+                    "metadata", "nonce", "time_to_live_ms",
+                ],
+                context: "shared transaction payload"
+            )
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            authority = try container.decode(String.self, forKey: .authority)
+            chain = try container.decode(String.self, forKey: .chain)
+            creationTimeMs = try container.decode(UInt64.self, forKey: .creationTimeMs)
+            timeToLiveMs = try container.decode(UInt64.self, forKey: .timeToLiveMs)
+            guard timeToLiveMs > 0 else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .timeToLiveMs,
+                    in: container,
+                    debugDescription: "time_to_live_ms must be positive"
+                )
+            }
+            nonce = try container.decodeIfPresent(UInt32.self, forKey: .nonce)
+            if nonce == 0 {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .nonce,
+                    in: container,
+                    debugDescription: "nonce must be null or positive"
+                )
+            }
+            executable = try container.decode(SharedExecutable.self, forKey: .executable)
+            _ = try container.decode(SharedFeePayment.self, forKey: .feePayment)
+            metadata = try container.decode([String: ToriiJSONValue].self, forKey: .metadata)
+        }
+    }
+
+    private enum SharedExecutable: Decodable {
+        case instructions([SharedInstruction])
+        case ivm(Data)
+        case batch([SharedBatchItem])
+        case contractCall(SharedContractCall)
+
+        private enum CodingKeys: String, CodingKey {
+            case instructions = "Instructions"
+            case ivm = "Ivm"
+            case batch = "Batch"
+            case contractCall = "ContractCall"
+        }
+
+        init(from decoder: Decoder) throws {
+            let dynamic = try decoder.container(keyedBy: FixtureJSONCodingKey.self)
+            let variants = Set(dynamic.allKeys.map(\.stringValue))
+            guard variants.count == 1,
+                  let variant = variants.first,
+                  ["Batch", "ContractCall", "Instructions", "Ivm"].contains(variant) else {
+                throw DecodingError.dataCorrupted(
+                    .init(
+                        codingPath: decoder.codingPath,
+                        debugDescription: "executable must contain exactly one known variant"
+                    )
+                )
+            }
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            switch variant {
+            case "Instructions":
+                self = try .instructions(container.decode([SharedInstruction].self, forKey: .instructions))
+            case "Ivm":
+                let encoded = try container.decode(String.self, forKey: .ivm)
+                guard let bytes = Data(base64Encoded: encoded),
+                      !bytes.isEmpty,
+                      bytes.base64EncodedString() == encoded else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .ivm,
+                        in: container,
+                        debugDescription: "Ivm must use non-empty canonical base64"
+                    )
+                }
+                self = .ivm(bytes)
+            case "Batch":
+                self = try .batch(container.decode([SharedBatchItem].self, forKey: .batch))
+            case "ContractCall":
+                self = try .contractCall(container.decode(SharedContractCall.self, forKey: .contractCall))
+            default:
+                throw DecodingError.dataCorrupted(
+                    .init(codingPath: decoder.codingPath, debugDescription: "unknown executable")
+                )
+            }
+        }
+    }
+
+    private struct SharedInstruction: Decodable {
+        let payloadBase64: String
+        let wireName: String
+
+        private enum CodingKeys: String, CodingKey {
+            case payloadBase64 = "payload_base64"
+            case wireName = "wire_name"
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactFixtureKeys(
+                decoder,
+                ["payload_base64", "wire_name"],
+                context: "shared instruction descriptor"
+            )
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            payloadBase64 = try container.decode(String.self, forKey: .payloadBase64)
+            wireName = try container.decode(String.self, forKey: .wireName)
+            guard let bytes = Data(base64Encoded: payloadBase64),
+                  bytes.base64EncodedString() == payloadBase64,
+                  !wireName.isEmpty else {
+                throw DecodingError.dataCorrupted(
+                    .init(codingPath: decoder.codingPath, debugDescription: "invalid instruction descriptor")
+                )
+            }
+        }
+    }
+
+    private enum SharedBatchItem: Decodable {
+        case instruction(SharedInstruction)
+        case contractCall(SharedContractCall)
+
+        private enum CodingKeys: String, CodingKey {
+            case instruction = "Instruction"
+            case contractCall = "ContractCall"
+        }
+
+        init(from decoder: Decoder) throws {
+            let dynamic = try decoder.container(keyedBy: FixtureJSONCodingKey.self)
+            let variants = Set(dynamic.allKeys.map(\.stringValue))
+            guard variants.count == 1,
+                  let variant = variants.first,
+                  ["ContractCall", "Instruction"].contains(variant) else {
+                throw DecodingError.dataCorrupted(
+                    .init(
+                        codingPath: decoder.codingPath,
+                        debugDescription: "batch item must contain exactly one known variant"
+                    )
+                )
+            }
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            if variant == "Instruction" {
+                self = try .instruction(container.decode(SharedInstruction.self, forKey: .instruction))
+            } else {
+                self = try .contractCall(container.decode(SharedContractCall.self, forKey: .contractCall))
+            }
+        }
+    }
+
+    private struct SharedContractCall: Decodable {
+        let contractAddress: String
+        let expectedCodeHash: String
+        let entrypoint: String
+        let arguments: [UInt8]?
+
+        private enum CodingKeys: String, CodingKey {
+            case contractAddress = "contract_address"
+            case expectedCodeHash = "expected_code_hash"
+            case entrypoint
+            case arguments
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactFixtureKeys(
+                decoder,
+                ["arguments", "contract_address", "entrypoint", "expected_code_hash"],
+                context: "shared contract call"
+            )
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            contractAddress = try container.decode(String.self, forKey: .contractAddress)
+            expectedCodeHash = try container.decode(String.self, forKey: .expectedCodeHash)
+            entrypoint = try container.decode(String.self, forKey: .entrypoint)
+            arguments = try container.decodeIfPresent([UInt8].self, forKey: .arguments)
+        }
+    }
+
+    private struct SharedFeePayment: Decodable {
+        private enum CodingKeys: String, CodingKey {
+            case payer
+            case value
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactFixtureKeys(
+                decoder,
+                ["payer", "value"],
+                context: "shared fee payment"
+            )
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            _ = try container.decode(String.self, forKey: .payer)
+            _ = try container.decode(SharedFeeValue.self, forKey: .value)
+        }
+    }
+
+    private struct SharedFeeValue: Decodable {
+        private enum CodingKeys: String, CodingKey {
+            case chargeLimits = "charge_limits"
+            case gasLimit = "gas_limit"
+        }
+
+        init(from decoder: Decoder) throws {
+            let dynamic = try decoder.container(keyedBy: FixtureJSONCodingKey.self)
+            let actual = Set(dynamic.allKeys.map(\.stringValue))
+            guard actual == ["charge_limits"] || actual == ["charge_limits", "gas_limit"] else {
+                throw DecodingError.dataCorrupted(
+                    .init(codingPath: decoder.codingPath, debugDescription: "invalid fee value fields")
+                )
+            }
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            _ = try container.decode([SharedChargeLimit].self, forKey: .chargeLimits)
+            if container.contains(.gasLimit) {
+                let gasLimit = try container.decode(UInt64.self, forKey: .gasLimit)
+                guard gasLimit > 0 else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .gasLimit,
+                        in: container,
+                        debugDescription: "gas_limit must be positive"
+                    )
+                }
+            }
+        }
+    }
+
+    private struct SharedChargeLimit: Decodable {
+        private enum CodingKeys: String, CodingKey {
+            case assetDefinitionId = "asset_definition_id"
+            case kind
+            case maxAmount = "max_amount"
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactFixtureKeys(
+                decoder,
+                ["asset_definition_id", "kind", "max_amount"],
+                context: "shared charge limit"
+            )
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            _ = try container.decode(String.self, forKey: .assetDefinitionId)
+            _ = try container.decode(SharedChargeKind.self, forKey: .kind)
+            _ = try container.decode(String.self, forKey: .maxAmount)
+        }
+    }
+
+    private struct SharedChargeKind: Decodable {
+        private enum CodingKeys: String, CodingKey {
+            case kind
+            case value
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactFixtureKeys(
+                decoder,
+                ["kind", "value"],
+                context: "shared charge kind"
+            )
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            _ = try container.decode(String.self, forKey: .kind)
+            _ = try container.decodeIfPresent(ToriiJSONValue.self, forKey: .value)
+        }
     }
 
     private let entries: [String: Entry]
     private let root: URL
+    let names: [String]
 
     init() throws {
         let root = URL(fileURLWithPath: #filePath)
@@ -359,10 +756,38 @@ private struct NoritoRpcFixtureLoader {
             .deletingLastPathComponent() // Tests
             .deletingLastPathComponent() // IrohaSwift package root
         let manifestURL = root.appendingPathComponent("fixtures/norito_rpc/transaction_fixtures.manifest.json")
+        let payloadURL = root.appendingPathComponent("fixtures/norito_rpc/transaction_payloads.json")
         let decoder = JSONDecoder()
-        let manifest = try decoder.decode(Manifest.self, from: Data(contentsOf: manifestURL))
-        self.entries = try Self.validatedEntries(manifest.fixtures)
+        let manifest = try StrictFixtureJSON.decode(
+            Manifest.self,
+            from: Data(contentsOf: manifestURL),
+            using: decoder,
+            context: manifestURL.path
+        )
+        let payloadDescriptors = try StrictFixtureJSON.decode(
+            [PayloadDocumentEntry].self,
+            from: Data(contentsOf: payloadURL),
+            using: decoder,
+            context: payloadURL.path
+        )
+        let entries = try Self.validatedEntries(manifest.fixtures)
+        let payloads = try Self.validatedPayloadEntries(payloadDescriptors)
+        guard Set(entries.keys) == Set(payloads.keys) else {
+            throw FixtureError.fixtureNameSetMismatch(
+                payloads: Set(payloads.keys),
+                manifests: Set(entries.keys)
+            )
+        }
+        for name in entries.keys {
+            guard let entry = entries[name], let payload = payloads[name] else {
+                throw FixtureError.missingFixture(name)
+            }
+            try Self.validateDescriptorParity(payload, manifest: entry)
+            try Self.validateEntryIdentity(entry, root: root)
+        }
+        self.entries = entries
         self.root = root
+        names = entries.keys.sorted()
     }
 
     static func validatedEntries(_ fixtures: [Entry]) throws -> [String: Entry] {
@@ -403,7 +828,99 @@ private struct NoritoRpcFixtureLoader {
                 throw FixtureError.duplicateSignedBytes(entry.name)
             }
         }
+        for entry in fixtures {
+            guard !entry.name.isEmpty,
+                  !entry.name.contains("/"),
+                  !entry.name.contains("\\"),
+                  entry.encodedFile == "\(entry.name).norito" else {
+                throw FixtureError.invalidEncodedFile(entry.encodedFile)
+            }
+            guard entry.timeToLiveMs > 0 else {
+                throw FixtureError.invalidTimeToLiveMs(entry.name)
+            }
+            guard entry.nonce != 0 else {
+                throw FixtureError.invalidNonce(entry.name)
+            }
+            guard entry.encodedLen > 0,
+                  entry.encodedLen <= 16 * 1024 * 1024,
+                  entry.signedLen > 0,
+                  entry.signedLen <= 16 * 1024 * 1024 else {
+                throw FixtureError.invalidLength(entry.name)
+            }
+        }
         return Dictionary(uniqueKeysWithValues: fixtures.map { ($0.name, $0) })
+    }
+
+    private static func validatedPayloadEntries(
+        _ fixtures: [PayloadDocumentEntry]
+    ) throws -> [String: PayloadDocumentEntry] {
+        var entries: [String: PayloadDocumentEntry] = [:]
+        for entry in fixtures {
+            guard entries[entry.name] == nil else {
+                throw FixtureError.duplicateFixtureName(entry.name)
+            }
+            guard entry.authority == entry.payload.authority,
+                  entry.chain == entry.payload.chain,
+                  entry.creationTimeMs == entry.payload.creationTimeMs,
+                  entry.timeToLiveMs == entry.payload.timeToLiveMs,
+                  entry.nonce == entry.payload.nonce else {
+                throw FixtureError.payloadMetadataMismatch(entry.name)
+            }
+            entries[entry.name] = entry
+        }
+        return entries
+    }
+
+    private static func validateDescriptorParity(
+        _ payload: PayloadDocumentEntry,
+        manifest: Entry
+    ) throws {
+        guard payload.authority == manifest.authority,
+              payload.chain == manifest.chain,
+              payload.creationTimeMs == manifest.creationTimeMs,
+              payload.timeToLiveMs == manifest.timeToLiveMs,
+              payload.nonce == manifest.nonce,
+              payload.payloadBase64 == manifest.payloadBase64,
+              payload.signedBase64 == manifest.signedBase64,
+              payload.payloadHash == manifest.payloadHash,
+              payload.signedHash == manifest.signedHash else {
+            throw FixtureError.manifestPayloadMismatch(manifest.name)
+        }
+    }
+
+    private static func validateEntryIdentity(_ entry: Entry, root: URL) throws {
+        guard isLowerHex(entry.payloadHash, count: 64),
+              isLowerHex(entry.signedHash, count: 64) else {
+            throw FixtureError.invalidHash(entry.name)
+        }
+        let payloadBytes = try decodeCanonicalBase64(
+            entry.payloadBase64,
+            context: "\(entry.name).payload_base64"
+        )
+        let signedBytes = try decodeCanonicalBase64(
+            entry.signedBase64,
+            context: "\(entry.name).signed_base64"
+        )
+        guard payloadBytes.count == entry.encodedLen,
+              signedBytes.count == entry.signedLen,
+              IrohaHash.hash(payloadBytes).hexLowercased() == entry.payloadHash,
+              try canonicalSignedTransactionPayload(signedBytes) == payloadBytes else {
+            throw FixtureError.invalidIdentity(entry.name)
+        }
+        var compact = CompactNoritoWriter()
+        compact.writeUInt32LE(0)
+        compact.writeField(payloadBytes)
+        guard IrohaHash.hash(compact.data).hexLowercased() == entry.signedHash else {
+            throw FixtureError.invalidIdentity(entry.name)
+        }
+        let fixtureURL = root.appendingPathComponent("fixtures/norito_rpc/\(entry.encodedFile)")
+        guard try Data(contentsOf: fixtureURL) == payloadBytes else {
+            throw FixtureError.invalidIdentity(entry.name)
+        }
+    }
+
+    private static func isLowerHex(_ value: String, count: Int) -> Bool {
+        value.count == count && value.allSatisfy { "0123456789abcdef".contains($0) }
     }
 
     private static func decodeCanonicalBase64(_ value: String, context: String) throws -> Data {
@@ -492,7 +1009,7 @@ private func decodeSignedPayload(from json: String) -> [String: Any]? {
 
 private func assertOptionalNumberEquals(
     _ value: Any?,
-    expected: Int64?,
+    expected: UInt64?,
     name: String,
     field: String
 ) {
@@ -500,7 +1017,7 @@ private func assertOptionalNumberEquals(
         guard let number = value as? NSNumber else {
             return XCTFail("\(field) missing in decode for \(name)")
         }
-        XCTAssertEqual(number.int64Value, expected, "\(field) mismatch in decode for \(name)")
+        XCTAssertEqual(number.uint64Value, expected, "\(field) mismatch in decode for \(name)")
         return
     }
     if value == nil || value is NSNull {
@@ -542,4 +1059,12 @@ private enum FixtureError: Error {
     case duplicateSignedBytes(String)
     case invalidBase64(String)
     case invalidTimeToLiveMs(String)
+    case invalidEncodedFile(String)
+    case invalidNonce(String)
+    case invalidLength(String)
+    case payloadMetadataMismatch(String)
+    case manifestPayloadMismatch(String)
+    case fixtureNameSetMismatch(payloads: Set<String>, manifests: Set<String>)
+    case invalidHash(String)
+    case invalidIdentity(String)
 }

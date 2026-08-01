@@ -94,8 +94,6 @@ pub mod fastpq;
 pub mod fees;
 /// Gas metering for non-VM ISI execution.
 pub mod gas;
-/// Genesis helpers (bootstrap protocol).
-pub mod genesis;
 /// Gossip protocols for transactions and peers.
 pub mod gossiper;
 /// Governance helpers (parliament selection, etc.).
@@ -137,8 +135,8 @@ pub mod privacy;
 pub mod privacy_engines;
 /// Deterministic compiled manifests for executable privacy engines.
 pub mod privacy_profiles;
-/// Native deterministic privacy release evidence, compiled only into the
-/// isolated Taira validation runner.
+/// Native deterministic privacy release evidence, compiled only into explicit
+/// release runners and opt-in integration gates.
 #[cfg(feature = "privacy-release-evidence")]
 pub mod privacy_release_evidence;
 /// Durable records produced by verified first-release privacy actions.
@@ -517,48 +515,64 @@ pub enum NetworkMessage {
     ///
     /// The nested enum retains global v1 variants for archive decoding, but
     /// [`BlockMessageWire`] rejects those variants during serialization.
+    #[codec(index = 0)]
     SumeragiBlock(Arc<BlockMessageWire>),
     /// Archived v1 consensus control-flow frame; live serialization and ingress reject it.
+    #[codec(index = 1)]
     SumeragiControlFlow(Box<ControlFlow>),
     /// Lane settlement relay envelope (NX-4).
+    #[codec(index = 2)]
     LaneRelay(Box<LaneRelayEnvelope>),
     /// Merge committee signature share for merge-ledger quorum certificates.
+    #[codec(index = 3)]
     MergeCommitteeSignature(Arc<MergeCommitteeSignature>),
     /// Lane-committee signature share for an automatic drain certificate.
+    #[codec(index = 4)]
     LaneDrainVote(Box<crate::lane_consensus::LaneDrainVoteV1>),
     /// Authenticated request/chunk traffic for a block-referenced certified merge sidecar.
+    #[codec(index = 5)]
     CertifiedMergeSidecar(Arc<CertifiedMergeSidecarMessage>),
     /// Native AMX participant attestation control-plane message.
+    #[codec(index = 6)]
     NativeAmx(Arc<native_amx::NativeAmxMessage>),
     /// Archived v1 block-sync frame; live serialization rejects it and v2 uses certified bodies.
+    #[codec(index = 7)]
     BlockSync(Box<BlockSyncMessage>),
     /// Transaction gossiper message.
+    #[codec(index = 8)]
     TransactionGossiper(Arc<TransactionGossip>),
-    /// Genesis bootstrap request (preflight or payload).
-    GenesisRequest(Box<genesis::GenesisRequest>),
-    /// Genesis bootstrap response.
-    GenesisResponse(Box<genesis::GenesisResponse>),
     /// Peer address gossip message.
+    #[codec(index = 9)]
     PeersGossiper(Box<PeersGossip>),
     /// Peer trust gossip message.
+    #[codec(index = 10)]
     PeerTrustGossip(Box<PeerTrustGossip>),
     /// Health check message.
+    #[codec(index = 11)]
     Health,
     /// Network Time Service: time synchronization ping.
+    #[codec(index = 12)]
     TimePing(Box<crate::time::TimePing>),
     /// Network Time Service: time synchronization pong.
+    #[codec(index = 13)]
     TimePong(Box<crate::time::TimePong>),
     /// Iroha Connect (WalletConnect-style) authenticated P2P control message.
+    #[codec(index = 14)]
     Connect(Box<connect_proto::ConnectP2pMessage>),
     /// Soracloud local-read proxy request routed to the authoritative primary host.
+    #[codec(index = 15)]
     SoracloudLocalReadProxyRequest(Box<soracloud_runtime::SoracloudLocalReadProxyRequestV1>),
     /// Soracloud local-read proxy response returned to the ingress node.
+    #[codec(index = 16)]
     SoracloudLocalReadProxyResponse(Box<soracloud_runtime::SoracloudLocalReadProxyResponseV1>),
     /// Torii proxy request routed across bounded Torii ingress proxy hops.
+    #[codec(index = 17)]
     ToriiProxyRequest(Box<torii_proxy::ToriiProxyRequestV5>),
     /// Torii proxy response returned to the ingress node.
+    #[codec(index = 18)]
     ToriiProxyResponse(Box<torii_proxy::ToriiProxyResponseV1>),
     /// Norito Streaming control-plane frame.
+    #[codec(index = 19)]
     StreamingControl(Box<ControlFrame>),
 }
 
@@ -668,9 +682,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             | NetworkMessage::SoracloudLocalReadProxyResponse(_)
             | NetworkMessage::ToriiProxyRequest(_)
             | NetworkMessage::ToriiProxyResponse(_)
-            | NetworkMessage::StreamingControl(_)
-            | NetworkMessage::GenesisRequest(_) => T::Control,
-            NetworkMessage::GenesisResponse(_) => T::BlockSync,
+            | NetworkMessage::StreamingControl(_) => T::Control,
             // The global v1 control-flow and block-sync envelopes are likewise
             // decode-only. Send admission, serialization, and daemon ingress
             // all reject them.
@@ -692,7 +704,6 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         use iroha_p2p::network::message::SubscriberRoute;
 
         match self {
-            Self::GenesisRequest(_) | Self::GenesisResponse(_) => SubscriberRoute::GenesisBootstrap,
             Self::SoracloudLocalReadProxyRequest(_)
             | Self::SoracloudLocalReadProxyResponse(_)
             | Self::ToriiProxyRequest(_)
@@ -706,12 +717,11 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         use iroha_p2p::network::message::ProgressReconstruction;
 
         match self {
-            // Sumeragi, genesis bootstrap, and certified-sidecar workers retain
-            // exact pending work and retry it through their bounded schedulers.
-            Self::SumeragiBlock(_)
-            | Self::CertifiedMergeSidecar(_)
-            | Self::GenesisRequest(_)
-            | Self::GenesisResponse(_) => ProgressReconstruction::Retransmit,
+            // Sumeragi and certified-sidecar workers retain exact pending work
+            // and retry it through their bounded schedulers.
+            Self::SumeragiBlock(_) | Self::CertifiedMergeSidecar(_) => {
+                ProgressReconstruction::Retransmit
+            }
             // Lane/merge producers rebuild their bounded handoff after
             // temporary actor pressure. Transport must keep the accepted
             // exact occurrence until writer flush; none of these payloads may
@@ -732,7 +742,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         use iroha_p2p::network::message::Topic;
 
         let (tag, remaining) = inbound_enum_parts(payload)?;
-        if tag == 13 {
+        if tag == 11 {
             if !remaining.is_empty() {
                 return Err(norito::core::Error::LengthMismatch);
             }
@@ -749,11 +759,10 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             2..=4 | 6 => Topic::Consensus,
             5 => inbound_certified_merge_sidecar_topic(field, flags)?,
             8 => inbound_transaction_gossip_topic(field, flags)?,
-            9 | 17..=22 => Topic::Control,
-            10 => Topic::BlockSync,
-            11 => Topic::PeerGossip,
-            12 => Topic::TrustGossip,
-            14..=16 => Topic::Health,
+            9 => Topic::PeerGossip,
+            10 => Topic::TrustGossip,
+            12..=14 => Topic::Health,
+            15..=19 => Topic::Control,
             _ => {
                 return Err(norito::core::Error::Message(
                     "unknown core network-message discriminant".to_owned(),
@@ -971,7 +980,7 @@ mod tests {
 
     use crate::{
         MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES, MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
-        NetworkMessage, PeerTrustGossip,
+        NetworkMessage, PeerTrustGossip, PeersGossip,
         gossiper::{GossipPlane, GossipRoute, GossipTransaction, TransactionGossip},
         queue::{RoutingDecision, RoutingPlan},
         role::RoleIdWithOwner,
@@ -1009,6 +1018,14 @@ mod tests {
         <NetworkMessage as ClassifyTopic>::inbound_topic(view.as_bytes(), view.flags())
             .expect("classify well-formed raw network payload")
             .expect("core network messages have a total raw classifier")
+    }
+
+    fn raw_network_tag(message: &NetworkMessage) -> u32 {
+        let encoded = ncore::to_bytes(message).expect("encode raw-tag fixture");
+        let view = ncore::from_bytes_view(&encoded).expect("inspect raw-tag fixture");
+        super::inbound_enum_parts(view.as_bytes())
+            .expect("extract core network-message discriminant")
+            .0
     }
 
     fn raw_sumeragi_topic_for_synthetic_tag(tag: u32) -> Result<NetworkTopic, ncore::Error> {
@@ -1063,6 +1080,82 @@ mod tests {
     }
 
     #[test]
+    fn first_release_network_tags_have_no_peer_genesis_protocol_gap() {
+        use iroha_primitives::unique_vec::UniqueVec;
+        use iroha_torii_shared::connect::{ConnectP2pMessageV1, ConnectSessionTerminatedV1};
+        use norito::streaming::{ControlErrorFrame, ErrorCode};
+
+        let fixtures = vec![
+            (
+                NetworkMessage::PeersGossiper(Box::new(PeersGossip {
+                    peers: UniqueVec::new(),
+                    peer_capabilities: BTreeMap::new(),
+                })),
+                9,
+                NetworkTopic::PeerGossip,
+                SubscriberRoute::General,
+            ),
+            (
+                NetworkMessage::PeerTrustGossip(Box::new(PeerTrustGossip { trust: Vec::new() })),
+                10,
+                NetworkTopic::TrustGossip,
+                SubscriberRoute::General,
+            ),
+            (
+                NetworkMessage::Health,
+                11,
+                NetworkTopic::Health,
+                SubscriberRoute::General,
+            ),
+            (
+                NetworkMessage::TimePing(Box::new(crate::time::TimePing { id: 1, t1_ms: 2 })),
+                12,
+                NetworkTopic::Health,
+                SubscriberRoute::General,
+            ),
+            (
+                NetworkMessage::TimePong(Box::new(crate::time::TimePong {
+                    id: 1,
+                    t2_ms: 2,
+                    t3_ms: 3,
+                })),
+                13,
+                NetworkTopic::Health,
+                SubscriberRoute::General,
+            ),
+            (
+                NetworkMessage::Connect(Box::new(ConnectP2pMessageV1::SessionTerminated(
+                    ConnectSessionTerminatedV1 {
+                        sid: [0x14; 32],
+                        reason: "closed".to_owned(),
+                    },
+                ))),
+                14,
+                NetworkTopic::Health,
+                SubscriberRoute::Connect,
+            ),
+            (
+                NetworkMessage::StreamingControl(Box::new(norito::streaming::ControlFrame::Error(
+                    ControlErrorFrame {
+                        code: ErrorCode::ProtocolViolation,
+                        message: "invalid frame".to_owned(),
+                    },
+                ))),
+                19,
+                NetworkTopic::Control,
+                SubscriberRoute::General,
+            ),
+        ];
+
+        for (message, expected_tag, expected_topic, expected_route) in fixtures {
+            assert_eq!(raw_network_tag(&message), expected_tag);
+            assert_eq!(message.topic(), expected_topic);
+            assert_eq!(raw_network_topic(&message), expected_topic);
+            assert_eq!(message.subscriber_route(), expected_route);
+        }
+    }
+
+    #[test]
     fn role_id_with_owner_parse_roundtrip() {
         let (account, _keypair) = gen_account_in("wonderland");
         let role: RoleId = "auditor".parse().expect("valid role id");
@@ -1074,49 +1167,6 @@ mod tests {
         let decoded: RoleIdWithOwner = encoded.parse().expect("roundtrip");
         assert_eq!(decoded.account.subject_id(), account.subject_id());
         assert_eq!(decoded.id, role);
-    }
-
-    #[test]
-    fn maximum_default_genesis_response_uses_the_reliable_bulk_cap() {
-        let bootstrap_max =
-            usize::try_from(iroha_config::parameters::defaults::genesis::BOOTSTRAP_MAX_BYTES.get())
-                .expect("default bootstrap maximum must fit usize");
-        let response = NetworkMessage::GenesisResponse(Box::new(crate::genesis::GenesisResponse {
-            chain_id: ChainId::from("genesis-topic-cap"),
-            request_id: 7,
-            public_key: None,
-            hash: None,
-            size_hint: Some(u64::try_from(bootstrap_max).expect("fixture size must fit u64")),
-            payload: Some(vec![0; bootstrap_max]),
-            error: None,
-        }));
-        assert_eq!(response.topic(), NetworkTopic::BlockSync);
-        assert_eq!(
-            response.subscriber_route(),
-            SubscriberRoute::GenesisBootstrap
-        );
-        assert_eq!(raw_network_topic(&response), NetworkTopic::BlockSync);
-
-        let origin = PeerId::from(checked_topic_keypair().public_key().clone());
-        let wire_bytes = iroha_p2p::network::data_frame_wire_len(
-            &origin,
-            None,
-            1,
-            iroha_p2p::Priority::High,
-            &response,
-        );
-        let bulk_cap =
-            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC.get();
-        let control_cap =
-            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONTROL.get();
-        assert!(
-            wire_bytes <= bulk_cap,
-            "the configured maximum genesis response and its exact P2P envelope must fit: {wire_bytes} > {bulk_cap}"
-        );
-        assert!(
-            wire_bytes > control_cap,
-            "the fixture must prove that the former control classification was insufficient"
-        );
     }
 
     #[test]
@@ -1132,6 +1182,11 @@ mod tests {
 
     #[test]
     fn raw_network_topic_is_total_for_restricted_gossip_and_fails_closed_on_unknown_layouts() {
+        #[derive(Encode)]
+        enum SingleFieldNetworkMessage {
+            Field(u8),
+        }
+
         let restricted = NetworkMessage::TransactionGossiper(Arc::new(TransactionGossip {
             txs: Vec::new(),
             routes: Vec::new(),
@@ -1143,12 +1198,42 @@ mod tests {
             NetworkTopic::TxGossipRestricted
         );
 
+        for (tag, expected) in [
+            (1_u32, NetworkTopic::Other),
+            (2, NetworkTopic::Consensus),
+            (3, NetworkTopic::Consensus),
+            (4, NetworkTopic::Consensus),
+            (6, NetworkTopic::Consensus),
+            (7, NetworkTopic::Other),
+            (9, NetworkTopic::PeerGossip),
+            (10, NetworkTopic::TrustGossip),
+            (12, NetworkTopic::Health),
+            (13, NetworkTopic::Health),
+            (14, NetworkTopic::Health),
+            (15, NetworkTopic::Control),
+            (16, NetworkTopic::Control),
+            (17, NetworkTopic::Control),
+            (18, NetworkTopic::Control),
+            (19, NetworkTopic::Control),
+        ] {
+            let (mut payload, flags) =
+                norito::codec::encode_with_header_flags(&SingleFieldNetworkMessage::Field(0));
+            payload[..core::mem::size_of::<u32>()].copy_from_slice(&tag.to_le_bytes());
+            let classified = <NetworkMessage as ClassifyTopic>::inbound_topic(&payload, flags)
+                .expect("classify explicit first-release tag");
+            assert_eq!(
+                classified,
+                Some(expected),
+                "wire tag {tag} must retain its exact first-release transport class"
+            );
+        }
+
         let flags = ncore::default_encode_flags();
         assert!(
             <NetworkMessage as ClassifyTopic>::inbound_topic(&99_u32.to_le_bytes(), flags).is_err(),
             "unknown network-message tags must fail before typed decode"
         );
-        let mut trailing_health = 13_u32.to_le_bytes().to_vec();
+        let mut trailing_health = 11_u32.to_le_bytes().to_vec();
         trailing_health.push(0);
         assert!(
             <NetworkMessage as ClassifyTopic>::inbound_topic(&trailing_health, flags).is_err(),
@@ -1292,6 +1377,7 @@ mod tests {
             NetworkTopic::Consensus,
             "lane-drain traffic must not share the authoritative v2 safety topic"
         );
+        assert_eq!(raw_network_tag(&message), 4);
         let encoded = norito::to_bytes(&message).expect("encode lane-drain vote message");
         let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
             .expect("decode lane-drain vote message");
@@ -1632,6 +1718,7 @@ mod tests {
         };
         assert_shared_carrier_wire_compatible(request_payload.as_ref());
         assert_eq!(request_message.topic(), NetworkTopic::Consensus);
+        assert_eq!(raw_network_tag(&request_message), 5);
         assert_eq!(raw_network_topic(&request_message), NetworkTopic::Consensus);
         let request_hash = HashOf::new(&request_message);
         let encoded = norito::to_bytes(&request_message).expect("encode sidecar request");
@@ -1869,6 +1956,17 @@ mod tests {
         assert!(torii_request.is_torii_proxy_control_message());
         assert!(torii_response.is_torii_proxy_control_message());
         assert!(!NetworkMessage::Health.is_torii_proxy_control_message());
+        for (message, expected_tag) in [
+            (&soracloud_request, 15),
+            (&soracloud_response, 16),
+            (&torii_request, 17),
+            (&torii_response, 18),
+        ] {
+            assert_eq!(raw_network_tag(message), expected_tag);
+            assert_eq!(message.topic(), NetworkTopic::Control);
+            assert_eq!(raw_network_topic(message), NetworkTopic::Control);
+            assert_eq!(message.subscriber_route(), SubscriberRoute::ToriiProxy);
+        }
     }
 
     #[test]
@@ -2247,6 +2345,7 @@ mod tests {
             plane: GossipPlane::Public,
         };
         let msg = NetworkMessage::TransactionGossiper(Arc::new(gossip));
+        assert_eq!(raw_network_tag(&msg), 8);
         assert_eq!(raw_network_topic(&msg), NetworkTopic::TxGossip);
 
         let bytes = msg.encode();

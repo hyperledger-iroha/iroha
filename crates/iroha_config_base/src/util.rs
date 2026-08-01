@@ -56,7 +56,7 @@ impl From<Duration> for DurationMs {
 }
 
 impl NoritoSerialize for DurationMs {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let millis = self.to_millis()?;
         <u64 as NoritoSerialize>::serialize(&millis, writer)
     }
@@ -146,7 +146,7 @@ impl<T> NoritoSerialize for Bytes<T>
 where
     T: num_traits::int::PrimInt + ToPrimitive + NoritoSerialize + Copy,
 {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
 

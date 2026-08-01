@@ -32,8 +32,8 @@ ci/check_sorafs_fixtures.sh
 Inspect the registry and candidate profile metadata:
 
 ```bash
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- --list-profiles
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- \
   --promote-profile=<handle> --json-out=-
 cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
   --chunker-profile=<handle> --json-out=-
@@ -42,7 +42,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
 For PoR coverage, replay a representative payload with proof sampling:
 
 ```bash
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./payload.bin \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- ./payload.bin \
   --profile=<handle> --json-out=- --por-json-out=- --por-sample=8
 ```
 

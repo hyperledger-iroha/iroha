@@ -29,8 +29,6 @@ tech_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽo
 
 [genesis]
 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
-# Joining nodes must set the exact expected_hash and enable remote bootstrap explicitly.
-bootstrap_enabled = false
 
 [gov]
 bond_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
@@ -71,17 +69,10 @@ stake_asset_id = "xor#universal"
 stake_escrow_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 slash_sink_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 
-[nexus.storage]
-local_budget_bytes = 44141730227814
-
-[nexus.storage.auto_default]
-aggregate_budget_bytes = 44141730227814
-version = 1
-
-[[nexus.storage.auto_default.filesystem_groups]]
-budget_bytes = 44141730227814
-components = ["kura", "wsv_cold", "sorafs", "soranet_spool", "soravpn_spool"]
-filesystem_id = "dev:16777232"
+[settlement.offline]
+enabled = true
+escrow_required = true
+escrow_accounts = {}
 
 [sorafs.gateway.site_bindings]
 path = "/config/sorafs_sites.json"

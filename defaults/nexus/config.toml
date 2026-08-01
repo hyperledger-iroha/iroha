@@ -84,8 +84,6 @@ retention_grace_secs = 86400
 
 [genesis]
 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
-# Joining nodes must set the exact expected_hash and enable remote bootstrap explicitly.
-bootstrap_enabled = false
 
 [streaming]
 identity_public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B"
@@ -120,7 +118,7 @@ sponsor_vault_custody_account_id = "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVx�
 stake_asset_id = "xor#universal"
 
 [nexus.storage]
-max_disk_usage_bytes = 274877906944
+local_budget_bytes = 274877906944
 budget_enforce_interval_blocks = 10
 max_wsv_memory_bytes = 8589934592
 

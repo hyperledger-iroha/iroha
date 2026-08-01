@@ -41,7 +41,6 @@ use iroha_data_model::{
         FeeSponsorNativeInstructionSelector, FeeSponsorProgram, FeeSponsorProgramId,
         FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect, FeeSponsorRuleSelector,
     },
-    offline::{OFFLINE_ASSET_ENABLED_METADATA_KEY, offline_escrow_account_id},
     parameter::{
         custom::{CustomParameter, CustomParameterId},
         system::{SumeragiConsensusMode, SumeragiNposParameters},
@@ -3017,27 +3016,13 @@ fn render_peer_config(
     torii.insert("transport".into(), Value::Table(transport));
     root.insert("torii".into(), Value::Table(torii));
 
-    let mut settlement_offline_escrow_accounts = Table::new();
-    let kagemusha_asset_definition =
-        AssetDefinitionId::parse_address_literal(LOCALNET_KAGEMUSHA_ASSET_ID)
-            .expect("built-in Kagemusha asset definition id must parse");
-    let chain_id = chain_id
-        .parse::<ChainId>()
-        .expect("generated localnet chain id must be canonical");
-    let kagemusha_escrow_account =
-        offline_escrow_account_id(&chain_id, &kagemusha_asset_definition);
-    settlement_offline_escrow_accounts.insert(
-        LOCALNET_KAGEMUSHA_ASSET_ID.into(),
-        Value::String(account_id_runtime_literal(
-            &kagemusha_escrow_account,
-            chain_discriminant,
-        )),
-    );
     let mut settlement_offline = Table::new();
-    settlement_offline.insert(
-        "escrow_accounts".into(),
-        Value::Table(settlement_offline_escrow_accounts),
-    );
+    // The generic localnet does not provision release artifacts or command
+    // authority, so it must not opt an asset into the process-local service.
+    // Taira profiles enable the capability explicitly.
+    settlement_offline.insert("enabled".into(), Value::Boolean(false));
+    settlement_offline.insert("escrow_required".into(), Value::Boolean(true));
+    settlement_offline.insert("escrow_accounts".into(), Value::Table(Table::new()));
     let mut settlement = Table::new();
     settlement.insert("offline".into(), Value::Table(settlement_offline));
     root.insert("settlement".into(), Value::Table(settlement));
@@ -3096,18 +3081,9 @@ fn extend_genesis(
         }
         let asset_def = AssetDefinitionId::parse_address_literal(&asset.id)
             .wrap_err("invalid asset definition id")?;
-        let mut metadata = Metadata::default();
-        if asset.id == LOCALNET_KAGEMUSHA_ASSET_ID {
-            metadata.insert(
-                OFFLINE_ASSET_ENABLED_METADATA_KEY
-                    .parse()
-                    .expect("offline asset metadata key must parse"),
-                Json::new(true),
-            );
-        }
         let definition = AssetDefinition::new(asset_def.clone(), NumericSpec::default())
             .with_name(asset.name.clone())
-            .with_metadata(metadata);
+            .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
         if let Some(alias_literal) = asset.alias.as_deref() {
             let alias = alias_literal
@@ -5102,7 +5078,7 @@ mod tests {
         let public_path = temp.path().join(GENESIS_PUBLIC_KEY_FILE);
         let private_path = temp.path().join(GENESIS_PRIVATE_KEY_FILE);
         let (public_key, private_key) =
-            KeyPair::try_from_seed([41_u8; 32], iroha_crypto::Algorithm::Ed25519)
+            KeyPair::try_from_seed(vec![41_u8; 32], iroha_crypto::Algorithm::Ed25519)
                 .expect("derive fixture genesis key")
                 .into_parts();
         let private_key = ExposedPrivateKey(private_key);
@@ -5937,7 +5913,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn generated_localnet_bootstraps_kagemusha_asset_and_permissions() {
+    fn generated_generic_localnet_bootstraps_kagemusha_asset_without_offline_opt_in() {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
@@ -5971,11 +5947,12 @@ mod tests {
             usize::from(client_account_id != *ALICE_ID);
         let expected_mint_destination =
             AssetId::new(kagemusha_asset_id.clone(), client_account_id.clone());
-        let offline_enabled_key: iroha_data_model::name::Name = OFFLINE_ASSET_ENABLED_METADATA_KEY
-            .parse()
-            .expect("offline asset metadata key");
+        let offline_enabled_key: iroha_data_model::name::Name =
+            iroha_data_model::offline::OFFLINE_ASSET_ENABLED_METADATA_KEY
+                .parse()
+                .expect("offline asset metadata key");
 
-        let has_definition = manifest.instructions().any(|instruction| {
+        let has_definition_without_offline_opt_in = manifest.instructions().any(|instruction| {
             instruction
                 .as_any()
                 .downcast_ref::<RegisterBox>()
@@ -5988,13 +5965,13 @@ mod tests {
                                     .object()
                                     .metadata
                                     .get(&offline_enabled_key)
-                                    .is_some_and(|value| matches!(value.try_into_any::<bool>(), Ok(true)))
+                                    .is_none()
                     )
                 })
         });
         assert!(
-            has_definition,
-            "localnet must register the built-in Kagemusha asset with offline.enabled=true"
+            has_definition_without_offline_opt_in,
+            "generic localnet must register the built-in Kagemusha asset without opting it into offline cash"
         );
 
         let has_alias_binding = manifest.instructions().any(|instruction| {
@@ -6167,8 +6144,11 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn generated_peer_config_enables_kagemusha_bootstrap_services() {
+    fn generated_generic_localnet_does_not_opt_in_offline_cash() {
         let temp = tempfile::tempdir().expect("make temp dir");
+        #[cfg(unix)]
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
+            .expect("make localnet output directory owner-held");
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
@@ -6457,36 +6437,23 @@ mod tests {
             .get("escrow_accounts")
             .and_then(toml::Value::as_table)
             .expect("settlement.offline.escrow_accounts table");
-        let chain_id = peer_cfg
-            .get("chain")
-            .and_then(toml::Value::as_str)
-            .expect("chain id");
-        let chain_discriminant = peer_cfg
-            .get("chain_discriminant")
-            .and_then(toml::Value::as_integer)
-            .map(|value| u16::try_from(value).expect("chain discriminant must fit u16"));
-        let kagemusha_asset_definition =
-            AssetDefinitionId::parse_address_literal(LOCALNET_KAGEMUSHA_ASSET_ID)
-                .expect("Kagemusha asset id");
-        let expected_escrow_account = offline_escrow_account_id(
-            &chain_id
-                .parse::<ChainId>()
-                .expect("generated localnet chain id must be canonical"),
-            &kagemusha_asset_definition,
+        assert_eq!(
+            settlement_offline
+                .get("enabled")
+                .and_then(toml::Value::as_bool),
+            Some(false),
+            "the generic localnet must not require unprovisioned offline-cash services"
         );
-        let expected_escrow_literal =
-            account_id_runtime_literal(&expected_escrow_account, chain_discriminant);
+        assert_eq!(
+            settlement_offline
+                .get("escrow_required")
+                .and_then(toml::Value::as_bool),
+            Some(true)
+        );
         assert_eq!(
             escrow_accounts.len(),
-            1,
-            "generated peer config must include only the built-in Kagemusha escrow binding"
-        );
-        assert_eq!(
-            escrow_accounts
-                .get(LOCALNET_KAGEMUSHA_ASSET_ID)
-                .and_then(toml::Value::as_str),
-            Some(expected_escrow_literal.as_str()),
-            "generated peer config must map the Kagemusha asset to its deterministic escrow account"
+            0,
+            "generic localnet config must not fabricate an offline-enabled asset binding"
         );
     }
 
@@ -9052,6 +9019,8 @@ mod tests {
             "http://127.0.0.1:29080/",
             &tmp.path().join("genesis.json"),
             &tmp.path().join("genesis.signed.nrt"),
+            &tmp.path().join(GENESIS_PUBLIC_KEY_FILE),
+            &tmp.path().join(GENESIS_PRIVATE_KEY_FILE),
             &tmp.path().join("client.toml"),
             &tmp.path().join("start.sh"),
             &tmp.path().join("stop.sh"),
@@ -9097,6 +9066,8 @@ mod tests {
             "http://127.0.0.1:29080/",
             &tmp.path().join("genesis.json"),
             &tmp.path().join("genesis.signed.nrt"),
+            &tmp.path().join(GENESIS_PUBLIC_KEY_FILE),
+            &tmp.path().join(GENESIS_PRIVATE_KEY_FILE),
             &tmp.path().join("client.toml"),
             &tmp.path().join("start.sh"),
             &tmp.path().join("stop.sh"),

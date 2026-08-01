@@ -29,28 +29,28 @@ def _retired_sidecar_gate_ttl_source_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "fc3c131df1f3511f80ce47720ab87043106239d332936f240348d3244550835e"
+        "ac4f99ff9fc3fafa2e3118dffa92d5da55636ef9b9dde871ebddec0b44d00115"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "2b6c2f9e6ef9b3979ce9f3fd5b5869adf92e2832ee5b9d1c8a9e45876f5a750d"
+        "1aa0d6490e6d2b8502f399c593be71c841d593ec79c251a6eebae86b6368a095"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
-        "30ec760fa27f2d7ee59c716570f2af457aa005a8377ee13ea8c17634b35699b8"
+        "fd33217a5c50f5fa21c9a18f4eb70211a2321910a07d37a50008b3586c7fe800"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/wal.rs": (
         "6bff6e8e90983f8bd1657de5faaf59b5db9a57e99ba0f9e0be96e7de0d3e2b9f"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "18e8ae9a15a2da81a0db130abd1d9a662035881a6f27931f8ed11187346db4a3"
+        "e7c9837e28f4822d011c2e6493cc850e12545f57b65ce6b0d91edcd4cdcc81d5"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "eba5129f19c0dc9e5196f6e888172b7ac52dc59a767370c526d244c198a10542"
+        "58b973b26448c283e606e1ce29f9ffd483ded33966811cc7819dba1116312baf"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "0d802c3c32b2bb13cf6369832dd65a4d79360dbc8035b5dd2ad26a86ca78fd88"
+        "d8e18c481e7938340e15232864f00d1acf00e7fad0216aef94f9a1973427a0d7"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
-        "6d492a52dd530130150a22eabec78375929d9431200ed06999d50490053a92a4"
+        "8bdf90b12382c16438cacf1ccfb0023ed9ec2bdeb153f6a4d029de0b066f4e8d"
     ),
 }
 

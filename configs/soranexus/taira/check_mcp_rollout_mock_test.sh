@@ -377,7 +377,11 @@ source, height_raw, block_hash, scenario, validator_index, sample_raw = sys.argv
 with open(source, encoding="utf-8") as stream:
     payload = json.load(stream)
 payload["evaluated_block_height"] = int(height_raw)
-payload["evaluated_block_hash"] = block_hash
+payload["evaluated_block_hash"] = "hash:" + block_hash.upper() + "#aB01"
+if scenario == "fleet_block_hash_short_checksum" and validator_index == "4":
+    payload["evaluated_block_hash"] = "hash:" + block_hash.upper() + "#123"
+elif scenario == "fleet_block_hash_trailing_bytes" and validator_index == "4":
+    payload["evaluated_block_hash"] += "trailing"
 sample = int(sample_raw)
 if scenario == "fleet_verifier_mismatch" and validator_index == "4":
     payload["active_recursive_step_ep_verifier"]["commitment"] = "06" * 32
@@ -410,15 +414,18 @@ print(json.dumps({
 PY
 )"
 elif [[ -n "$validator_index" && "$method" == "GET" && "$url" == */v1/sumeragi/status ]]; then
-  body="$(python3 - "$validator_index" "$validator_height" "$validator_block_hash" <<'PY'
+  body="$(python3 - "$validator_index" "$validator_height" "$validator_block_hash" "$scenario" <<'PY'
 import json
 import sys
 
-validator_index, committed_height_raw, block_hash = sys.argv[1:]
+validator_index, committed_height_raw, block_hash, scenario = sys.argv[1:]
 committed_height = int(committed_height_raw)
 node_hex = {"1": "A", "2": "B", "3": "C", "4": "D"}[validator_index] * 64
+canonical_block_hash = "hash:" + block_hash.upper() + "#Ab01"
+if scenario == "fleet_committed_hash_trailing_bytes" and validator_index == "4":
+    canonical_block_hash += "trailing"
 subject = {
-    "block_hash": "hash:" + block_hash.upper(),
+    "block_hash": canonical_block_hash,
     "payload_hash": "hash:" + "F" * 64,
 }
 payload = {
@@ -838,6 +845,9 @@ run_case fleet_verifier_mismatch 'live release identity does not match the exter
 run_case fleet_release_changes_between_samples 'live release identity does not match the external operator-reviewed identity'
 run_case fleet_stale_offline_progress 'validator fleet offline readiness did not advance a common evaluated block'
 run_case fleet_lagging_status_blocks '/status.blocks 706 does not match the durable committed height 707'
+run_case fleet_block_hash_short_checksum 'evaluated_block_hash is not a canonical Iroha block hash'
+run_case fleet_block_hash_trailing_bytes 'evaluated_block_hash is not a canonical Iroha block hash'
+run_case fleet_committed_hash_trailing_bytes 'durable committed subject omitted a canonical block hash'
 run_invalid_canary_identity_case \
   archived-chain \
   'write canary config must target the expected Taira chain'

@@ -1106,19 +1106,29 @@ def test_async_source_fidelity_pins_live_serve_occurrence_identity(
     )
 
 
+def copy_timeout_vote_window_fixture(tmp_path: Path, module) -> Path:
+    """Copy the bounded TimeoutVote production and regression sources."""
+
+    relatives = (
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/types.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/tests.rs"),
+    )
+    for relative in relatives:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(module.ROOT_DIR / relative, destination)
+    return tmp_path / relatives[0]
+
+
 def test_async_source_fidelity_pins_timeout_vote_semantic_capacity_bypass(
     tmp_path: Path,
 ) -> None:
-    """The real TimeoutVote capacity, admission, pruning, and tests are sealed."""
+    """The bounded TimeoutVote production and regression sources are sealed."""
 
     module = load_checker()
-    rust_path = tmp_path / "crates" / "iroha_core" / "src" / "sumeragi" / "v2.rs"
-    rust_path.parent.mkdir(parents=True)
-    shutil.copy2(
-        module.ROOT_DIR
-        / "crates/iroha_core/src/sumeragi/v2.rs",
-        rust_path,
-    )
+    copy_timeout_vote_window_fixture(tmp_path, module)
 
     errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
         tmp_path
@@ -1133,6 +1143,15 @@ def test_async_source_fidelity_pins_timeout_vote_semantic_capacity_bypass(
         (
             "admit_authenticated_payload",
             (
+                "if !reducer::timeout_vote_view_is_admissible("
+                "current_view, vote.round.view)"
+            ),
+            "if false",
+            "current/adjacent view window",
+        ),
+        (
+            "admit_authenticated_payload",
+            (
                 "locked_commit_progress || matches!(key, "
                 "IngressSemanticKey::TimeoutVote { .. })"
             ),
@@ -1142,20 +1161,22 @@ def test_async_source_fidelity_pins_timeout_vote_semantic_capacity_bypass(
         (
             "prune_ingress_records",
             (
-                "round.height == current_height "
-                "&& round.view == current_view"
+                "round.height == current_height\n"
+                "                        "
+                "&& reducer::timeout_vote_view_is_admissible("
+                "current_view, round.view)"
             ),
             "round.height == current_height",
-            "retained only at the current height and view",
+            "retained only at the current height and current/adjacent view",
         ),
         (
             "prune_ingress_records",
             (
                 "matches_current_lock(*key, record.fingerprint) "
-                "|| matches_current_timeout(*key)"
+                "|| matches_retained_timeout(*key)"
             ),
             "matches_current_lock(*key, record.fingerprint)",
-            "preserve either the exact lock or current TimeoutVote",
+            "preserve either the exact lock or retained TimeoutVote",
         ),
     ),
 )
@@ -1166,13 +1187,10 @@ def test_timeout_vote_semantic_capacity_rejects_real_source_mutations(
     new: str,
     expected_error: str,
 ) -> None:
-    """Current-view admission and both protected prune arms fail closed."""
+    """Bounded admission and both protected prune arms fail closed."""
 
     module = load_checker()
-    relative = Path("crates/iroha_core/src/sumeragi/v2.rs")
-    rust_path = tmp_path / relative
-    rust_path.parent.mkdir(parents=True)
-    shutil.copy2(module.ROOT_DIR / relative, rust_path)
+    rust_path = copy_timeout_vote_window_fixture(tmp_path, module)
     mutate_rust_item_source_in_context(
         module,
         rust_path,
@@ -1189,10 +1207,158 @@ def test_timeout_vote_semantic_capacity_rejects_real_source_mutations(
     assert any(expected_error in error for error in errors), errors
 
 
+def test_timeout_vote_semantic_capacity_rejects_two_roster_sets(
+    tmp_path: Path,
+) -> None:
+    """The semantic table reserves lock plus both bounded timeout rounds."""
+
+    module = load_checker()
+    rust_path = copy_timeout_vote_window_fixture(tmp_path, module)
+    mutate_rust_item_source(
+        module,
+        rust_path,
+        "semantic_ingress_capacity",
+        "roster_len.saturating_mul(3)",
+        "roster_len.saturating_mul(2)",
+    )
+
+    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(
+        "three roster-bounded protected sets" in error for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_error"),
+    (
+        (
+            "FUTURE_TIMEOUT_VOTE_LOOKAHEAD: u64 = 1",
+            "FUTURE_TIMEOUT_VOTE_LOOKAHEAD: u64 = 2",
+            "lookahead must remain exactly one view",
+        ),
+        (
+            "current_view.saturating_add(FUTURE_TIMEOUT_VOTE_LOOKAHEAD)",
+            "current_view.wrapping_add(FUTURE_TIMEOUT_VOTE_LOOKAHEAD)",
+            "lower bound and saturating one-view upper bound",
+        ),
+    ),
+)
+def test_timeout_vote_view_window_rejects_predicate_mutations(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """The one-round helper cannot widen, wrap, or lose its exact bound."""
+
+    module = load_checker()
+    copy_timeout_vote_window_fixture(tmp_path, module)
+    types_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/types.rs"
+    mutate_source_once(types_path, old, new)
+
+    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("item_name", "old", "new", "expected_error"),
+    (
+        (
+            "on_timeout_vote",
+            (
+                "if !timeout_vote_view_is_admissible("
+                "self.durable.current_view(), vote.round().view())"
+            ),
+            "if false",
+            "admission must use the bounded current/adjacent predicate",
+        ),
+        (
+            "on_persisted",
+            "self.timeout_votes.retain(|round, _| {",
+            "self.timeout_votes.clear();\n                if false {",
+            "retain exactly the current/adjacent vote and formed-certificate pools",
+        ),
+        (
+            "on_persisted",
+            "self.formed_timeouts.retain(|round| {",
+            "self.formed_timeouts.clear();\n                if false {",
+            "retain exactly the current/adjacent vote and formed-certificate pools",
+        ),
+    ),
+)
+def test_timeout_vote_view_window_rejects_reducer_mutations(
+    tmp_path: Path,
+    item_name: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Reducer admission and both install-retention pools stay bounded."""
+
+    module = load_checker()
+    copy_timeout_vote_window_fixture(tmp_path, module)
+    reducer_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/reducer.rs"
+    mutate_rust_item_source_in_context(
+        module,
+        reducer_path,
+        item_name,
+        (("impl", "Reducer"),),
+        old,
+        new,
+    )
+
+    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    "test_name",
+    (
+        "adjacent_future_timeout_votes_form_a_catch_up_certificate",
+        "timeout_install_preserves_adjacent_shares_for_the_new_current_view",
+        "timeout_votes_beyond_adjacent_lookahead_are_ignored",
+    ),
+)
+def test_timeout_vote_view_window_regressions_cannot_be_deleted(
+    tmp_path: Path,
+    test_name: str,
+) -> None:
+    """Catch-up, install preservation, and far-future rejection stay sealed."""
+
+    module = load_checker()
+    copy_timeout_vote_window_fixture(tmp_path, module)
+    tests_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/tests.rs"
+    mutate_rust_item_source(
+        module,
+        tests_path,
+        test_name,
+        f"fn {test_name}(",
+        f"fn removed_{test_name}(",
+    )
+
+    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(
+        f"named {test_name}; found 0" in error for error in errors
+    ), errors
+
+
 @pytest.mark.parametrize(
     "test_name",
     (
         "capacity_bypass_records_follow_current_lock_and_timeout_view",
+        "adjacent_future_timeout_vote_remains_retryable_until_current_view_advances",
         "full_normal_deferred_lane_cannot_drop_absolute_timeout",
         "busy_deferred_source_identity_coalesces_across_consumer_view_change",
     ),
@@ -1201,13 +1367,10 @@ def test_timeout_vote_semantic_capacity_regressions_cannot_be_deleted(
     tmp_path: Path,
     test_name: str,
 ) -> None:
-    """Capacity, full-lane, and cross-view regressions remain exact items."""
+    """Capacity, adjacent, full-lane, and cross-view regressions stay exact."""
 
     module = load_checker()
-    relative = Path("crates/iroha_core/src/sumeragi/v2.rs")
-    rust_path = tmp_path / relative
-    rust_path.parent.mkdir(parents=True)
-    shutil.copy2(module.ROOT_DIR / relative, rust_path)
+    rust_path = copy_timeout_vote_window_fixture(tmp_path, module)
     mutate_rust_item_source(
         module,
         rust_path,

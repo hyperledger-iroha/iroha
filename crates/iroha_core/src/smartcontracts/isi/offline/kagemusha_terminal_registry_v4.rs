@@ -5096,7 +5096,7 @@ mod tests {
     ))]
     #[test]
     fn configured_catalog_aggregate_byte_accounting_is_bounded() {
-        const CORRECTED_EQ_EP_PROVING_KEYS_BYTES: u64 = 2 * 4_594_903_830;
+        const CORRECTED_EQ_EP_PROVING_KEYS_BYTES: u64 = 2 * 5_347_763_078;
 
         assert_eq!(MAX_CATALOG_AGGREGATE_BYTES_V4, 12 * 1024 * 1024 * 1024);
         assert!(

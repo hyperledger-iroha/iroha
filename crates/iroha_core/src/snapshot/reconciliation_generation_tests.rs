@@ -58,6 +58,7 @@
         let attacker_suffix =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x92; 32]));
 
+        SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| passes.set(0));
         let error = reconcile_snapshot_hash_height_with_kura(
             &[forged_prefix, attacker_suffix],
             1,
@@ -67,6 +68,13 @@
         )
         .expect_err("a divergent retained prefix must reject before suffix extension");
 
+        SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| {
+            assert_eq!(
+                passes.get(),
+                1,
+                "forged prefix rejection must complete one fail-before-mutation pass"
+            );
+        });
         assert!(matches!(
             error,
             TryReadError::MismatchedHash { height: 1, .. }

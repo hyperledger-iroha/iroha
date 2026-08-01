@@ -1,5 +1,6 @@
 [package]
 name = "irohad"
+autobins = false
 
 edition.workspace = true
 version.workspace = true
@@ -20,8 +21,8 @@ categories.workspace = true
 workspace = true
 
 [features]
-default = ["daemon-i3"]
-daemon-common = [
+default = ["daemon"]
+daemon = [
     "telemetry",
     "schema-endpoint",
     "iroha_core/node",
@@ -31,12 +32,7 @@ daemon-common = [
     "ivm/runtime",
     "norito/node-codec",
 ]
-daemon-i2 = ["daemon-common"]
-daemon-i3 = ["daemon-common"]
-# Compatibility aliases for existing build scripts; shipping binaries use the
-# explicit daemon profile names above.
-build-i2 = ["daemon-i2"]
-build-i3 = ["daemon-i3"]
+dev-tools = ["daemon", "zk-stark"]
 accel-metal = ["fastpq-gpu", "ivm/metal", "norito/codec-gpu-metal"]
 accel-cuda = ["fastpq-gpu", "iroha_core/cuda", "ivm/cuda", "norito/codec-gpu-cuda"]
 embedded-soracloud-runtime = []
@@ -75,24 +71,19 @@ schema-endpoint = ["iroha_torii/schema"]
 # Enable profiling endpoint
 profiling-endpoint = ["iroha_torii/profiling"]
 [[bin]]
-name = "iroha3d"
-path = "src/bin/iroha3d.rs"
-required-features = ["daemon-i3"]
-
-[[bin]]
-name = "iroha2d"
-path = "src/bin/iroha2d.rs"
-required-features = ["daemon-i2"]
-
-[[bin]]
 name = "irohad"
 path = "src/bin/irohad.rs"
-required-features = ["daemon-i3"]
+required-features = ["daemon"]
+
+[[bin]]
+name = "sorafs_governance_dag"
+path = "src/bin/sorafs_governance_dag.rs"
+required-features = ["daemon"]
 
 [[bin]]
 name = "taira_privacy_prebundle_gate"
 path = "src/bin/taira_privacy_prebundle_gate.rs"
-required-features = ["zk-stark"]
+required-features = ["dev-tools", "zk-stark"]
 
 [badges]
 is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledger-iroha/iroha" }

@@ -57,6 +57,7 @@ test("native SDK archives expose local compiled profiles without synthesizing re
     assert.doesNotMatch(rust, /pub fn privacy_capabilities_v1\s*\(/);
     assert.doesNotMatch(rust, /name = "privacy_capabilities_v1"/);
     assert.doesNotMatch(rust, /iroha_privacy_capabilities_v1/);
+    assert.doesNotMatch(rust, /committed_privacy_capability_snapshot_v1/);
     assert.doesNotMatch(rust, /struct PrivacyAlgorithmEntry/);
     assert.doesNotMatch(rust, /struct PrivacyCapabilitiesV1/);
   }

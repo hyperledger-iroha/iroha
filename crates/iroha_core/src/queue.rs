@@ -1083,6 +1083,34 @@ pub(crate) struct LaneQueueReservationGroupBindingV1 {
     pub(crate) reservation_count: u64,
 }
 
+/// Move-only proof that Queue revalidated one complete durable autonomous
+/// reservation group immediately before producer-side Kura activation.
+///
+/// Only [`Queue::authorize_lane_reservation_kura_activation`] can construct
+/// this value. Kura consumes it after matching the signed executable payload
+/// to the same ordered group and committee position, so possession of payload
+/// bytes alone is never treated as proof of the producer's V4/V5 ownership.
+#[must_use = "a Queue-authenticated Kura activation must be consumed by the exact producer payload"]
+#[allow(missing_copy_implementations)]
+pub(crate) struct AutonomousLaneKuraActivationAuthorization<'queue> {
+    validator_count: u8,
+    producer: u128,
+    reservation_group: LaneQueueReservationGroupBindingV1,
+    _reservation_transition: QueueDurabilityTransition<'queue>,
+}
+
+impl AutonomousLaneKuraActivationAuthorization<'_> {
+    /// Borrow the exact committee and group facts rechecked by Kura while the
+    /// embedded Queue transition fence remains live.
+    pub(crate) const fn facts(&self) -> (u8, u128, LaneQueueReservationGroupBindingV1) {
+        (
+            self.validator_count,
+            self.producer,
+            self.reservation_group,
+        )
+    }
+}
+
 /// One bounded Queue-owned autonomous diagnostics input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LaneQueueReservationDiagnosticGroupV1 {
@@ -3101,7 +3129,7 @@ impl Queue {
             .into_iter()
             .flat_map(|signed| signed.attachments().into_iter())
             .into_iter()
-            .flat_map(|list| list.0.iter())
+            .flat_map(|list| list.as_slice().iter())
             .filter_map(|attachment| attachment.lane_privacy.clone())
             .collect()
     }
@@ -4276,6 +4304,183 @@ impl Queue {
         Ok(records.len())
     }
 
+    /// Revalidate one complete FIFO-ordered pre-Kura group while the caller
+    /// holds both the reservation-transition and queue ownership locks.
+    ///
+    /// The same predicate feeds the mutually exclusive producer activation
+    /// and direct-release paths. This prevents either path from drifting to a
+    /// weaker definition of live V4/V5 ownership.
+    fn revalidate_complete_live_pre_kura_group_locked(
+        &self,
+        expected_group: LaneQueueReservationGroupBindingV1,
+        keys: &[LaneQueueReservationKeyV2],
+    ) -> Result<Vec<LaneQueueReservationRecordV5>, LaneQueueReservationError> {
+        if self.lane_reservation_journal.lock().is_none() {
+            return Err(LaneQueueReservationError::JournalNotInstalled);
+        }
+        let store = self.lane_reservations.lock();
+        for key in keys {
+            store.ensure_no_conflict(key)?;
+            store.ensure_not_release_prepared(key)?;
+        }
+        let mut records = store
+            .live_by_hash
+            .values()
+            .filter(|record| {
+                LaneQueueReservationGroupIdentityV1::from_key(&record.key)
+                    == expected_group.identity
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by_key(|record| {
+            (
+                record.fifo_order.ordinal,
+                record.key.signed_transaction_hash,
+            )
+        });
+        if records.len() != keys.len()
+            || records
+                .iter()
+                .zip(keys)
+                .any(|(record, expected)| record.key != *expected)
+        {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "pre-Kura autonomous batch does not name the complete FIFO-ordered live group"
+                    .to_owned(),
+            ));
+        }
+        if records
+            .windows(2)
+            .any(|records| records[0].fifo_order.ordinal >= records[1].fifo_order.ordinal)
+        {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "pre-Kura autonomous batch contains non-increasing durable FIFO ordinals"
+                    .to_owned(),
+            ));
+        }
+        for record in &records {
+            record
+                .validate()
+                .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+            self.validate_live_reservation_against_queue(record)?;
+            let hash = record.key.signed_transaction_hash;
+            if self
+                .fifo_order_by_hash
+                .get(&hash)
+                .is_none_or(|fifo_order| *fifo_order.value() != record.fifo_order)
+            {
+                return Err(LaneQueueReservationError::ReconciliationFifoOrderMismatch { hash });
+            }
+            let claim = self.durable_plan_claims.get(&hash).ok_or(
+                LaneQueueReservationError::ReconciliationMissingDurableClaim { hash },
+            )?;
+            let binding = claim.global_admission_binding().map_err(|reason| {
+                LaneQueueReservationError::ReconciliationDurableClaimMismatch { hash, reason }
+            })?;
+            binding
+                .validate_for_lane_reservation_commit(&record.key)
+                .map_err(|reason| {
+                    LaneQueueReservationError::ReconciliationDurableClaimMismatch { hash, reason }
+                })?;
+            let _authenticated =
+                Self::reconciliation_record_from_durable_claim(record, claim.value())?;
+        }
+        let actual_group = lane_queue_reservation_group_binding_from_ordered_keys(
+            records.iter().map(|record| &record.key),
+        )
+        .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+        if actual_group != expected_group {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "pre-Kura autonomous durable V5 group differs from its pending batch".to_owned(),
+            ));
+        }
+        Ok(records)
+    }
+
+    /// Fence one exact durable autonomous group for producer-side Kura
+    /// activation.
+    ///
+    /// The returned move-only value retains per-transaction Queue transition
+    /// ownership until Kura finishes its persistence attempt. A concurrent
+    /// Commit or release therefore cannot invalidate the V4/V5 facts between
+    /// this revalidation and the durable payload boundary.
+    ///
+    /// # Errors
+    /// Returns an identity, durable-claim, FIFO, journal, or concurrent-
+    /// transition error without minting Kura authority.
+    pub(crate) fn authorize_lane_reservation_kura_activation<'queue>(
+        &'queue self,
+        authorization: AutonomousLaneReservationSelectionAuthorization,
+        ordered_keys: &[LaneQueueReservationKeyV2],
+    ) -> Result<AutonomousLaneKuraActivationAuthorization<'queue>, LaneQueueReservationError> {
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
+        let scope = authorization.scope();
+        scope.validate()?;
+        let validator_count = authorization.validator_count();
+        let producer = authorization.producer();
+        if validator_count == 0 || validator_count > 128 {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "pre-Kura activation requires a 1..=128 validator committee".to_owned(),
+            ));
+        }
+        let validator_mask = if validator_count == 128 {
+            u128::MAX
+        } else {
+            (1_u128 << validator_count) - 1
+        };
+        if producer == 0 || producer & !validator_mask != 0 || producer & (producer - 1) != 0 {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "pre-Kura activation has a noncanonical producer committee index".to_owned(),
+            ));
+        }
+        let reservation_group = lane_queue_reservation_group_binding_from_ordered_keys(
+            ordered_keys.iter(),
+        )
+        .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+        let expected_identity = LaneQueueReservationGroupIdentityV1 {
+            lane_id: scope.lane_id,
+            dataspace_id: scope.dataspace_id,
+            lane_incarnation: scope.lane_incarnation,
+            proposal_height: scope.proposal_height,
+            lane_block_height: scope.lane_block_height,
+            lane_block_view: scope.lane_block_view,
+            reservation_owner_hash: scope.reservation_owner_hash,
+            proposal_identity_hash: scope.proposal_identity_hash,
+        };
+        if reservation_group.identity != expected_identity {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "pre-Kura activation group differs from its canonical slot authority".to_owned(),
+            ));
+        }
+
+        let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
+        let queue_guard = self.push_remove_lock.lock();
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
+        let records = self.revalidate_complete_live_pre_kura_group_locked(
+            reservation_group,
+            ordered_keys,
+        )?;
+        let reservation_transition = self
+            .begin_durability_transition_locked(
+                records
+                    .iter()
+                    .map(|record| record.key.signed_transaction_hash),
+            )
+            .map_err(|hash| LaneQueueReservationError::Conflict { hash })?;
+        drop(queue_guard);
+
+        Ok(AutonomousLaneKuraActivationAuthorization {
+            validator_count,
+            producer,
+            reservation_group,
+            _reservation_transition: reservation_transition,
+        })
+    }
+
     /// Durably restore one exact locally pending autonomous batch before Kura activation.
     ///
     /// The move-only context can be derived only from the local pending batch. Under the
@@ -4343,86 +4548,8 @@ impl Queue {
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
-        if self.lane_reservation_journal.lock().is_none() {
-            return Err(LaneQueueReservationError::JournalNotInstalled);
-        }
-        let store = self.lane_reservations.lock();
-        for key in keys {
-            store.ensure_no_conflict(key)?;
-            store.ensure_not_release_prepared(key)?;
-        }
-        let mut records = store
-            .live_by_hash
-            .values()
-            .filter(|record| {
-                LaneQueueReservationGroupIdentityV1::from_key(&record.key)
-                    == expected_group.identity
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        records.sort_by_key(|record| {
-            (
-                record.fifo_order.ordinal,
-                record.key.signed_transaction_hash,
-            )
-        });
-        if records.len() != keys.len()
-            || records
-                .iter()
-                .zip(keys)
-                .any(|(record, expected)| record.key != *expected)
-        {
-            return Err(LaneQueueReservationError::InvalidIdentity(
-                "pre-Kura direct release does not name the complete FIFO-ordered live group"
-                    .to_owned(),
-            ));
-        }
-        if records
-            .windows(2)
-            .any(|records| records[0].fifo_order.ordinal >= records[1].fifo_order.ordinal)
-        {
-            return Err(LaneQueueReservationError::InvalidIdentity(
-                "pre-Kura direct release contains non-increasing durable FIFO ordinals".to_owned(),
-            ));
-        }
-        for record in &records {
-            record
-                .validate()
-                .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
-            self.validate_live_reservation_against_queue(record)?;
-            let hash = record.key.signed_transaction_hash;
-            if self
-                .fifo_order_by_hash
-                .get(&hash)
-                .is_none_or(|fifo_order| *fifo_order.value() != record.fifo_order)
-            {
-                return Err(LaneQueueReservationError::ReconciliationFifoOrderMismatch { hash });
-            }
-            let claim = self
-                .durable_plan_claims
-                .get(&hash)
-                .ok_or(LaneQueueReservationError::ReconciliationMissingDurableClaim { hash })?;
-            let binding = claim.global_admission_binding().map_err(|reason| {
-                LaneQueueReservationError::ReconciliationDurableClaimMismatch { hash, reason }
-            })?;
-            binding
-                .validate_for_lane_reservation_commit(&record.key)
-                .map_err(|reason| {
-                    LaneQueueReservationError::ReconciliationDurableClaimMismatch { hash, reason }
-                })?;
-            let _authenticated =
-                Self::reconciliation_record_from_durable_claim(record, claim.value())?;
-        }
-        let actual_group = lane_queue_reservation_group_binding_from_ordered_keys(
-            records.iter().map(|record| &record.key),
-        )
-        .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
-        if actual_group != expected_group {
-            return Err(LaneQueueReservationError::InvalidIdentity(
-                "pre-Kura direct release durable V5 group differs from its pending batch"
-                    .to_owned(),
-            ));
-        }
+        let records =
+            self.revalidate_complete_live_pre_kura_group_locked(expected_group, keys)?;
 
         let selected_count = u64::try_from(records.len()).map_err(|_| {
             LaneQueueReservationError::InvalidIdentity(
@@ -4432,7 +4559,7 @@ impl Queue {
         let binding_a = CanonicalIdentityProjection::from_bytes(
             IDENTITY_DOMAIN_PAYLOAD,
             IDENTITY_KIND_CANONICAL_PAYLOAD,
-            *actual_group.reservation_group_hash.as_ref(),
+            *expected_group.reservation_group_hash.as_ref(),
         );
         let before = ProductionInFlightFirstReleaseStateProjection {
             validator_count,
@@ -4502,7 +4629,6 @@ impl Queue {
             )
             .map_err(|hash| LaneQueueReservationError::Conflict { hash })?;
         let release_keys = records.iter().map(|record| record.key).collect();
-        drop(store);
 
         // Retain exclusive queue ownership through the checked durability append. No admission,
         // selection, removal, or FIFO rewrite can invalidate the final locked projection before
@@ -17608,7 +17734,8 @@ pub mod tests {
                 }),
             }),
         };
-        let attachments = ProofAttachmentList(vec![proof_attachment]);
+        let attachments = ProofAttachmentList::try_from(vec![proof_attachment])
+            .expect("one attachment is a valid bounded proof list");
         let confidential_tx = accepted_tx_with_attachments(
             confidential_id,
             &confidential_keypair,

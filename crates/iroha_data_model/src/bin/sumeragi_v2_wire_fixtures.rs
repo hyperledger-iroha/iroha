@@ -1,10 +1,11 @@
 //! Regenerate the shared Sumeragi v2 wire and Native AMX fixtures.
 //!
-//! Run `cargo run --locked --offline -p iroha_data_model --bin sumeragi_v2_wire_fixtures`
+//! Run `cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures`
 //! to refresh `fixtures/sumeragi_v2/wire_v2.tsv` and
-//! `fixtures/sumeragi_v2/native_amx_v2_grouped.json`. Pass `--check` to verify
-//! that the checked-in fixtures are exactly the current canonical Rust
-//! encodings and JSON models.
+//! `fixtures/sumeragi_v2/native_amx_v2_grouped.json`. The default mode writes;
+//! pass `--out-dir <path>` to target a cache staging directory and add `--check`
+//! to verify that destination against the current canonical Rust encodings and
+//! JSON models.
 
 mod native_amx_grouped;
 
@@ -1171,7 +1172,7 @@ fn write_fixture(path: &Path, rendered: &str, check_only: bool) -> Result<(), Bo
         let existing = fs::read_to_string(path)?;
         if existing != rendered {
             return Err(format!(
-                "fixture {} is stale; run cargo run --locked --offline -p iroha_data_model --bin sumeragi_v2_wire_fixtures",
+                "fixture {} is stale; run cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures",
                 path.display(),
             )
             .into());
@@ -1205,7 +1206,7 @@ fn parse_options_from(
                 let value = arguments
                     .next()
                     .ok_or("--out-dir requires a directory path")?;
-                if value.is_empty() {
+                if value.is_empty() || value.starts_with('-') {
                     return Err("--out-dir requires a non-empty directory path".into());
                 }
                 output_dir = Some(PathBuf::from(value));
@@ -1268,6 +1269,9 @@ mod tests {
         for arguments in [
             vec!["--check".to_owned(), "--check".to_owned()],
             vec!["--out-dir".to_owned()],
+            vec!["--out-dir".to_owned(), String::new()],
+            vec!["--out-dir".to_owned(), "--check".to_owned()],
+            vec!["--out-dir".to_owned(), "-h".to_owned()],
             vec![
                 "--out-dir".to_owned(),
                 "first".to_owned(),

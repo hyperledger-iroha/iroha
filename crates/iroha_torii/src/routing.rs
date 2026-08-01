@@ -244,8 +244,11 @@ pub const SORANET_PRIVACY_EVENT_ENDPOINT: &str = "/v1/soranet/privacy/event";
 #[cfg(feature = "telemetry")]
 pub const SORANET_PRIVACY_SHARE_ENDPOINT: &str = "/v1/soranet/privacy/share";
 
-pub async fn handler_openapi_spec(State(_state): State<crate::SharedAppState>) -> Response {
-    match norito::json::to_string_pretty(&crate::openapi::generate_spec()) {
+pub async fn handler_openapi_spec(State(state): State<crate::SharedAppState>) -> Response {
+    let offline_enabled = state.state.view().settlement.offline.enabled;
+    match norito::json::to_string_pretty(&crate::openapi::generate_spec_for_runtime(
+        offline_enabled,
+    )) {
         Ok(body) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/json")
@@ -32248,9 +32251,7 @@ mod multisig_native_norito_dto_tests {
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags_hint);
         let _sequential = norito::core::SequentialOverrideGuard::enter();
         let mut payload = Vec::new();
-        value
-            .serialize(&mut payload)
-            .expect("serialize bare payload");
+        norito::core::serialize_to_buffer(value, &mut payload).expect("serialize bare payload");
         payload
     }
 
@@ -48758,49 +48759,73 @@ mod cursor_mode_tests {
 
     use iroha_core::{
         kura::Kura,
+        query::snapshot::{
+            CursorMode, run_on_snapshot_with_mode_arc_and_start_budget,
+        },
         query::store::LiveQueryStore,
-        smartcontracts::isi::query::{QueryLimits, apply_query_postprocessing},
+        smartcontracts::isi::query::QueryLimits,
         state::{State, World},
     };
     use iroha_data_model::prelude::*;
-    use iroha_data_model::query::parameters::{FetchSize, QueryParams};
+    use iroha_data_model::query::{
+        ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
+        dsl::{CompoundPredicate, SelectorTuple},
+        parameters::{FetchSize, QueryParams},
+    };
     use nonzero_ext::nonzero;
 
     use super::*;
 
-    fn make_minimal_state() -> State {
+    fn make_minimal_state(authority: &AccountId) -> State {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        State::new_for_testing(World::new(), kura, query)
+        let domains = (0..3).map(|index| {
+            Domain::new(
+                DomainId::try_new(format!("cursor{index}"), "world").expect("domain id"),
+            )
+            .build(authority)
+        });
+        let world = World::with(
+            domains,
+            [Account::new(authority.clone()).build(authority)],
+            [],
+        );
+        State::new_for_testing(world, kura, query)
     }
 
     fn seed_stored_cursor(
-        live_query_store: &iroha_core::query::store::LiveQueryStoreHandle,
+        state: &Arc<State>,
         authority: &AccountId,
         gas_budget: u64,
     ) -> iroha_data_model::query::parameters::ForwardCursor {
-        let query_output = (0..3).map(|i| {
-            Permission::new(
-                format!("p{i}"),
-                iroha_data_model::prelude::Json::from(false),
-            )
-        });
         let query_params = QueryParams {
             fetch_size: FetchSize {
                 fetch_size: Some(nonzero!(1_u64)),
             },
             ..QueryParams::default()
         };
-        let iter = apply_query_postprocessing(
-            query_output,
+        let payload = norito::codec::Encode::encode(
+            &iroha_data_model::query::domain::prelude::FindDomains,
+        );
+        let query_box: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<Domain>::new(
+            CompoundPredicate::PASS,
             SelectorTuple::default(),
-            &query_params,
+            payload,
+        ));
+        let request = QueryRequest::Start(QueryWithParams::new(&query_box, query_params));
+        let response = run_on_snapshot_with_mode_arc_and_start_budget(
+            state,
+            &state.query_handle,
+            authority,
+            request,
+            CursorMode::Stored,
             QueryLimits::default(),
+            Some(gas_budget),
         )
-        .expect("build query output");
-        let response = live_query_store
-            .handle_iter_start(iter, authority, Some(gas_budget))
-            .expect("start query");
+        .expect("start stored query through the authorization corridor");
+        let iroha_data_model::query::QueryResponse::Iterable(response) = response else {
+            panic!("FindDomains must produce an iterable response");
+        };
         let (_batch, _remaining, cursor) = response.into_parts();
         cursor.expect("cursor should be stored")
     }
@@ -48825,15 +48850,15 @@ mod cursor_mode_tests {
 
     #[tokio::test]
     async fn stored_mode_insufficient_gas_rejected() {
-        let mut s = make_minimal_state();
+        let kp =
+            checked_cursor_mode_keypair(0x96, "derive stored cursor insufficient-gas fixture key");
+        let authority = AccountId::new(kp.public_key().clone());
+        let mut s = make_minimal_state(&authority);
         s.pipeline.query_default_cursor_mode =
             iroha_config::parameters::actual::QueryCursorMode::Stored;
         s.pipeline.query_stored_min_gas_units = 200;
         let state = Arc::new(s);
 
-        let kp =
-            checked_cursor_mode_keypair(0x96, "derive stored cursor insufficient-gas fixture key");
-        let authority = AccountId::new(kp.public_key().clone());
         let signed = signed_singular_find_active_abi(&authority, &kp);
 
         let opts = QueryOptions {
@@ -48863,15 +48888,15 @@ mod cursor_mode_tests {
 
     #[tokio::test]
     async fn stored_mode_sufficient_gas_ok() {
-        let mut s = make_minimal_state();
+        let kp =
+            checked_cursor_mode_keypair(0x97, "derive stored cursor sufficient-gas fixture key");
+        let authority = AccountId::new(kp.public_key().clone());
+        let mut s = make_minimal_state(&authority);
         s.pipeline.query_default_cursor_mode =
             iroha_config::parameters::actual::QueryCursorMode::Stored;
         s.pipeline.query_stored_min_gas_units = 200;
         let state = Arc::new(s);
 
-        let kp =
-            checked_cursor_mode_keypair(0x97, "derive stored cursor sufficient-gas fixture key");
-        let authority = AccountId::new(kp.public_key().clone());
         let signed = signed_singular_find_active_abi(&authority, &kp);
 
         let opts = QueryOptions {
@@ -48898,15 +48923,15 @@ mod cursor_mode_tests {
 
     #[tokio::test]
     async fn stored_mode_continue_uses_cursor_gas_budget() {
-        let mut s = make_minimal_state();
+        let kp = checked_cursor_mode_keypair(0x98, "derive stored cursor continue fixture key");
+        let authority = AccountId::new(kp.public_key().clone());
+        let mut s = make_minimal_state(&authority);
         s.pipeline.query_default_cursor_mode =
             iroha_config::parameters::actual::QueryCursorMode::Stored;
         s.pipeline.query_stored_min_gas_units = 200;
         let state = Arc::new(s);
 
-        let kp = checked_cursor_mode_keypair(0x98, "derive stored cursor continue fixture key");
-        let authority = AccountId::new(kp.public_key().clone());
-        let cursor = seed_stored_cursor(&state.query_handle, &authority, 250);
+        let cursor = seed_stored_cursor(&state, &authority, 250);
         let signed = iroha_data_model::query::QueryRequest::Continue(cursor)
             .with_authority(authority)
             .sign(&kp);
@@ -48935,14 +48960,14 @@ mod cursor_mode_tests {
 
     #[tokio::test]
     async fn ephemeral_mode_unaffected_without_gas() {
-        let mut s = make_minimal_state();
+        let kp = checked_cursor_mode_keypair(0x99, "derive ephemeral cursor fixture key");
+        let authority = AccountId::new(kp.public_key().clone());
+        let mut s = make_minimal_state(&authority);
         s.pipeline.query_default_cursor_mode =
             iroha_config::parameters::actual::QueryCursorMode::Ephemeral;
         s.pipeline.query_stored_min_gas_units = 200;
         let state = Arc::new(s);
 
-        let kp = checked_cursor_mode_keypair(0x99, "derive ephemeral cursor fixture key");
-        let authority = AccountId::new(kp.public_key().clone());
         let signed = signed_singular_find_active_abi(&authority, &kp);
 
         // No override and no gas_units → should pass in ephemeral mode
@@ -75046,6 +75071,47 @@ fn normalize_status_block_visibility(status: &mut Status, authoritative_block_he
         .map_or(0, |sumeragi| sumeragi.commit_qc_height);
     status.blocks =
         authoritative_block_height.unwrap_or_else(|| status.blocks.max(telemetry_commit_height));
+}
+
+#[cfg(all(test, feature = "telemetry"))]
+mod status_block_visibility_tests {
+    use iroha_telemetry::metrics::SumeragiConsensusStatus;
+
+    use super::{Status, normalize_status_block_visibility};
+
+    #[test]
+    fn authoritative_state_height_replaces_lagging_and_leading_counters() {
+        for telemetry_height in [3, 19] {
+            let mut status = Status {
+                blocks: telemetry_height,
+                sumeragi: Some(SumeragiConsensusStatus {
+                    commit_qc_height: telemetry_height,
+                    ..SumeragiConsensusStatus::default()
+                }),
+                ..Status::default()
+            };
+
+            normalize_status_block_visibility(&mut status, Some(11));
+
+            assert_eq!(status.blocks, 11);
+        }
+    }
+
+    #[test]
+    fn missing_state_anchor_keeps_monotonic_commit_qc_fallback() {
+        let mut status = Status {
+            blocks: 5,
+            sumeragi: Some(SumeragiConsensusStatus {
+                commit_qc_height: 8,
+                ..SumeragiConsensusStatus::default()
+            }),
+            ..Status::default()
+        };
+
+        normalize_status_block_visibility(&mut status, None);
+
+        assert_eq!(status.blocks, 8);
+    }
 }
 
 #[cfg(feature = "telemetry")]

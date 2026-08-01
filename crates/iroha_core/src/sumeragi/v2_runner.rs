@@ -2457,7 +2457,7 @@ fn schedule_local_proposal(
         directive,
         local_validator,
         proposal_state.attempted,
-        executor.can_admit_local_proposal(),
+        executor.can_schedule_local_proposal()?,
     );
     // Bind immutable locked-body acquisition to the current reducer
     // incarnation before observing proposal eligibility. Every validator must
@@ -2507,7 +2507,7 @@ fn schedule_local_proposal(
             current,
             local_validator,
             proposal_state.attempted,
-            executor.can_admit_local_proposal(),
+            executor.can_schedule_local_proposal()?,
         );
         if !current_recovery_plan.may_repropose {
             continue;
@@ -2563,7 +2563,7 @@ fn schedule_local_proposal(
     // Do not consume a fresh or retained candidate until the executor can
     // reserve its local StoreBody owner. Timers, retransmission, and
     // completions continue while this producer waits.
-    if !executor.can_admit_local_proposal() {
+    if !executor.can_schedule_local_proposal()? {
         return Ok(());
     }
     // A locked directive can only consume its exact retained body. It must

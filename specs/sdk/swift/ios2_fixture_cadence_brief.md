@@ -23,24 +23,19 @@ rotate fixtures or report on parity health.
   Wednesday at 17:00 UTC**. Ownership alternates weekly (odd ISO weeks =
   Android Foundations TL, even ISO weeks = Swift Lead) unless
   `SWIFT_FIXTURE_ROTATION_OWNER` overrides the slot in CI.
-- **Cadence labels & alerts:** `scripts/swift_fixture_regen.sh` accepts
-  `SWIFT_FIXTURE_CADENCE` values `weekly-wed-1700utc` (default),
-  `rolling-48h` (continuous 48 h windows), and
-  `fallback-mon-thu-utc` (Monday/Thursday slots). The cadence interval
-  recorded in `artifacts/swift_fixture_regen_state.json` derives from
-  `SWIFT_FIXTURE_CADENCE_INTERVAL_HOURS` (defaults to 48). Set
-  `SWIFT_FIXTURE_ALERT_CONTACT`/`SWIFT_FIXTURE_ALERT_CHANNEL` so the state
-  file embeds the PagerDuty rotation metadata consumed by the parity
-  dashboards.
+- **Cadence labels & alerts:** Scheduling metadata distinguishes
+  `weekly-wed-1700utc`, `rolling-48h`, and `fallback-mon-thu-utc`, but it never
+  selects a generator mode. Every slot runs the same locked canonical owner
+  command and records its evidence separately from fixture bytes.
 - **CI enforcement:** `ci/check_swift_fixtures.sh` now honours
   `SWIFT_FIXTURE_EXPECTED_CADENCE` (comma-separated labels) when verifying
   cadence metadata, making it safe to allow fallback/event-driven windows
   without silencing the guardrail.
-- **Source of truth:** Until the Rust exporter lands Swift bindings, mirror the
-  Android canonical set via `scripts/swift_fixture_regen.sh`. The script emits
-  `artifacts/swift_fixture_regen_state.json`, capturing cadence label,
-  rotation owner, trigger (`scheduled` vs `event`), archive digests, and slot
-  metadata for audit trails.
+- **Source of truth:** `fixtures/norito_rpc/` is authoritative. The canonical
+  owner publishes only `transaction_payloads.json` and
+  `transaction_fixtures.manifest.json` into `IrohaSwift/Fixtures/`; canonical
+  `.norito` blobs stay in the owner directory. Java receives the generated blob
+  mirror, while Python receives the same descriptor-only mirror as Swift.
 - **SRE observability:** `scripts/swift_status_export.py` and
   `ci/swift_status_export.sh` publish `swift_parity_success_total`,
   `swift_parity_failure_total`, `swift_parity_status`,
@@ -57,10 +52,10 @@ rotate fixtures or report on parity health.
 
 | Mode | Trigger | Owner(s) | Required actions | Evidence & metrics |
 |------|---------|----------|------------------|--------------------|
-| Scheduled slot | Wednesday 17:00 UTC slot reached; no pending incident | Alternating owners (odd weeks Android Foundations TL, even weeks Swift Lead) | Run `make swift-fixtures`, `make swift-fixtures-check`, and `make swift-ci`. Set `SWIFT_FIXTURE_ROTATION_OWNER` to the on-call name and keep the default `SWIFT_FIXTURE_CADENCE=weekly-wed-1700utc`. | `artifacts/swift_fixture_regen_state.json` updated; `swift_parity_success_total` increments; `status.md` entry records “scheduled” outcome; dashboards remain green. |
-| Event-driven regen | Governance-approved Norito change or urgent ABI fix (outside scheduled slot) | Change author (Rust maintainer) + Swift Lead | Run `scripts/swift_fixture_regen.sh` with `SWIFT_FIXTURE_EVENT_TRIGGER=1` and `SWIFT_FIXTURE_EVENT_REASON="<ticket or commit>"`, then re-run `make swift-ci`. Post intent/result in `#sdk-parity`. | State file shows trigger=`event`; `swift_parity_regen_hours_since_success` resets; `swift_parity_outstanding_diffs` drops to zero. |
-| Governance fallback | Governance vote slips past 7 days or scheduled slot collides with change freeze | Swift Lead (primary) + Release Eng (backup) | Follow the manual fallback procedure below to keep parity within SLA while governance finalises the decision. File an action item in the next governance sync log and link to the resulting `status.md` note. | `SWIFT_FIXTURE_CADENCE=fallback-weekly-monthu` (see below) recorded in state file, `swift_parity_failure_total` remains unchanged, dashboards annotate the fallback window. |
-| Archive replay | Rust exporter publishes signed archive; Swift consumes archive for reproducibility | Norito tooling maintainer + Swift Lead | Invoke `scripts/swift_fixture_regen.sh` with `SWIFT_FIXTURE_ARCHIVE=/path/to/archive.tar.zst` (or ZIP). Confirm SHA/digest fields land in the state file and attach archive metadata to `status.md`. | Archive path + SHA recorded; `swift_parity_success_total` increments; reproducibility checklist (`specs/sdk/swift/reproducibility_checklist.md`) references the archive. |
+| Scheduled slot | Wednesday 17:00 UTC slot reached; no pending incident | Alternating operators (odd weeks Android Foundations TL, even weeks Swift Lead) | Run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures`, `python3 scripts/check_swift_fixtures.py`, and `make swift-ci`. | Owner-command diff is complete; `swift_parity_success_total` increments; dashboards remain green. |
+| Event-driven regen | Governance-approved Norito change or urgent ABI fix (outside scheduled slot) | Change author (Rust maintainer) + Swift Lead | Run the same locked owner command, then the Swift descriptor check and `make swift-ci`. Post intent/result in `#sdk-parity`. | Evidence records trigger=`event`; `swift_parity_regen_hours_since_success` resets; `swift_parity_outstanding_diffs` drops to zero. |
+| Governance fallback | Governance vote slips past 7 days or scheduled slot collides with change freeze | Swift Lead (primary) + Release Eng (backup) | Follow the manual fallback procedure below; run the unchanged locked owner command and record `fallback-mon-thu-utc` in cadence evidence. | `swift_parity_failure_total` remains unchanged and dashboards annotate the fallback window without altering fixture bytes. |
+| Reproducible replay | An earlier canonical revision must be reproduced | Norito tooling maintainer + Swift Lead | Check out the authenticated revision, use its lockfile, and run the same locked owner command. Do not import an SDK archive or regenerate from a mirror. | Canonical and mirror hashes match the authenticated revision; reproducibility checklist (`specs/sdk/swift/reproducibility_checklist.md`) records the revision. |
 
 ## Manual Fallback Procedure
 
@@ -71,19 +66,17 @@ governance that the automated rotation is paused.
 
 1. **announce intent** in `#sdk-parity` (tagging governance chair + SRE). Include
    the reason, expected slot, and ticket/incident reference.
-2. **set fallback env vars** before invoking the tooling:
+2. **run the canonical owner and Swift checks**; fallback cadence changes the
+   schedule, not the fixture algorithm:
 
    ```bash
-   SWIFT_FIXTURE_CADENCE="fallback-mon-thu-utc" \
-   SWIFT_FIXTURE_ROTATION_OWNER="swift-lead" \
-   SWIFT_FIXTURE_EVENT_REASON="governance-fallback:<ticket>" \
-   make swift-fixtures
-   make swift-fixtures-check
+   cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
+   python3 scripts/check_swift_fixtures.py
    make swift-ci
    ```
 
-   The cadence label propagates into `artifacts/swift_fixture_regen_state.json`
-   so dashboards and `scripts/swift_status_export.py` flag the fallback slot.
+   Record `fallback-mon-thu-utc`, the operator, and the ticket in the cadence
+   evidence so dashboards and `scripts/swift_status_export.py` flag the slot.
    When CI needs to tolerate multiple cadence windows (scheduled + fallback),
    export `SWIFT_FIXTURE_EXPECTED_CADENCE=weekly-wed-1700utc,fallback-mon-thu-utc`
    before invoking `ci/check_swift_fixtures.sh`.
@@ -103,7 +96,7 @@ governance that the automated rotation is paused.
 - **`swift_parity_status` (gauge)** — 1 when the latest digest has zero diffs and
   the 48 h SLA has not been breached, 0 otherwise.
 - **`swift_parity_outstanding_diffs`** — number of Norito fixture records that
-  still differ from the canonical Android set. Must be zero before shipping.
+  still differ from `fixtures/norito_rpc/`. Must be zero before shipping.
 - **`swift_parity_regen_hours_since_success`** — primary SLA indicator; alerts
   at 36 h (warning) and 48 h (critical). This hook is consumed by
   `dashboards/mobile_ci.swift`, the Buildkite Slack digest, and the
@@ -115,9 +108,10 @@ governance that the automated rotation is paused.
 
 ## Reporting & Evidence
 
-- **Automation outputs:** Commit or archive the updated fixtures under
-  `IrohaSwift/Fixtures`, keep `artifacts/swift_fixture_regen_state.json` in sync,
-  and ensure `scripts/check_swift_fixtures.py` passes locally before pushing.
+- **Automation outputs:** Commit the canonical publication with the generated
+  Swift descriptor pair under `IrohaSwift/Fixtures/`; do not archive or copy the
+  canonical `.norito` blobs into Swift. Ensure
+  `scripts/check_swift_fixtures.py` passes locally before pushing.
 - **Status log:** Add a bullet to `status.md` describing the cadence (scheduled,
   event-driven, or fallback), the trigger, and any follow-up required.
 - **Roadmap cross-link:** Reference this brief when closing the IOS2 roadmap

@@ -6,7 +6,6 @@ use core::{
 };
 use std::{
     cell::Cell,
-    io::Write,
     sync::{
         Arc, Condvar, LazyLock, Mutex, RwLock,
         atomic::{AtomicU16, Ordering},
@@ -614,7 +613,7 @@ fn account_address_norito_error(err: AccountAddressError) -> ncore::Error {
 }
 
 impl NoritoSerialize for AccountAddress {
-    fn serialize<W: Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let canonical = self
             .canonical_bytes()
             .map_err(account_address_norito_error)?;

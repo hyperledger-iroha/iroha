@@ -142,7 +142,13 @@ into multi-second stalls.
   `--restart-generation`. It emits identity-scoped terminal-unhealthy paths
   for all four supervisors and fails immediately if any current-generation
   marker appears during initial health, consensus advancement, or the child
-  restart proof.
+  restart proof. On macOS it authenticates native NUL-delimited process argv
+  rather than `ps` rendering and launches new supervisors through the exact
+  validated root-controlled Python.app executable. The emergency
+  `--allow-framework-python-argv0-rewrite` option is only for migrating a
+  legacy testnet Homebrew supervisor whose same-framework Python.app rewrite,
+  remaining argv, parent/UID, child, and rollback identity all match exactly;
+  it is refused by default.
 - `scripts/migrate_taira_peer_supervision.py`: creates a sealed, read-only
   adoption plan for an existing four-peer macOS deployment, then performs an
   explicitly confirmed maintenance-window cutover from `run-canonical.sh` or
@@ -445,9 +451,12 @@ cargo run -p iroha_kagami --bin kagami -- \
 Generate the real Eq/Ep artifacts through the source-sealed two-stage
 packager. Start from a checkout whose `HEAD` commit signature has been
 verified, then explicitly review and seal its complete dirty closure before
-building the exact candidate binary and entering the non-raiseable 16 GiB
-generation guard. Keep at least 16 GiB free on its pinned disk-backed output
-filesystem for the raw proving-key spools and framed artifact copy.
+building the exact candidate binary and entering the non-raiseable 64 GiB /
+half-physical-RAM generation guard. Its polling stop uses process-tree RSS and
+its final gate uses the direct child's kernel peak RSS; macOS footprint remains
+diagnostic only. Keep at least 16 GiB free on its pinned
+disk-backed output filesystem for the raw proving-key spools and framed
+artifact copy.
 Retain the helper's canonical JSON report. The reviewed source closure and its
 digest are release inputs; the report's `source_commit` must equal the verified
 `HEAD`, and unreviewed working-tree changes fail closed.

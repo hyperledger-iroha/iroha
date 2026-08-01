@@ -20,11 +20,11 @@ Completed history lives in [`status.md`](./status.md).
 
 ## First-release security remediation validation
 
-The source and cross-SDK remediation described in `status.md` is complete.
-Release evidence still requires the serialized build lane to become available,
-then regeneration of the canonical DA reconstruction fixture and unsigned
-OpenAPI development provenance from the final source state, focused Rust
-crate/test validation, and a broad locked offline workspace compile attempt.
+Release validation remains open. It requires a stable serialized build lane,
+focused locked/offline Nexus configuration, daemon, and state-enforcement
+tests, regeneration of the canonical DA reconstruction fixture and unsigned
+OpenAPI development provenance from the final source state, a broad locked
+offline workspace compile attempt, and a final report-by-report reconciliation.
 Do not promote the private audit ledger to complete until those source-bound
 commands and the final reconciliation pass are recorded.
 
@@ -46,10 +46,10 @@ the in-tree test provider or the outbound replay result.
   exceptions, prioritizing Kura, Torii routing/API, core state, and other files
   still above 20,000 lines. Preserve public facades and wire behavior; every
   split must ratchet the checked-in line count downward.
-- Reduce the data-model frontend and monomorphization surface without exceeding
-  the 41-unit compile baseline or its 44-unit hard limit. Prefer bounded
-  internal modules and derive-family isolation over new crates or feature
-  fragmentation.
+- Validate the reduced Norito/data-model frontend on representative lower-memory
+  macOS hosts and under a Linux cgroup hard limit. Keep future reductions inside
+  bounded modules and derive-family isolation rather than adding crates or
+  feature fragmentation.
 - Move additional SDK/code-generation callers onto the focused
   `norito_codegen_exporter` library. Keep the `xtask` compatibility commands
   until every documented and CI caller has migrated, then remove only the
@@ -65,29 +65,63 @@ initialization before publication/geometry compaction, keeps capture and
 publication ordered under one lock, leaves process gas/telemetry untouched
 during dry-run validation, and blocks empty-state fallback when either the
 configured-primary durable binding disagrees or its geometry floor was
-compacted. The first-party Soracloud signed-mutation path also uses
+compacted. Reset capture now reads native Darwin argv, binds the direct
+root-controlled Python.app runtime for new supervisors, and permits the legacy
+same-framework Homebrew argv0 rewrite only through an explicit testnet-reset
+authorization. Restart proof now binds a bounded same-inode log cursor,
+requires exactly one authenticated snapshot load with no Kura/empty-state
+fallback, rechecks the final process identities and advancing fleet, and emits
+the measured duration under the 45-second ceiling. Controller and public smoke
+parsers accept the exact optional four-hex checksum in canonical Iroha block
+hashes without accepting arbitrary suffixes. The first-party Soracloud
+signed-mutation path also uses
 middleware-authenticated signer headers only: Torii rejects retired inline
 signing fields and the CLI omits them from every mutation request. Focused
-locked/offline source validation is complete; source sealing, release
-generation, and live rollout remain open, and public Taira remains on the old
-deployment. Do not expose it as a ready offline-cash lane until the guarded
-reset reports `mandatory: true`, `ready: true` and passes the signed public
-canary. The rollout checker now enforces that same `/readyz` invariant on
-public ingress and every direct validator rather than relying on controller
-evidence alone.
+locked/offline validation of those consensus and restart repairs is complete.
+Compact-commitment validation, source sealing, release generation, and live
+rollout remain open, and public Taira remains on the old deployment. Do not
+expose it as a ready offline-cash lane until the guarded reset reports
+`mandatory: true`, `ready: true` and passes the signed public canary. The
+rollout checker now enforces that same `/readyz` invariant on public ingress
+and every direct validator rather than relying on controller evidence alone.
+
+The earlier populated-profile probe is superseded for promotion. Authentic
+final-VK generation exposed a 20,154-byte raw compiled-protocol identity: its
+316 SHA-256 blocks required 147,520 rows across five Table16 lanes, exceeding
+the 131,063 usable k17 rows and failing only after roughly 29 minutes. The
+compact source keeps the value-free structure hash at V1, while protocol
+identity V2 and deferred audit V6 absorb every canonical 32-byte compressed
+point into Poseidon as two injective little-endian `u128` field elements and
+feed only a short one-block domain/version/digest wrapper to SHA-256. Exact
+SHA-job and dense-MSM capacity checks now reject an impossible auxiliary layout
+before key generation. The authentic StepEq reciprocal audit contains 1,867
+dense sources, which exceeded k17 as one 313,659-row trace. It is now split in
+stable source order across three disjoint accumulator lanes with terminal-to-
+start equality links and a final ring closure; the longest lane is 104,667
+rows and the ring preserves exactly the original identity relation. The
+`[220]` advice / `[25, 0, 0]` lookup-advice k17 profile remains the candidate,
+but a fresh guarded final-source probe must
+qualify it; neither the earlier probe hashes nor any existing artifact release
+attests this change.
 
 Remaining work stays ordered and fail-closed:
 
-- Seal the independently reviewed minimal source closure on signed
-  `optimizations` anchor `54515044a3408011915d6bb1b70bcb4bdac15b76`.
-  The prior r5 seal anchored to
-  `41287ed727addc87418c1a0878f7bd97c7cce83b` predates this patch and must not be
-  used to attest it. Build and hash the candidate, runtime, configuration, and
-  eight-artifact release bundle from the resulting single provenance set.
-- Capture fresh signed physical-device evidence on exact `iPhone18,2` / `V54AP`
-  hardware and collect all six independent review categories. Unavailable
-  devices and the incomplete review set remain hard promotion gates; simulator,
-  stale, or partially reviewed evidence is not a substitute.
+- Complete focused compile and unit validation for the native,
+  scalar-circuit, and reciprocal-circuit compact commitments, including
+  compressed-point parity, identity rejection, exact V1 structure/V2 identity,
+  V6 audit equality, tamper rejection, and early capacity diagnostics. Then run
+  the fresh guarded k17 shape probe and bind its exact result; this probe and
+  authentic generation have not passed yet.
+- Seal the final reviewed source closure over signed `optimizations` anchor
+  `7d0d0d29544cbeaae114c1c098ee1e41187634e2`. Build and hash the candidate
+  generator, runtime binaries, configuration, and reset tooling from that one
+  provenance set; no earlier r5/r6 binary or artifact seal attests the k17
+  layout.
+- Run guarded production generation for the exact eight-artifact Eq/Ep bundle,
+  confirm and bind the expected 93,120-byte proofs and 191,862-byte maximum
+  pair, complete the required independent review and physical-device evidence,
+  finalize the immutable release, and qualify its validator catalog. Diagnostic
+  probe output is not a candidate or promotion record.
 - Perform the authorized guarded reset across all four validators, deploy the
   sealed binary/configuration/artifact set, and prove advancing consensus,
   query-visible `/status.blocks` equality, mandatory offline readiness, signed
@@ -493,12 +527,14 @@ cutover work.
   least 24 GiB of installed memory, then run that binary's `generate-candidate`
   command through `scripts/run_kagemusha_v4_generation.py` and retain the
   generation JSONL/summary beside the published candidate and sealed-build
-  report. Keep the non-raiseable 16 GiB guard, file-backed proving-key
-  serialization, and the 12 GiB reviewed exact-profile preflight around the
-  checked 9,747,562,496-byte static admission estimate. The corrected k16
-  `[443]` advice / `[47, 0, 0]` lookup-advice shape has
-  exact per-parity ParamsIPA/VK/PK lengths of
-  4,194,372 / 35,018 / 4,594,903,830 bytes and remains inside the fixed 5 GiB
+  report. Keep the non-raiseable 64 GiB / half-physical-RAM guard, file-backed
+  proving-key serialization, scoped max(RSS, physical-footprint) polling plus
+  the final kernel peak-RSS gate, and the 56 GiB reviewed exact-profile
+  preflight around the checked 53,108,563,136-byte phase-aware admission
+  estimate. The populated k17
+  `[220]` advice / `[25, 0, 0]` lookup-advice shape has exact per-parity
+  ParamsIPA/VK/PK lengths of
+  8,388,676 / 20,362 / 5,347,763,078 bytes and remains inside the fixed 5 GiB
   per-artifact corridor. A
   non-shipping memory-benchmark report is diagnostic calibration, not candidate
   or release evidence. Do not restore high-degree generation or a release-sized
@@ -508,14 +544,12 @@ cutover work.
   peak memory, retry after the native busy result, transient verifier/prover
   sequencing, and no partially advanced wallet lifecycle when a proof worker
   is busy.
-- Continue splitting or simplifying the `iroha_data_model` compile and
-  monomorphization surface. The first source-level decoder de-duplication cut
-  the exact serialized no-run reproducer from 12.191 GiB to 11.466 GiB and cut
-  its eight-object rlib from 570,253,400 to 470,810,416 bytes. Eight codegen
-  units remains the lowest measured profile (16 and 64 were neutral; one unit
-  regressed to 19.322 GiB), but one Cargo job cannot cap this still-large single
-  frontend process. Isolate additional derive families or split bounded model
-  modules, then repeat the exact reproducer under a Linux cgroup hard limit.
+- Repeat the current cold workspace and focused data-model profiles on a
+  representative lower-memory Mac and under a Linux cgroup hard limit. Add a
+  serialization-throughput benchmark for nested writer-backed values so future
+  frontend reductions retain both deterministic bytes and runtime performance.
+  Keep native Cargo jobserver parallelism as the default; use the documented
+  opt-in constrained runner only on hosts that actually require serialization.
 
 Mixed-executable-batch follow-up is limited to completing the full workspace
 suite and the complete platform SDK suites on toolchains with their required
@@ -598,7 +632,7 @@ as additional streamed artifacts.
 The unreleased recursive state boundary carrier remains V2 without changing
 bridge ABI 21 or manifest V4, while its nested compact profile is V5. The
 boundary is the complete 138-limb canonical state, including the public
-append-only `next_zero_leaf_index`; each fixed Eq/Ep public-input schema is 64
+append-only `next_zero_leaf_index`; each fixed Eq/Ep public-input schema is 66
 field elements.
 There is no fallback for the former layout. All earlier V4 candidate keys,
 bootstrap witnesses, proofs, manifests, and schema digests are invalid and must
@@ -638,8 +672,8 @@ blocked until the focused adversarial circuit, bridge, and SDK matrix verifies
 these obligations and fresh artifacts are generated from the resulting layout.
 Each parity must retain one fixed circuit shape across initialization and
 one-/two-parent transitions. The V4 candidate authenticates its compact
-degree-16 base-circuit configuration and fixed 64-element public layout, two mandatory
-real-or-bootstrap parent slots, canonical bootstrap-witness artifacts,
+degree-17 base-circuit configuration and fixed 66-element public layout, two
+mandatory real-or-bootstrap parent slots, canonical bootstrap-witness artifacts,
 in-circuit presence selectors, fixed post-proof and branch folds, and fixed
 deferred-equation stage plans. Circuit parameters stay inside the signed
 manifest profiles. Concrete StepEq/StepEp circuit, proving, and terminal
@@ -659,12 +693,13 @@ stays false.
 The historical ABI-19/V3 path had a 1,600-byte per-step limit. Its degree-18 prototype produced 7,296-byte ordinary and
 7,328-byte augmented proofs even before full confidential/output-membership
 composition; it is not the current artifact/readiness contract. V4's
-authenticated profiles pin measured per-parity proof bounds and its manifest
-pins the pair bound. The reviewed `[443]` advice / `[47, 0, 0]` lookup profile retains
+authenticated profiles pin exact per-parity proof bounds and its manifest
+pins the pair bound. The reviewed `[220]` advice / `[25, 0, 0]` lookup profile retains
 defensive ceilings of 192 KiB per step and 384 KiB per canonical pair. The
-current composite graph preflights at exactly 147,776 bytes per parity and
-300,916 bytes for a recursive pair. The manifest must authenticate that
-recursive maximum rather than the smaller 296,164-byte initialization sample.
+populated graph computes a 93,120-byte transcript per role, a 186,852-byte
+initialization pair, and a 191,862-byte maximum recursive pair. Authentic
+generation must confirm those exact values, and the manifest must authenticate
+the recursive maximum rather than the smaller initialization pair.
 Those ceilings are not availability signals; promotion must pin the
 candidate's exact values and pass independent review and device evidence.
 
@@ -1330,9 +1365,8 @@ an operation executable, and backend construction without the exact registry
 bindings does not open lineage. The
 retired direct fixed-window `lineage-key-artifacts` experiment failed before
 Halo2 keygen when its old column-heavy verifier slice could not fit the bounded
-domain. Its conclusion that degree 16 was unacceptable applied only to that
-pre-compact shape. The current nested compact V5 profile instead fixes degree
-16 with `[443]` advice and `[47, 0, 0]` lookup-advice columns and remains fail-closed
+domain. The current nested compact V5 profile instead fixes degree 17 with
+`[220]` advice and `[25, 0, 0]` lookup-advice columns and remains fail-closed
 behind the generation and physical-evidence gates listed above; the retired
 shape is not a fallback.
 
@@ -2872,20 +2906,14 @@ excluded from the first release.
   The 2026-06-29 Windows `.NET 8.0.422` full C# pass certifies matching C#
   confidential transfer/unshield verify request proof-size prechecks for
   `proof must not exceed 33554432 bytes` on `win-x64`.
-- Continue reducing local/CI compile memory after the WSL cargo-test hardening
-  and Kagemusha V3 preflight isolation: plain default tests no longer run the
-  heavy record-bound Pasta proof matrix or the oversized private Sumeragi
-  main-loop unit-test harness. The native Kagemusha V3 FFI adversarial test also keeps minimum-sized random
-  invalid-proof backend verification behind an explicit ignored test, with SDK
-  parity guarding that the backend-heavy soft-invalid check cannot drift back
-  into the default bridge test.
-  The exact serialized bridge reproducer confirmed the independent
-  `iroha_data_model` compiler hotspot. Sharing canonical/prefix decoder control
-  flow reduced its eight-unit kernel high-water mark to `11.466 GiB`, 742.2 MiB
-  below the comparable pre-refactor 16-unit run, but Jobs=1 cannot reduce this
-  remaining one-process footprint. Continue splitting its derive and model
-  surface rather than reintroducing broad Cargo parallelism or
-  one-file-one-binary integration-test discovery.
+- Continue validating local/CI compile memory after the WSL cargo-test
+  hardening, Kagemusha V3 preflight isolation, and Norito serializer
+  de-monomorphization. Plain default tests must keep the heavy record-bound
+  Pasta proof matrix, oversized private Sumeragi main-loop harness, and
+  backend-heavy soft-invalid bridge checks out of routine execution. Run the
+  current focused data-model reproducer under an enforced Linux memory limit
+  and keep target-inventory and source-budget ratchets green while native Cargo
+  jobserver parallelism remains the normal developer default.
 - Native asset locks are now first-class ISIs for escrow-style conditional
   custody, including optional release authority, expiry, partial drawdown,
   deterministic custody, Python SDK helpers, negative/adversarial unit tests, and
@@ -25835,14 +25863,16 @@ progress witness because broadcast excludes the sender.
 
 The deferred Progress reserve is now partitioned into non-displacing
 locked-Commit, TimeoutVote, PrepareQC, CommitQC, and TC ownership classes, with
-one signer-injective locked-Commit and TimeoutVote slot per frozen validator.
-Exact retransmissions coalesce, while distinct same-owner traffic cannot
-displace admitted progress and retries after fair service. Current-view
-TimeoutVote keys also retain one signer-bounded semantic-admission slot beyond
-the ordinary history budget, preventing pre-queue starvation when that table
-is saturated. The pinned adapter boundary realizes the exact `1024 + 2N`
-live bound and crosses TC installation to prove old-view retirement plus
-non-poisoning current-view retry. Durable Decision
+one signer-injective locked-Commit slot and one TimeoutVote slot per frozen
+validator. The TimeoutVote slot is shared across the bounded current and
+adjacent-future rounds. Exact retransmissions coalesce, while distinct
+same-owner traffic cannot displace admitted progress and retries after fair
+service. Current/adjacent TimeoutVote keys retain two signer-bounded
+semantic-admission sets beyond the ordinary history budget, preventing
+pre-queue starvation when that table is saturated. The pinned adapter boundary
+realizes the exact `1024 + 3N` live bound and crosses TC installation to prove
+out-of-window retirement, adjacent-share preservation, and non-poisoning
+current-view retry. Durable Decision
 retransmission reconstructs store, validation, and application work from its
 recorded body stage. The height watchdog advances only on bounded semantic or
 Prepare/Commit count-and-power high-water, while candidate status reflects

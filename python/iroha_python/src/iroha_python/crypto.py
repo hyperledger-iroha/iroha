@@ -261,8 +261,7 @@ def _native_instruction_builder(name: str) -> Any:
     builder = getattr(_crypto.Instruction, name, None)
     if builder is None:
         raise RuntimeError(
-            f"iroha_python._crypto is missing Instruction.{name}(); "
-            "rebuild the extension"
+            f"iroha_python._crypto is missing Instruction.{name}(); rebuild the extension"
         )
     return builder
 
@@ -495,9 +494,7 @@ else:
     PrivacyVeRangeActionBuildResultV1 = _crypto.PrivacyVeRangeActionBuildResultV1
     PrivacyVegaActionPreparationV1 = _crypto.PrivacyVegaActionPreparationV1
     PrivacyVegaActionBuildResultV1 = _crypto.PrivacyVegaActionBuildResultV1
-    PrivacyZkAceTransferActionBuildResultV1 = (
-        _crypto.PrivacyZkAceTransferActionBuildResultV1
-    )
+    PrivacyZkAceTransferActionBuildResultV1 = _crypto.PrivacyZkAceTransferActionBuildResultV1
     PrivacyZkAmsBatchAdmissionActionBuildResultV1 = (
         _crypto.PrivacyZkAmsBatchAdmissionActionBuildResultV1
     )
@@ -620,7 +617,9 @@ def verify_committed_transaction_inclusion(
 
 
 if not TYPE_CHECKING:
-    SignedTransactionEnvelope.__doc__ = """Signed transaction envelope produced by the Python SDK."""
+    SignedTransactionEnvelope.__doc__ = (
+        """Signed transaction envelope produced by the Python SDK."""
+    )
 
 
 def signed_transaction_envelope_from_json(payload: str) -> SignedTransactionEnvelope:
@@ -664,7 +663,6 @@ def _normalize_bytes(value: Any, name: str, *, expected_len: Optional[int] = Non
 
 
 _PROOF_BOX_MAX_ENCODED_BYTES_V1 = 64 * 1024 * 1024
-_PROOF_BOX_CANONICAL_FIELD_OVERHEAD_V1 = 32
 _VERIFYING_KEY_ID_MAX_FIELD_BYTES = 256
 _LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 = 255
 _PORTABLE_VERIFIER_ID_FORBIDDEN_SEPARATORS = (
@@ -678,6 +676,46 @@ _PORTABLE_VERIFIER_ID_FORBIDDEN_SEPARATORS = (
     ":.",
     ".:",
 )
+
+
+def _norito_compact_len_prefix_bytes_v1(length: int) -> int:
+    """Return the canonical unsigned compact-prefix width for ``length``."""
+
+    if length < 0:
+        raise ValueError("canonical field length must be non-negative")
+    return max(1, (length.bit_length() + 6) // 7)
+
+
+def _proof_box_canonical_encoded_len_v1(backend: str, proof_len: int) -> int:
+    """Return the exact canonical nested ``ProofBox`` payload length."""
+
+    if proof_len < 0:
+        raise ValueError("proof length must be non-negative")
+    backend_len = len(backend.encode("utf-8"))
+    backend_value_len = _norito_compact_len_prefix_bytes_v1(backend_len) + backend_len
+    backend_field_len = _norito_compact_len_prefix_bytes_v1(backend_value_len) + backend_value_len
+    # Norito V1 retains an eight-byte sequence count inside the compact-framed
+    # struct member for ``Vec<u8>``.
+    proof_value_len = 8 + proof_len
+    proof_field_len = _norito_compact_len_prefix_bytes_v1(proof_value_len) + proof_value_len
+    return backend_field_len + proof_field_len
+
+
+def _proof_box_max_proof_bytes_v1(backend: str) -> int:
+    """Return the largest proof whose canonical nested payload is at most 64 MiB."""
+
+    lower = 0
+    upper = _PROOF_BOX_MAX_ENCODED_BYTES_V1
+    while lower < upper:
+        candidate = lower + (upper - lower + 1) // 2
+        if (
+            _proof_box_canonical_encoded_len_v1(backend, candidate)
+            <= _PROOF_BOX_MAX_ENCODED_BYTES_V1
+        ):
+            lower = candidate
+        else:
+            upper = candidate - 1
+    return lower
 
 
 def _require_portable_verifier_id_field(value: Any, context: str) -> str:
@@ -696,19 +734,10 @@ def _require_portable_verifier_id_field(value: Any, context: str) -> str:
             (encoded[0:1].islower() or encoded[0:1].isdigit())
             and (encoded[-1:].islower() or encoded[-1:].isdigit())
         )
-        or any(
-            byte
-            not in b"abcdefghijklmnopqrstuvwxyz0123456789-_/.:"
-            for byte in encoded
-        )
-        or any(
-            separator in value
-            for separator in _PORTABLE_VERIFIER_ID_FORBIDDEN_SEPARATORS
-        )
+        or any(byte not in b"abcdefghijklmnopqrstuvwxyz0123456789-_/.:" for byte in encoded)
+        or any(separator in value for separator in _PORTABLE_VERIFIER_ID_FORBIDDEN_SEPARATORS)
     ):
-        raise ValueError(
-            f"{context} must use the bounded portable verifier-key registry grammar"
-        )
+        raise ValueError(f"{context} must use the bounded portable verifier-key registry grammar")
     return value
 
 
@@ -759,28 +788,21 @@ def _normalize_lane_privacy_attachment(entry: Mapping[str, Any]) -> Dict[str, An
         raise ValueError("leaf_index must be an unsigned 32-bit integer")
     if not proof_bytes:
         raise ValueError("proof_bytes must be non-empty")
-    maximum_proof_bytes = (
-        _PROOF_BOX_MAX_ENCODED_BYTES_V1
-        - _PROOF_BOX_CANONICAL_FIELD_OVERHEAD_V1
-        - len(proof_backend.encode("utf-8"))
-    )
+    maximum_proof_bytes = _proof_box_max_proof_bytes_v1(proof_backend)
     if len(proof_bytes) > maximum_proof_bytes:
         raise ValueError(
-            "proof_bytes exceeds the "
-            f"{maximum_proof_bytes}-byte limit for this backend"
+            f"proof_bytes exceeds the {maximum_proof_bytes}-byte limit for this backend"
         )
 
     if not isinstance(raw_audit, (list, tuple)):
         raise TypeError("audit_path must be a list or tuple of 32-byte siblings")
     if not 1 <= len(raw_audit) <= _LANE_PRIVACY_MAX_MERKLE_DEPTH_V1:
         raise ValueError(
-            "audit_path must contain between 1 and "
-            f"{_LANE_PRIVACY_MAX_MERKLE_DEPTH_V1} siblings"
+            f"audit_path must contain between 1 and {_LANE_PRIVACY_MAX_MERKLE_DEPTH_V1} siblings"
         )
     if len(raw_audit) < 32 and leaf_index >= 1 << len(raw_audit):
         raise ValueError(
-            f"leaf_index {leaf_index} is not representable by merkle depth "
-            f"{len(raw_audit)}"
+            f"leaf_index {leaf_index} is not representable by merkle depth {len(raw_audit)}"
         )
     audit_path: list[bytes] = []
     for idx, sibling in enumerate(raw_audit):
@@ -930,12 +952,12 @@ class Ed25519KeyPair:
 
         return load_ed25519_keypair_from_hex(private_key_hex)
 
-    def default_account_id(self, domain: str, discriminant: int = _DEFAULT_I105_DISCRIMINANT) -> str:
+    def default_account_id(
+        self, domain: str, discriminant: int = _DEFAULT_I105_DISCRIMINANT
+    ) -> str:
         """Return the canonical I105 account id using the public key and `domain`."""
 
-        return ed25519_public_key_account_id(
-            self.public_key, domain, discriminant=discriminant
-        )
+        return ed25519_public_key_account_id(self.public_key, domain, discriminant=discriminant)
 
 
 @dataclass(frozen=True)
@@ -1159,9 +1181,7 @@ def sm2_public_key_multihash(public_key: bytes, distid: Optional[str] = None) ->
     """Return the canonical multihash for an SM2 public key."""
 
     if len(public_key) != SM2_PUBLIC_KEY_LENGTH:
-        raise ValueError(
-            f"public key must be {SM2_PUBLIC_KEY_LENGTH} bytes, got {len(public_key)}"
-        )
+        raise ValueError(f"public key must be {SM2_PUBLIC_KEY_LENGTH} bytes, got {len(public_key)}")
     return _crypto.sm2_public_key_multihash(public_key, distid)
 
 
@@ -1187,13 +1207,9 @@ def verify_sm2(
     """Verify ``signature`` against ``message`` and the provided SM2 public key."""
 
     if len(public_key) != SM2_PUBLIC_KEY_LENGTH:
-        raise ValueError(
-            f"public key must be {SM2_PUBLIC_KEY_LENGTH} bytes, got {len(public_key)}"
-        )
+        raise ValueError(f"public key must be {SM2_PUBLIC_KEY_LENGTH} bytes, got {len(public_key)}")
     if len(signature) != SM2_SIGNATURE_LENGTH:
-        raise ValueError(
-            f"signature must be {SM2_SIGNATURE_LENGTH} bytes, got {len(signature)}"
-        )
+        raise ValueError(f"signature must be {SM2_SIGNATURE_LENGTH} bytes, got {len(signature)}")
     return bool(_crypto.verify_sm2(public_key, message, signature, distid))
 
 
@@ -1497,9 +1513,7 @@ def _confidential_verifying_key_parts(
         or verifying_key.get("vkCircuitId")
     )
     vk_bytes = (
-        verifying_key.get("bytes")
-        or verifying_key.get("vk_bytes")
-        or verifying_key.get("vkBytes")
+        verifying_key.get("bytes") or verifying_key.get("vk_bytes") or verifying_key.get("vkBytes")
     )
     backend = _require_exact_non_empty_string(backend, f"{context}.backend")
     circuit_id = _require_exact_non_empty_string(circuit_id, f"{context}.circuit_id")
@@ -1810,6 +1824,8 @@ buildConfidentialTransferProofV2 = build_confidential_transfer_proof_v2
 buildConfidentialTransferProofV2WithPaths = build_confidential_transfer_proof_v2_with_paths
 buildConfidentialUnshieldProofV3 = build_confidential_unshield_proof_v3
 buildConfidentialUnshieldProofV3WithPaths = build_confidential_unshield_proof_v3_with_paths
+
+
 def confidential_transfer_v2_verifying_key_registration_payload_v1() -> Dict[str, Any]:
     """Build the canonical active confidential transfer v2 verifier-key payload."""
 
@@ -1863,9 +1879,7 @@ def _privacy_output_archive(module: object, operation: str, result: object) -> b
     if result is None:
         raise RuntimeError(f"native {operation} returned no output")
     if isinstance(result, str):
-        raise RuntimeError(
-            f"native {operation} returned text instead of Norito V1 bytes"
-        )
+        raise RuntimeError(f"native {operation} returned text instead of Norito V1 bytes")
     view = _privacy_unsigned_byte_view(
         result,
         bytes_like_message=f"native {operation} returned non-byte output",
@@ -2038,7 +2052,7 @@ def is_privacy_native_available() -> bool:
 
 
 def privacy_compiled_profile_catalog_v1() -> bytes:
-    """Return this binary's canonical local compiled-profile catalog.
+    """Return this binary's canonical Norito V1 local compiled-profile catalog.
 
     This archive has no committed height, governance activation, or readiness
     state. Use ``Client.privacy_capabilities_v1()`` for a fresh authoritative
@@ -2065,9 +2079,7 @@ def canonical_genesis_header_hash_v1(
     if not isinstance(framed_signed_genesis, (bytes, bytearray, memoryview)):
         raise TypeError("framed_signed_genesis must be bytes-like")
     try:
-        result = _crypto.canonical_genesis_header_hash_v1(
-            bytes(framed_signed_genesis)
-        )
+        result = _crypto.canonical_genesis_header_hash_v1(bytes(framed_signed_genesis))
     except AttributeError as exc:
         raise RuntimeError(
             "iroha_python._crypto is missing canonical_genesis_header_hash_v1; "
@@ -2091,9 +2103,7 @@ def canonical_signed_transaction_hash_v1(
     ):
         raise TypeError("signed_transaction_versioned must be bytes-like")
     try:
-        result = _crypto.canonical_signed_transaction_hash_v1(
-            bytes(signed_transaction_versioned)
-        )
+        result = _crypto.canonical_signed_transaction_hash_v1(bytes(signed_transaction_versioned))
     except AttributeError as exc:
         raise RuntimeError(
             "iroha_python._crypto is missing canonical_signed_transaction_hash_v1; "
@@ -2194,9 +2204,7 @@ def privacy_vega_device_authentication_digest_v1(
     except Exception:
         raise ValueError("invalid Vega device-authentication statement") from None
     if not isinstance(result, bytes) or len(result) != 32 or result == bytes(32):
-        raise RuntimeError(
-            "native Vega device-authentication derivation returned invalid bytes"
-        )
+        raise RuntimeError("native Vega device-authentication derivation returned invalid bytes")
     return result
 
 
@@ -2222,9 +2230,7 @@ def inspect_signed_privacy_zk_ace_transfer_action_v1(
     except Exception:
         raise ValueError("invalid canonical signed ZK-ACE transfer action") from None
     if type(result) is not dict:
-        raise RuntimeError(
-            "native ZK-ACE transfer action inspection returned an invalid result"
-        )
+        raise RuntimeError("native ZK-ACE transfer action inspection returned an invalid result")
     return result
 
 
@@ -2239,9 +2245,7 @@ def inspect_signed_privacy_jindo_action_v1(
     ):
         raise TypeError("signed_transaction_versioned must be bytes-like")
     try:
-        result = _crypto.inspect_signed_privacy_jindo_action_v1(
-            bytes(signed_transaction_versioned)
-        )
+        result = _crypto.inspect_signed_privacy_jindo_action_v1(bytes(signed_transaction_versioned))
     except AttributeError as exc:
         raise RuntimeError(
             "iroha_python._crypto is missing "
@@ -2291,9 +2295,7 @@ def inspect_signed_privacy_vega_action_v1(
     ):
         raise TypeError("signed_transaction_versioned must be bytes-like")
     try:
-        result = _crypto.inspect_signed_privacy_vega_action_v1(
-            bytes(signed_transaction_versioned)
-        )
+        result = _crypto.inspect_signed_privacy_vega_action_v1(bytes(signed_transaction_versioned))
     except AttributeError as exc:
         raise RuntimeError(
             "iroha_python._crypto is missing "
@@ -2329,9 +2331,7 @@ def inspect_signed_privacy_zk_ams_batch_admission_action_v1(
     except Exception:
         raise ValueError("invalid canonical signed ZK-AMS batch-admission action") from None
     if type(result) is not dict:
-        raise RuntimeError(
-            "native ZK-AMS batch-admission inspection returned an invalid result"
-        )
+        raise RuntimeError("native ZK-AMS batch-admission inspection returned an invalid result")
     return result
 
 
@@ -2356,9 +2356,7 @@ def inspect_signed_privacy_zk_ams_provision_account_action_v1(
             "rebuild the extension"
         ) from exc
     except Exception:
-        raise ValueError(
-            "invalid canonical signed ZK-AMS account-provisioning action"
-        ) from None
+        raise ValueError("invalid canonical signed ZK-AMS account-provisioning action") from None
     if type(result) is not dict:
         raise RuntimeError(
             "native ZK-AMS account-provisioning inspection returned an invalid result"
@@ -2387,9 +2385,7 @@ def inspect_signed_privacy_bootle_lantern_presentation_action_v1(
             "rebuild the extension"
         ) from exc
     except Exception:
-        raise ValueError(
-            "invalid canonical signed Bootle/Lantern presentation action"
-        ) from None
+        raise ValueError("invalid canonical signed Bootle/Lantern presentation action") from None
     if type(result) is not dict:
         raise RuntimeError(
             "native Bootle/Lantern presentation inspection returned an invalid result"
@@ -2417,13 +2413,9 @@ def _inspect_signed_privacy_native_action_v1(
     try:
         result = inspector(bytes(signed_transaction_versioned))
     except Exception:
-        raise ValueError(
-            f"invalid canonical signed {protocol_label} action"
-        ) from None
+        raise ValueError(f"invalid canonical signed {protocol_label} action") from None
     if type(result) is not dict:
-        raise RuntimeError(
-            f"native {protocol_label} action inspection returned an invalid result"
-        )
+        raise RuntimeError(f"native {protocol_label} action inspection returned an invalid result")
     return result
 
 

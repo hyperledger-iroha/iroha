@@ -33,16 +33,16 @@ first alias.
 List all registered descriptors:
 
 ```bash
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- --list-profiles
 ```
 
 Select profiles by numeric id or canonical handle:
 
 ```bash
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- ./docs.tar \
   --profile-id=1 --json-out=-
 
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- ./docs.tar \
   --profile=sorafs.sf2@1.0.0 --json-out=-
 ```
 
@@ -57,7 +57,7 @@ into `crates/sorafs_manifest/src/chunker_registry.rs` when promoting a new
 profile:
 
 ```bash
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- \
   --promote-profile=sorafs.sf2@1.0.0 --json-out=-
 ```
 
@@ -70,14 +70,14 @@ logs reproducible without creating temporary files.
 Inspect a specific PoR witness by chunk, segment, and leaf indices:
 
 ```bash
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- ./docs.tar \
   --por-proof=0:0:0 --por-proof-out=leaf.proof.json
 ```
 
 Validate an existing proof against a payload:
 
 ```bash
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- ./docs.tar \
   --por-proof-verify=leaf.proof.json --json-out=-
 ```
 
@@ -85,7 +85,7 @@ For batch sampling, use `--por-sample=<count>` with an optional deterministic
 seed and output path:
 
 ```bash
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- ./docs.tar \
   --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 ```
 

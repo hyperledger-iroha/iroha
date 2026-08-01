@@ -17,6 +17,7 @@ use super::{
 use crate::{
     arithmetic::{CurveAffine, parallelize},
     circuit::Value,
+    helpers::release_allocator_slack,
     multicore::{IntoParallelIterator, ParallelIterator},
     poly::{
         EvaluationDomain, batch_invert_assigned_consuming,
@@ -358,9 +359,17 @@ where
             .map(|poly| domain.lagrange_from_vec(poly)),
     );
 
+    // Rayon preserves canonical column order. Release each worker's completed
+    // MSM scratch without serializing independent commitments; on Darwin that
+    // returned scratch can otherwise remain compressed and charged across
+    // hundreds of fixed columns.
     let fixed_commitments = (&fixed)
         .into_par_iter()
-        .map(|poly| params.commit_lagrange(poly, Blind::default()).to_affine())
+        .map(|poly| {
+            let commitment = params.commit_lagrange(poly, Blind::default()).to_affine();
+            release_allocator_slack();
+            commitment
+        })
         .collect();
 
     VerifyingKey::from_parts(
@@ -445,6 +454,10 @@ where
             .map_err(KeygenWithExtractorError::Keygen)?;
     let extracted = extractor(&circuit).map_err(KeygenWithExtractorError::Extractor)?;
     drop(circuit);
+    // The synthesized assembly is the only live owner needed below. On
+    // Darwin, promptly purge pages freed with the much larger virtual circuit
+    // graph before allocating permutation and MSM scratch.
+    release_allocator_slack();
 
     let domain = generated_domain.expect("verifier-key generation constructs a domain");
     let vk = keygen_vk_from_assembly(params, domain, cs, assembly, false);
@@ -499,6 +512,7 @@ where
             .map_err(KeygenWithExtractorError::Keygen)?;
     let extracted = extractor(&circuit).map_err(KeygenWithExtractorError::Extractor)?;
     drop(circuit);
+    release_allocator_slack();
 
     let pk = keygen_pk_from_assembly(
         params,
@@ -617,7 +631,11 @@ where
 
             let fixed_commitments = (&fixed)
                 .into_par_iter()
-                .map(|poly| params.commit_lagrange(poly, Blind::default()).to_affine())
+                .map(|poly| {
+                    let commitment = params.commit_lagrange(poly, Blind::default()).to_affine();
+                    release_allocator_slack();
+                    commitment
+                })
                 .collect();
 
             let vk = VerifyingKey::from_parts(
@@ -652,7 +670,11 @@ where
 
             let fixed_commitments = (&fixed)
                 .into_par_iter()
-                .map(|poly| params.commit_lagrange(poly, Blind::default()).to_affine())
+                .map(|poly| {
+                    let commitment = params.commit_lagrange(poly, Blind::default()).to_affine();
+                    release_allocator_slack();
+                    commitment
+                })
                 .collect();
 
             let vk = VerifyingKey::from_parts(

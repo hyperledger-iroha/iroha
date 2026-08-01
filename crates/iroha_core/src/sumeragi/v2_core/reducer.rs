@@ -31,6 +31,7 @@ use super::{
         WAL_RECORD_PROPOSAL_INTENT, WAL_RECORD_TIMEOUT_INTENT,
         check_production_durable_intent_transition, locked_commit_progress_witness_is_valid,
     },
+    types::timeout_vote_view_is_admissible,
 };
 
 /// Progress of an exact block body through the durable validation boundary.
@@ -1302,6 +1303,19 @@ impl Reducer {
         let trace = self.effect_trace(event, after, effects);
         let boundary_claimed = self.boundary_claim(event, after, effects);
         let boundary_granted = self.boundary_grant(event, after, effects, boundary_claimed);
+        let installed_height = after.durable.height();
+        let installed_view = after.durable.current_view();
+        let timeout_evidence_after_outside_installed_window = Self::cardinality(
+            after
+                .timeout_votes
+                .keys()
+                .chain(after.formed_timeouts.iter())
+                .filter(|round| {
+                    round.height() != installed_height
+                        || !timeout_vote_view_is_admissible(installed_view, round.view())
+                })
+                .count(),
+        );
         TransitionProjection {
             before_state: self,
             after_state: after,
@@ -1337,6 +1351,7 @@ impl Reducer {
             timeout_votes_after: &after.timeout_votes,
             formed_timeouts_before: &self.formed_timeouts,
             formed_timeouts_after: &after.formed_timeouts,
+            timeout_evidence_after_outside_installed_window,
             timeout_control_before: self
                 .outbound_control
                 .get(&OutboundControlClass::TimeoutVote),
@@ -4191,7 +4206,7 @@ impl Reducer {
         {
             return Err(ReducerError::InvalidTimeoutVote);
         }
-        if vote.round().view() != self.durable.current_view() {
+        if !timeout_vote_view_is_admissible(self.durable.current_view(), vote.round().view()) {
             return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
         }
         if let Some(certificate) = vote.highest_prepare()
@@ -4323,13 +4338,6 @@ impl Reducer {
             });
         }
         let pending = pending.clone();
-        let strict_same_round_timeout_upgrade = matches!(
-            pending.entry.record(),
-            WalRecord::InstallTimeout(certificate)
-                if self
-                    .durable
-                    .is_strict_same_round_timeout_upgrade(certificate)
-        );
         // Preflight the generation transition before applying the WAL entry
         // or releasing its pending owner. Normal view advances reset to zero;
         // only a same-view lock upgrade can reach the checked overflow path.
@@ -4394,16 +4402,22 @@ impl Reducer {
                 self.signature_queue.retain(|message| {
                     Self::signable_is_durably_authorized_for(&self.durable, message)
                 });
-                if strict_same_round_timeout_upgrade {
-                    let current_round =
-                        Round::new(self.context.height(), self.durable.current_view());
-                    self.timeout_votes
-                        .retain(|round, _| *round == current_round);
-                    self.formed_timeouts.retain(|round| *round == current_round);
-                } else {
-                    self.timeout_votes.clear();
-                    self.formed_timeouts.clear();
-                }
+                // Preserve already authenticated shares for the installed
+                // view and its one-round catch-up window. Before this bound
+                // existed every normal TC install cleared shares which had
+                // arrived slightly early, recreating the same stagger at the
+                // successor view. Stale and farther-future pools are retired
+                // at this durable boundary; a same-round lock upgrade keeps
+                // the identical bounded set.
+                let current_view = self.durable.current_view();
+                self.timeout_votes.retain(|round, _| {
+                    round.height() == self.context.height()
+                        && timeout_vote_view_is_admissible(current_view, round.view())
+                });
+                self.formed_timeouts.retain(|round| {
+                    round.height() == self.context.height()
+                        && timeout_vote_view_is_admissible(current_view, round.view())
+                });
                 self.known_prepare.clear();
                 if let Some(highest) = self.durable.highest_prepare() {
                     self.known_prepare

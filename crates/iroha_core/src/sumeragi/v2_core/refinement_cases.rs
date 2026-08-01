@@ -4305,6 +4305,7 @@ fn base_facts() -> TransitionFacts {
         install_view_unchanged: false,
         timeout_vote_pool_unchanged: true,
         formed_timeouts_unchanged: true,
+        timeout_evidence_after_in_installed_window: true,
         timeout_control_unchanged: true,
         timeout_control_after_absent: true,
         enter_view_exact: true,
@@ -4775,14 +4776,28 @@ fn volatile_bounds_and_action_record_pairs_fail_closed() {
 
     let mut advancing_install_keeps_old_pool = same_round_install;
     advancing_install_keeps_old_pool.install_view_unchanged = false;
+    advancing_install_keeps_old_pool.timeout_evidence_after_in_installed_window = false;
     assert!(!accepts_facts(advancing_install_keeps_old_pool));
 
     let mut advancing_install = advancing_install_keeps_old_pool;
     advancing_install.volatile_after.timeout_vote_pools = 0;
     advancing_install.volatile_after.timeout_vote_entries = 0;
+    advancing_install.timeout_evidence_after_in_installed_window = true;
     assert!(
         accepts_facts(advancing_install),
         "an advancing TC install clears timeout pools, markers, and control"
+    );
+
+    let mut advancing_install_keeps_adjacent_pool = advancing_install;
+    advancing_install_keeps_adjacent_pool
+        .volatile_after
+        .timeout_vote_pools = 1;
+    advancing_install_keeps_adjacent_pool
+        .volatile_after
+        .timeout_vote_entries = 2;
+    assert!(
+        accepts_facts(advancing_install_keeps_adjacent_pool),
+        "an advancing TC may preserve authenticated shares in the installed window"
     );
 
     let mut advancing_install_keeps_timeout_control = advancing_install;

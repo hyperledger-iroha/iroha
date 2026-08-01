@@ -4231,7 +4231,13 @@ mod measured_bytes_impls {
 
     impl MeasuredBytes for ProofAttachmentList {
         fn measured_bytes(&self) -> usize {
-            size_of::<ProofAttachmentList>().saturating_add(self.0.measured_bytes_extra())
+            let mut total = size_of::<ProofAttachmentList>();
+            total =
+                total.saturating_add(self.capacity().saturating_mul(size_of::<ProofAttachment>()));
+            for attachment in self.as_slice() {
+                total = total.saturating_add(attachment.measured_bytes_extra());
+            }
+            total
         }
     }
 
@@ -5321,6 +5327,7 @@ mod tests {
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
         nexus::{DataSpaceId, LaneCatalog, LaneConfig, LaneId},
         peer::PeerId,
+        proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
     };
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
@@ -5409,6 +5416,35 @@ mod tests {
             std::mem::size_of::<Vec<u8>>() + value.capacity() * std::mem::size_of::<u8>();
         let measured = compute_hot_bytes(&value).expect("hot byte measurement");
         assert_eq!(measured, expected);
+    }
+
+    #[test]
+    fn measured_bytes_account_for_proof_attachment_list_capacity() {
+        let attachment = ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+            VerifyingKeyId::new("halo2/ipa", "tiered-capacity-fixture"),
+        );
+        let mut compact = Vec::with_capacity(1);
+        compact.push(attachment.clone());
+        let mut reserved = Vec::with_capacity(8);
+        reserved.push(attachment);
+        let compact = ProofAttachmentList::try_from(compact).expect("valid compact list");
+        let reserved = ProofAttachmentList::try_from(reserved).expect("valid reserved list");
+
+        assert_eq!(compact.as_slice(), reserved.as_slice());
+        let capacity_delta = reserved
+            .capacity()
+            .checked_sub(compact.capacity())
+            .expect("reserved fixture has greater capacity");
+        assert!(capacity_delta > 0);
+        let measured_delta = MeasuredBytes::measured_bytes(&reserved)
+            .checked_sub(MeasuredBytes::measured_bytes(&compact))
+            .expect("reserved fixture has greater measured size");
+        assert_eq!(
+            measured_delta,
+            capacity_delta.saturating_mul(std::mem::size_of::<ProofAttachment>())
+        );
     }
 
     #[test]

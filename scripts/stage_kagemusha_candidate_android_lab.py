@@ -54,6 +54,12 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 PORTABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 PUBLIC_TAIRA_CHAIN_DISCRIMINANT = 369
+AUTHORITY_BUILD_FEATURES = (
+    "iroha_core/dev-tools",
+    "iroha_core/kagemusha-candidate-evidence-lab",
+    "connect_norito_bridge/dev-tools",
+    "connect_norito_bridge/kagemusha-candidate-evidence-lab",
+)
 
 ARTIFACTS = (
     ("step_eq_params_ipa", "step-eq.params-ipa.krv4"),
@@ -570,6 +576,29 @@ def _audit_repository_cargo_config() -> None:
             raise StageError("repository Cargo aliases are forbidden for authority builds")
 
 
+def _authority_build_command(cargo: Path) -> list[str]:
+    return [
+        os.fspath(cargo),
+        "build",
+        "--manifest-path",
+        os.fspath(REPOSITORY_ROOT / "Cargo.toml"),
+        "--locked",
+        "--offline",
+        "--jobs",
+        "2",
+        "-p",
+        "iroha_core",
+        "--bin",
+        "kagemusha_recursive_spend_v4_bundle",
+        "-p",
+        "connect_norito_bridge",
+        "--bin",
+        "kagemusha_candidate_scenario_validator",
+        "--features",
+        ",".join(AUTHORITY_BUILD_FEATURES),
+    ]
+
+
 def build_authoritative_validators(build_root: Path) -> AuthorityBinaries:
     build_root.mkdir(mode=0o700)
     build_root.chmod(0o700)
@@ -613,26 +642,7 @@ def build_authoritative_validators(build_root: Path) -> AuthorityBinaries:
         selected = next((path for path in choices if path.is_file()), None)
         if selected is not None:
             environment[variable] = os.fspath(selected)
-    command = [
-        os.fspath(cargo),
-        "build",
-        "--manifest-path",
-        os.fspath(REPOSITORY_ROOT / "Cargo.toml"),
-        "--locked",
-        "--offline",
-        "--jobs",
-        "2",
-        "-p",
-        "iroha_core",
-        "--bin",
-        "kagemusha_recursive_spend_v4_bundle",
-        "-p",
-        "connect_norito_bridge",
-        "--bin",
-        "kagemusha_candidate_scenario_validator",
-        "--features",
-        "iroha_core/kagemusha-candidate-evidence-lab,connect_norito_bridge/kagemusha-candidate-evidence-lab",
-    ]
+    command = _authority_build_command(cargo)
     nice = next((path for path in (Path("/usr/bin/nice"), Path("/bin/nice")) if path.is_file()), None)
     if nice is not None:
         command = [os.fspath(nice), "-n", "10", *command]

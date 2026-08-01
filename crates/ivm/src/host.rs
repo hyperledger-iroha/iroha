@@ -6098,7 +6098,7 @@ mod tests {
         {
             let _canonical =
                 norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-            norito::NoritoSerialize::serialize(&request, &mut bare)
+            norito::core::serialize_to_buffer(&request, &mut bare)
                 .expect("encode bare canonical VRF batch");
         }
         assert!(

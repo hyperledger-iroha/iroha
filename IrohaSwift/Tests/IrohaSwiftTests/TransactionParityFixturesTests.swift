@@ -9,7 +9,7 @@ final class TransactionParityFixturesTests: XCTestCase {
         let loader = try Self.fixtures()
         XCTAssertEqual(
             ToriiNodeCapabilities.expectedSignedTransactionSchemaHashHex,
-            loader.schema.signedSchemaHashHex
+            loader.signedSchemaHashHex
         )
     }
 
@@ -29,7 +29,6 @@ final class TransactionParityFixturesTests: XCTestCase {
         }
         """#.utf8)
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
         let executable = try decoder.decode(TransactionExecutable.self, from: data)
 
         guard case let .batch(items) = executable else {
@@ -99,7 +98,7 @@ final class TransactionParityFixturesTests: XCTestCase {
                     guard case let .instruction(instruction) = entry else { return nil }
                     return instruction
                 }
-            case .ivm:
+            case .ivm, .contractCall:
                 instructions = []
             }
             for instruction in instructions {
@@ -146,7 +145,7 @@ final class TransactionParityFixturesTests: XCTestCase {
                                           assetDefinitionId: assetDefinitionId,
                                           quantity: quantity,
                                           destination: canonicalDestination,
-                                          description: fixture.payload.metadata["memo"],
+                                          description: fixture.payload.stringMetadata(named: "memo"),
                                           feePayment: fixture.payload.feePayment,
                                           ttlMs: fixture.payload.timeToLiveMs,
                                           nonce: fixture.payload.nonce)
@@ -273,7 +272,6 @@ final class TransactionParityFixturesTests: XCTestCase {
     func testParityFixtureLoadersRejectDuplicateIdentitiesAndBase64Aliases() throws {
         let first = TransactionFixtureLoader.ManifestEntry(
             name: "first",
-            encodedFile: "first.norito",
             payloadBase64: "AA==",
             payloadHash: "payload-hash",
             signedBase64: "AQ==",
@@ -281,7 +279,6 @@ final class TransactionParityFixturesTests: XCTestCase {
         )
         let renamedClone = TransactionFixtureLoader.ManifestEntry(
             name: "renamed-clone",
-            encodedFile: "renamed-clone.norito",
             payloadBase64: first.payloadBase64,
             payloadHash: first.payloadHash,
             signedBase64: first.signedBase64,
@@ -292,6 +289,22 @@ final class TransactionParityFixturesTests: XCTestCase {
         ) { error in
             guard case FixtureError.duplicatePayloadHash("payload-hash") = error else {
                 return XCTFail("unexpected renamed-clone error: \(error)")
+            }
+        }
+
+        let duplicateKeyData = Data(
+            #"[{"name":"first","name":"second"}]"#.utf8
+        )
+        XCTAssertThrowsError(
+            try StrictFixtureJSON.decode(
+                [TransactionFixtureLoader.PayloadEntry].self,
+                from: duplicateKeyData,
+                using: JSONDecoder(),
+                context: "duplicate-key-test"
+            )
+        ) { error in
+            guard case StrictFixtureJSONError.duplicateKey("name", "duplicate-key-test") = error else {
+                return XCTFail("unexpected duplicate-key error: \(error)")
             }
         }
 
@@ -331,8 +344,12 @@ final class TransactionParityFixturesTests: XCTestCase {
             entries[0]["payload"] = payload
             let data = try JSONSerialization.data(withJSONObject: entries)
             let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            return try decoder.decode([TransactionFixtureLoader.PayloadEntry].self, from: data)[0]
+            return try StrictFixtureJSON.decode(
+                [TransactionFixtureLoader.PayloadEntry].self,
+                from: data,
+                using: decoder,
+                context: "ttl-test"
+            )[0]
         }
 
         XCTAssertEqual(try loadFixture(ttl: 1).payload.timeToLiveMs, 1)
@@ -353,6 +370,91 @@ final class TransactionParityFixturesTests: XCTestCase {
         }
     }
 
+    func testSwiftPayloadRequiresAuthorityFeePayer() throws {
+        let invalidPayers: [Any] = ["owner", "Authority", "", true]
+        for payer in invalidPayers {
+            XCTAssertThrowsError(
+                try decodeFirstSwiftPayload { payload in
+                    guard var feePayment = payload["fee_payment"] as? [String: Any] else {
+                        throw FixtureError.missingFixture("Swift parity fee payment")
+                    }
+                    feePayment["payer"] = payer
+                    payload["fee_payment"] = feePayment
+                },
+                "payer \(String(describing: payer))"
+            )
+        }
+    }
+
+    func testSwiftPayloadRejectsNonEmptyChargeLimits() throws {
+        XCTAssertThrowsError(
+            try decodeFirstSwiftPayload { payload in
+                guard var feePayment = payload["fee_payment"] as? [String: Any],
+                      var feeValue = feePayment["value"] as? [String: Any] else {
+                    throw FixtureError.missingFixture("Swift parity fee value")
+                }
+                feeValue["charge_limits"] = [["limit": 1]]
+                feePayment["value"] = feeValue
+                payload["fee_payment"] = feePayment
+            }
+        )
+    }
+
+    func testSwiftPayloadMetadataAcceptsNestedJsonValues() throws {
+        let entry = try decodeFirstSwiftPayload { payload in
+            let nested: [String: Any] = [
+                "enabled": true,
+                "values": [1, NSNull(), ["ratio": 1.5]] as [Any],
+            ]
+            payload["metadata"] = [
+                "memo": "fixture memo",
+                "nested": nested,
+            ] as [String: Any]
+        }
+
+        XCTAssertEqual(entry.payload.metadata["memo"], .string("fixture memo"))
+        XCTAssertEqual(
+            entry.payload.metadata["nested"],
+            .object([
+                "enabled": .bool(true),
+                "values": .array([
+                    .number(1),
+                    .null,
+                    .object(["ratio": .number(1.5)]),
+                ]),
+            ])
+        )
+        XCTAssertEqual(entry.payload.stringMetadata(named: "memo"), "fixture memo")
+        XCTAssertNil(entry.payload.stringMetadata(named: "nested"))
+    }
+
+    func testSwiftManifestRejectsLegacyRootAndEntryFields() throws {
+        let decoder = JSONDecoder()
+        let legacyRoot = Data(
+            #"{"fixtures":[],"generated_at":"legacy","schema":{},"signing_key":{}}"#.utf8
+        )
+        XCTAssertThrowsError(
+            try StrictFixtureJSON.decode(
+                TransactionFixtureLoader.ManifestFile.self,
+                from: legacyRoot,
+                using: decoder,
+                context: "legacy-root"
+            )
+        )
+
+        let legacyEntry = Data(
+            #"{"fixtures":[{"name":"swift_transfer_asset_basic","payload_base64":"AA==","payload_hash":"00","signed_base64":"AQ==","signed_hash":"00","encoded_file":"legacy.norito"}]}"#.utf8
+        )
+        XCTAssertThrowsError(
+            try StrictFixtureJSON.decode(
+                TransactionFixtureLoader.ManifestFile.self,
+                from: legacyEntry,
+                using: decoder,
+                context: "legacy-entry"
+            )
+        )
+    }
+
     func testCompactPropertiesRejectDuplicateKeys() throws {
         let fixtureURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -371,6 +473,30 @@ final class TransactionParityFixturesTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    private func decodeFirstSwiftPayload(
+        mutating mutation: (inout [String: Any]) throws -> Void
+    ) throws -> TransactionFixtureLoader.PayloadEntry {
+        let payloadURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/swift_parity_payloads.json")
+        let source = try Data(contentsOf: payloadURL)
+        guard var entries = try JSONSerialization.jsonObject(with: source) as? [[String: Any]],
+              var payload = entries.first?["payload"] as? [String: Any] else {
+            throw FixtureError.missingFixture("Swift parity payload")
+        }
+        try mutation(&payload)
+        entries[0]["payload"] = payload
+        let data = try JSONSerialization.data(withJSONObject: entries)
+        return try StrictFixtureJSON.decode(
+            [TransactionFixtureLoader.PayloadEntry].self,
+            from: data,
+            using: JSONDecoder(),
+            context: "Swift parity payload mutation test"
+        )[0]
+    }
 
     private func assertFixture(
         named name: String,
@@ -482,51 +608,396 @@ final class TransactionParityFixturesTests: XCTestCase {
     }
 }
 
+// MARK: - Strict Native JSON
+
+struct FixtureJSONCodingKey: CodingKey, Hashable {
+    let stringValue: String
+    let intValue: Int?
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+        intValue = nil
+    }
+
+    init?(intValue: Int) {
+        stringValue = String(intValue)
+        self.intValue = intValue
+    }
+}
+
+func requireExactFixtureKeys(
+    _ decoder: Decoder,
+    _ expected: Set<String>,
+    context: String
+) throws {
+    let container = try decoder.container(keyedBy: FixtureJSONCodingKey.self)
+    let actual = Set(container.allKeys.map(\.stringValue))
+    guard actual == expected else {
+        throw DecodingError.dataCorrupted(
+            .init(
+                codingPath: decoder.codingPath,
+                debugDescription: "\(context) fields must be exactly \(expected.sorted()); got \(actual.sorted())"
+            )
+        )
+    }
+}
+
+enum StrictFixtureJSON {
+    static func decode<T: Decodable>(
+        _ type: T.Type,
+        from data: Data,
+        using decoder: JSONDecoder,
+        context: String
+    ) throws -> T {
+        var scanner = FixtureJSONDuplicateKeyScanner(data: data, context: context)
+        try scanner.validate()
+        return try decoder.decode(type, from: data)
+    }
+}
+
+enum StrictFixtureJSONError: Error, Equatable {
+    case duplicateKey(String, String)
+    case malformed(String)
+}
+
+private struct FixtureJSONDuplicateKeyScanner {
+    private let bytes: [UInt8]
+    private let context: String
+    private var offset = 0
+
+    init(data: Data, context: String) {
+        bytes = Array(data)
+        self.context = context
+    }
+
+    mutating func validate() throws {
+        skipWhitespace()
+        try parseValue()
+        skipWhitespace()
+        guard offset == bytes.count else {
+            throw malformed("trailing content")
+        }
+    }
+
+    private mutating func parseValue() throws {
+        skipWhitespace()
+        guard let byte = current else { throw malformed("unexpected end of input") }
+        switch byte {
+        case 0x7B: try parseObject() // {
+        case 0x5B: try parseArray() // [
+        case 0x22: _ = try parseString() // "
+        case 0x74: try parseLiteral("true")
+        case 0x66: try parseLiteral("false")
+        case 0x6E: try parseLiteral("null")
+        case 0x2D, 0x30 ... 0x39: try parseNumber()
+        default: throw malformed("unexpected byte \(byte)")
+        }
+    }
+
+    private mutating func parseObject() throws {
+        try consume(0x7B)
+        skipWhitespace()
+        if current == 0x7D {
+            offset += 1
+            return
+        }
+        var keys = Set<String>()
+        while true {
+            skipWhitespace()
+            let key = try parseString()
+            guard keys.insert(key).inserted else {
+                throw StrictFixtureJSONError.duplicateKey(key, context)
+            }
+            skipWhitespace()
+            try consume(0x3A)
+            try parseValue()
+            skipWhitespace()
+            if current == 0x7D {
+                offset += 1
+                return
+            }
+            try consume(0x2C)
+        }
+    }
+
+    private mutating func parseArray() throws {
+        try consume(0x5B)
+        skipWhitespace()
+        if current == 0x5D {
+            offset += 1
+            return
+        }
+        while true {
+            try parseValue()
+            skipWhitespace()
+            if current == 0x5D {
+                offset += 1
+                return
+            }
+            try consume(0x2C)
+        }
+    }
+
+    private mutating func parseString() throws -> String {
+        let start = offset
+        try consume(0x22)
+        while let byte = current {
+            if byte == 0x22 {
+                offset += 1
+                let token = Data(bytes[start ..< offset])
+                do {
+                    return try JSONDecoder().decode(String.self, from: token)
+                } catch {
+                    throw malformed("invalid string")
+                }
+            }
+            if byte < 0x20 { throw malformed("unescaped control byte in string") }
+            offset += 1
+            if byte == 0x5C {
+                guard let escaped = current else { throw malformed("truncated escape") }
+                offset += 1
+                if escaped == 0x75 {
+                    for _ in 0 ..< 4 {
+                        guard let hex = current, isHex(hex) else {
+                            throw malformed("invalid unicode escape")
+                        }
+                        offset += 1
+                    }
+                } else if ![0x22, 0x2F, 0x5C, 0x62, 0x66, 0x6E, 0x72, 0x74].contains(escaped) {
+                    throw malformed("invalid string escape")
+                }
+            }
+        }
+        throw malformed("unterminated string")
+    }
+
+    private mutating func parseLiteral(_ literal: StaticString) throws {
+        for byte in String(describing: literal).utf8 {
+            try consume(byte)
+        }
+    }
+
+    private mutating func parseNumber() throws {
+        if current == 0x2D { offset += 1 }
+        guard let first = current else { throw malformed("truncated number") }
+        if first == 0x30 {
+            offset += 1
+        } else {
+            guard (0x31 ... 0x39).contains(first) else { throw malformed("invalid number") }
+            offset += 1
+            while let byte = current, (0x30 ... 0x39).contains(byte) { offset += 1 }
+        }
+        if current == 0x2E {
+            offset += 1
+            try consumeDigits()
+        }
+        if current == 0x65 || current == 0x45 {
+            offset += 1
+            if current == 0x2B || current == 0x2D { offset += 1 }
+            try consumeDigits()
+        }
+    }
+
+    private mutating func consumeDigits() throws {
+        guard let first = current, (0x30 ... 0x39).contains(first) else {
+            throw malformed("number requires a digit")
+        }
+        while let byte = current, (0x30 ... 0x39).contains(byte) { offset += 1 }
+    }
+
+    private mutating func consume(_ expected: UInt8) throws {
+        guard current == expected else { throw malformed("expected byte \(expected)") }
+        offset += 1
+    }
+
+    private mutating func skipWhitespace() {
+        while let byte = current, [0x20, 0x09, 0x0A, 0x0D].contains(byte) {
+            offset += 1
+        }
+    }
+
+    private var current: UInt8? {
+        offset < bytes.count ? bytes[offset] : nil
+    }
+
+    private func malformed(_ detail: String) -> StrictFixtureJSONError {
+        .malformed("\(context): \(detail) at byte \(offset)")
+    }
+
+    private func isHex(_ byte: UInt8) -> Bool {
+        (0x30 ... 0x39).contains(byte)
+            || (0x41 ... 0x46).contains(byte)
+            || (0x61 ... 0x66).contains(byte)
+    }
+}
+
 // MARK: - Fixture Loading
 
 private struct TransactionFixtureLoader {
     struct PayloadEntry: Decodable {
         let name: String
         let payload: TransactionPayloadSpec
+
+        private enum CodingKeys: String, CodingKey {
+            case name
+            case payload
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactFixtureKeys(
+                decoder,
+                ["name", "payload"],
+                context: "Swift parity payload entry"
+            )
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            name = try container.decode(String.self, forKey: .name)
+            payload = try container.decode(TransactionPayloadSpec.self, forKey: .payload)
+        }
     }
 
     struct ManifestEntry: Decodable {
         let name: String
-        let encodedFile: String
         let payloadBase64: String
         let payloadHash: String
         let signedBase64: String
         let signedHash: String
-    }
 
-    struct ManifestSchema: Decodable {
-        let signedSchemaHashHex: String
+        private enum CodingKeys: String, CodingKey {
+            case name
+            case payloadBase64 = "payload_base64"
+            case payloadHash = "payload_hash"
+            case signedBase64 = "signed_base64"
+            case signedHash = "signed_hash"
+        }
+
+        init(
+            name: String,
+            payloadBase64: String,
+            payloadHash: String,
+            signedBase64: String,
+            signedHash: String
+        ) {
+            self.name = name
+            self.payloadBase64 = payloadBase64
+            self.payloadHash = payloadHash
+            self.signedBase64 = signedBase64
+            self.signedHash = signedHash
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactFixtureKeys(
+                decoder,
+                [
+                    "name", "payload_base64", "payload_hash", "signed_base64", "signed_hash",
+                ],
+                context: "Swift parity manifest fixture"
+            )
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            name = try container.decode(String.self, forKey: .name)
+            payloadBase64 = try container.decode(String.self, forKey: .payloadBase64)
+            payloadHash = try container.decode(String.self, forKey: .payloadHash)
+            signedBase64 = try container.decode(String.self, forKey: .signedBase64)
+            signedHash = try container.decode(String.self, forKey: .signedHash)
+        }
     }
 
     struct ManifestFile: Decodable {
-        let schema: ManifestSchema
         let fixtures: [ManifestEntry]
+
+        private enum CodingKeys: String, CodingKey {
+            case fixtures
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactFixtureKeys(
+                decoder,
+                ["fixtures"],
+                context: "Swift parity manifest"
+            )
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            fixtures = try container.decode([ManifestEntry].self, forKey: .fixtures)
+        }
     }
 
-    let schema: ManifestSchema
+    private struct SchemaHashFile: Decodable {
+        let version: UInt64
+        let entries: [SchemaHashEntry]
+
+        private enum CodingKeys: String, CodingKey {
+            case version
+            case entries
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactFixtureKeys(
+                decoder,
+                ["entries", "version"],
+                context: "canonical schema hash file"
+            )
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            version = try container.decode(UInt64.self, forKey: .version)
+            entries = try container.decode([SchemaHashEntry].self, forKey: .entries)
+        }
+    }
+
+    private struct SchemaHashEntry: Decodable {
+        let typeName: String
+        let alias: String
+        let schemaHash: String
+
+        private enum CodingKeys: String, CodingKey {
+            case typeName = "type_name"
+            case alias
+            case schemaHash = "schema_hash"
+        }
+
+        init(from decoder: Decoder) throws {
+            try requireExactFixtureKeys(
+                decoder,
+                ["alias", "schema_hash", "type_name"],
+                context: "canonical schema hash entry"
+            )
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            typeName = try container.decode(String.self, forKey: .typeName)
+            alias = try container.decode(String.self, forKey: .alias)
+            schemaHash = try container.decode(String.self, forKey: .schemaHash)
+        }
+    }
+
+    private static let expectedFixtureNames: Set<String> = [
+        "swift_transfer_asset_basic",
+        "swift_mint_asset_basic",
+        "swift_burn_asset_basic",
+    ]
+    private static let maximumFixtureLength = 16 * 1024 * 1024
+
+    let signedSchemaHashHex: String
     let payloads: [String: TransactionPayloadSpec]
     let manifests: [String: ManifestEntry]
 
     init() throws {
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
 
         let payloadURL = TransactionFixtureLoader.fixturesRoot()
             .appendingPathComponent("swift_parity_payloads.json")
         let payloadData = try Data(contentsOf: payloadURL)
-        let payloadEntries = try decoder.decode([PayloadEntry].self, from: payloadData)
+        let payloadEntries = try StrictFixtureJSON.decode(
+            [PayloadEntry].self,
+            from: payloadData,
+            using: decoder,
+            context: payloadURL.path
+        )
         payloads = try Self.validatedPayloads(payloadEntries)
 
         let manifestURL = TransactionFixtureLoader.fixturesRoot()
             .appendingPathComponent("swift_parity_manifest.json")
         let manifestData = try Data(contentsOf: manifestURL)
-        let manifest = try decoder.decode(ManifestFile.self, from: manifestData)
-        schema = manifest.schema
+        let manifest = try StrictFixtureJSON.decode(
+            ManifestFile.self,
+            from: manifestData,
+            using: decoder,
+            context: manifestURL.path
+        )
         manifests = try Self.validatedManifests(manifest.fixtures)
         guard Set(payloads.keys) == Set(manifests.keys) else {
             throw FixtureError.fixtureNameSetMismatch(
@@ -534,13 +1005,44 @@ private struct TransactionFixtureLoader {
                 manifests: Set(manifests.keys)
             )
         }
+        guard Set(payloads.keys) == Self.expectedFixtureNames else {
+            throw FixtureError.unexpectedSwiftFixtureNames(Set(payloads.keys))
+        }
+        signedSchemaHashHex = try Self.loadSignedSchemaHash(using: decoder)
+        let root = Self.fixturesRoot()
+        for name in Self.expectedFixtureNames {
+            guard payloads[name] != nil, let entry = manifests[name] else {
+                throw FixtureError.missingFixture(name)
+            }
+            try Self.validateParity(manifest: entry, root: root)
+        }
     }
 
     static func validatedPayloads(_ entries: [PayloadEntry]) throws -> [String: TransactionPayloadSpec] {
         var names = Set<String>()
         for entry in entries {
+            guard !entry.name.isEmpty else {
+                throw FixtureError.invalidFixtureName(entry.name)
+            }
             guard names.insert(entry.name).inserted else {
                 throw FixtureError.duplicateFixtureName(entry.name)
+            }
+            let expected: (kind: String, action: String)
+            switch entry.name {
+            case "swift_burn_asset_basic": expected = ("Burn", "BurnAsset")
+            case "swift_mint_asset_basic": expected = ("Mint", "MintAsset")
+            case "swift_transfer_asset_basic": expected = ("Transfer", "TransferAsset")
+            default: throw FixtureError.invalidSwiftPayload(entry.name)
+            }
+            guard case let .instructions(instructions) = entry.payload.executable,
+                  instructions.count == 1,
+                  let instruction = instructions.first,
+                  instruction.kind == expected.kind,
+                  instruction.arguments["action"] == expected.action,
+                  Set(instruction.arguments.keys) == [
+                      "action", "asset_definition_id", "destination", "quantity",
+                  ] else {
+                throw FixtureError.invalidSwiftPayload(entry.name)
             }
         }
         return Dictionary(uniqueKeysWithValues: entries.map { ($0.name, $0.payload) })
@@ -548,17 +1050,18 @@ private struct TransactionFixtureLoader {
 
     static func validatedManifests(_ entries: [ManifestEntry]) throws -> [String: ManifestEntry] {
         var names = Set<String>()
-        var encodedFiles = Set<String>()
         var payloadHashes = Set<String>()
         var payloadBytes = Set<Data>()
         var signedHashes = Set<String>()
         var signedBytes = Set<Data>()
         for entry in entries {
+            guard !entry.name.isEmpty,
+                  !entry.name.contains("/"),
+                  !entry.name.contains("\\") else {
+                throw FixtureError.invalidFixtureName(entry.name)
+            }
             guard names.insert(entry.name).inserted else {
                 throw FixtureError.duplicateFixtureName(entry.name)
-            }
-            guard encodedFiles.insert(entry.encodedFile).inserted else {
-                throw FixtureError.duplicateEncodedFile(entry.encodedFile)
             }
             guard payloadHashes.insert(entry.payloadHash).inserted else {
                 throw FixtureError.duplicatePayloadHash(entry.payloadHash)
@@ -590,6 +1093,67 @@ private struct TransactionFixtureLoader {
             throw FixtureError.invalidBase64(context)
         }
         return decoded
+    }
+
+    private static func validateParity(manifest: ManifestEntry, root: URL) throws {
+        guard isLowerHex(manifest.payloadHash, count: 64),
+              isLowerHex(manifest.signedHash, count: 64) else {
+            throw FixtureError.invalidFixtureHash(manifest.name)
+        }
+        let payloadBytes = try decodeCanonicalBase64(
+            manifest.payloadBase64,
+            context: "\(manifest.name).payload_base64"
+        )
+        let signedBytes = try decodeCanonicalBase64(
+            manifest.signedBase64,
+            context: "\(manifest.name).signed_base64"
+        )
+        guard !payloadBytes.isEmpty,
+              payloadBytes.count <= maximumFixtureLength,
+              !signedBytes.isEmpty,
+              signedBytes.count <= maximumFixtureLength,
+              IrohaHash.hash(payloadBytes).hexEncodedString() == manifest.payloadHash,
+              try canonicalSignedTransactionPayload(signedBytes) == payloadBytes else {
+            throw FixtureError.invalidFixtureIdentity(manifest.name)
+        }
+        var compact = CompactNoritoWriter()
+        compact.writeUInt32LE(0)
+        compact.writeField(payloadBytes)
+        guard IrohaHash.hash(compact.data).hexEncodedString() == manifest.signedHash else {
+            throw FixtureError.invalidFixtureIdentity(manifest.name)
+        }
+        let fixtureURL = root.appendingPathComponent("\(manifest.name).norito")
+        guard try Data(contentsOf: fixtureURL) == payloadBytes else {
+            throw FixtureError.invalidFixtureIdentity(manifest.name)
+        }
+    }
+
+    private static func isLowerHex(_ value: String, count: Int) -> Bool {
+        value.count == count && value.allSatisfy { "0123456789abcdef".contains($0) }
+    }
+
+    private static func loadSignedSchemaHash(using decoder: JSONDecoder) throws -> String {
+        let schemaURL = fixturesRoot()
+            .deletingLastPathComponent() // IrohaSwift
+            .deletingLastPathComponent() // repository root
+            .appendingPathComponent("fixtures/norito_rpc/schema_hashes.json")
+        let file = try StrictFixtureJSON.decode(
+            SchemaHashFile.self,
+            from: Data(contentsOf: schemaURL),
+            using: decoder,
+            context: schemaURL.path
+        )
+        guard file.version == 1,
+              let entry = file.entries.first(where: { $0.alias == "SignedTransaction" }),
+              entry.typeName == "iroha_data_model::transaction::signed::model::SignedTransaction",
+              entry.schemaHash.hasPrefix("0x") else {
+            throw FixtureError.invalidManifestMetadata
+        }
+        let hash = String(entry.schemaHash.dropFirst(2))
+        guard isLowerHex(hash, count: 32) else {
+            throw FixtureError.invalidManifestMetadata
+        }
+        return hash
     }
 
     func fixture(named name: String) throws -> CombinedTransactionFixture {
@@ -624,20 +1188,28 @@ private struct TransactionPayloadSpec: Decodable {
     let timeToLiveMs: UInt64
     let nonce: UInt32?
     let feePayment: FeePaymentIntent
-    let metadata: [String: String]
+    let metadata: [String: ToriiJSONValue]
 
     private enum CodingKeys: String, CodingKey {
         case chain
         case authority
-        case creationTimeMs
+        case creationTimeMs = "creation_time_ms"
         case executable
-        case timeToLiveMs
+        case timeToLiveMs = "time_to_live_ms"
         case nonce
-        case feePayment
+        case feePayment = "fee_payment"
         case metadata
     }
 
     init(from decoder: Decoder) throws {
+        try requireExactFixtureKeys(
+            decoder,
+            [
+                "authority", "chain", "creation_time_ms", "executable", "fee_payment",
+                "metadata", "nonce", "time_to_live_ms",
+            ],
+            context: "Swift parity transaction payload"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         chain = try container.decode(String.self, forKey: .chain)
         authority = try container.decode(String.self, forKey: .authority)
@@ -651,13 +1223,26 @@ private struct TransactionPayloadSpec: Decodable {
                 debugDescription: "time_to_live_ms must be positive"
             )
         }
-        nonce = try container.decodeIfPresent(UInt32.self, forKey: .nonce)
-        // The fixture loader uses `convertFromSnakeCase` for the surrounding
-        // payload. Decode the fee object as JSON first so its exact wire keys
-        // (`charge_limits`, `gas_limit`, …) reach FeePaymentIntent unchanged.
+        let decodedNonce = try container.decode(UInt32.self, forKey: .nonce)
+        guard decodedNonce > 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .nonce,
+                in: container,
+                debugDescription: "nonce must be positive"
+            )
+        }
+        nonce = decodedNonce
+        // Decode the fee object as JSON after the closed-schema preflight so
+        // its exact wire keys reach FeePaymentIntent unchanged.
+        _ = try container.decode(SwiftFixtureFeePayment.self, forKey: .feePayment)
         let feeValue = try container.decode(ToriiJSONValue.self, forKey: .feePayment)
         feePayment = try feeValue.decode(as: FeePaymentIntent.self)
-        metadata = try container.decodeIfPresent([String: String].self, forKey: .metadata) ?? [:]
+        metadata = try container.decode([String: ToriiJSONValue].self, forKey: .metadata)
+    }
+
+    func stringMetadata(named name: String) -> String? {
+        guard case let .string(value)? = metadata[name] else { return nil }
+        return value
     }
 
     func instruction(kind: String, action: String) throws -> TransactionInstruction {
@@ -670,7 +1255,7 @@ private struct TransactionPayloadSpec: Decodable {
                 guard case let .instruction(instruction) = entry else { return nil }
                 return instruction
             }
-        case .ivm:
+        case .ivm, .contractCall:
             throw FixtureError.unsupportedExecutable(kind)
         }
         guard let instruction = items.first(where: { instruction in
@@ -682,30 +1267,101 @@ private struct TransactionPayloadSpec: Decodable {
     }
 }
 
+private struct SwiftFixtureFeePayment: Decodable {
+    private enum CodingKeys: String, CodingKey {
+        case payer
+        case value
+    }
+
+    init(from decoder: Decoder) throws {
+        try requireExactFixtureKeys(
+            decoder,
+            ["payer", "value"],
+            context: "Swift parity fee payment"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let payer = try container.decode(String.self, forKey: .payer)
+        guard payer == "authority" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .payer,
+                in: container,
+                debugDescription: "payer must be the literal 'authority'"
+            )
+        }
+        _ = try container.decode(SwiftFixtureFeeValue.self, forKey: .value)
+    }
+}
+
+private struct SwiftFixtureFeeValue: Decodable {
+    private enum CodingKeys: String, CodingKey {
+        case chargeLimits = "charge_limits"
+    }
+
+    init(from decoder: Decoder) throws {
+        try requireExactFixtureKeys(
+            decoder,
+            ["charge_limits"],
+            context: "Swift parity fee value"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let chargeLimits = try container.decode([ToriiJSONValue].self, forKey: .chargeLimits)
+        guard chargeLimits.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .chargeLimits,
+                in: container,
+                debugDescription: "charge_limits must be an empty array"
+            )
+        }
+    }
+}
+
 private enum TransactionExecutable: Decodable {
     case instructions([TransactionInstruction])
     case ivm(Data)
     case batch([TransactionExecutableBatchItem])
+    case contractCall(TransactionContractInvocationSpec)
 
     private enum CodingKeys: String, CodingKey {
         case instructions = "Instructions"
         case ivm = "Ivm"
         case batch = "Batch"
+        case contractCall = "ContractCall"
     }
 
     init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: FixtureJSONCodingKey.self)
+        let variants = Set(dynamic.allKeys.map(\.stringValue))
+        guard variants.count == 1,
+              let variant = variants.first,
+              ["Batch", "ContractCall", "Instructions", "Ivm"].contains(variant) else {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "executable must contain exactly one known variant"
+                )
+            )
+        }
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        if let instructions = try container.decodeIfPresent([TransactionInstruction].self, forKey: .instructions) {
+        if variant == "Instructions" {
+            let instructions = try container.decode([TransactionInstruction].self, forKey: .instructions)
             self = .instructions(instructions)
-        } else if let ivmBase64 = try container.decodeIfPresent(String.self, forKey: .ivm) {
-            guard let decoded = Data(base64Encoded: ivmBase64) else {
+        } else if variant == "Ivm" {
+            let ivmBase64 = try container.decode(String.self, forKey: .ivm)
+            guard let decoded = Data(base64Encoded: ivmBase64),
+                  !decoded.isEmpty,
+                  decoded.base64EncodedString() == ivmBase64 else {
                 throw DecodingError.dataCorruptedError(forKey: .ivm,
                                                        in: container,
-                                                       debugDescription: "invalid base64 payload")
+                                                       debugDescription: "invalid or non-canonical base64 payload")
             }
             self = .ivm(decoded)
-        } else if let batch = try container.decodeIfPresent([TransactionExecutableBatchItem].self, forKey: .batch) {
+        } else if variant == "Batch" {
+            let batch = try container.decode([TransactionExecutableBatchItem].self, forKey: .batch)
             self = .batch(batch)
+        } else if variant == "ContractCall" {
+            self = try .contractCall(
+                container.decode(TransactionContractInvocationSpec.self, forKey: .contractCall)
+            )
         } else {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(codingPath: decoder.codingPath,
@@ -725,8 +1381,11 @@ private enum TransactionExecutableBatchItem: Decodable {
     }
 
     init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        guard container.allKeys.count == 1 else {
+        let dynamic = try decoder.container(keyedBy: FixtureJSONCodingKey.self)
+        let variants = Set(dynamic.allKeys.map(\.stringValue))
+        guard variants.count == 1,
+              let variant = variants.first,
+              ["ContractCall", "Instruction"].contains(variant) else {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(
                     codingPath: decoder.codingPath,
@@ -734,13 +1393,15 @@ private enum TransactionExecutableBatchItem: Decodable {
                 )
             )
         }
-        if let instruction = try container.decodeIfPresent(TransactionInstruction.self, forKey: .instruction) {
-            self = .instruction(instruction)
-        } else if let invocation = try container.decodeIfPresent(
-            TransactionContractInvocationSpec.self,
-            forKey: .contractCall
-        ) {
-            self = .contractCall(invocation)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if variant == "Instruction" {
+            self = try .instruction(
+                container.decode(TransactionInstruction.self, forKey: .instruction)
+            )
+        } else if variant == "ContractCall" {
+            self = try .contractCall(
+                container.decode(TransactionContractInvocationSpec.self, forKey: .contractCall)
+            )
         } else {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(
@@ -757,11 +1418,47 @@ private struct TransactionContractInvocationSpec: Decodable {
     let expectedCodeHash: String
     let entrypoint: String
     let arguments: [UInt8]?
+
+    private enum CodingKeys: String, CodingKey {
+        case contractAddress = "contract_address"
+        case expectedCodeHash = "expected_code_hash"
+        case entrypoint
+        case arguments
+    }
+
+    init(from decoder: Decoder) throws {
+        try requireExactFixtureKeys(
+            decoder,
+            ["arguments", "contract_address", "entrypoint", "expected_code_hash"],
+            context: "contract call"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        contractAddress = try container.decode(String.self, forKey: .contractAddress)
+        expectedCodeHash = try container.decode(String.self, forKey: .expectedCodeHash)
+        entrypoint = try container.decode(String.self, forKey: .entrypoint)
+        arguments = try container.decodeIfPresent([UInt8].self, forKey: .arguments)
+    }
 }
 
 private struct TransactionInstruction: Decodable {
     let kind: String
     let arguments: [String: String]
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case arguments
+    }
+
+    init(from decoder: Decoder) throws {
+        try requireExactFixtureKeys(
+            decoder,
+            ["arguments", "kind"],
+            context: "Swift parity instruction"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(String.self, forKey: .kind)
+        arguments = try container.decode([String: String].self, forKey: .arguments)
+    }
 
     func argument(named name: String) throws -> String {
         guard let value = arguments[name], !value.isEmpty else {
@@ -787,6 +1484,15 @@ private enum FixtureError: Error, LocalizedError {
     case duplicateSignedHash(String)
     case duplicateSignedBytes(String)
     case invalidBase64(String)
+    case invalidFixtureName(String)
+    case invalidEncodedFile(String)
+    case unexpectedSwiftFixtureNames(Set<String>)
+    case invalidManifestMetadata
+    case manifestPayloadMismatch(String)
+    case invalidFixtureLength(String)
+    case invalidFixtureHash(String)
+    case invalidFixtureIdentity(String)
+    case invalidSwiftPayload(String)
     case fixtureNameSetMismatch(payloads: Set<String>, manifests: Set<String>)
     case invalidSigningSeed
     case bridgeKeypairUnavailable
@@ -823,6 +1529,24 @@ private enum FixtureError: Error, LocalizedError {
             return "fixture signed bytes are duplicated by '\(name)'"
         case let .invalidBase64(context):
             return "fixture base64 is invalid or non-canonical: \(context)"
+        case let .invalidFixtureName(name):
+            return "fixture name is empty or invalid: '\(name)'"
+        case let .invalidEncodedFile(file):
+            return "fixture encoded_file is not the canonical local filename: '\(file)'"
+        case let .unexpectedSwiftFixtureNames(names):
+            return "Swift fixture names are not the exact first-release set: \(names.sorted())"
+        case .invalidManifestMetadata:
+            return "Swift fixture manifest metadata is missing or malformed"
+        case let .manifestPayloadMismatch(name):
+            return "Swift fixture manifest and payload metadata differ for '\(name)'"
+        case let .invalidFixtureLength(name):
+            return "Swift fixture lengths are outside the accepted bounds for '\(name)'"
+        case let .invalidFixtureHash(name):
+            return "Swift fixture hashes are malformed for '\(name)'"
+        case let .invalidFixtureIdentity(name):
+            return "Swift fixture bytes, lengths, or hashes do not agree for '\(name)'"
+        case let .invalidSwiftPayload(name):
+            return "Swift fixture payload is outside the exact first-release schema for '\(name)'"
         case let .fixtureNameSetMismatch(payloads, manifests):
             return "payload/manifest fixture names differ: payloads=\(payloads.sorted()) manifests=\(manifests.sorted())"
         case .invalidSigningSeed:

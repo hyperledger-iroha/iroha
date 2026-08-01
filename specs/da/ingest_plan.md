@@ -331,7 +331,7 @@ payload, or metadata field invalidates the signature.
   2. `iroha app sorafs fetch --manifest manifest_<manifest_hash>.json --plan chunk_plan_<manifest_hash>.json --output payload.car`
      (or `iroha app da prove-availability`, which writes the fetch artefacts under
      `artifacts/da/prove_availability_<ts>/` and persists per-chunk files inside the `chunks/` directory).
-  3. `cargo run -p sorafs_car --features cli --bin da_reconstruct --manifest manifest_<manifest_hash>.norito --chunks-dir ./artifacts/da/prove_availability_<ts>/chunks --output reconstructed.bin --json-out summary.json`.
+  3. `cargo run -p sorafs_car --features da_harness,dev-tools --bin da_reconstruct --manifest manifest_<manifest_hash>.norito --chunks-dir ./artifacts/da/prove_availability_<ts>/chunks --output reconstructed.bin --json-out summary.json`.
 
   A regression fixture lives under `fixtures/da/reconstruct/rs_parity_v1/` and captures the full manifest
   and chunk matrix (data + parity) used by `tests::reconstructs_fixture_with_parity_chunks`. Regenerate it with
@@ -594,7 +594,7 @@ duplicate slashes from firing on the same incident.【crates/sorafs_node/src/lib
 
 ### Placement + repair harness
 
-`cargo run -p sorafs_car --bin da_reconstruct -- --manifest <path> --chunks-dir <dir>` now
+`cargo run -p sorafs_car --features da_harness,dev-tools --bin da_reconstruct -- --manifest <path> --chunks-dir <dir>` now
 computes a placement hash over `(index, role, stripe/column, offsets)` and performs row-first then
 column RS(16) repair before reconstructing the payload:
 

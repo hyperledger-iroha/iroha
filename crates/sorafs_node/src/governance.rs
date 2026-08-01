@@ -568,11 +568,11 @@ pub fn canonicalize_governance_dag_outbound_http_request_v1<'a>(
 /// receiver in Kubo, IPFS, IPNS, or a head service.
 ///
 /// Replay state is deliberately caller-owned, bounded, and borrowed for this
-/// receiver's lifetime. Deployments must retain one receiver/cache for the
-/// lifetime of the corresponding pinned policy.
-// Production qualification remains blocked until deployment-owned Kubo/head
-// ingress installs this boundary and sealed cross-replica state replaces the
-// process-local replay memory.
+/// receiver's lifetime. Process-local consumers must retain one receiver/cache
+/// for the lifetime of the corresponding pinned policy. Cross-replica ingress
+/// must instead use [`crate::GovernanceDagSealedHttpRequestReceiverV1`], which
+/// makes the qualified sealed CAS store authoritative. External Kubo/head
+/// packaging, installation, and supervision remain deployment-owned.
 #[derive(Debug)]
 pub struct GovernanceDagHttpRequestReceiverV1<'a> {
     scope: GovernanceDagAuthenticationScope,
@@ -619,6 +619,36 @@ impl<'a> GovernanceDagHttpRequestReceiverV1<'a> {
         body: &[u8],
         now_unix_secs: u64,
     ) -> Result<GovernanceDagCanonicalRequestV1, GovernanceDagRequestAuthenticationErrorV1> {
+        self.verify_http_request_with_envelope(method, canonical_url, headers, body, now_unix_secs)
+            .map(|(request, _envelope)| request)
+    }
+
+    /// Authenticate one complete HTTP request and return its parsed envelope.
+    ///
+    /// This is the same receiver boundary as [`Self::verify_http_request`],
+    /// with the verified public envelope retained for a deployment-owned
+    /// durable replay fence. The caller must not dispatch the request until
+    /// that durable fence commits the returned nonce.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable, payload-free rejection and does not return either
+    /// value until every structural, timing, signature, and borrowed-cache
+    /// check succeeds.
+    pub fn verify_http_request_with_envelope<'h>(
+        &mut self,
+        method: &str,
+        canonical_url: &str,
+        headers: impl IntoIterator<Item = (&'h str, &'h [u8])>,
+        body: &[u8],
+        now_unix_secs: u64,
+    ) -> Result<
+        (
+            GovernanceDagCanonicalRequestV1,
+            GovernanceDagRequestAuthenticationEnvelopeV1,
+        ),
+        GovernanceDagRequestAuthenticationErrorV1,
+    > {
         let (selected_headers, authentication_headers) = partition_governance_dag_http_headers_v1(
             headers,
             body,
@@ -643,7 +673,7 @@ impl<'a> GovernanceDagHttpRequestReceiverV1<'a> {
             now_unix_secs,
             self.replay_cache,
         )?;
-        Ok(request)
+        Ok((request, envelope))
     }
 }
 

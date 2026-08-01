@@ -34,10 +34,10 @@ _DIRECTORY_MODE = 0o500
 _BUILD_DIRECTORY_MODE = 0o700
 
 _BINARIES = (
-    ("irohad", "release/iroha3d", "default"),
+    ("irohad", "release/irohad", "default"),
     (
         "irohad_message_control",
-        "message-control/release/iroha3d",
+        "message-control/release/irohad",
         "message_control",
     ),
     ("iroha", "release/iroha", "default"),

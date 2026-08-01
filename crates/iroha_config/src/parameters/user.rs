@@ -887,6 +887,110 @@ impl AccountAddressParseScope {
 }
 
 impl Root {
+    /// Read the root configuration after canonicalizing disabled optional
+    /// service subtrees across all ordered TOML sources.
+    ///
+    /// Offline cash defaults to disabled. When the effective switch is false,
+    /// its dormant subtree and command-service subtree are replaced by the
+    /// canonical disabled representation before typed deserialization. A
+    /// higher-precedence `enabled = true` value, or a malformed effective
+    /// switch, remains strict and is not rewritten.
+    ///
+    /// # Errors
+    ///
+    /// Returns the ordinary collective configuration-reader error when an
+    /// active or otherwise non-canonicalized parameter is invalid.
+    pub fn read_and_complete(
+        reader: ConfigReader,
+    ) -> core::result::Result<Self, Report<[iroha_config_base::read::Error]>> {
+        fn effective_bool_source(
+            sources: &[iroha_config_base::toml::TomlSource],
+            path: &[&str],
+        ) -> Option<(usize, Option<bool>)> {
+            let id = ParameterId::from(path);
+            sources
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(index, source)| source.fetch(&id).map(|value| (index, value.as_bool())))
+        }
+
+        fn remove_path(table: &mut toml::Table, path: &[&str]) {
+            let Some((segment, tail)) = path.split_first() else {
+                return;
+            };
+            if tail.is_empty() {
+                table.remove(*segment);
+                return;
+            }
+            if let Some(child) = table.get_mut(*segment).and_then(toml::Value::as_table_mut) {
+                remove_path(child, tail);
+            }
+        }
+
+        fn insert_disabled_table(table: &mut toml::Table, path: &[&str]) {
+            let Some((segment, tail)) = path.split_first() else {
+                return;
+            };
+            if tail.is_empty() {
+                table.insert(
+                    (*segment).to_owned(),
+                    toml::Value::Table(toml::Table::from_iter([(
+                        "enabled".to_owned(),
+                        toml::Value::Boolean(false),
+                    )])),
+                );
+                return;
+            }
+            let child = table
+                .entry((*segment).to_owned())
+                .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+            if !child.is_table() {
+                *child = toml::Value::Table(toml::Table::new());
+            }
+            insert_disabled_table(
+                child
+                    .as_table_mut()
+                    .expect("canonicalized TOML parent is a table"),
+                tail,
+            );
+        }
+
+        let reader = reader.rewrite_toml_sources(|sources| {
+            const OFFLINE: &[&str] = &["settlement", "offline"];
+            const OFFLINE_ENABLED: &[&str] = &["settlement", "offline", "enabled"];
+            const COMMANDS: &[&str] = &["torii", "kagemusha_commands"];
+            const COMMANDS_ENABLED: &[&str] = &["torii", "kagemusha_commands", "enabled"];
+
+            let effective_offline = effective_bool_source(sources, OFFLINE_ENABLED);
+            let offline_disabled = match effective_offline {
+                Some((_, Some(enabled))) => !enabled,
+                Some((_, None)) => false,
+                None => true,
+            };
+
+            if offline_disabled {
+                let target = effective_offline.map(|(index, _)| index);
+                for source in sources.iter_mut() {
+                    remove_path(source.table_mut(), OFFLINE);
+                    remove_path(source.table_mut(), COMMANDS);
+                }
+                if let Some(index) = target {
+                    insert_disabled_table(sources[index].table_mut(), OFFLINE);
+                }
+                return;
+            }
+
+            if let Some((_, Some(false))) = effective_bool_source(sources, COMMANDS_ENABLED) {
+                for source in sources.iter_mut() {
+                    remove_path(source.table_mut(), COMMANDS);
+                }
+            }
+        });
+
+        reader.read_and_complete::<Self>()
+    }
+
     fn derive_default_snapshot_store_dir(snapshot: &mut Snapshot, kura: &actual::Kura) {
         if !matches!(snapshot.store_dir.origin(), ParameterOrigin::Default { .. }) {
             return;
@@ -1006,8 +1110,16 @@ impl Root {
     /// If any invalidity found.
     /// Convert this user configuration into the runtime representation.
     #[allow(clippy::too_many_lines)]
-    pub fn parse(self) -> Result<actual::Root, ParseError> {
+    pub fn parse(mut self) -> Result<actual::Root, ParseError> {
         let mut emitter = Emitter::new();
+        // Disabled offline cash is intentionally inert on development and
+        // non-Taira profiles. Drop a stale command section before Torii parses
+        // credentials so it cannot activate routes or make an unused optional
+        // capability a startup dependency. Public Taira's explicit capability
+        // requirement is enforced after parsing against the chain id.
+        if !self.settlement.offline.enabled {
+            self.torii.kagemusha_commands = None;
+        }
         let _account_address_scope = AccountAddressParseScope::enter(
             self.default_account_domain_label.value(),
             *self.chain_discriminant.value(),
@@ -1063,7 +1175,6 @@ impl Root {
         Self::derive_default_snapshot_store_dir(&mut snapshot, &kura);
         let dev_telemetry = self.dev_telemetry;
         let parsed_sorafs = self.sorafs.parse(&mut emitter);
-        let kagemusha_commands_configured = self.torii.kagemusha_commands.is_some();
         let (torii, live_query_store) = self.torii.parse(&mut emitter, parsed_sorafs);
         let soracloud_runtime = self.soracloud_runtime.parse(&mut emitter);
         let telemetry = self.telemetry.map(actual::Telemetry::from);
@@ -1134,13 +1245,6 @@ impl Root {
         let crypto = self.crypto.parse(&mut emitter);
         let settlement = self.settlement.parse(&mut emitter);
         let hijiri = self.hijiri.parse(&mut emitter);
-
-        if !settlement.offline.enabled && kagemusha_commands_configured {
-            emitter.emit(
-                Report::new(ParseError::InvalidSettlementConfig)
-                    .attach("settlement.offline.enabled=false forbids torii.kagemusha_commands"),
-            );
-        }
 
         if let Err(err) = concurrency.validate() {
             emitter.emit(err);
@@ -5578,41 +5682,18 @@ pub struct Genesis {
     /// Public key expected to sign the genesis block payload.
     #[config(env = "GENESIS_PUBLIC_KEY")]
     pub public_key: WithOrigin<PublicKey>,
-    /// Optional path to the genesis block payload (`.json` or `.norito`).
+    /// Optional path to the operator-provisioned signed genesis block payload.
     #[config(env = "GENESIS")]
     pub file: Option<WithOrigin<PathBuf>>,
     /// Optional path to genesis manifest JSON for startup validation.
     #[config(env = "GENESIS_MANIFEST_JSON")]
     pub manifest_json: Option<WithOrigin<PathBuf>>,
-    /// Exact genesis block hash required for remote bootstrap.
+    /// Exact genesis consensus-header hash used as a normal-startup trust anchor.
     ///
-    /// This may be omitted when a local signed genesis file is configured.
+    /// This may be omitted when a local signed genesis file is configured. When both are present,
+    /// they must identify the same signed genesis instance.
     #[config(env = "GENESIS_EXPECTED_HASH")]
     pub expected_hash: Option<WithOrigin<HashOf<BlockHeader>>>,
-    /// Optional explicit peer allowlist that may serve genesis during bootstrap. Defaults to trusted peers.
-    #[config(default)]
-    pub bootstrap_allowlist: Vec<PeerId>,
-    /// Maximum genesis payload size accepted from peers during bootstrap.
-    #[config(default = "defaults::genesis::BOOTSTRAP_MAX_BYTES")]
-    pub bootstrap_max_bytes: Bytes<u64>,
-    /// Minimum interval between serving bootstrap responses to avoid abuse.
-    #[config(default = "defaults::genesis::BOOTSTRAP_RESPONSE_THROTTLE.into()")]
-    pub bootstrap_response_throttle_ms: DurationMs,
-    /// Timeout per bootstrap round-trip (preflight or payload).
-    #[config(default = "defaults::genesis::BOOTSTRAP_REQUEST_TIMEOUT.into()")]
-    pub bootstrap_request_timeout_ms: DurationMs,
-    /// Retry/backoff interval between bootstrap attempts.
-    #[config(default = "defaults::genesis::BOOTSTRAP_RETRY_INTERVAL.into()")]
-    pub bootstrap_retry_interval_ms: DurationMs,
-    /// Request windows per retry cycle before backoff resets and a warning is emitted.
-    /// Enabled bootstrap continues across cycles until success or a permanent validation error.
-    #[config(default = "defaults::genesis::BOOTSTRAP_MAX_ATTEMPTS")]
-    pub bootstrap_max_attempts: u32,
-    /// Whether to attempt network bootstrap when local genesis is missing.
-    ///
-    /// Enabling this without a local file requires `expected_hash`.
-    #[config(default = "true")]
-    pub bootstrap_enabled: bool,
 }
 
 impl From<Genesis> for actual::Genesis {
@@ -5622,13 +5703,6 @@ impl From<Genesis> for actual::Genesis {
             file: genesis.file,
             manifest_json: genesis.manifest_json,
             expected_hash: genesis.expected_hash.map(WithOrigin::into_value),
-            bootstrap_allowlist: genesis.bootstrap_allowlist,
-            bootstrap_max_bytes: genesis.bootstrap_max_bytes.get(),
-            bootstrap_response_throttle: genesis.bootstrap_response_throttle_ms.get(),
-            bootstrap_request_timeout: genesis.bootstrap_request_timeout_ms.get(),
-            bootstrap_retry_interval: genesis.bootstrap_retry_interval_ms.get(),
-            bootstrap_max_attempts: genesis.bootstrap_max_attempts,
-            bootstrap_enabled: genesis.bootstrap_enabled,
         }
     }
 }
@@ -7859,8 +7933,11 @@ pub struct Settlement {
 /// User-level Kagemusha escrow and execution configuration.
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Offline {
-    /// Enable the mandatory Kagemusha offline-cash service for this node profile.
-    #[config(default = "true")]
+    /// Enable Kagemusha offline-cash support for this node profile.
+    ///
+    /// Public Taira profiles must opt in explicitly; development and other
+    /// dataspaces do not inherit an unrelated offline-cash startup obligation.
+    #[config(default = "false")]
     pub enabled: bool,
     /// Require Kagemusha cash to be escrow-backed.
     #[config(default = "true")]
@@ -7882,7 +7959,7 @@ pub struct Offline {
 impl Default for Offline {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             escrow_required: true,
             escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
@@ -8072,19 +8149,15 @@ impl Offline {
             kagemusha_catalog_qualification_seal_path,
             mut kagemusha_max_decoded_bytes,
         } = self;
-        if !enabled
-            && (!escrow_accounts.is_empty()
-                || kagemusha_release_policy_path.is_some()
-                || kagemusha_artifact_dir.is_some()
-                || kagemusha_catalog_qualification_seal_path.is_some())
-        {
-            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
-                "settlement.offline.enabled=false requires empty escrow and release configuration",
-            ));
+        if !enabled {
+            // Canonical disabled state: stale values cannot affect execution
+            // policy hashes, load release material, create escrow bindings, or
+            // turn an unused optional service into a startup dependency.
+            return actual::Offline::default();
         }
         if !escrow_required {
             emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
-                "settlement.offline.escrow_required cannot be false; offline cash is mandatory",
+                "settlement.offline.escrow_required cannot be false when offline cash is enabled",
             ));
         }
         if kagemusha_release_policy_path.is_some() != kagemusha_artifact_dir.is_some() {
@@ -9325,19 +9398,13 @@ impl Default for Nexus {
 }
 
 /// User-level configuration container for Nexus storage budgets.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct NexusStorage {
     /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
     ///
-    /// When set, this overrides the legacy `max_disk_usage_bytes` alias and becomes the
-    /// node-local budget automatically split across Kura, tiered-state cold storage, SoraFS, and
-    /// streaming spools.
+    /// When omitted, `irohad` derives a filesystem-aware budget at runtime without modifying the
+    /// operator configuration.
     pub local_budget_bytes: Option<Bytes<u64>>,
-    /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
-    #[config(default = "defaults::nexus::storage::MAX_DISK_USAGE_BYTES")]
-    pub max_disk_usage_bytes: WithOrigin<Bytes<u64>>,
-    /// Internal persisted metadata backing auto-derived per-filesystem budget defaults.
-    pub auto_default: Option<NexusStorageAutoDefault>,
     /// Block interval between disk budget enforcement scans (0 = every block).
     #[config(default = "defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS")]
     pub budget_enforce_interval_blocks: u64,
@@ -9353,15 +9420,6 @@ impl Default for NexusStorage {
     fn default() -> Self {
         Self {
             local_budget_bytes: None,
-            max_disk_usage_bytes: WithOrigin::new(
-                defaults::nexus::storage::MAX_DISK_USAGE_BYTES,
-                ParameterOrigin::default(ParameterId::from([
-                    "nexus",
-                    "storage",
-                    "max_disk_usage_bytes",
-                ])),
-            ),
-            auto_default: None,
             budget_enforce_interval_blocks:
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
@@ -9373,131 +9431,23 @@ impl Default for NexusStorage {
 impl NexusStorage {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorage> {
         let weights = self.disk_budget_weights.parse(emitter)?;
-        let (legacy_budget, legacy_origin) = self.max_disk_usage_bytes.into_tuple();
-        let legacy_budget_explicit = !matches!(legacy_origin, ParameterOrigin::Default { .. });
-        let local_budget_bytes = self.local_budget_bytes.map(Bytes::get);
-        let auto_default = self
-            .auto_default
-            .and_then(|auto_default| auto_default.parse(emitter));
-        let max_disk_usage_bytes = Bytes(local_budget_bytes.unwrap_or_else(|| legacy_budget.get()));
-        let budget_source = if legacy_budget_explicit {
-            actual::NexusStorageBudgetSource::OperatorExplicit
-        } else if let Some(local_budget_bytes) = local_budget_bytes {
-            if auto_default.as_ref().is_some_and(|auto_default| {
-                auto_default.matches_aggregate_budget(local_budget_bytes)
-            }) {
-                actual::NexusStorageBudgetSource::AutoDerived
-            } else {
-                actual::NexusStorageBudgetSource::OperatorExplicit
-            }
-        } else {
-            actual::NexusStorageBudgetSource::Unset
-        };
+        if self
+            .local_budget_bytes
+            .is_some_and(|budget| budget.get() == 0)
+        {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.storage.local_budget_bytes must be greater than zero when configured",
+            ));
+            return None;
+        }
+        let local_budget_bytes = self.local_budget_bytes;
         Some(actual::NexusStorage {
-            max_disk_usage_bytes,
-            budget_source,
-            auto_default,
+            local_budget_bytes,
+            effective_local_budget_bytes: local_budget_bytes,
             budget_enforce_interval_blocks: self.budget_enforce_interval_blocks,
             max_wsv_memory_bytes: self.max_wsv_memory_bytes,
             disk_budget_weights: weights,
             configured_component_caps: None,
-        })
-    }
-}
-
-/// Internal persisted auto-derived Nexus storage metadata.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
-pub struct NexusStorageAutoDefault {
-    /// Metadata schema version.
-    pub version: u32,
-    /// Aggregate budget derived across all filesystem groups.
-    pub aggregate_budget_bytes: Bytes<u64>,
-    /// Persisted filesystem groups in deterministic order.
-    pub filesystem_groups: Vec<NexusStorageAutoDefaultFilesystemGroup>,
-}
-
-impl NexusStorageAutoDefault {
-    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorageAutoDefault> {
-        let mut filesystem_groups = Vec::with_capacity(self.filesystem_groups.len());
-        let mut seen_components = BTreeSet::new();
-        for filesystem_group in self.filesystem_groups {
-            let filesystem_group = filesystem_group.parse(emitter)?;
-            for component in &filesystem_group.components {
-                if !seen_components.insert(*component) {
-                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                        "nexus.storage.auto_default reuses component `{}` across filesystem groups",
-                        component.as_str()
-                    )));
-                    return None;
-                }
-            }
-            filesystem_groups.push(filesystem_group);
-        }
-
-        Some(actual::NexusStorageAutoDefault {
-            version: self.version,
-            aggregate_budget_bytes: self.aggregate_budget_bytes.get(),
-            filesystem_groups,
-        })
-    }
-}
-
-/// Internal persisted auto-derived filesystem group metadata.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
-pub struct NexusStorageAutoDefaultFilesystemGroup {
-    /// Stable filesystem identity recorded when the budget was derived.
-    pub filesystem_id: String,
-    /// Budget derived for the filesystem group.
-    pub budget_bytes: Bytes<u64>,
-    /// Components assigned to the filesystem group.
-    pub components: Vec<String>,
-}
-
-impl NexusStorageAutoDefaultFilesystemGroup {
-    fn parse(
-        self,
-        emitter: &mut Emitter<ParseError>,
-    ) -> Option<actual::NexusStorageAutoDefaultFilesystemGroup> {
-        if self.filesystem_id.trim().is_empty() {
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                "nexus.storage.auto_default.filesystem_groups[].filesystem_id must not be empty",
-            ));
-            return None;
-        }
-
-        if self.components.is_empty() {
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                "nexus.storage.auto_default.filesystem_groups[].components must not be empty",
-            ));
-            return None;
-        }
-
-        let mut components = Vec::with_capacity(self.components.len());
-        let mut seen_components = BTreeSet::new();
-        for component_label in self.components {
-            let Ok(component) = component_label.parse::<actual::NexusStorageBudgetComponent>()
-            else {
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "unknown nexus.storage.auto_default component `{component_label}`"
-                )));
-                return None;
-            };
-            if !seen_components.insert(component) {
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.storage.auto_default filesystem `{}` repeats component `{}`",
-                    self.filesystem_id,
-                    component.as_str()
-                )));
-                return None;
-            }
-            components.push(component);
-        }
-        components.sort_unstable();
-
-        Some(actual::NexusStorageAutoDefaultFilesystemGroup {
-            filesystem_id: self.filesystem_id,
-            budget_bytes: self.budget_bytes.get(),
-            components,
         })
     }
 }
@@ -9545,6 +9495,21 @@ impl NexusStorageWeights {
     }
 
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorageWeights> {
+        if let Some((field, _)) = [
+            ("kura_blocks_bps", self.kura_blocks_bps),
+            ("wsv_snapshots_bps", self.wsv_snapshots_bps),
+            ("sorafs_bps", self.sorafs_bps),
+            ("soranet_spool_bps", self.soranet_spool_bps),
+            ("soravpn_spool_bps", self.soravpn_spool_bps),
+        ]
+        .into_iter()
+        .find(|(_, weight)| *weight == 0)
+        {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.storage.disk_budget_weights entries must all be greater than zero; `{field}` is zero"
+            )));
+            return None;
+        }
         let total = self.total_bps();
         if total != u32::from(defaults::nexus::storage::BPS_TOTAL) {
             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
@@ -14600,6 +14565,21 @@ impl Torii {
             &self.operator_auth.mtls_trusted_proxy_cidrs,
             false,
         );
+        if self.zk_prover_max_scan_bytes < defaults::torii::ZK_PROVER_ATTACHMENT_BODY_MAX_BYTES_V1 {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.zk_prover_max_scan_bytes must be at least {} so one maximum-size first-release body can make progress",
+                    defaults::torii::ZK_PROVER_ATTACHMENT_BODY_MAX_BYTES_V1
+                ),
+            );
+        }
+        if self.zk_prover_max_scan_millis == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.zk_prover_max_scan_millis must be greater than zero so pending work can make progress",
+            );
+        }
         if let Some(preauth_allow_cidrs) = self.preauth_allow_cidrs.as_ref() {
             validate_explicit_trust_cidrs(
                 emitter,
@@ -31606,8 +31586,8 @@ mod offline_cfg_tests {
 
         assert!(parsed.enabled);
         assert_eq!(
-            parsed.max_body_bytes.0,
-            defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES.0
+            parsed.max_body_bytes.get(),
+            defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES.get()
         );
         assert_eq!(parsed.dedupe_ttl_secs, 120);
         assert_eq!(parsed.default_profile, "swift-cbpr-plus");
@@ -32176,7 +32156,7 @@ policy_digest_hex = "{policy_digest_hex}"
     }
 
     #[test]
-    fn disabled_offline_profile_rejects_dormant_kagemusha_commands_during_root_parse() {
+    fn disabled_offline_profile_canonicalizes_stale_settings_and_commands_during_root_parse() {
         let mut table = base_table();
         let settlement = table
             .entry("settlement")
@@ -32185,10 +32165,27 @@ policy_digest_hex = "{policy_digest_hex}"
             .expect("settlement table");
         settlement.insert(
             "offline".into(),
-            Value::Table(Table::from_iter([(
-                "enabled".into(),
-                Value::Boolean(false),
-            )])),
+            Value::Table(Table::from_iter([
+                ("enabled".into(), Value::Boolean(false)),
+                ("escrow_required".into(), Value::String("bad-bool".into())),
+                ("escrow_accounts".into(), Value::Array(Vec::new())),
+                (
+                    "kagemusha_release_policy_path".into(),
+                    Value::String(String::new()),
+                ),
+                (
+                    "kagemusha_artifact_dir".into(),
+                    Value::String("stale-artifacts".into()),
+                ),
+                (
+                    "kagemusha_catalog_qualification_seal_path".into(),
+                    Value::String("relative-stale-seal".into()),
+                ),
+                (
+                    "kagemusha_max_decoded_bytes".into(),
+                    Value::String("bad-budget".into()),
+                ),
+            ])),
         );
 
         let torii = table
@@ -32198,19 +32195,13 @@ policy_digest_hex = "{policy_digest_hex}"
         torii.insert(
             "kagemusha_commands".into(),
             Value::Table(Table::from_iter([
-                ("enabled".into(), Value::Boolean(false)),
-                (
-                    "private_key".into(),
-                    Value::String(
-                        "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-                            .into(),
-                    ),
-                ),
-                ("minimum_xor_balance".into(), Value::String("1".into())),
-                ("max_tx_value".into(), Value::String("1".into())),
+                ("enabled".into(), Value::Boolean(true)),
+                ("private_key".into(), Value::Integer(7)),
+                ("minimum_xor_balance".into(), Value::Array(Vec::new())),
+                ("max_tx_value".into(), Value::Boolean(true)),
                 (
                     "operation_registry_max_entries".into(),
-                    Value::Integer(4_096),
+                    Value::String("bad-limit".into()),
                 ),
                 (
                     "operation_registry_max_bytes".into(),
@@ -32219,13 +32210,216 @@ policy_digest_hex = "{policy_digest_hex}"
             ])),
         );
 
+        let actual = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect("disabled offline profile must ignore dormant optional settings");
+        assert!(!actual.settlement.offline.enabled);
+        assert!(actual.settlement.offline.escrow_required);
+        assert!(actual.settlement.offline.escrow_accounts.is_empty());
+        assert!(
+            actual
+                .settlement
+                .offline
+                .kagemusha_release_policy_path
+                .is_none()
+        );
+        assert!(actual.settlement.offline.kagemusha_artifact_dir.is_none());
+        assert!(
+            actual
+                .settlement
+                .offline
+                .kagemusha_catalog_qualification_seal_path
+                .is_none()
+        );
+        assert_eq!(
+            actual.settlement.offline.kagemusha_max_decoded_bytes,
+            defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
+        );
+        assert!(
+            actual.torii.kagemusha_commands.is_none(),
+            "disabled offline cash must not activate command routes"
+        );
+    }
+
+    fn offline_overlay(enabled: bool, malformed_subordinate: bool) -> Table {
+        let mut offline = Table::from_iter([("enabled".into(), Value::Boolean(enabled))]);
+        if malformed_subordinate {
+            offline.insert(
+                "escrow_accounts".into(),
+                Value::String("not-an-escrow-map".into()),
+            );
+            offline.insert(
+                "kagemusha_max_decoded_bytes".into(),
+                Value::String("not-a-byte-budget".into()),
+            );
+        }
+        Table::from_iter([(
+            "settlement".into(),
+            Value::Table(Table::from_iter([(
+                "offline".into(),
+                Value::Table(offline),
+            )])),
+        )])
+    }
+
+    #[test]
+    fn enabled_offline_profile_keeps_malformed_subordinates_strict() {
+        let mut table = base_table();
+        table.extend(offline_overlay(true, true));
+
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("disabled offline profile must reject dormant Kagemusha commands");
+            .expect_err("enabled offline profile must validate subordinate types");
         let report = format!("{error:?}");
         assert!(
-            report.contains("settlement.offline.enabled=false forbids torii.kagemusha_commands"),
+            report.contains("escrow_accounts") || report.contains("kagemusha_max_decoded_bytes"),
             "{report}"
         );
+    }
+
+    #[test]
+    fn zk_prover_scan_budget_must_fit_one_maximum_body() {
+        let mut table = base_table();
+        let torii = table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table");
+        let minimum = defaults::torii::ZK_PROVER_ATTACHMENT_BODY_MAX_BYTES_V1;
+        torii.insert(
+            "zk_prover_max_scan_bytes".into(),
+            Value::Integer(i64::try_from(minimum - 1).expect("minimum fits TOML integer")),
+        );
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("sub-body scan budget must fail closed");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains("zk_prover_max_scan_bytes must be at least"),
+            "{report}"
+        );
+
+        let mut table = base_table();
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table")
+            .insert(
+                "zk_prover_max_scan_bytes".into(),
+                Value::Integer(i64::try_from(minimum).expect("minimum fits TOML integer")),
+            );
+        assert_eq!(
+            load_root(table).torii.zk_prover_max_scan_bytes,
+            minimum,
+            "the closed minimum scan budget must remain valid"
+        );
+    }
+
+    #[test]
+    fn zk_prover_scan_time_budget_must_allow_progress() {
+        let mut table = base_table();
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table")
+            .insert("zk_prover_max_scan_millis".into(), Value::Integer(0));
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("zero scan time budget must fail closed");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains("zk_prover_max_scan_millis must be greater than zero"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn disabled_kagemusha_commands_ignore_malformed_subordinates_when_offline_is_active() {
+        let mut table = base_table();
+        table.extend(offline_overlay(true, false));
+        let torii = table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table");
+        torii.insert(
+            "kagemusha_commands".into(),
+            Value::Table(Table::from_iter([
+                ("enabled".into(), Value::Boolean(false)),
+                ("private_key".into(), Value::Integer(7)),
+                ("minimum_xor_balance".into(), Value::Array(Vec::new())),
+                (
+                    "operation_registry_max_bytes".into(),
+                    Value::String("bad".into()),
+                ),
+            ])),
+        );
+
+        let actual = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect("disabled command service must ignore dormant subordinate values");
+        assert!(actual.settlement.offline.enabled);
+        assert!(actual.torii.kagemusha_commands.is_none());
+    }
+
+    #[test]
+    fn enabled_kagemusha_commands_keep_malformed_subordinates_strict() {
+        let mut table = base_table();
+        table.extend(offline_overlay(true, false));
+        let torii = table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table");
+        torii.insert(
+            "kagemusha_commands".into(),
+            Value::Table(Table::from_iter([
+                ("enabled".into(), Value::Boolean(true)),
+                ("private_key".into(), Value::Integer(7)),
+                ("minimum_xor_balance".into(), Value::Array(Vec::new())),
+            ])),
+        );
+
+        actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("enabled command service must validate subordinate types");
+    }
+
+    #[test]
+    fn ordered_sources_use_the_highest_precedence_offline_switch_before_rewrite() {
+        let disabled_base_enabled_overlay = super::Root::read_and_complete(
+            ConfigReader::new()
+                .with_toml_source(TomlSource::inline({
+                    let mut table = base_table();
+                    table.extend(offline_overlay(false, true));
+                    table
+                }))
+                .with_toml_source(TomlSource::inline(offline_overlay(true, false))),
+        );
+        assert!(
+            disabled_base_enabled_overlay.is_err(),
+            "an enabled overlay must retain strict validation of inherited values"
+        );
+
+        let enabled_base_disabled_overlay = super::Root::read_and_complete(
+            ConfigReader::new()
+                .with_toml_source(TomlSource::inline({
+                    let mut table = base_table();
+                    table.extend(offline_overlay(true, true));
+                    table
+                }))
+                .with_toml_source(TomlSource::inline(offline_overlay(false, false))),
+        )
+        .expect("a disabled overlay must canonicalize the inherited dormant subtree")
+        .parse()
+        .expect("canonical disabled profile must parse");
+        assert!(!enabled_base_disabled_overlay.settlement.offline.enabled);
+    }
+
+    #[test]
+    fn absent_offline_switch_does_not_mask_malformed_settlement_parent() {
+        let mut table = base_table();
+        table.insert(
+            "settlement".into(),
+            Value::String("not-a-settlement-table".into()),
+        );
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("a malformed settlement namespace must remain strict");
+        assert!(format!("{error:?}").contains("settlement"));
     }
 
     fn sorafs_table_mut(table: &mut Table) -> &mut Table {
@@ -34434,7 +34628,33 @@ publish_delay_seconds = 17
     include!("user/kura_and_snapshot_tests.rs");
 
     #[test]
-    fn storage_budget_applies_after_parse() {
+    fn retired_peer_genesis_bootstrap_config_is_rejected() {
+        for field in [
+            "bootstrap_allowlist",
+            "bootstrap_max_bytes",
+            "bootstrap_response_throttle",
+            "bootstrap_request_timeout",
+            "bootstrap_retry_interval",
+            "bootstrap_max_attempts",
+            "bootstrap_enabled",
+        ] {
+            let mut table = base_table();
+            let genesis = table
+                .entry("genesis")
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("genesis table");
+            genesis.insert(field.into(), Value::Boolean(true));
+
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "retired genesis.{field} must not be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn storage_legacy_budget_name_is_rejected() {
         let mut table = base_table();
         let nexus = table
             .entry("nexus")
@@ -34443,24 +34663,12 @@ publish_delay_seconds = 17
             .expect("nexus table");
         let mut storage = Table::new();
         storage.insert("max_disk_usage_bytes".into(), Value::Integer(1_000));
-        storage.insert("max_wsv_memory_bytes".into(), Value::Integer(256));
-        let mut weights = Table::new();
-        weights.insert("kura_blocks_bps".into(), Value::Integer(10_000));
-        weights.insert("wsv_snapshots_bps".into(), Value::Integer(0));
-        weights.insert("sorafs_bps".into(), Value::Integer(0));
-        weights.insert("soranet_spool_bps".into(), Value::Integer(0));
-        weights.insert("soravpn_spool_bps".into(), Value::Integer(0));
-        storage.insert("disk_budget_weights".into(), Value::Table(weights));
         nexus.insert("storage".into(), Value::Table(storage));
 
-        let actual = load_root(table);
-        assert_eq!(
-            actual.nexus.storage.budget_source,
-            actual::NexusStorageBudgetSource::OperatorExplicit
+        assert!(
+            actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+            "the pre-release max_disk_usage_bytes alias must not be silently accepted"
         );
-        assert_eq!(actual.kura.max_disk_usage_bytes.get(), 1_000);
-        assert!(actual.tiered_state.enabled);
-        assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 256);
     }
 
     #[test]
@@ -34475,35 +34683,40 @@ publish_delay_seconds = 17
         storage.insert("local_budget_bytes".into(), Value::Integer(1_024));
         storage.insert("max_wsv_memory_bytes".into(), Value::Integer(128));
         let mut weights = Table::new();
-        weights.insert("kura_blocks_bps".into(), Value::Integer(10_000));
-        weights.insert("wsv_snapshots_bps".into(), Value::Integer(0));
-        weights.insert("sorafs_bps".into(), Value::Integer(0));
-        weights.insert("soranet_spool_bps".into(), Value::Integer(0));
-        weights.insert("soravpn_spool_bps".into(), Value::Integer(0));
+        weights.insert("kura_blocks_bps".into(), Value::Integer(3_000));
+        weights.insert("wsv_snapshots_bps".into(), Value::Integer(2_000));
+        weights.insert("sorafs_bps".into(), Value::Integer(4_000));
+        weights.insert("soranet_spool_bps".into(), Value::Integer(500));
+        weights.insert("soravpn_spool_bps".into(), Value::Integer(500));
         storage.insert("disk_budget_weights".into(), Value::Table(weights));
         nexus.insert("storage".into(), Value::Table(storage));
 
         let actual = load_root(table);
         assert_eq!(
-            actual.nexus.storage.budget_source,
-            actual::NexusStorageBudgetSource::OperatorExplicit
+            actual.nexus.storage.local_budget_bytes.map(Bytes::get),
+            Some(1_024)
         );
-        assert_eq!(actual.nexus.storage.max_disk_usage_bytes.get(), 1_024);
-        assert_eq!(actual.kura.max_disk_usage_bytes.get(), 1_024);
+        assert_eq!(
+            actual
+                .nexus
+                .storage
+                .effective_local_budget_bytes
+                .map(Bytes::get),
+            Some(1_024)
+        );
+        assert_eq!(actual.kura.max_disk_usage_bytes.get(), 309);
         assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 128);
     }
 
     #[test]
-    fn storage_budget_is_not_explicit_when_left_unset() {
+    fn storage_budget_requests_runtime_derivation_when_left_unset() {
         let actual = load_root(base_table());
-        assert_eq!(
-            actual.nexus.storage.budget_source,
-            actual::NexusStorageBudgetSource::Unset
-        );
+        assert!(actual.nexus.storage.local_budget_bytes.is_none());
+        assert!(actual.nexus.storage.effective_local_budget_bytes.is_none());
     }
 
     #[test]
-    fn storage_local_budget_with_matching_auto_default_parses_as_auto_derived() {
+    fn storage_zero_local_budget_is_rejected() {
         let mut table = base_table();
         let nexus = table
             .entry("nexus")
@@ -34511,101 +34724,13 @@ publish_delay_seconds = 17
             .as_table_mut()
             .expect("nexus table");
         let mut storage = Table::new();
-        storage.insert("local_budget_bytes".into(), Value::Integer(1_024));
-        storage.insert("max_wsv_memory_bytes".into(), Value::Integer(128));
-        let mut auto_default = Table::new();
-        auto_default.insert(
-            "version".into(),
-            Value::Integer(i64::from(actual::NexusStorageAutoDefault::VERSION)),
-        );
-        auto_default.insert("aggregate_budget_bytes".into(), Value::Integer(1_024));
-        let mut filesystem_group = Table::new();
-        filesystem_group.insert("filesystem_id".into(), Value::String("dev:1".into()));
-        filesystem_group.insert("budget_bytes".into(), Value::Integer(1_024));
-        filesystem_group.insert(
-            "components".into(),
-            Value::Array(vec![
-                Value::String("kura".into()),
-                Value::String("wsv_cold".into()),
-                Value::String("sorafs".into()),
-                Value::String("soranet_spool".into()),
-                Value::String("soravpn_spool".into()),
-            ]),
-        );
-        auto_default.insert(
-            "filesystem_groups".into(),
-            Value::Array(vec![Value::Table(filesystem_group)]),
-        );
-        storage.insert("auto_default".into(), Value::Table(auto_default));
+        storage.insert("local_budget_bytes".into(), Value::Integer(0));
         nexus.insert("storage".into(), Value::Table(storage));
 
-        let actual = load_root(table);
-        assert_eq!(
-            actual.nexus.storage.budget_source,
-            actual::NexusStorageBudgetSource::AutoDerived
-        );
-        assert_eq!(actual.nexus.storage.max_disk_usage_bytes.get(), 1_024);
         assert!(
-            actual.nexus.storage.auto_default.is_some(),
-            "matching metadata should be preserved"
+            actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+            "zero would disable downstream enforcement and must fail parsing"
         );
-    }
-
-    #[test]
-    fn storage_local_budget_without_auto_default_is_operator_explicit() {
-        let mut table = base_table();
-        let nexus = table
-            .entry("nexus")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("nexus table");
-        let mut storage = Table::new();
-        storage.insert("local_budget_bytes".into(), Value::Integer(1_024));
-        nexus.insert("storage".into(), Value::Table(storage));
-
-        let actual = load_root(table);
-        assert_eq!(
-            actual.nexus.storage.budget_source,
-            actual::NexusStorageBudgetSource::OperatorExplicit
-        );
-    }
-
-    #[test]
-    fn storage_local_budget_mismatch_disables_auto_default_reuse() {
-        let mut table = base_table();
-        let nexus = table
-            .entry("nexus")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("nexus table");
-        let mut storage = Table::new();
-        storage.insert("local_budget_bytes".into(), Value::Integer(1_024));
-        let mut auto_default = Table::new();
-        auto_default.insert(
-            "version".into(),
-            Value::Integer(i64::from(actual::NexusStorageAutoDefault::VERSION)),
-        );
-        auto_default.insert("aggregate_budget_bytes".into(), Value::Integer(2_048));
-        let mut filesystem_group = Table::new();
-        filesystem_group.insert("filesystem_id".into(), Value::String("dev:1".into()));
-        filesystem_group.insert("budget_bytes".into(), Value::Integer(2_048));
-        filesystem_group.insert(
-            "components".into(),
-            Value::Array(vec![Value::String("kura".into())]),
-        );
-        auto_default.insert(
-            "filesystem_groups".into(),
-            Value::Array(vec![Value::Table(filesystem_group)]),
-        );
-        storage.insert("auto_default".into(), Value::Table(auto_default));
-        nexus.insert("storage".into(), Value::Table(storage));
-
-        let actual = load_root(table);
-        assert_eq!(
-            actual.nexus.storage.budget_source,
-            actual::NexusStorageBudgetSource::OperatorExplicit
-        );
-        assert_eq!(actual.nexus.storage.max_disk_usage_bytes.get(), 1_024);
     }
 
     #[test]

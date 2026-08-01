@@ -1,8 +1,6 @@
 //! Structures, traits and impls related to `Account`s.
 use core::fmt;
-use std::{
-    cell::RefCell, collections::BTreeMap, format, io::Write, str::FromStr, string::String, vec::Vec,
-};
+use std::{cell::RefCell, collections::BTreeMap, format, str::FromStr, string::String, vec::Vec};
 
 pub use admission::{
     ACCOUNT_ADMISSION_POLICY_METADATA_KEY, AccountAdmissionMode, AccountAdmissionPolicy,
@@ -373,7 +371,7 @@ impl FromStr for OpaqueAccountId {
 }
 
 impl norito::NoritoSerialize for AccountId {
-    fn serialize<W: Write>(&self, writer: W) -> Result<(), norito::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         norito::core::NoritoSerialize::serialize(&self.controller, writer)
     }
 

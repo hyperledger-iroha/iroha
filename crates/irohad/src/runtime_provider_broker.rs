@@ -42525,13 +42525,14 @@ mod protocol {
                     Ok(())
                 );
 
-                let attachments = iroha_data_model::proof::ProofAttachmentList(vec![
+                let attachments = iroha_data_model::proof::ProofAttachmentList::try_from(vec![
                     iroha_data_model::proof::ProofAttachment::new_ref(
                         "halo2/ipa".into(),
                         iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
                         iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_1"),
                     ),
-                ]);
+                ])
+                .expect("one attachment is a valid bounded proof list");
                 let attached =
                     iroha_data_model::transaction::TransactionBuilder::from_payload(payload)
                         .expect("rebuild attached provider-ingest payload")

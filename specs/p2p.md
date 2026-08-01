@@ -7,7 +7,7 @@ This section describes the peer-to-peer (P2P) queue capacities and the metrics e
 
 - `p2p_queue_cap_high` (usize, default: 8192)
   - Capacity of each high-priority network message queue and inbound peer dispatch buffer.
-    Authoritative v2 safety traffic and route-qualified semantic-progress traffic each get an
+    Authoritative v2 safety traffic and topic-qualified semantic-progress traffic each get an
     independent queue of this capacity; other High traffic uses the ordinary high queue. The
     safety and ordinary queues share an exact `H + S` byte owner. The progress queue has a separate
     additive `P` owner equal to one maximum eligible encrypted stream frame. Each lane may retain
@@ -24,12 +24,12 @@ This section describes the peer-to-peer (P2P) queue capacities and the metrics e
     batches, and socket writes. The network actor uses the same amount as its ordinary high-byte
     subcap. The actor adds one maximum control-frame safety charge (`S`) and one maximum eligible
     progress-frame charge (`P`) as disjoint reserves. Separately, each authenticated peer gets one
-    such charge (`R`). Eligible traffic is consensus safety/consensus/payload/chunk, BlockSync, and
-    `Control` only when its subscriber route is `GenesisBootstrap`; caller-selected High traffic,
-    including general, Torii, and Connect control, cannot spend `P` or `R`. Duplicate or replacement
-    sessions reuse the same peer reserve, and `max_total_connections` bounds the connected owner as
-    `H + L + N * R`; the actor owner is independently bounded as `H + S + P`. Startup fails closed
-    if an expression overflows or an owner cannot retain one maximum eligible frame.
+    such charge (`R`). Eligible traffic is consensus safety/consensus/payload/chunk and BlockSync;
+    caller-selected High traffic, including all Control traffic, cannot spend `P` or `R`. Duplicate
+    or replacement sessions reuse the same peer reserve, and `max_total_connections` bounds the
+    connected owner as `H + L + N * R`; the actor owner is independently bounded as `H + S + P`.
+    Startup fails closed if an expression overflows or an owner cannot retain one maximum eligible
+    frame.
     These formulas describe leased encrypted-frame payload ownership, not total process RSS. Each
     authenticated stream also has fixed-cap scratch/batch buffers (`B_stream`), and each QUIC
     connection has transport state plus per-connection datagram/flow-control buffers (`B_quic`).
@@ -48,17 +48,17 @@ Notes
 - `ConsensusSafety` is a local scheduling tag (never a wire field) for authoritative v2
   proposals, votes, quorum/timeout certificates, and commit-certificate responses. Its network
   actor, per-peer post, inbound dispatch, and relay subscriber scheduling lanes are isolated so
-  auxiliary, proxy, and genesis traffic cannot consume their count capacity. The encrypted sender
-  and missing-session deferred queues instead share the configured aggregate high count/byte
+  auxiliary and proxy traffic cannot consume their count capacity. The encrypted sender and
+  missing-session deferred queues instead share the configured aggregate high count/byte
   envelope with ordinary traffic; safety owns the first retry/service rank and cannot be evicted
   by ordinary traffic. This keeps aggregate retention bounded without surrendering safety service.
 - The relay registers separate safety, ordinary high (`Consensus` plus `Control`), payload, chunk,
-  and low subscribers; genesis bootstrap subscribes to `Control` requests and bulk-cap
-  `BlockSync` responses, while Torii proxy control retains its filtered `Control` subscription.
-  On a full subscriber channel, safety and route-qualified semantic progress retain their exact
-  dispatch-owned message in separate bounded per-peer backlogs with alternating service. The
+  and low subscribers; Torii proxy control retains its filtered `Control` subscription. Genesis is
+  a local trust-root input and has no peer request/response route. On a full subscriber channel,
+  safety and topic-qualified semantic progress retain their exact dispatch-owned message in
+  separate bounded per-peer backlogs with alternating service. The
   progress count bound is `max(p2p_subscriber_queue_cap, 2 × admitted_peer_count)`; each peer's
-  share is clamped to 2–64 entries and divided evenly between a consensus/control lane and a
+  share is clamped to 2–64 entries and divided evenly between a consensus lane and a
   payload/chunk/BlockSync bulk lane. Round-robin service across those classes prevents a chunk
   flood from consuming or starving the lane reservation. Retained messages keep their existing
   inbound dispatch-byte leases, so this count backlog does not create an uncharged payload owner.
@@ -442,7 +442,7 @@ capabilities, configured `ChainId`, full 256-bit session binding, and optional
 TLS/QUIC certificate fingerprint. The network start API requires a `ChainId`;
 changing any advertised claim, replaying it into another session or transport,
 or connecting from another chain fails signature verification before the peer
-can enter the authenticated set or exchange genesis traffic. The compact
+can enter the authenticated set or exchange network traffic. The compact
 64-bit disambiguator is only a simultaneous-connection tie-breaker. There is no
 feature flag or unbound mode. Plain TCP, TLS-over-TCP, and QUIC accepts all
 enter the same `ConnectedFrom` handshake state machine; TLS and QUIC only add

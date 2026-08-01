@@ -112,7 +112,7 @@ KAGEMUSHA_BRIDGE_ABI_VERSION = 21
 KAGEMUSHA_MAX_HOPS = 8
 # Keep the packager's fail-closed per-file corridor identical to the runtime's
 # non-configurable KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4.  The
-# reviewed compact-V5 processed proving key is 4,594,903,830 bytes, so retaining
+# reviewed compact-V5 processed proving key is 5,347,763,078 bytes, so retaining
 # the stale 4 GiB corridor here would reject a release that core accepts.
 KAGEMUSHA_ARTIFACT_MAX_BYTES = 5 * 1024 * 1024 * 1024
 KAGEMUSHA_ARTIFACT_ROLES = (

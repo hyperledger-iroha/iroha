@@ -141,7 +141,7 @@ range of at most 8 MiB and receive `206` plus `Content-Range`.
    The report should show zero retries and `provider_reports[].metadata.capabilities` must include `chunk_range_fetch`.
 3. Capture a trustless verification summary for the staged CAR:
    ```bash
-   cargo run -p sorafs_car --bin soranet_trustless_verifier --features cli --locked -- \
+   cargo run -p sorafs_car --features cli,dev-tools --bin soranet_trustless_verifier --locked -- \
      --manifest fixtures/sorafs_gateway/1.0.0/manifest_v1.to \
      --car fixtures/sorafs_gateway/1.0.0/gateway.car \
      --json-out=artifacts/gateway/stage_trustless_summary.json --quiet

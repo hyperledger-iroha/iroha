@@ -1,6 +1,6 @@
 //! Regenerate the canonical AXT fixtures used across SDKs and guard scripts.
 //!
-//! Run with `cargo run -p iroha_data_model --features test-fixtures --bin axt_fixtures`
+//! Run with `cargo run -p iroha_data_model --features dev-tools,test-fixtures --bin axt_fixtures`
 //! to refresh `tests/fixtures/*.json`. Use `--check` to verify the checked-in
 //! fixtures are up to date without rewriting them.
 
@@ -356,7 +356,7 @@ fn write_fixture<T: json::JsonSerialize>(
         let existing = fs::read_to_string(path)?;
         if existing.trim() != new_content.trim() {
             return Err(format!(
-                "fixture {} is stale; run cargo run -p iroha_data_model --features test-fixtures --bin axt_fixtures",
+                "fixture {} is stale; run cargo run -p iroha_data_model --features dev-tools,test-fixtures --bin axt_fixtures",
                 path.display()
             )
             .into());

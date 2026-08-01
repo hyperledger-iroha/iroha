@@ -1238,14 +1238,14 @@ fn validate_proof_attachment_shapes(tx: &SignedTransaction) -> Result<(), Accept
     let Some(attachments) = tx.attachments() else {
         return Ok(());
     };
-    if attachments.0.is_empty() {
+    if attachments.is_empty() {
         return Err(AcceptTransactionFail::TransactionLimit(
             TransactionLimitError {
                 reason: "Proof attachment list must not be empty".into(),
             },
         ));
     }
-    for (index, attachment) in attachments.0.iter().enumerate() {
+    for (index, attachment) in attachments.as_slice().iter().enumerate() {
         if let Some((field, message)) = attachment.structural_error() {
             return Err(AcceptTransactionFail::TransactionLimit(
                 TransactionLimitError {
@@ -2310,7 +2310,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         validate_proof_attachment_shapes(tx)?;
 
         let decompressed_len = tx.attachments().map_or(0usize, |attachments| {
-            attachments.0.iter().fold(0usize, |acc, attachment| {
+            attachments.as_slice().iter().fold(0usize, |acc, attachment| {
                 let mut subtotal = attachment.proof.bytes.len();
                 if attachment.vk_commitment.is_some() {
                     subtotal = subtotal.saturating_add(32);
@@ -4168,7 +4168,7 @@ fn collect_lane_privacy_proofs(
 ) -> Vec<iroha_data_model::nexus::LanePrivacyProof> {
     tx.attachments()
         .into_iter()
-        .flat_map(|list| list.0.iter())
+        .flat_map(|list| list.as_slice().iter())
         .filter_map(|attachment| attachment.lane_privacy.clone())
         .collect()
 }
@@ -10589,7 +10589,8 @@ pub mod tests {
         let proof = ProofBox::new("halo2/ipa".into(), vec![0u8; 192]);
         let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_limit");
         let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id);
-        let attachments = ProofAttachmentList(vec![attachment]);
+        let attachments = ProofAttachmentList::try_from(vec![attachment])
+            .expect("one attachment is a valid bounded proof list");
 
         let tx = TransactionBuilder::new(
             chain.clone(),
@@ -10658,52 +10659,58 @@ pub mod tests {
         forged_hash[0] ^= 0x80;
         forged_envelope_hash.envelope_hash = Some(forged_hash);
 
+        assert!(matches!(
+            ProofAttachmentList::try_from(Vec::new()),
+            Err(iroha_data_model::proof::ProofAttachmentListError::Empty)
+        ));
+
         let cases = [
             (
-                "empty-list",
-                ProofAttachmentList(Vec::new()),
-                "must not be empty",
-            ),
-            (
                 "proof-backend-mismatch",
-                ProofAttachmentList(vec![ProofAttachment::new_ref(
+                ProofAttachmentList::try_from(vec![ProofAttachment::new_ref(
                     "halo2/ipa".into(),
                     ProofBox::new("stark/fri".into(), vec![1, 2, 3]),
                     VerifyingKeyId::new("halo2/ipa", "vk_admission"),
-                )]),
+                )])
+                .expect("one attachment is a valid bounded proof list"),
                 "proof.backend",
             ),
             (
                 "nonportable-vk-ref-name",
-                ProofAttachmentList(vec![ProofAttachment::new_ref(
+                ProofAttachmentList::try_from(vec![ProofAttachment::new_ref(
                     "halo2/ipa".into(),
                     ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
                     VerifyingKeyId::new("halo2/ipa", "VkAdmission"),
-                )]),
+                )])
+                .expect("one attachment is a valid bounded proof list"),
                 "vk_ref",
             ),
             (
                 "empty-proof-bytes",
-                ProofAttachmentList(vec![ProofAttachment::new_ref(
+                ProofAttachmentList::try_from(vec![ProofAttachment::new_ref(
                     "halo2/ipa".into(),
                     ProofBox::new("halo2/ipa".into(), Vec::new()),
                     VerifyingKeyId::new("halo2/ipa", "vk_admission"),
-                )]),
+                )])
+                .expect("one attachment is a valid bounded proof list"),
                 "proof.bytes",
             ),
             (
                 "zero-vk-commitment",
-                ProofAttachmentList(vec![zero_vk_commitment]),
+                ProofAttachmentList::try_from(vec![zero_vk_commitment])
+                    .expect("one attachment is a valid bounded proof list"),
                 "vk_commitment",
             ),
             (
                 "zero-envelope-hash",
-                ProofAttachmentList(vec![zero_envelope_hash]),
+                ProofAttachmentList::try_from(vec![zero_envelope_hash])
+                    .expect("one attachment is a valid bounded proof list"),
                 "envelope_hash",
             ),
             (
                 "forged-envelope-hash",
-                ProofAttachmentList(vec![forged_envelope_hash]),
+                ProofAttachmentList::try_from(vec![forged_envelope_hash])
+                    .expect("one attachment is a valid bounded proof list"),
                 "envelope_hash",
             ),
         ];
@@ -11737,7 +11744,10 @@ pub mod tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, "noop".into())])
-        .with_attachments(ProofAttachmentList(vec![attachment1, attachment2]))
+        .with_attachments(
+            ProofAttachmentList::try_from(vec![attachment1, attachment2])
+                .expect("two attachments are a valid bounded proof list"),
+        )
         .sign(keypair.private_key());
 
         let collected_proofs = super::collect_lane_privacy_proofs(&tx);

@@ -1,5 +1,6 @@
 [package]
 name = "iroha_sccp"
+autobins = false
 edition.workspace = true
 version.workspace = true
 authors.workspace = true
@@ -9,10 +10,16 @@ license.workspace = true
 workspace = true
 
 [features]
+dev-tools = []
 test-fixtures = [
     "iroha_data_model/test-fixtures",
     "iroha_data_model/transparent_api",
 ]
+
+[[bin]]
+name = "sccp_release_evidence"
+path = "src/bin/sccp_release_evidence.rs"
+required-features = ["dev-tools"]
 
 [dependencies]
 blake3 = { workspace = true }

@@ -4,8 +4,6 @@
 //! `u32` mantissa lengths, minimal little-endian two's-complement bytes, no
 //! compression, no layout flags, and no alignment padding.
 
-use std::io::Write;
-
 use norito::{
     Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize,
     json::{self, FastJsonWrite, JsonDeserialize},
@@ -634,7 +632,7 @@ macro_rules! impl_frame_codec {
                 $schema
             }
 
-            fn serialize<W: Write>(&self, mut writer: W) -> Result<(), NoritoError> {
+            fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
                 writer
                     .write_all(&$encode(self))
                     .map_err(|error| NoritoError::Message(error.to_string()))

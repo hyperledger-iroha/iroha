@@ -796,6 +796,24 @@ pub trait Circuit<F: Field> {
     /// arrangement, column arrangement, etc.
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config;
 
+    /// Synthesize the circuit into a floor planner's measurement pass.
+    ///
+    /// The default preserves Halo2's witness-stripping contract. Circuits
+    /// with a very large, fixed-shape graph may override this to measure the
+    /// existing graph without cloning it, provided they hide witnesses from
+    /// the measurement backend and reset every synthesis-local mutation before
+    /// the assignment pass begins.
+    fn synthesize_for_measurement(
+        &self,
+        config: Self::Config,
+        layouter: impl Layouter<F>,
+    ) -> Result<(), Error>
+    where
+        Self: Sized,
+    {
+        self.without_witnesses().synthesize(config, layouter)
+    }
+
     /// Given the provided `cs`, synthesize the circuit. The concrete type of
     /// the caller will be different depending on the context, and they may or
     /// may not expect to have a witness present.

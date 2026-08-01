@@ -6765,12 +6765,15 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         Ok(())
     }
 
-    /// Replace the bounded set of owners currently held by retained executor
-    /// effects or asynchronous Sign/Fetch/Store/Validate/Apply tasks.
+    /// Replace the bounded set of runnable owners currently held by retained
+    /// executor effects or asynchronous Sign/Store/Validate/Apply tasks.
     ///
     /// The executor derives this set from its existing bounded maps before
     /// each runtime step. Supplying a forged carrier or exceeding the existing
     /// pending-work plus one retained-batch bound fails closed.
+    /// A network-waiting Fetch remains executor-owned but is intentionally
+    /// passive here; its exact owner returns with `BodyAvailable` so the wait
+    /// itself cannot block the control traffic needed to finish or supersede it.
     pub(crate) fn set_external_lifecycle_owners(
         &mut self,
         owners: Vec<RuntimeLifecycleOwner>,
@@ -6783,6 +6786,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         self.external_lifecycle_owners = owners;
         Ok(())
+    }
+
+    /// Return the number of runnable external owners published to the runtime.
+    #[cfg(test)]
+    pub(crate) fn external_lifecycle_owner_count(&self) -> usize {
+        self.external_lifecycle_owners.len()
     }
 
     /// Bind external lifecycle capacity to the effect executor's existing
@@ -6860,6 +6869,39 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             owner,
             RuntimeFreshRootKind::LocalProposalAdmission,
         ))
+    }
+
+    /// Return whether the runner may begin one local proposal for this view.
+    ///
+    /// An armed leader reservation is deliberately one-shot: guarded Proposal
+    /// fanout consumes it, while a later timeout or `EnterView` owns the next
+    /// progress transition. A same-view lock update may make the runner's
+    /// candidate state eligible again, but it must not turn that scheduling
+    /// churn into a second Proposal. Report the consumed reservation as
+    /// ordinary backpressure so the pacemaker can advance the view. Corrupt or
+    /// mismatched reservations remain fatal, and the actual admission path
+    /// below still fails closed if a caller bypasses this preflight.
+    pub(crate) fn local_proposal_admission_available(
+        &mut self,
+        tag: EventTag,
+    ) -> Result<bool, String> {
+        if self.fail_closed {
+            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
+        }
+        if tag != self.round_tag {
+            self.latch_fail_closed(
+                "local proposal admission preflight changed the authoritative tag",
+            );
+            return Err("Sumeragi v2 local proposal preflight tag was invalid".to_owned());
+        }
+        let Some(reservation) = self.active_view_producer.as_ref() else {
+            return Ok(!self.clocks_armed);
+        };
+        if reservation.tag != tag || !reservation.ownership.validate_exact() {
+            self.latch_fail_closed("local proposal admission preflight changed its producer");
+            return Err("Sumeragi v2 local proposal preflight producer was invalid".to_owned());
+        }
+        Ok(true)
     }
 
     /// Retain or release the scheduler-visible producer for the authoritative
@@ -9697,11 +9739,89 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     /// Return whether the fair-ingress head can reach authentication and then
     /// either claim its exact runtime prefix or coalesce with an exact queued
     /// authenticated owner.
+    fn can_admit_pre_runtime_leader_wire(
+        &self,
+        outer_message: &wire::ConsensusMessageV2,
+        runtime_message: &wire::ConsensusMessageV2,
+        default_class: CommandClass,
+        ownership: &FairV2IngressOwnershipEvidence,
+    ) -> Option<bool> {
+        let token = ownership.leader_wire_token()?;
+        if ownership.leader_wire_runtime_receipt().is_some() {
+            return None;
+        }
+
+        // Productive fair ingress owns the durable Ingress token while the
+        // packet is still physically queued. Its Runtime receipt can only be
+        // minted by the atomic dequeue immediately after this read-only
+        // predicate succeeds. Validate that exact pre-handoff state here;
+        // never weaken RuntimeIngressOwnershipEvidence, whose token+receipt
+        // pairing remains the post-dequeue proof boundary.
+        let outer = super::message::BlockMessage::V2(outer_message.clone());
+        if !ownership.validate_exact()
+            || !ownership.matches_message(&outer)
+            || ownership.runtime_physical_cut().is_some()
+            || ownership.runtime_lifecycle_ordinal() != Some(token.scheduler_ordinal())
+            || !self
+                .ingress
+                .lifecycle_ordinals
+                .recognizes_minted(token.scheduler_ordinal())
+                .unwrap_or(false)
+        {
+            // Drain malformed process-local ownership so the mutating seam
+            // reports the exact invariant failure instead of pinning a fair
+            // lane forever.
+            return Some(true);
+        }
+
+        if let Some((_, admission_ordinal)) = self
+            .driver
+            .deferred_authenticated_message_owner(runtime_message)
+        {
+            // A Busy-deferred aggregate already owns its sole serialized
+            // occurrence. An exact restart retry may rejoin that lifecycle;
+            // a distinct productive token must remain in fair ingress until
+            // the deferred owner retires and a real FIFO slot is available.
+            let same_token = self
+                .deferred_ingress_ownership
+                .get(&admission_ordinal)
+                .and_then(|retained| retained.leader_wire_token().ok().flatten())
+                == Some(token);
+            return Some(same_token);
+        }
+
+        for queued in &self.ingress.commands {
+            if !queued.command.matches_wire_envelope(runtime_message) {
+                continue;
+            }
+            let Some(retained) = queued.ingress_ownership.as_ref() else {
+                // Let the mutating seam expose a corrupt authenticated owner.
+                return Some(true);
+            };
+            match retained.leader_wire_token() {
+                Ok(Some(retained_token)) if retained_token == token => return Some(true),
+                Ok(_) => {}
+                Err(_) => return Some(true),
+            }
+        }
+
+        let may_use_progress = self
+            .driver
+            .wire_ingress_may_use_progress(&runtime_message.payload);
+        let capacity = match self.ingress.check_capacity(default_class) {
+            Ok(()) => Ok(()),
+            Err(_) if may_use_progress => self.ingress.check_capacity(CommandClass::Progress),
+            Err(error) => Err(error),
+        };
+        Some(capacity.is_ok())
+    }
+
     pub(crate) fn can_admit_network_message_with_ingress_ownership(
         &self,
         message: &wire::ConsensusMessageV2,
         ingress_ownership: &FairV2IngressOwnershipEvidence,
     ) -> bool {
+        let outer_message = message;
         let (runtime_message, default_class) = match &message.payload {
             wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => (
                 wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
@@ -9721,6 +9841,14 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             &runtime_message,
             ingress_ownership.clone(),
         ) else {
+            if let Some(admissible) = self.can_admit_pre_runtime_leader_wire(
+                outer_message,
+                &runtime_message,
+                default_class,
+                ingress_ownership,
+            ) {
+                return admissible;
+            }
             // Drain malformed process-local ownership so the mutating seam can
             // fail closed instead of leaving the fair queue permanently stuck.
             return true;

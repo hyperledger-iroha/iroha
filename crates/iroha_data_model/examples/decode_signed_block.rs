@@ -68,7 +68,7 @@ fn dump_reference_encoding() -> Result<(), Box<dyn Error>> {
     let mut set = BTreeSet::new();
     set.insert(block_sig);
     let mut buf = Vec::new();
-    norito::core::NoritoSerialize::serialize(&set, &mut buf).unwrap();
+    norito::core::serialize_to_buffer(&set, &mut buf).unwrap();
     println!(
         "reference BTreeSet bytes len={} head={}",
         buf.len(),
@@ -180,7 +180,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .iter()
                     .map(|tx| {
                         let mut buf = Vec::new();
-                        norito::core::NoritoSerialize::serialize(tx.signature(), &mut buf)
+                        norito::core::serialize_to_buffer(tx.signature(), &mut buf)
                             .map(|()| buf.len())
                             .unwrap_or_default()
                     })

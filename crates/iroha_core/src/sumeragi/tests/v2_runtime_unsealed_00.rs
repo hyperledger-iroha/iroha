@@ -1430,6 +1430,11 @@
         runtime
             .arm_live_clocks(start)
             .expect("arm clocks after producer reservation");
+        assert!(
+            runtime
+                .local_proposal_admission_available(initial)
+                .expect("armed reservation is eligible")
+        );
 
         let ownership = runtime
             .mint_local_proposal_effect_ownership(initial, &proposal.manifest)
@@ -1449,11 +1454,58 @@
             .complete_active_view_producer_after_proposal_fanout(proposal.round, &ownership)
             .expect("guarded fanout retires the inherited producer");
         assert!(runtime.active_view_producer.is_none());
+        assert!(
+            !runtime
+                .local_proposal_admission_available(initial)
+                .expect("consumed same-view reservation becomes retryable backpressure")
+        );
+        assert!(
+            !runtime.fail_closed,
+            "same-view scheduling churn must leave timeout recovery live"
+        );
         assert!(matches!(
             runtime.step_and_take_scheduler_ownership_for_test(deadline),
             Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
         ));
         assert_eq!(runtime.driver.timeouts, vec![initial]);
+    }
+
+    #[test]
+    fn armed_proposal_admission_cannot_bypass_the_active_view_reservation() {
+        let (context, keys) = authenticated_runtime_context();
+        let message = signed_runtime_proposal(&context, &keys, 0xA9);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = message.payload else {
+            panic!("runtime fixture must produce a Proposal")
+        };
+        let initial = EventTag::new(context.height, 0, Generation::new(1));
+        let start = Instant::now();
+        let (mut runtime, _) = SerializedV2Runtime::with_driver(
+            FakeDriver::new(initial),
+            start,
+            Duration::from_secs(10),
+            RuntimeQueueConfig::new(8, 2, 2),
+            Vec::new(),
+        )
+        .expect("construct unarmed runtime");
+        runtime
+            .reconcile_active_view_producer(initial, false)
+            .expect("nonleader has no proposal reservation");
+        runtime
+            .arm_live_clocks(start)
+            .expect("arm runtime without a producer reservation");
+
+        assert!(
+            !runtime
+                .local_proposal_admission_available(initial)
+                .expect("scheduler observes an unavailable one-shot producer")
+        );
+        assert!(
+            runtime
+                .mint_local_proposal_effect_ownership(initial, &proposal.manifest)
+                .is_err(),
+            "the admission invariant remains fail-closed if preflight is bypassed"
+        );
+        assert!(runtime.fail_closed);
     }
 
     #[test]

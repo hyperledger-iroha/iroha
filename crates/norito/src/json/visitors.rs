@@ -1,0 +1,345 @@
+use super::{CoerceKey, Error, JsonDeserialize, KeyRef, Parser, Visitor, visit_value};
+
+/// Streaming visitor for a JSON object.
+pub struct MapVisitor<'a, 'p> {
+    parser: &'p mut Parser<'a>,
+    finished: bool,
+    value_pending: bool,
+    after_comma: bool,
+}
+
+impl<'a, 'p> MapVisitor<'a, 'p> {
+    /// Begin visiting an object at the parser's current position.
+    pub fn new(parser: &'p mut Parser<'a>) -> Result<Self, Error> {
+        parser.skip_ws();
+        parser.expect(b'{')?;
+        let mut visitor = Self {
+            parser,
+            finished: false,
+            value_pending: false,
+            after_comma: false,
+        };
+        if visitor.parser.try_consume_char(b'}')? {
+            visitor.finished = true;
+        }
+        Ok(visitor)
+    }
+
+    /// Access the underlying parser.
+    #[inline]
+    pub fn parser(&mut self) -> &mut Parser<'a> {
+        self.parser
+    }
+
+    /// Return whether the closing delimiter has been consumed.
+    #[inline]
+    pub fn is_finished(&self) -> bool {
+        self.finished && !self.value_pending
+    }
+
+    /// Parse the next object key without materializing its value.
+    pub fn next_key(&mut self) -> Result<Option<KeyRef<'a>>, Error> {
+        if self.finished {
+            return Ok(None);
+        }
+        if self.value_pending {
+            return Err(Error::Message(
+                "attempted to read a new key before consuming the previous value".into(),
+            ));
+        }
+        self.reject_trailing_comma()?;
+        if self.parser.try_consume_char(b'}')? {
+            self.finished = true;
+            return Ok(None);
+        }
+        let key = self.parser.parse_key()?;
+        self.after_comma = false;
+        self.value_pending = true;
+        Ok(Some(key))
+    }
+
+    /// Parse the value belonging to the current key.
+    pub fn parse_value<T: JsonDeserialize>(&mut self) -> Result<T, Error> {
+        if !self.value_pending {
+            return Err(Error::Message("no pending value for current key".into()));
+        }
+        let value = T::json_deserialize(self.parser)?;
+        self.finish_value()?;
+        Ok(value)
+    }
+
+    /// Parse the current value with a custom streaming visitor.
+    pub fn parse_value_with<V>(&mut self, visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'a>,
+    {
+        if !self.value_pending {
+            return Err(Error::Message("no pending value for current key".into()));
+        }
+        let value = visit_value(self.parser, visitor)?;
+        self.finish_value()?;
+        Ok(value)
+    }
+
+    /// Skip the value belonging to the current key.
+    pub fn skip_value(&mut self) -> Result<(), Error> {
+        if !self.value_pending {
+            return Err(Error::Message("no pending value for current key".into()));
+        }
+        self.parser.skip_value()?;
+        self.finish_value()
+    }
+
+    /// Parse the next key and typed value as one owned entry.
+    pub fn next_entry<T: JsonDeserialize>(&mut self) -> Result<Option<(String, T)>, Error> {
+        match self.next_key()? {
+            Some(key) => {
+                let owned = match key {
+                    KeyRef::Borrowed(s) => s.to_owned(),
+                    KeyRef::Owned(s) => s,
+                };
+                let value = self.parse_value::<T>()?;
+                Ok(Some((owned, value)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Fetch the next key and coerce it into `T` using `FromStr`.
+    ///
+    /// Returns `Ok(None)` when the object has no more entries. Any parse
+    /// failure from `T::from_str` is wrapped in a deterministic JSON
+    /// [`Error`].
+    pub fn coerce_key<T>(&mut self) -> Result<Option<T>, Error>
+    where
+        T: core::str::FromStr,
+        T::Err: core::fmt::Display,
+    {
+        match self.next_key()? {
+            Some(key) => {
+                let parsed = CoerceKey::from(key).parse::<T>()?;
+                Ok(Some(parsed))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Fetch the next key/value pair, coercing the key via `FromStr` and
+    /// deserializing the value using `JsonDeserialize`.
+    pub fn next_entry_coerced<T, V>(&mut self) -> Result<Option<(T, V)>, Error>
+    where
+        T: core::str::FromStr,
+        T::Err: core::fmt::Display,
+        V: JsonDeserialize,
+    {
+        match self.next_key()? {
+            Some(key) => {
+                let parsed_key = CoerceKey::from(key).parse::<T>()?;
+                let value = self.parse_value::<V>()?;
+                Ok(Some((parsed_key, value)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Finish the object and require its closing delimiter.
+    pub fn finish(mut self) -> Result<(), Error> {
+        if self.value_pending {
+            return Err(Error::Message(
+                "object ended before consuming value for current key".into(),
+            ));
+        }
+        if !self.finished {
+            self.reject_trailing_comma()?;
+            if self.parser.try_consume_char(b'}')? {
+                self.finished = true;
+            } else {
+                let (byte, line, col) =
+                    crate::json::pos_from_offset(self.parser.input(), self.parser.position());
+                return Err(Error::ExpectedCommaOrObjectEnd { byte, line, col });
+            }
+        }
+        Ok(())
+    }
+
+    /// Construct a missing-field error.
+    #[inline]
+    pub fn missing_field(field: &'static str) -> Error {
+        Error::missing_field(field)
+    }
+
+    /// Construct a duplicate-field error.
+    #[inline]
+    pub fn duplicate_field(field: &str) -> Error {
+        Error::duplicate_field(field)
+    }
+
+    /// Construct an unknown-field error.
+    #[inline]
+    pub fn unknown_field(field: &str) -> Error {
+        Error::unknown_field(field)
+    }
+
+    fn reject_trailing_comma(&mut self) -> Result<(), Error> {
+        self.parser.skip_ws();
+        if self.after_comma && self.parser.peek() == Some(b'}') {
+            return Err(self.parser.err_here("trailing comma in object"));
+        }
+        Ok(())
+    }
+
+    fn finish_value(&mut self) -> Result<(), Error> {
+        self.parser.skip_ws();
+        match self.parser.peek() {
+            Some(b',') => {
+                self.parser.bump();
+                self.value_pending = false;
+                self.after_comma = true;
+                Ok(())
+            }
+            Some(b'}') => {
+                self.parser.bump();
+                self.finished = true;
+                self.value_pending = false;
+                Ok(())
+            }
+            Some(_) => {
+                let (byte, line, col) =
+                    crate::json::pos_from_offset(self.parser.input(), self.parser.position());
+                Err(Error::ExpectedCommaOrObjectEnd { byte, line, col })
+            }
+            None => {
+                let (byte, line, col) =
+                    crate::json::pos_from_offset(self.parser.input(), self.parser.position());
+                Err(Error::UnexpectedEof { byte, line, col })
+            }
+        }
+    }
+}
+
+/// Streaming visitor for a JSON array.
+pub struct SeqVisitor<'a, 'p> {
+    parser: &'p mut Parser<'a>,
+    finished: bool,
+    after_comma: bool,
+}
+
+impl<'a, 'p> SeqVisitor<'a, 'p> {
+    /// Begin visiting an array at the parser's current position.
+    pub fn new(parser: &'p mut Parser<'a>) -> Result<Self, Error> {
+        parser.skip_ws();
+        parser.expect(b'[')?;
+        let mut visitor = Self {
+            parser,
+            finished: false,
+            after_comma: false,
+        };
+        if visitor.parser.try_consume_char(b']')? {
+            visitor.finished = true;
+        }
+        Ok(visitor)
+    }
+
+    /// Access the underlying parser.
+    #[inline]
+    pub fn parser(&mut self) -> &mut Parser<'a> {
+        self.parser
+    }
+
+    /// Return whether the closing delimiter has been consumed.
+    #[inline]
+    pub fn is_finished(&self) -> bool {
+        self.finished
+    }
+
+    /// Parse the next typed array element.
+    pub fn next_element<T: JsonDeserialize>(&mut self) -> Result<Option<T>, Error> {
+        if self.finished {
+            return Ok(None);
+        }
+        self.prepare_element()?;
+        let value = T::json_deserialize(self.parser)?;
+        self.finish_element()?;
+        Ok(Some(value))
+    }
+
+    /// Parse the next element with a custom streaming visitor.
+    pub fn next_element_with<V>(&mut self, visitor: V) -> Result<Option<V::Value>, Error>
+    where
+        V: Visitor<'a>,
+    {
+        if self.finished {
+            return Ok(None);
+        }
+        self.prepare_element()?;
+        let value = visit_value(self.parser, visitor)?;
+        self.finish_element()?;
+        Ok(Some(value))
+    }
+
+    /// Skip the next array element.
+    pub fn skip_element(&mut self) -> Result<(), Error> {
+        if self.finished {
+            return Ok(());
+        }
+        self.prepare_element()?;
+        self.parser.skip_value()?;
+        self.finish_element()
+    }
+
+    /// Finish the array and require its closing delimiter.
+    pub fn finish(mut self) -> Result<(), Error> {
+        if !self.finished {
+            self.reject_trailing_comma()?;
+            if self.parser.try_consume_char(b']')? {
+                self.finished = true;
+            } else {
+                let (byte, line, col) =
+                    crate::json::pos_from_offset(self.parser.input(), self.parser.position());
+                return Err(Error::ExpectedCommaOrArrayEnd { byte, line, col });
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare_element(&mut self) -> Result<(), Error> {
+        self.reject_trailing_comma()?;
+        self.after_comma = false;
+        Ok(())
+    }
+
+    fn reject_trailing_comma(&mut self) -> Result<(), Error> {
+        self.parser.skip_ws();
+        if self.after_comma && self.parser.peek() == Some(b']') {
+            return Err(self.parser.err_here("trailing comma in array"));
+        }
+        Ok(())
+    }
+
+    fn finish_element(&mut self) -> Result<(), Error> {
+        self.parser.skip_ws();
+        match self.parser.peek() {
+            Some(b',') => {
+                self.parser.bump();
+                self.after_comma = true;
+                Ok(())
+            }
+            Some(b']') => {
+                self.parser.bump();
+                self.finished = true;
+                self.after_comma = false;
+                Ok(())
+            }
+            Some(_) => {
+                let (byte, line, col) =
+                    crate::json::pos_from_offset(self.parser.input(), self.parser.position());
+                Err(Error::ExpectedCommaOrArrayEnd { byte, line, col })
+            }
+            None => {
+                let (byte, line, col) =
+                    crate::json::pos_from_offset(self.parser.input(), self.parser.position());
+                Err(Error::UnexpectedEof { byte, line, col })
+            }
+        }
+    }
+}

@@ -117,7 +117,7 @@ New compute configuration lives in `crates/iroha_config/src/parameters`:
   `crates/iroha_config/src/parameters/{user,actual,defaults}.rs`. Defaults: 32
   in-flight, 512 queued per route, 200 RPS, p50 25 ms, p95 75 ms, p99 120 ms.
 - Run the lightweight bench harness to capture SLO summaries and a request/egress
-  snapshot: `cargo run -p xtask --bin compute_gateway -- bench [manifest_path]
+  snapshot: `cargo run -p xtask --features dev-tools --bin compute_gateway -- bench [manifest_path]
   [iterations] [concurrency] [out_dir]` (defaults: `fixtures/compute/manifest_compute_payments.json`,
   128 iterations, concurrency 16, outputs under
   `artifacts/compute_gateway/bench_summary.{json,md}`). The bench uses

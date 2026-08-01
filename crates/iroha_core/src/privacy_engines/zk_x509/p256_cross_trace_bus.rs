@@ -37,6 +37,7 @@
 //! The aggregate adapter registers these source-attached auxiliary columns and
 //! terminal chain in the production verifier.
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -44,6 +45,11 @@ use thiserror::Error;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::p256_external_binding_air::{
     P256ExternalBindingFixedAccessV1, P256ExternalBindingTraceV1,
+};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::p256_value_bus::{
+    P256ValueAccessKindV1, P256ValueBusBaseEndpointTraceV1, P256ValueBusErrorV1,
+    P256ValueBusFixedAccessV1, p256_value_bus_base_execution_source_cell_v1,
 };
 use super::{
     p256_ecdsa_air::P256EcdsaRoleV1,
@@ -55,9 +61,7 @@ use super::{
     },
     p256_value_bus::{
         P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1, P256_VALUE_BUS_LIMBS_V1,
-        P256_VALUE_BUS_SEGMENT_ROWS_V1, P256ValueAccessKindV1, P256ValueBusBaseEndpointTraceV1,
-        P256ValueBusErrorV1, P256ValueBusFixedAccessV1,
-        p256_value_bus_base_execution_source_cell_v1,
+        P256_VALUE_BUS_SEGMENT_ROWS_V1,
     },
 };
 use crate::privacy_engines::transparent_stark::{
@@ -156,7 +160,9 @@ const P256_CROSS_TRACE_VALUE_CELLS_V1: usize = (P256_CROSS_TRACE_INITIAL_VALUES_
     * P256_VALUE_BUS_LIMBS_V1;
 const P256_CROSS_TRACE_CERTIFICATE_WRITER_SOURCE_CELLS_V1: usize = 14_208;
 const P256_CROSS_TRACE_WALLET_WRITER_SOURCE_CELLS_V1: usize = 14_224;
+#[cfg(test)]
 const P256_CROSS_TRACE_CERTIFICATE_EVENTS_V1: usize = 216_304;
+#[cfg(test)]
 const P256_CROSS_TRACE_WALLET_EVENTS_V1: usize = 216_336;
 const P256_CROSS_TRACE_MAX_WRITER_MULTIPLICITY_V1: u16 = 129;
 
@@ -179,6 +185,7 @@ const _: () = assert!(P256_CROSS_TRACE_SINK_AUX_WIDTH_V1 == 38);
 const _: () = assert!(P256_CROSS_TRACE_WINDOW_AUX_WIDTH_V1 == 23);
 const _: () = assert!(P256_CROSS_TRACE_REDUCTION_AUX_WIDTH_V1 == 18);
 const _: () = assert!(P256_CROSS_TRACE_LOW_S_AUX_WIDTH_V1 == 13);
+const _: () = assert!(P256_CROSS_TRACE_MAX_CONSTRAINT_DEGREE_V1 == 3);
 
 /// Cross-trace endpoint domain included in every active factor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -324,6 +331,7 @@ pub(crate) enum P256CrossTraceBusErrorV1 {
     #[error("zk-X509 P-256 cross-trace topology is invalid")]
     Topology,
     /// A source row is not the verifier-selected committed cell.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 cross-trace source is invalid")]
     Source,
     /// A multiplicity is unsupported, missing, duplicated, or inconsistent.
@@ -333,6 +341,7 @@ pub(crate) enum P256CrossTraceBusErrorV1 {
     #[error("zk-X509 P-256 cross-trace challenges are invalid")]
     Challenge,
     /// A product, addition chain, boundary, or terminal constraint failed.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 cross-trace constraint failed")]
     Constraint,
     /// A bounded allocation or checked index exceeded the release envelope.
@@ -349,6 +358,7 @@ impl From<P256ExternalBindingErrorV1> for P256CrossTraceBusErrorV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl From<P256ValueBusErrorV1> for P256CrossTraceBusErrorV1 {
     fn from(error: P256ValueBusErrorV1) -> Self {
         match error {
@@ -416,6 +426,7 @@ pub(crate) fn build_zk_x509_p256_cross_trace_regular_aux_v1(
 }
 
 /// Build one deterministic ordinary auxiliary row for a streaming consumer.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_regular_row_v1(
     fixed: P256CrossTraceRegularFixedRowV1,
     source_values: [F; P256_CROSS_TRACE_EVENT_SLOTS_V1],
@@ -569,7 +580,6 @@ pub(crate) struct P256CrossTraceSinkFixedRowV1 {
 /// allocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct P256CrossTraceSinkFixedV1 {
-    role: P256EcdsaRoleV1,
     logical: Vec<[Option<P256ExternalBindingCrossSourceV1>; P256_EXTERNAL_BINDINGS_PER_ROW_V1]>,
 }
 
@@ -604,7 +614,7 @@ impl P256CrossTraceSinkFixedV1 {
         {
             return Err(P256CrossTraceBusErrorV1::Topology);
         }
-        Ok(Self { role, logical })
+        Ok(Self { logical })
     }
 
     /// Regenerate one exact fixed row, including canonical inactive padding.
@@ -663,12 +673,14 @@ impl P256CrossTraceSinkFixedV1 {
     }
 
     /// Logical non-padding row count.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn logical_rows_v1(&self) -> usize {
         self.logical.len()
     }
 }
 
 /// Compile the compact role-derived sink schedule.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn compile_zk_x509_p256_cross_trace_sink_fixed_v1(
     role: P256EcdsaRoleV1,
 ) -> Result<P256CrossTraceSinkFixedV1, P256CrossTraceBusErrorV1> {
@@ -794,8 +806,9 @@ impl<'a> P256CrossTraceSinkStreamV1<'a> {
     }
 
     /// Verifier-fixed role.
+    #[cfg(test)]
     pub(crate) fn role_v1(&self) -> P256EcdsaRoleV1 {
-        self.fixed.role
+        self.binding.role
     }
 
     /// Number of rows not yet emitted.
@@ -923,7 +936,6 @@ pub(crate) struct P256CrossTraceWriterFixedRowV1 {
 /// Compact verifier-owned writer-source schedule.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct P256CrossTraceWriterSourceFixedV1 {
-    role: P256EcdsaRoleV1,
     multiplicities: Vec<u16>,
 }
 
@@ -947,6 +959,7 @@ pub(crate) struct P256CrossTraceWriterAuxRowV1 {
 
 /// Constant-memory deterministic provider for the `2^19` writer-source
 /// auxiliary rows.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256CrossTraceWriterSourceStreamV1<'a> {
     value_bus: &'a P256ValueBusBaseEndpointTraceV1,
     fixed: Arc<P256CrossTraceWriterSourceFixedV1>,
@@ -997,10 +1010,7 @@ impl P256CrossTraceWriterSourceFixedV1 {
         {
             return Err(P256CrossTraceBusErrorV1::Multiplicity);
         }
-        Ok(Self {
-            role,
-            multiplicities,
-        })
+        Ok(Self { multiplicities })
     }
 
     /// Verifier-preprocessed row at one two-factor-packed value-bus ordinal.
@@ -1061,6 +1071,7 @@ impl P256CrossTraceWriterSourceFixedV1 {
     }
 
     /// Number of distinct writer cells consumed by the sink.
+    #[cfg(test)]
     pub(crate) fn active_source_cells_v1(&self) -> usize {
         self.multiplicities
             .iter()
@@ -1069,6 +1080,7 @@ impl P256CrossTraceWriterSourceFixedV1 {
     }
 
     /// Writer-use count including exact multiplicities.
+    #[cfg(test)]
     pub(crate) fn total_uses_v1(&self) -> usize {
         self.multiplicities
             .iter()
@@ -1083,6 +1095,7 @@ impl P256CrossTraceWriterSourceFixedV1 {
 /// A first pass validates every selected source and computes the terminal. The
 /// returned provider then regenerates all `2^20` rows sequentially without
 /// retaining the roughly 272 MiB row-major auxiliary trace.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_p256_cross_trace_writer_source_v1(
     value_bus: &P256ValueBusBaseEndpointTraceV1,
     role: P256EcdsaRoleV1,
@@ -1108,6 +1121,7 @@ pub(crate) fn build_zk_x509_p256_cross_trace_writer_source_v1(
     })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compute_writer_terminal_v1(
     value_bus: &P256ValueBusBaseEndpointTraceV1,
     fixed: &P256CrossTraceWriterSourceFixedV1,
@@ -1126,6 +1140,7 @@ fn compute_writer_terminal_v1(
     Ok(running)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
     /// Restart deterministic row replay without recompiling multiplicities or
     /// recomputing the terminal.
@@ -1244,6 +1259,7 @@ pub(crate) fn evaluate_zk_x509_p256_cross_trace_writer_row_constraints_v1(
     residues
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_writer_row_v1(
     fixed: P256CrossTraceWriterFixedRowV1,
     source_values: [F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
@@ -1339,6 +1355,7 @@ fn writer_cell_at_execution_ordinal_v1(
     Ok(None)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn projected_writer_source_values_v1(
     value_bus: &P256ValueBusBaseEndpointTraceV1,
     packed_ordinal: usize,
@@ -1400,6 +1417,7 @@ fn compress_event_v1(
 }
 
 /// Exact maximum tagged-event count used in the four-lane soundness bound.
+#[cfg(test)]
 pub(crate) const fn p256_cross_trace_events_v1(role: P256EcdsaRoleV1) -> usize {
     match role {
         P256EcdsaRoleV1::CertificateOrCrl => P256_CROSS_TRACE_CERTIFICATE_EVENTS_V1,

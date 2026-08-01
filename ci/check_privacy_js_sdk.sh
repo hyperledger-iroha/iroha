@@ -107,9 +107,9 @@ export PYTHONDONTWRITEBYTECODE=1
   test/instructionBuilders.test.js
 "${NODE_BIN}" --test test/proofAttachmentParity.test.js
 "${NODE_BIN}" --test test/privacyExact12FixtureBundle.test.js
-"${NODE_BIN}" --test --test-name-pattern "package dist entrypoint exports only the canonical privacy capability bridge|package declarations expose readonly snapshot metadata without retired privacy types" \
+"${NODE_BIN}" --test --test-name-pattern "package dist entrypoint exports only the canonical privacy compiled-profile catalog bridge|package declarations expose readonly snapshot metadata without retired privacy types" \
   test/package_dist.test.js
 "${NODE_BIN}" --test --test-name-pattern "strict NodeNext resolves the root and every public subpath from a packed layout" \
   test/packageTypes.test.js
-"${NODE_BIN}" --test --test-name-pattern "browser crypto exposes only the privacy capability bridge as a safe stub" \
+"${NODE_BIN}" --test --test-name-pattern "browser crypto exposes only the privacy compiled-profile catalog bridge as a safe stub" \
   test/crypto.browser.test.js

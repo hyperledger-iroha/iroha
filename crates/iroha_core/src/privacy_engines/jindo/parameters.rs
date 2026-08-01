@@ -6,7 +6,9 @@
 //! consensus code: its selected output is pinned here and covered by the engine
 //! manifest and known-answer tests.
 
-use super::JINDO_MAX_BATCH_SIZE_V1;
+use iroha_data_model::privacy::IROHA_JINDO_OUTER_COMMITMENT_RANK_V1;
+
+use super::{JINDO_ENCODING_EXPONENT_V1, JINDO_MAX_BATCH_SIZE_V1};
 
 /// Closed discrete-Gaussian widths used by the native Jindo prover.
 ///
@@ -94,10 +96,10 @@ pub(crate) struct JindoParametersV1 {
 /// The only native Jindo parameter profile compiled for the first release.
 pub(crate) const JINDO_PARAMETERS_V1: JindoParametersV1 = JindoParametersV1 {
     max_batch_size: JINDO_MAX_BATCH_SIZE_V1,
-    rows: 17,
+    rows: JINDO_ENCODING_EXPONENT_V1 + 1,
     columns: 1,
     inner_msis_rank: 15,
-    outer_msis_rank: 13,
+    outer_msis_rank: IROHA_JINDO_OUTER_COMMITMENT_RANK_V1,
     mlwe_rank: 32,
     log_inner_cutoff: 40,
     log_outer_cutoff: 65,
@@ -160,6 +162,10 @@ mod tests {
     fn all_profile_counts_and_bounds_are_nonzero_and_bounded() {
         let profile = JINDO_PARAMETERS_V1;
         assert_eq!(profile.max_batch_size, JINDO_MAX_BATCH_SIZE_V1);
+        assert_eq!(
+            profile.outer_msis_rank,
+            IROHA_JINDO_OUTER_COMMITMENT_RANK_V1
+        );
         assert_eq!(profile.inner_msis_rank * (profile.columns + 1), 30);
         assert!(profile.outer_msis_rank > 0);
         assert!(profile.mlwe_rank > profile.inner_msis_rank);

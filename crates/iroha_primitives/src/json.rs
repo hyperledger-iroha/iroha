@@ -83,7 +83,7 @@ impl norito::core::NoritoSerialize for Json {
         }
     }
 
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let wire = JsonWireRef(Cow::Borrowed(self.0.as_str()));
         norito::core::NoritoSerialize::serialize(&wire, writer)
     }

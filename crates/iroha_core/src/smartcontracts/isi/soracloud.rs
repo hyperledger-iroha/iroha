@@ -587,16 +587,22 @@ fn require_soracloud_permission(
     authority: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
-    let has_permission = state_transaction
+    let required = Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new(()));
+    let has_direct = state_transaction
         .world
-        .account_permissions
-        .get(authority)
-        .is_some_and(|permissions| {
-            permissions
-                .iter()
-                .any(|permission| permission.name() == CAN_MANAGE_SORACLOUD_PERMISSION)
+        .account_permissions_iter(authority)
+        .is_ok_and(|permissions| permissions.into_iter().any(|actual| actual == &required));
+    let has_role = state_transaction
+        .world
+        .account_roles_iter(authority)
+        .any(|role_id| {
+            state_transaction
+                .world
+                .roles
+                .get(role_id)
+                .is_some_and(|role| role.permissions().any(|actual| actual == &required))
         });
-    if has_permission {
+    if has_direct || has_role {
         Ok(())
     } else {
         Err(InstructionExecutionError::InvariantViolation(
@@ -5267,6 +5273,34 @@ fn verify_soracloud_fhe_full_bootstrap_execution_proofs(
     Ok(())
 }
 
+fn validate_soracloud_fhe_state_payload(
+    value_size_bytes: Option<u64>,
+    value_payload: Option<&[u8]>,
+    payload_commitment: Option<Hash>,
+) -> Result<(u64, Hash, BfvIdentifierCiphertext), InstructionExecutionError> {
+    let value_size_bytes = value_size_bytes
+        .ok_or_else(|| invalid_parameter("FHE upsert requires value_size_bytes"))?;
+    let value_payload =
+        value_payload.ok_or_else(|| invalid_parameter("FHE upsert requires value_payload"))?;
+    let payload_commitment = payload_commitment
+        .ok_or_else(|| invalid_parameter("FHE upsert requires payload commitment"))?;
+    let actual_value_size = u64::try_from(value_payload.len())
+        .map_err(|_| invalid_parameter("FHE value_payload length exceeds u64 range"))?;
+    if value_size_bytes != actual_value_size {
+        return Err(invalid_parameter(format!(
+            "FHE value_size_bytes {value_size_bytes} does not match value_payload length {actual_value_size}"
+        )));
+    }
+    if payload_commitment != Hash::new(value_payload) {
+        return Err(invalid_parameter("FHE payload commitment mismatch"));
+    }
+
+    let params = ram_lfe_bfv_parameters_v1();
+    let envelope = decode_soracloud_fhe_envelope(value_payload)?;
+    validate_soracloud_fhe_envelope_shape(&params, &envelope, "fhe state upsert")?;
+    Ok((value_size_bytes, payload_commitment, envelope))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn verify_soracloud_fhe_input_admission_proof(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -5281,6 +5315,17 @@ fn verify_soracloud_fhe_input_admission_proof(
     governance_tx_hash: Hash,
     proof: Option<&SoracloudFheInputAdmissionProofV1>,
 ) -> Result<Option<(u128, BfvCiphertextBoundModeV1, Hash)>, InstructionExecutionError> {
+    let validated_input_payload = if operation == SoraStateMutationOperationV1::Upsert
+        && encryption == SoraStateEncryptionV1::FheCiphertext
+    {
+        Some(validate_soracloud_fhe_state_payload(
+            value_size_bytes,
+            value_payload,
+            payload_commitment,
+        )?)
+    } else {
+        None
+    };
     let Some(proof) = proof else {
         return Ok(None);
     };
@@ -5294,30 +5339,11 @@ fn verify_soracloud_fhe_input_admission_proof(
             "FHE input admission proofs require FheCiphertext encryption",
         ));
     }
-    let value_size_bytes = value_size_bytes
-        .ok_or_else(|| invalid_parameter("FHE input admission proof requires value_size_bytes"))?;
-    let value_payload = value_payload
-        .ok_or_else(|| invalid_parameter("FHE input admission proof requires value_payload"))?;
-    let payload_commitment = payload_commitment.ok_or_else(|| {
-        invalid_parameter("FHE input admission proof requires payload commitment")
-    })?;
-    let actual_value_size = u64::try_from(value_payload.len()).map_err(|_| {
-        invalid_parameter("FHE input admission value_payload length exceeds u64 range")
-    })?;
-    if value_size_bytes != actual_value_size {
-        return Err(invalid_parameter(format!(
-            "FHE input admission value_size_bytes {value_size_bytes} does not match value_payload length {actual_value_size}"
-        )));
-    }
-    let actual_payload_commitment = Hash::new(value_payload);
-    if payload_commitment != actual_payload_commitment {
-        return Err(invalid_parameter(
-            "FHE input admission payload commitment mismatch",
-        ));
-    }
+    let (value_size_bytes, payload_commitment, input_envelope) = validated_input_payload
+        .ok_or_else(|| {
+            invalid_parameter("FHE input admission proof requires an FHE upsert payload")
+        })?;
     let params = ram_lfe_bfv_parameters_v1();
-    let input_envelope = decode_soracloud_fhe_envelope(value_payload)?;
-    validate_soracloud_fhe_envelope_shape(&params, &input_envelope, "fhe input admission")?;
     proof
         .validate()
         .map_err(|err| invalid_parameter(format!("invalid FHE input admission proof: {err}")))?;
@@ -18824,6 +18850,75 @@ mod tests {
     }
 
     #[test]
+    fn soracloud_permission_accepts_exact_assigned_role() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut state_transaction = state_block.transaction();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+        let role_id: RoleId = "soracloud_operator".parse().expect("valid role id");
+        let role = Role::new(role_id.clone(), BOB_ID.clone())
+            .add_permission(Permission::new(
+                CAN_MANAGE_SORACLOUD_PERMISSION.into(),
+                Json::new(()),
+            ))
+            .build(&BOB_ID);
+        state_transaction.world.roles.insert(role_id.clone(), role);
+        state_transaction.world.account_roles.insert(
+            crate::role::RoleIdWithOwner::new(BOB_ID.clone(), role_id),
+            (),
+        );
+
+        require_soracloud_permission(&BOB_ID, &state_transaction)?;
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_permission_rejects_same_name_wrong_payload_direct_and_role()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut state_transaction = state_block.transaction();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+        state_transaction.world.add_account_permission(
+            &BOB_ID,
+            Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new("all")),
+        );
+        let role_id: RoleId = "malformed_soracloud_operator"
+            .parse()
+            .expect("valid role id");
+        let role = Role::new(role_id.clone(), BOB_ID.clone())
+            .add_permission(Permission::new(
+                CAN_MANAGE_SORACLOUD_PERMISSION.into(),
+                Json::new(true),
+            ))
+            .build(&BOB_ID);
+        state_transaction.world.roles.insert(role_id.clone(), role);
+        state_transaction.world.account_roles.insert(
+            crate::role::RoleIdWithOwner::new(BOB_ID.clone(), role_id),
+            (),
+        );
+
+        let error = require_soracloud_permission(&BOB_ID, &state_transaction)
+            .expect_err("same-name permissions with non-unit payloads must not authorize");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvariantViolation(message)
+                if message.as_ref() == "not permitted: CanManageSoracloud"
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn soracloud_active_validator_authority_rejects_mismatched_public_lane_validator_rows()
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
@@ -20699,7 +20794,7 @@ mod tests {
                 .expect("encrypt bounded-noise slot")
             })
             .collect::<Vec<_>>();
-        norito::to_bytes(&BfvIdentifierCiphertext { slots })
+        norito::encode_canonical(&BfvIdentifierCiphertext { slots })
             .expect("encode bounded-noise FHE payload")
     }
 
@@ -20714,7 +20809,7 @@ mod tests {
         };
         let ciphertext =
             encrypt_identifier_from_seed(&public_parameters, input, seed).expect("encrypt");
-        norito::to_bytes(&ciphertext).expect("encode ciphertext")
+        norito::encode_canonical(&ciphertext).expect("encode ciphertext")
     }
 
     fn sample_fhe_envelope(input: &[u8], seed: &[u8]) -> BfvIdentifierCiphertext {
@@ -20728,7 +20823,7 @@ mod tests {
         envelope
             .slots
             .resize(RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT + 1, slot);
-        norito::to_bytes(&envelope).expect("encode oversized FHE payload")
+        norito::encode_canonical(&envelope).expect("encode oversized FHE payload")
     }
 
     const FHE_INPUT_ADMISSION_BACKEND: &str = "stark/fri/sha256-goldilocks";
@@ -48427,6 +48522,96 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(bootstrap_plaintext, vec![9, 11]);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn mutate_soracloud_state_rejects_malformed_fhe_payload_without_optional_proof()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let bundle = sample_bundle_with_state_binding(
+            "portal",
+            "1.0.0",
+            0,
+            "vault",
+            "/state/private",
+            SoraStateEncryptionV1::FheCiphertext,
+            SoraStateMutabilityV1::ReadWrite,
+            131_072,
+            262_144,
+        );
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        isi::DeploySoracloudService {
+            bundle: bundle.clone(),
+            initial_service_configs: BTreeMap::new(),
+            initial_service_secrets: BTreeMap::new(),
+            provenance: bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let service_name: Name = "portal".parse().expect("valid service name");
+        let binding_name: Name = "vault".parse().expect("valid binding name");
+        let state_key = "/state/private/malformed-without-proof";
+        let payload = structurally_truncated_fhe_payload();
+        let payload_size = u64::try_from(payload.len()).expect("payload length");
+        let payload_commitment = Hash::new(&payload);
+        let governance_tx_hash = Hash::new(b"gov-malformed-fhe-without-proof");
+        let audit_count = stx.world.soracloud_service_audit_events.len();
+        let event_count = stx.world.internal_event_buf.len();
+
+        let error = iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
+            service_name: service_name.clone(),
+            binding_name: binding_name.clone(),
+            state_key: state_key.to_owned(),
+            operation: SoraStateMutationOperationV1::Upsert,
+            value_size_bytes: Some(payload_size),
+            value_payload: Some(payload.clone()),
+            encryption: SoraStateEncryptionV1::FheCiphertext,
+            governance_tx_hash,
+            fhe_input_admission_proof: None,
+            provenance: state_mutation_provenance(
+                &service_name,
+                &binding_name,
+                state_key,
+                SoraStateMutationOperationV1::Upsert,
+                Some(payload_size),
+                Some(payload_commitment),
+                SoraStateEncryptionV1::FheCiphertext,
+                governance_tx_hash,
+                None,
+            ),
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("every FHE upsert must validate its canonical ciphertext envelope");
+
+        assert_invalid_parameter_contains(error, "invalid FHE ciphertext envelope");
+        assert!(
+            stx.world
+                .soracloud_service_state_entries
+                .get(&(
+                    service_name.as_ref().to_owned(),
+                    binding_name.as_ref().to_owned(),
+                    state_key.to_owned(),
+                ))
+                .is_none(),
+            "malformed FHE input must not persist state"
+        );
+        assert_eq!(
+            stx.world.soracloud_service_audit_events.len(),
+            audit_count,
+            "malformed FHE input must not append an audit record"
+        );
+        assert_eq!(
+            stx.world.internal_event_buf.len(),
+            event_count,
+            "malformed FHE input must not stage events"
+        );
         Ok(())
     }
 

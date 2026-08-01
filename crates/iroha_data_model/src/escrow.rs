@@ -55,7 +55,7 @@ impl EscrowId {
 }
 
 impl norito::core::NoritoSerialize for EscrowId {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(&self.0, writer)
     }
 

@@ -191,7 +191,7 @@ proof for the same exact transition. The next pair closes both parent halves;
 it never replaces one current parity with a temporal predecessor proof.
 Artifacts bind both VKs, both parameter generations, and the complete 138-limb
 compact V5 field-neutral state nested inside ABI-21/V4. Each parity exposes an
-exact 64-element public column at authenticated degree 16. The supported
+exact 66-element public column at authenticated degree 17. The supported
 same-scalar-field tuples compile: an `EqAffine` proof can be loaded in an `Fp`
 circuit and the reciprocal `EpAffine` proof in an `Fq` circuit. Earlier direct
 verifier prototypes measured multi-gigabyte RSS and are retained only as
@@ -202,7 +202,17 @@ The production route is the reviewed compact fixed-key split described by
 native-scalar half must derive every transcript challenge and residual
 coefficient, its reciprocal native-point half must constrain the identical
 proof/VK point stream and complete MSM, and both halves must bind the same exact
-field-neutral SHA-256 identity. The terminal path must additionally decide
+V2 compiled-protocol identity. The value-free compiled-protocol structure hash
+remains V1. Identity V2 absorbs its domain, parity, V1 structure digest, point
+count, every canonical compressed verifier-key point, and transcript initial
+state with Poseidon. Every 32-byte compressed point is split injectively into
+two little-endian `u128` field elements, so neither Pasta direction loses the
+compressed sign bit or aliases coordinates by modular reduction. A short
+domain/version wrapper then SHA-256-hashes the canonical Poseidon field
+encoding in one compression block. The V6 deferred-equation audit independently
+uses the same injective compressed-point-to-Poseidon construction and its own
+one-block SHA-256 domain. Native, scalar-circuit, and reciprocal-circuit
+commitments must match exactly. The terminal path must additionally decide
 `U == MSM(h_coeffs(xi), params.generators)`; checking only the 38-term PLONK
 opening residual is not an IPA decision. Native/in-circuit transcript parity,
 substitution tests, both outer proofs, recursive accumulation, and both terminal
@@ -233,8 +243,11 @@ result-state limbs, including the statement's append-only
 `next_zero_leaf_index`. ABI 21 and manifest V4 remain the only lifecycle, but
 keys, bootstrap witnesses, proofs, manifests, and schema hashes from the former
 large layout are incompatible and must not be reused. The nested compact
-profile fixes the single public-instance column at 64 field elements and degree
-16. Each authenticated `KagemushaStepCircuitParamsV4` still binds the
+profile fixes the single public-instance column at 66 field elements and degree
+17. The common semantic header occupies elements `[0, 19)`, the 38-element IPA
+accumulator occupies `[19, 57)`, Eq and Ep deferred-audit words occupy
+`[57, 61)` and `[61, 65)`, and the live selector is element 65. Each
+authenticated `KagemushaStepCircuitParamsV4` still binds the
 parameter-layout version, IPA degree, advice and lookup-advice columns by
 phase, fixed and instance columns, lookup width, exact public-input length,
 minimum unusable rows, and parent-proof byte bound. Its default value is an
@@ -269,7 +282,7 @@ materializing an n-by-m grid, and converts one coefficient column at a time.
 Empty-bootstrap assembly keeps an identity permutation implicit and
 materializes union-find state only on the first nontrivial copy. Verifier-key
 construction builds, commits, and drops one permutation polynomial at a time,
-avoiding retention of the complete reviewed 534-column permutation inventory.
+avoiding retention of the complete reviewed 297-column permutation inventory.
 Those streamed commitments complete before assigned fixed columns and
 bit-packed selectors expand into degree-sized field polynomials. The ordinary
 borrowed Halo2 entrypoints remain available, and the consuming paths produce
@@ -287,26 +300,31 @@ verifier domain alongside them.
 
 The consuming quotient evaluator preserves the ordinary prover's constraint
 and Horner order but transforms only one degree-sized copy-permutation sigma
-chunk at a time. For the reviewed 534-column permutation this keeps at most two
+chunk at a time. For the reviewed 297-column permutation this keeps at most two
 sigma cosets live instead of retaining the full permutation inventory.
 Instance conversion is deferred until its Lagrange allocation can be
 consumed, and configure metadata, selector polynomials, and the evaluator graph
 are released at their final use. Borrowed and consuming proofs are regression-
 checked byte for byte. Parameter construction also evicts each one-shot
-projective FFT cache after the corresponding Eq/Ep transform, removing roughly
-12 MiB of worker-lifetime retention on ARM at k16. Evaluation domains eagerly
-initialize only the base FFT table and leave unused 2n/4n tables lazy, avoiding
-roughly 24 MiB at k16. Quotient parts are written directly into their final
-interleaved polynomial instead of through a transpose allocation, avoiding
-roughly 8 MiB, and cached recursive FFT scratch is evicted before h-piece MSMs,
-removing another roughly 8 MiB from that overlap. The outer lifecycle remains
+projective FFT cache after the corresponding Eq/Ep transform, removing its
+domain-sized worker-lifetime retention. Evaluation domains eagerly initialize
+only the base FFT table and leave unused 2n/4n tables lazy. Quotient parts are
+written directly into their final interleaved polynomial instead of through a
+transpose allocation, and cached recursive FFT scratch is evicted before
+h-piece MSMs. The outer lifecycle remains
 in a disposable one-worker pool. Large MSMs alone acquire process-wide
 admission before scalar/base preprocessing and run in a fixed two-worker
 window pool, bounding concurrent preprocessing, window buckets, and allocator
-caches without changing accumulator order. The checked static admission
-estimate is 9,747,562,496 bytes (9.078125 GiB), not a physical RSS prediction;
-it remains below the reviewed 12 GiB exact-profile preflight ceiling, and the
-16 GiB supervisor remains authoritative.
+caches without changing accumulator order. The checked phase-aware admission
+estimate is 53,108,563,136 bytes (49.4612 GiB), not a physical-memory
+prediction. It includes the virtual graph, synthesis-local map, physical advice
+columns, processed key, and allocator reserve that overlap during the consuming
+prover. It is 7,020,979,008 bytes below the reviewed 56 GiB exact-profile
+preflight ceiling, and the 64 GiB / half-physical-RAM supervisor remains
+authoritative. The
+superseded precompact
+diagnostic peaked at 4,998,922,240 bytes; a fresh final-source k17 probe must
+replace that physical measurement.
 
 Each live V4 step carries the exact operation vector, ordered parent state and
 lineage slots, post-proof and branch folds, deferred-equation audit words, and
@@ -367,19 +385,24 @@ python3 scripts/run_kagemusha_v4_generation.py \
 
 Direct unsupervised `generate-candidate` execution is rejected. The launcher
 holds the per-user heavy-job lock shared with the strict TLAPS runner and applies
-a bounded polling ceiling at the lower of 16 GiB or half of physical RAM, with a
-target 50 ms cadence and 2-second per-inspection timeout. Inspection failure is
-terminal and a supervisor lifeline cleans the exact process group; sampling is
-scheduled from completed probes so a delayed macOS inspection cannot create a
-catch-up storm. This portable userspace polling is not an operating-system hard
-allocation limit. Generation also requires at least 16 GiB free on the pinned
+a bounded polling ceiling at the lower of 64 GiB or half of physical RAM. On
+macOS, the 250 ms runtime loop enumerates only the owned group with
+`proc_listpgrppids`, validates stable BSD identity and ownership around
+`proc_pid_rusage`, and enforces the greater of RSS or physical-footprint high
+water. Enumeration saturation, identity reuse, ownership drift, and kernel API
+failure are terminal. A threshold crossing stops the group before one final
+scoped measurement, then kills and reaps only that group. The direct child's
+kernel `wait4` peak RSS remains an independent final gate. This portable
+userspace polling is not an operating-system hard allocation limit.
+Generation also requires at least 16 GiB free on the pinned
 disk-backed output filesystem before it creates the two raw proving-key spools
 and each framed artifact copy.
-Every sample reuses one process snapshot for memory accounting and detection of
+Admission and final-success gates use a full-host process snapshot to detect
 same-user TLAPM, Isabelle, Poly/ML, or Kagemusha work outside the owned group.
-A conflict terminates only the owned generation group with status 74, and a
-final exclusion check runs before successful candidate finalization so a late
-direct job cannot produce valid evidence.
+The runtime loop never invokes global `ps`, so memory or APFS pressure cannot
+block enforcement. A conflict terminates only the owned generation group with
+status 74, and the final exclusion check prevents a late direct job from
+producing valid evidence.
 The launcher writes owner-private JSONL and summary evidence. A lower
 `--max-memory-gib` is accepted; the ceiling cannot be raised. Its one-shot
 inherited launch capability prevents stale environment markers from bypassing
@@ -389,7 +412,7 @@ normal, failed, signalled, or memory-limited return it securely removes only
 owner-private residue carrying that exact id. Build the binary first: the
 launcher accepts only the prebuilt bundle
 executable followed by `generate-candidate`, so Cargo and rustc are never
-included in the 16 GiB process group. Finalization and candidate validation do
+included in the guarded process group. Finalization and candidate validation do
 not require this generation guard. Commit-signature verification is the
 separate Git step above, and the returned `source_commit` must equal that
 verified commit. The sealed build helper requires the same clean exact source
@@ -398,23 +421,32 @@ compiler controls, and returns the exact source and binary digests. Its 24 GiB
 installed-memory floor is compiler-build admission, not an OS-hard allocation
 limit.
 
-For diagnostic RSS calibration on a dirty or unsigned development tree, build
+For diagnostic memory calibration on a dirty or unsigned development tree, build
 and run the separate non-shipping benchmark. It executes the complete compact
-k16 key-generation, bootstrap, live-proof, and verification lifecycle, streams
+k17 key-generation, bootstrap, live-proof, and verification lifecycle, streams
 both proving keys to anonymous files, and emits only validated byte counts. It
 cannot frame, publish, or promote a candidate, and its resource report is not
 release evidence:
 
 ```text
 cargo build --release -p iroha_core \
-  --features kagemusha-generation-memory-lab \
+  --features kagemusha-generation-memory-lab,dev-tools \
   --bin kagemusha_recursive_spend_v4_memory_benchmark --jobs 1
 
 python3 scripts/run_kagemusha_v4_generation_benchmark.py \
-  --resource-report <new-diagnostic-report-directory> -- \
+  --resource-report <new-diagnostic-report-directory> \
+  --scratch-parent <owner-private-disk-directory> -- \
   target/release/kagemusha_recursive_spend_v4_memory_benchmark \
-  measure-compact-k16
+  measure-compact-k17
 ```
+
+Use `probe-compact-k17-shape` in place of `measure-compact-k17` to rerun the
+populated four-role closure diagnostic. The guard admits only those two exact
+operations and rejects extra arguments. On Darwin, both diagnostic operations
+use the production runner's 250 ms process-group sampling and enforce the
+greater of aggregate RSS or physical footprint. Other hosts retain the
+process-group RSS policy because they do not expose the Darwin footprint
+counter.
 
 Use the optimized binary for calibration. An `opt-level=0` debug build derives
 the same deterministic public parameters and byte geometry, but its sequential
@@ -424,27 +456,50 @@ between runs.
 
 Generation also computes every ParamsIPA, processed verifier-key, and processed
 proving-key length from the authenticated circuit shape before allocating IPA
-parameters. The reviewed compact profile is degree 16 with `[443]` advice,
-`[47, 0, 0]` lookup-advice, one fixed, and one instance column. The two trailing
+parameters. The reviewed compact profile is degree 17 with `[220]` advice,
+`[25, 0, 0]` lookup-advice, one fixed, and one instance column. The two trailing
 zero lookup phases are canonical `BaseCircuitBuilder` output, not allocated
-advice phases. Its exact per-parity encodings are 4,194,372 bytes for ParamsIPA,
-35,018 bytes for the processed VK, and 4,594,903,830 bytes for the processed PK.
-Proving keys serialize directly into bounded owner-private staging files and are framed by streaming reads; Eq and Ep
+advice phases. Its complete configured inventory is 411 advice columns, nine
+base fixed columns, 330 selectors, 297 equality/permutation columns, 339 fixed
+polynomials, and 636 commitments. Its exact per-parity encodings are 8,388,676
+bytes for ParamsIPA, 20,362 bytes for the processed VK, and 5,347,763,078 bytes
+for the processed PK.
+Proving keys serialize directly into bounded owner-private staging files and
+are framed by streaming reads; Eq and Ep
 processed keys are never retained together or copied through a release-sized
 `Vec`. The final verifier- and proving-key circuits are consumed after
 post-synthesis breakpoint extraction or validation and before key assembly.
 Generation then stages the exact processed key before handing its owned value
 and the witness-only calibration circuit to the consuming prover. The 5 GiB
-PK role cap, 12 GiB exact-profile preflight ceiling, and 16 GiB aggregate
-generation guard are fixed. The complete
+PK role cap, 56 GiB exact-profile preflight ceiling, and 64 GiB /
+half-physical-RAM aggregate generation guard are fixed. The complete
 outer generation lifecycle runs inside a disposable one-worker Rayon pool, so
 FFT and quotient scratch cannot multiply the resident key and worker-local FFT
 caches are released at the end of the attempt. Large MSMs use the process-wide
 admitted two-worker window pool described above; their fixed accumulator order
 is unchanged. These are safety ceilings, not operator-tunable capacity targets.
-The dedicated physical degree-16 run and its observed peak-RSS evidence are
-still pending; the checked estimate and userspace guard are not substitutes for
-that measurement.
+The earlier guarded populated-profile probe synthesized all four Eq/Ep
+bootstrap/live roles twice and reported `[175]` advice with `[19, 0, 0]`
+lookup advice, but it did not contain the authentic final verifying-key point
+stream and is superseded for promotion. Authentic generation later reached a
+20,154-byte raw protocol-identity SHA preimage: 316 compression blocks required
+147,520 rows across the five Table16 lanes, exceeding the 131,063 usable k17
+rows, and failed only after roughly 29 minutes of setup. V2 protocol identity
+and V6 deferred audit now Poseidon-absorb their full injective point encodings
+and feed only their 53-byte domain/version/digest wrappers to SHA-256. The
+authentic reciprocal StepEq audit contains 1,867 dense sources; its former
+single 313,659-row trace is now split in stable order across three disjoint
+lanes whose global accumulator is equality-bound endpoint to start. The
+623-source longest lane consumes 104,667 rows, and closing the final endpoint
+to the first start enforces exactly the original unsplit identity relation.
+The composite builder also checks exact SHA-job and dense-MSM row profiles
+before key generation, so an impossible auxiliary layout fails before
+expensive setup. A fresh guarded k17 probe must re-establish the final graph's
+shape and structure consistency. The 93,120-byte per-role transcript, 186,852-byte
+initialization pair, and 191,862-byte maximum pair remain expected values until
+that probe and authentic source-sealed candidate generation confirm them;
+release finalization, physical-device evidence, and live Taira rollout remain
+pending.
 
 Candidate generation records the clean source and exact inline Eq/Ep circuit
 parameters and emits the eight role-separated artifacts. The candidate is not

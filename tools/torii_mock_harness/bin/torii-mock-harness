@@ -16,5 +16,5 @@ elif [[ -x "$BIN_DEBUG" ]]; then
   exec "$BIN_DEBUG" "$@"
 else
   echo "[torii-mock-harness] compiled binary not found; running via cargo run" >&2
-  exec cargo run -p xtask --bin torii-mock-harness -- "$@"
+  exec cargo run -p xtask --features dev-tools --bin torii-mock-harness -- "$@"
 fi

@@ -17,6 +17,7 @@ use std::{
     env,
     ffi::OsString,
     fs,
+    future::Future,
     num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     process,
@@ -78,10 +79,10 @@ use mochi_core::{
     ManagedEventStream, ManagedStatusStream, NetworkProfile, PeerLogEvent, PeerState, PrivateKey,
     ProfilePreset, SigningAuthority, StateCursor, StateEntry, StatePage, StateQueryKind,
     StatusStreamEvent, Supervisor, SupervisorBuilder, SupervisorError, SupervisorSessionInfo,
-    ToriiClient, TransactionComposeOptions, TransactionPreview, compose_preview_with_options,
-    development_signing_authorities, drafts_from_json_str, drafts_to_pretty_json,
-    fetch_dashboard_snapshot, infer_workspace_root_from_sandbox_root, run_chaos_preset,
-    run_state_query, sample_cabbage_definition_id, sample_rose_definition_id,
+    ToriiClient, ToriiError, TransactionComposeOptions, TransactionPreview,
+    compose_preview_with_options, development_signing_authorities, drafts_from_json_str,
+    drafts_to_pretty_json, fetch_dashboard_snapshot, infer_workspace_root_from_sandbox_root,
+    run_chaos_preset, run_state_query, sample_cabbage_definition_id, sample_rose_definition_id,
     sandbox_root_for_workspace,
     supervisor::RestartPolicy,
     torii::{
@@ -108,9 +109,13 @@ const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const STATUS_STALE_MULTIPLIER: u32 = 3;
 const STATUS_HISTORY_LEN: usize = 16;
 const READINESS_TIMEOUT: Duration = Duration::from_secs(8);
+const SANDBOX_READINESS_TIMEOUT: Duration = Duration::from_secs(60);
 const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const SMOKE_TIMEOUT: Duration = Duration::from_secs(12);
 const SMOKE_MAX_ATTEMPTS: usize = 3;
+const LOCAL_MCP_STARTUP_MAX_ATTEMPTS: usize = 4;
+const LOCAL_MCP_STARTUP_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
+const LOCAL_MCP_STARTUP_MAX_BACKOFF: Duration = Duration::from_secs(1);
 const EVENT_FILTER_STORAGE_KEY: &str = "mochi.event_filter";
 const ACTIVE_VIEW_STORAGE_KEY: &str = "mochi.active_view";
 const FIRST_RUN_COMPLETED_STORAGE_KEY: &str = "mochi.first_run_completed";
@@ -158,6 +163,7 @@ struct CliOverrides {
     binaries: BinaryOverrides,
     build_binaries: Option<bool>,
     readiness_smoke: Option<bool>,
+    readiness_timeout: Option<Duration>,
     restart_policy: Option<RestartPolicy>,
     nexus_config: Option<toml::Table>,
     nexus_enabled: Option<bool>,
@@ -408,6 +414,13 @@ where
             "--disable-smoke" => {
                 overrides.readiness_smoke = Some(false);
             }
+            "--readiness-timeout-ms" => {
+                let value = next_value_string(&mut iter, "--readiness-timeout-ms")?;
+                overrides.readiness_timeout = Some(parse_positive_millis_flag(
+                    &value,
+                    "--readiness-timeout-ms",
+                )?);
+            }
             "--restart-mode" => {
                 let value = next_value_string(&mut iter, "--restart-mode")?;
                 restart_mode = Some(parse_restart_mode_flag(&value)?);
@@ -485,6 +498,7 @@ fn merge_overrides(env: CliOverrides, cli: CliOverrides) -> CliOverrides {
         },
         build_binaries: cli.build_binaries.or(env.build_binaries),
         readiness_smoke: cli.readiness_smoke.or(env.readiness_smoke),
+        readiness_timeout: cli.readiness_timeout.or(env.readiness_timeout),
         restart_policy: cli.restart_policy.or(env.restart_policy),
         nexus_config: cli.nexus_config.or(env.nexus_config),
         nexus_enabled: cli.nexus_enabled.or(env.nexus_enabled),
@@ -539,6 +553,12 @@ fn parse_env_overrides() -> Result<CliOverrides, CliParseError> {
     }
     if let Some(value) = env_value("MOCHI_READINESS_SMOKE")? {
         overrides.readiness_smoke = Some(parse_bool_flag(&value, "MOCHI_READINESS_SMOKE")?);
+    }
+    if let Some(value) = env_value("MOCHI_READINESS_TIMEOUT_MS")? {
+        overrides.readiness_timeout = Some(parse_positive_millis_flag(
+            &value,
+            "MOCHI_READINESS_TIMEOUT_MS",
+        )?);
     }
 
     let env_restart_mode = env_value("MOCHI_RESTART_MODE")?
@@ -794,6 +814,16 @@ fn parse_u64_flag(value: &str, flag: &str) -> Result<u64, CliParseError> {
         .map_err(|_| CliParseError::new(format!("{flag} expects a non-negative integer")))
 }
 
+fn parse_positive_millis_flag(value: &str, flag: &str) -> Result<Duration, CliParseError> {
+    let millis = parse_u64_flag(value, flag)?;
+    if millis == 0 {
+        return Err(CliParseError::new(format!(
+            "{flag} expects an integer greater than zero"
+        )));
+    }
+    Ok(Duration::from_millis(millis))
+}
+
 fn parse_bool_flag(value: &str, flag: &str) -> Result<bool, CliParseError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Ok(true),
@@ -899,6 +929,8 @@ fn print_cli_usage() {
     println!("  --no-build-binaries          Disable auto-build of missing binaries.");
     println!("  --disable-smoke              Disable readiness smoke transactions.");
     println!("  --enable-smoke               Re-enable readiness smoke transactions.");
+    println!("  --readiness-timeout-ms <millis>");
+    println!("                               Bound cold-start readiness (default: 60000).");
     println!("  --restart-mode <never|on-failure>");
     println!("                               Choose the peer restart policy.");
     println!("  --restart-max <attempts>     Override retry attempts in on-failure mode.");
@@ -914,6 +946,15 @@ fn configured_readiness_smoke_for(
         .readiness_smoke
         .or_else(|| config.and_then(|cfg| cfg.config.readiness_smoke))
         .unwrap_or(true)
+}
+
+fn configured_readiness_options_for(overrides: &CliOverrides) -> ReadinessOptions {
+    ReadinessOptions::new(
+        overrides
+            .readiness_timeout
+            .unwrap_or(SANDBOX_READINESS_TIMEOUT),
+    )
+    .with_poll_interval(READINESS_POLL_INTERVAL)
 }
 
 fn should_default_workspace_root(
@@ -1096,6 +1137,7 @@ fn run_sandbox_serve_cli(overrides: CliOverrides) -> Result<(), String> {
     let workspace_root =
         resolve_workspace_root_for_cli(&overrides, bundle_config.as_ref(), Some(&supervisor));
     let readiness_smoke = configured_readiness_smoke_for(bundle_config.as_ref(), &overrides);
+    let readiness_options = configured_readiness_options_for(&overrides);
 
     supervisor
         .start_all()
@@ -1111,9 +1153,10 @@ fn run_sandbox_serve_cli(overrides: CliOverrides) -> Result<(), String> {
     let runtime = Runtime::new().map_err(|err| format!("failed to create runtime: {err}"))?;
     runtime.block_on(async {
         if readiness_smoke {
-            let plan = supervisor
+            let mut plan = supervisor
                 .default_readiness_smoke_plan()
                 .map_err(|err| format!("failed while preparing readiness smoke: {err}"))?;
+            plan.status_options = readiness_options;
             client.wait_for_readiness_smoke(plan).await.map_err(|err| {
                 format!(
                     "failed while waiting for readiness smoke: {err} ({:?})",
@@ -1122,10 +1165,7 @@ fn run_sandbox_serve_cli(overrides: CliOverrides) -> Result<(), String> {
             })?;
         } else {
             client
-                .wait_for_ready(
-                    ReadinessOptions::new(READINESS_TIMEOUT)
-                        .with_poll_interval(READINESS_POLL_INTERVAL),
-                )
+                .wait_for_ready(readiness_options)
                 .await
                 .map_err(|err| {
                     format!(
@@ -1138,8 +1178,7 @@ fn run_sandbox_serve_cli(overrides: CliOverrides) -> Result<(), String> {
     })?;
 
     let mcp_probe = runtime.block_on(async {
-        client
-            .validate_local_mcp()
+        validate_local_mcp_for_startup(&client)
             .await
             .map_err(|err| format!("failed while validating local MCP: {err}"))
     })?;
@@ -1165,6 +1204,55 @@ fn run_sandbox_serve_cli(overrides: CliOverrides) -> Result<(), String> {
 
     runtime.block_on(wait_for_shutdown_signal());
     Ok(())
+}
+
+async fn validate_local_mcp_for_startup(
+    client: &ToriiClient,
+) -> Result<LocalMcpProbeResult, ToriiError> {
+    retry_local_mcp_rate_limit(
+        || client.validate_local_mcp(),
+        LOCAL_MCP_STARTUP_MAX_ATTEMPTS,
+        LOCAL_MCP_STARTUP_INITIAL_BACKOFF,
+        LOCAL_MCP_STARTUP_MAX_BACKOFF,
+    )
+    .await
+}
+
+async fn retry_local_mcp_rate_limit<F, Fut>(
+    mut probe: F,
+    max_attempts: usize,
+    initial_backoff: Duration,
+    max_backoff: Duration,
+) -> Result<LocalMcpProbeResult, ToriiError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<LocalMcpProbeResult, ToriiError>>,
+{
+    let max_attempts = max_attempts.max(1);
+    let mut backoff = initial_backoff.min(max_backoff);
+    let mut attempt = 1;
+    loop {
+        match probe().await {
+            Ok(result) => return Ok(result),
+            Err(error) if local_mcp_error_is_rate_limited(&error) && attempt < max_attempts => {
+                // ToriiError does not currently retain response headers, so
+                // Retry-After is unavailable at this boundary. Keep the
+                // fallback short and bounded; all non-429 failures return
+                // immediately without retrying protocol or catalog errors.
+                tokio::time::sleep(backoff).await;
+                backoff = backoff.saturating_mul(2).min(max_backoff);
+                attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn local_mcp_error_is_rate_limited(error: &ToriiError) -> bool {
+    matches!(
+        error,
+        ToriiError::UnexpectedStatus { status, .. } if status.as_u16() == 429
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2880,6 +2968,39 @@ lane_count = 2
     }
 
     #[test]
+    fn parse_cli_readiness_timeout_applies_to_cold_start() {
+        let parsed = parse_cli_overrides_from(vec![
+            OsString::from("--readiness-timeout-ms"),
+            OsString::from("300000"),
+        ])
+        .expect("parse CLI");
+        assert_eq!(
+            parsed.overrides.readiness_timeout,
+            Some(Duration::from_secs(300))
+        );
+        let options = configured_readiness_options_for(&parsed.overrides);
+        assert_eq!(options.timeout, Duration::from_secs(300));
+        assert_eq!(options.poll_interval, READINESS_POLL_INTERVAL);
+    }
+
+    #[test]
+    fn sandbox_readiness_timeout_defaults_to_cold_start_budget() {
+        let options = configured_readiness_options_for(&CliOverrides::default());
+        assert_eq!(options.timeout, SANDBOX_READINESS_TIMEOUT);
+        assert_eq!(options.poll_interval, READINESS_POLL_INTERVAL);
+    }
+
+    #[test]
+    fn parse_cli_readiness_timeout_rejects_zero() {
+        let error = parse_cli_overrides_from(vec![
+            OsString::from("--readiness-timeout-ms"),
+            OsString::from("0"),
+        ])
+        .expect_err("zero readiness timeout must be rejected");
+        assert!(error.to_string().contains("greater than zero"));
+    }
+
+    #[test]
     fn parse_cli_unknown_flag_errors() {
         let err = parse_cli_overrides_from(vec![OsString::from("--unknown")])
             .expect_err("unknown flag should error");
@@ -2970,6 +3091,28 @@ lane_count = 2
         let _smoke = CliEnvGuard::set("MOCHI_READINESS_SMOKE", "false");
         let overrides = parse_env_overrides().expect("parse env overrides");
         assert_eq!(overrides.readiness_smoke, Some(false));
+    }
+
+    #[test]
+    fn env_readiness_timeout_override_applies() {
+        let _guard = cli_env_lock().lock().expect("env lock");
+        let _timeout = CliEnvGuard::set("MOCHI_READINESS_TIMEOUT_MS", "45000");
+        let overrides = parse_env_overrides().expect("parse env overrides");
+        assert_eq!(overrides.readiness_timeout, Some(Duration::from_secs(45)));
+    }
+
+    #[test]
+    fn cli_readiness_timeout_overrides_environment() {
+        let env_overrides = CliOverrides {
+            readiness_timeout: Some(Duration::from_secs(45)),
+            ..Default::default()
+        };
+        let cli_overrides = CliOverrides {
+            readiness_timeout: Some(Duration::from_secs(300)),
+            ..Default::default()
+        };
+        let merged = merge_overrides(env_overrides, cli_overrides);
+        assert_eq!(merged.readiness_timeout, Some(Duration::from_secs(300)));
     }
 
     #[test]
@@ -12556,7 +12699,9 @@ impl ToriiErrorInfoUiExt for ToriiErrorInfo {
     fn color(&self) -> Color32 {
         match self.kind {
             ToriiErrorKind::Decode => Color32::from_rgb(200, 160, 64),
-            ToriiErrorKind::Timeout => Color32::from_rgb(200, 160, 64),
+            ToriiErrorKind::Timeout | ToriiErrorKind::SmokeAdmissionOutcomeUnknown => {
+                Color32::from_rgb(200, 160, 64)
+            }
             ToriiErrorKind::SmokeRejected => Color32::from_rgb(200, 64, 64),
             ToriiErrorKind::HttpTransport
             | ToriiErrorKind::UnexpectedStatus
@@ -13255,7 +13400,10 @@ mod tests {
         collections::VecDeque,
         num::NonZeroU64,
         path::Path,
-        sync::Arc,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::{Duration, Instant},
     };
 
@@ -13291,11 +13439,11 @@ mod tests {
     use norito::json::{self, Value};
 
     use super::{
-        ActiveView, CliOverrides, InstructionPermission, MaintenanceCommand, MaintenanceState,
-        MaintenanceTask, MochiApp, ProfilePreset, SignerEntryForm, SignerEntryState,
-        StatePageCache, StateQueryKind, SupervisorBuilder, compose_app_env_recipe,
-        compose_launch_recipe, ensure_http_base, filter_state_entries,
-        reset_cli_overrides_for_tests, shell_quote,
+        ActiveView, CliOverrides, InstructionPermission, LocalMcpProbeResult, MaintenanceCommand,
+        MaintenanceState, MaintenanceTask, MochiApp, ProfilePreset, SignerEntryForm,
+        SignerEntryState, StatePageCache, StateQueryKind, SupervisorBuilder,
+        compose_app_env_recipe, compose_launch_recipe, ensure_http_base, filter_state_entries,
+        reset_cli_overrides_for_tests, retry_local_mcp_rate_limit, shell_quote,
     };
 
     #[test]
@@ -13347,6 +13495,93 @@ mod tests {
             ensure_http_base("http://127.0.0.1:8080/"),
             "http://127.0.0.1:8080"
         );
+    }
+
+    fn local_mcp_probe_fixture() -> LocalMcpProbeResult {
+        LocalMcpProbeResult {
+            protocol_version: "2025-06-18".to_owned(),
+            toolset_version: Some("test-v1".to_owned()),
+            tool_count: 1,
+            tool_names: vec!["iroha.health".to_owned()],
+        }
+    }
+
+    fn local_mcp_rate_limit_error() -> ToriiError {
+        ToriiError::UnexpectedStatus {
+            status: "429".parse().expect("valid status code"),
+            reject_code: None,
+            message: Some("mcp request rate limited".to_owned()),
+        }
+    }
+
+    #[test]
+    fn local_mcp_startup_retry_recovers_from_transient_429() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed_attempts = Arc::clone(&attempts);
+        let result = runtime.block_on(retry_local_mcp_rate_limit(
+            move || {
+                let attempt = observed_attempts.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if attempt < 2 {
+                        Err(local_mcp_rate_limit_error())
+                    } else {
+                        Ok(local_mcp_probe_fixture())
+                    }
+                }
+            },
+            4,
+            Duration::ZERO,
+            Duration::ZERO,
+        ));
+
+        assert_eq!(
+            result.expect("third attempt succeeds"),
+            local_mcp_probe_fixture()
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn local_mcp_startup_retry_never_retries_protocol_failure() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed_attempts = Arc::clone(&attempts);
+        let error = runtime
+            .block_on(retry_local_mcp_rate_limit(
+                move || {
+                    observed_attempts.fetch_add(1, Ordering::SeqCst);
+                    async { Err(ToriiError::Decode("invalid MCP tool catalog".to_owned())) }
+                },
+                4,
+                Duration::ZERO,
+                Duration::ZERO,
+            ))
+            .expect_err("protocol failure must be returned immediately");
+
+        assert!(matches!(error, ToriiError::Decode(_)));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn local_mcp_startup_retry_is_bounded() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed_attempts = Arc::clone(&attempts);
+        let error = runtime
+            .block_on(retry_local_mcp_rate_limit(
+                move || {
+                    observed_attempts.fetch_add(1, Ordering::SeqCst);
+                    async { Err(local_mcp_rate_limit_error()) }
+                },
+                3,
+                Duration::ZERO,
+                Duration::ZERO,
+            ))
+            .expect_err("persistent throttling must remain visible");
+
+        assert!(matches!(error, ToriiError::UnexpectedStatus { .. }));
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
     }
 
     #[test]

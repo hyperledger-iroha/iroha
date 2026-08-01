@@ -561,7 +561,10 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     )
     .with_executable(Executable::IvmProved(derive_resp.proved.clone()))
     .with_metadata(tx_meta.clone())
-    .with_attachments(ProofAttachmentList(vec![attachment.clone()]))
+    .with_attachments(
+        ProofAttachmentList::try_from(vec![attachment.clone()])
+            .expect("one attachment is a valid bounded proof list"),
+    )
     .sign(client.key_pair.private_key());
     client
         .submit_transaction_blocking(&tx_valid)
@@ -572,7 +575,10 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     let tx_bad = TransactionBuilder::new(client.chain.clone(), client.account.clone(), fee_payment)
         .with_executable(Executable::IvmProved(derive_resp.proved))
         .with_metadata(tx_meta)
-        .with_attachments(ProofAttachmentList(vec![bad_attachment]))
+        .with_attachments(
+            ProofAttachmentList::try_from(vec![bad_attachment])
+                .expect("one attachment is a valid bounded proof list"),
+        )
         .sign(client.key_pair.private_key());
     let bad = client.submit_transaction_blocking(&tx_bad);
     assert!(

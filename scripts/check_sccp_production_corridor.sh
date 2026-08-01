@@ -1476,7 +1476,7 @@ phase_rust_sccp() {
     cargo test --locked -p iroha_sccp -- --nocapture
   run_cmd \
     env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
-    cargo test --locked -p iroha_sccp --bin sccp_release_evidence -- --nocapture
+    cargo test --locked -p iroha_sccp --features dev-tools --bin sccp_release_evidence -- --nocapture
 }
 
 phase_evidence_scripts() {
@@ -1490,7 +1490,7 @@ phase_evidence_scripts() {
   fi
   run_cmd \
     env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
-    cargo build --locked -p iroha_sccp --bin sccp_release_evidence
+    cargo build --locked -p iroha_sccp --features dev-tools --bin sccp_release_evidence
   run_cmd env "SCCP_RELEASE_RUST_VALIDATOR=$validator" \
     "$SCCP_CORRIDOR_PYTHON_BIN" -m pytest -q \
     pytests/scripts/check_sccp_production_corridor_test.py \

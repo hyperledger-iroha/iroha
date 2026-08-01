@@ -1,7 +1,5 @@
 //! Core Norito functionality tests.
 
-use std::io::Write;
-
 use byteorder::{ByteOrder, LittleEndian};
 use iroha_schema::IntoSchema;
 use norito::core::*;
@@ -114,9 +112,9 @@ fn checksum_validation() {
 struct A(u32, u32);
 
 impl NoritoSerialize for A {
-    fn serialize<W: Write>(&self, mut w: W) -> Result<(), Error> {
-        self.0.serialize(&mut w)?;
-        self.1.serialize(&mut w)
+    fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
+        self.0.serialize(encoder)?;
+        self.1.serialize(encoder)
     }
 }
 

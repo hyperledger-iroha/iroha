@@ -122,7 +122,7 @@ advert_args=(
   --issued-at=1700000000
 )
 
-cargo run -p sorafs_car --bin sorafs_provider_advert -- \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_provider_advert -- \
   --prepare "${advert_args[@]}" \
   --public-key-file=provider.pub \
   --public-key-fingerprint-sha256="$REVIEWED_PROVIDER_KEY_SHA256" \
@@ -132,7 +132,7 @@ cargo run -p sorafs_car --bin sorafs_provider_advert -- \
 # Send provider-advert.signing-payload to the governed PKCS#11/HSM signer.
 # The signer returns exactly 64 raw Ed25519 signature bytes in provider.sig.
 
-cargo run -p sorafs_car --bin sorafs_provider_advert -- \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_provider_advert -- \
   --emit "${advert_args[@]}" \
   --public-key-file=provider.pub \
   --public-key-fingerprint-sha256="$REVIEWED_PROVIDER_KEY_SHA256" \

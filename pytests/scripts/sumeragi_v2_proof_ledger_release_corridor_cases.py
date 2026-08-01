@@ -2105,7 +2105,7 @@ def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> Non
 
     for source in (release_source, soak_source):
         assert "unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN" in source
-        assert "CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami" in source
+        assert "CARGO_BIN_EXE_irohad CARGO_BIN_EXE_kagami" in source
         assert "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA" in source
         assert "TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO" in source
         assert "CARGO_BIN_EXE_iroha" in source
@@ -2116,11 +2116,11 @@ def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> Non
         assert "ensure_source_bound_localnet_binaries" in source
         assert "export_source_bound_localnet_binaries" in source
         assert (
-            'export TEST_NETWORK_BIN_IROHAD="${IROHA_TEST_TARGET_DIR}/release/iroha3d"'
+            'export TEST_NETWORK_BIN_IROHAD="${IROHA_TEST_TARGET_DIR}/release/irohad"'
             in source
         )
         assert (
-            'export TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="${IROHA_TEST_TARGET_DIR}/message-control/release/iroha3d"'
+            'export TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="${IROHA_TEST_TARGET_DIR}/message-control/release/irohad"'
             in source
         )
         assert (

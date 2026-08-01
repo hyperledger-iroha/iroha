@@ -268,7 +268,7 @@ impl Default for Uptime {
 }
 
 impl norito::core::NoritoSerialize for Uptime {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let pair = (self.0.as_secs(), self.0.subsec_nanos());
         norito::core::NoritoSerialize::serialize(&pair, writer)
     }
@@ -430,7 +430,7 @@ impl From<LayerWidthBuckets> for [u64; 8] {
 }
 
 impl norito::core::NoritoSerialize for LayerWidthBuckets {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5], self.0[6], self.0[7],
         );
@@ -2152,7 +2152,7 @@ impl Default for SorafsNodeOtel {
 }
 
 impl norito::core::NoritoSerialize for MicropaymentCreditSnapshot {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.deterministic_charge.clone(),
             self.credit_generated.clone(),
@@ -2203,7 +2203,7 @@ impl<'a> DecodeFromSlice<'a> for MicropaymentCreditSnapshot {
 }
 
 impl norito::core::NoritoSerialize for MicropaymentTicketCounters {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (self.processed, self.won, self.duplicate);
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
@@ -2254,7 +2254,7 @@ pub struct MicropaymentSampleStatus {
 }
 
 impl norito::core::NoritoSerialize for MicropaymentSampleStatus {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.provider_id_hex.clone(),
             self.credits.clone(),
@@ -3616,7 +3616,7 @@ impl NexusLaneTeuBuckets {
 }
 
 impl norito::core::NoritoSerialize for NexusLaneTeuBuckets {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.floor,
             self.headroom,
@@ -3729,7 +3729,7 @@ impl norito::json::JsonDeserialize for SchedulerLayerWidthBuckets {
 }
 
 impl norito::core::NoritoSerialize for SchedulerLayerWidthBuckets {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.buckets[0],
             self.buckets[1],
@@ -3815,7 +3815,7 @@ impl NexusLaneTeuDeferrals {
 }
 
 impl norito::core::NoritoSerialize for NexusLaneTeuDeferrals {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.cap_exceeded,
             self.envelope_limit,
@@ -3958,7 +3958,7 @@ pub struct NexusLaneTeuStatus {
 }
 
 impl norito::core::NoritoSerialize for NexusLaneTeuStatus {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(&NexusLaneTeuStatusPayload::from(self), writer)
     }
 }
@@ -4152,7 +4152,7 @@ pub struct NexusLaneRuntimeUpgradeHookStatus {
 }
 
 impl norito::core::NoritoSerialize for NexusLaneRuntimeUpgradeHookStatus {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.allow,
             self.require_metadata,
@@ -4379,7 +4379,7 @@ pub struct NexusDataspaceTeuStatus {
 }
 
 impl norito::core::NoritoSerialize for NexusDataspaceTeuStatus {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.lane_id,
             self.dataspace_id,
@@ -4610,7 +4610,7 @@ impl SumeragiConsensusStatus {
 }
 
 impl norito::core::NoritoSerialize for SumeragiConsensusStatus {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = SumeragiConsensusStatusPayload::from(self);
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
@@ -6059,7 +6059,7 @@ pub struct GovernanceManifestActivation {
 }
 
 impl norito::core::NoritoSerialize for Status {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = StatusPayload::from(self);
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
@@ -6073,7 +6073,7 @@ impl<'a> norito::core::NoritoDeserialize<'a> for Status {
 }
 
 impl norito::core::NoritoSerialize for GovernanceStatus {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.proposals,
             self.protected_namespace,
@@ -6163,7 +6163,7 @@ impl<'a> DecodeFromSlice<'a> for GovernanceStatus {
 }
 
 impl norito::core::NoritoSerialize for GovernanceProposalCounters {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (self.proposed, self.approved, self.rejected, self.enacted);
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
@@ -6199,7 +6199,7 @@ impl<'a> DecodeFromSlice<'a> for GovernanceProposalCounters {
 }
 
 impl norito::core::NoritoSerialize for GovernanceProtectedNamespaceCounters {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (self.total_checks, self.allowed, self.rejected);
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
@@ -6264,7 +6264,7 @@ impl<'a> DecodeFromSlice<'a> for GovernanceManifestAdmissionCounters {
 }
 
 impl norito::core::NoritoSerialize for GovernanceManifestQuorumCounters {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (self.total_checks, self.satisfied, self.rejected);
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
@@ -6298,7 +6298,7 @@ impl<'a> DecodeFromSlice<'a> for GovernanceManifestQuorumCounters {
 }
 
 impl norito::core::NoritoSerialize for GovernanceManifestActivation {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
             self.contract_address.clone(),
             self.code_hash_hex.clone(),
