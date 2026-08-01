@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Verify checked-in SoraFS fixtures, signatures, SDK inventory, and heavy
 # cross-language vectors. Requires Cargo, Python 3, and the repository's pinned
-# dependencies. Node.js and Go are mandatory when
-# SORAFS_FIXTURE_REQUIRE_TOOLCHAIN=1 (the release/nightly workflow sets it);
-# otherwise their heavyweight local-only checks are reported and skipped.
+# dependencies. Node.js and Go are mandatory because their heavyweight
+# cross-language checks are part of the release fixture contract.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,7 +20,6 @@ difference fails.
 Environment:
   CARGO_NET_OFFLINE                    Cargo offline mode (default: true).
   CARGO_TERM_COLOR                     Cargo colour setting (default: never).
-  SORAFS_FIXTURE_REQUIRE_TOOLCHAIN     Set to 1 to require Node.js and Go.
 EOF
 }
 
@@ -39,33 +37,20 @@ if [[ "$#" -gt 0 ]]; then
   esac
 fi
 
-require_fixture_toolchain="${SORAFS_FIXTURE_REQUIRE_TOOLCHAIN:-0}"
-case "${require_fixture_toolchain}" in
-  0|1) ;;
-  *)
-    echo "[sorafs-fixtures] error: SORAFS_FIXTURE_REQUIRE_TOOLCHAIN must be 0 or 1" >&2
-    exit 2
-    ;;
-esac
-
 cleanup_fixture_snapshots() {
   if [[ -n "${fixture_snapshot_root}" && -d "${fixture_snapshot_root}" ]]; then
     rm -rf -- "${fixture_snapshot_root}"
   fi
 }
 
-fixture_tool_available() {
+require_fixture_tool() {
   local tool_name="$1"
   local check_label="$2"
   if command -v "${tool_name}" >/dev/null 2>&1; then
     return 0
   fi
-  if [[ "${require_fixture_toolchain}" == "1" ]]; then
-    echo "[sorafs-fixtures] error: ${check_label} requires ${tool_name}" >&2
-    exit 1
-  fi
-  echo "[sorafs-fixtures] skipping ${check_label} (${tool_name} not available)" >&2
-  return 1
+  echo "[sorafs-fixtures] error: ${check_label} requires ${tool_name}" >&2
+  exit 1
 }
 
 snapshot_manifest_tree() {
@@ -557,39 +542,36 @@ backpressure = Path("fuzz/sorafs_chunker/sf1_profile_v1_backpressure.json")
 expect_aliases(backpressure)
 PY
 
-if fixture_tool_available node "SF1 vector parity"; then
-  echo "[sorafs-fixtures] running SF1 vector parity (Node)"
-  node scripts/check_sf1_vectors.mjs
-fi
+require_fixture_tool node "SF1 vector parity"
+echo "[sorafs-fixtures] running SF1 vector parity (Node)"
+node scripts/check_sf1_vectors.mjs
 
 echo "[sorafs-fixtures] running 1 GiB chunker regression (Rust)"
 cargo test --locked -p sorafs_chunker --test one_gib -- --ignored
 
-if fixture_tool_available go "1 GiB Go regression"; then
-  echo "[sorafs-fixtures] running 1 GiB chunker regression (Go)"
-  go_cache="${repo_root}/target/go-cache"
-  go_mod_cache="${repo_root}/target/go-mod-cache"
-  go_tmp="${repo_root}/target/go-tmp"
-  go_path="${repo_root}/target/go"
-  mkdir -p "${go_cache}" "${go_mod_cache}" "${go_tmp}" "${go_path}"
-  (
-    cd fixtures/sorafs_chunker
-    SORAFS_HEAVY=1 \
-    GOCACHE="${go_cache}" \
-    GOMODCACHE="${go_mod_cache}" \
-    GOPATH="${go_path}" \
-    TMPDIR="${go_tmp}" \
-    GOTMPDIR="${go_tmp}" \
-      go test ./...
-  )
-fi
+require_fixture_tool go "1 GiB Go regression"
+echo "[sorafs-fixtures] running 1 GiB chunker regression (Go)"
+go_cache="${repo_root}/target/go-cache"
+go_mod_cache="${repo_root}/target/go-mod-cache"
+go_tmp="${repo_root}/target/go-tmp"
+go_path="${repo_root}/target/go"
+mkdir -p "${go_cache}" "${go_mod_cache}" "${go_tmp}" "${go_path}"
+(
+  cd fixtures/sorafs_chunker
+  SORAFS_HEAVY=1 \
+  GOCACHE="${go_cache}" \
+  GOMODCACHE="${go_mod_cache}" \
+  GOPATH="${go_path}" \
+  TMPDIR="${go_tmp}" \
+  GOTMPDIR="${go_tmp}" \
+    go test ./...
+)
 
-if fixture_tool_available node "1 GiB Node regression"; then
-  echo "[sorafs-fixtures] running 1 GiB chunker regression (Node)"
-  (
-    cd javascript/iroha_js
-    SORAFS_HEAVY=1 node --test test/sorafsChunker.oneGib.test.js
-  )
-fi
+require_fixture_tool node "1 GiB Node regression"
+echo "[sorafs-fixtures] running 1 GiB chunker regression (Node)"
+(
+  cd javascript/iroha_js
+  node scripts/run-test-profile.mjs heavy
+)
 
 echo "[sorafs-fixtures] fixtures stable and signatures verified"

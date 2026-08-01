@@ -6056,11 +6056,12 @@ pub(crate) struct ProductionInFlightFirstReleaseReleaseProjection {
 /// Validator sets use the same 1..=128 canonical-order bitmap geometry as the
 /// production height context. The paired TLA+ instance remains deliberately
 /// bounded to one producer and two replicas; its states embed into this wider
-/// relation. `binding_a` is the exact content-bound QueuePlan admission
-/// preimage identity. `payload_binding_a` identifies the authenticated
-/// committee members whose custody of that preimage is established at this
-/// boundary; it is committee-bounded and must include the selected producer,
-/// but it does not assert knowledge by every validator.
+/// relation. `binding_a` is the exact content-bound FIFO-ordered conjunction
+/// of the selected QueuePlan admission preimages. `payload_binding_a`
+/// identifies the authenticated committee members whose custody of that
+/// complete reservation group is established at this boundary; it is
+/// committee-bounded and must include the selected producer, but it does not
+/// assert knowledge by every validator.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProductionInFlightFirstReleaseStateProjection {
     pub(crate) validator_count: u8,

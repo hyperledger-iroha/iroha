@@ -180,6 +180,7 @@ export type {
   PrivacyProtocolLimitsV1,
   PrivacyProtocolTagV1,
   PrivacyTaggedUnitV1,
+  PrivacyU64V1,
 } from "./privacy-capabilities.js";
 export interface CryptoKeyPair {
   algorithm: CryptoAlgorithm;
@@ -1249,13 +1250,14 @@ export interface ConfidentialEncryptedPayloadInput {
 export interface ProofAttachmentInput {
   backend: string;
   proof: BinaryLike;
-  verifyingKeyRef: VerifyingKeyIdLike;
+  verifyingKeyRef: { backend: string; name: string };
   verifyingKeyCommitment?: BinaryLike | null;
+  envelopeHash?: BinaryLike | null;
   lanePrivacy?: {
     commitmentId: number;
-    merkle?: {
+    merkle: {
       leaf: BinaryLike;
-      leafIndex?: number;
+      leafIndex: number;
       auditPath: BinaryLike[];
     };
   } | null;
@@ -3921,6 +3923,8 @@ type NoritoRuntimeNamespaceExport =
   | "noritoDecodeInstruction"
   | "noritoDecodeInstructionBoxArchive"
   | "noritoDecodeOpenVerifyEnvelope"
+  | "noritoDecodePrivacyExact12FixtureBundleBase64V1"
+  | "noritoDecodePrivacyExact12FixtureBundleV1"
   | "noritoEncodeInstruction"
   | "noritoEncodeInstructionBoxArchive"
   | "noritoEncodeContractManifestSignaturePayload"
@@ -3929,7 +3933,11 @@ type NoritoRuntimeNamespaceExport =
   | "noritoEncodeMultisigProposeRequest"
   | "noritoEncodeSorafsBillingAcknowledgementProofV1"
   | "noritoEncodeOpenVerifyEnvelope"
+  | "noritoEncodePrivacyExact12FixtureBundleV1"
   | "noritoEncodeTransactionPayloadBatch"
+  | "PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1"
+  | "PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1"
+  | "PRIVACY_EXACT12_PROTOCOL_IDS_V1"
   | "SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1"
   | "SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1"
   | "validateNoritoFrame"
@@ -3939,8 +3947,8 @@ type NoritoRuntimeNamespaceExport =
 
 type CryptoRuntimeNamespaceExport =
     "CRYPTO_ALGORITHMS"
-  | "PRIVACY_CAPABILITY_VALIDATION_STATUS_V1"
-  | "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES"
+  | "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES"
+  | "PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1"
   | "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION"
   | "SM2_DEFAULT_DISTINGUISHED_ID"
   | "SM2_PRIVATE_KEY_LENGTH"
@@ -3967,7 +3975,7 @@ type CryptoRuntimeNamespaceExport =
   | "loadSm2KeyPair"
   | "normalizeCryptoAlgorithm"
   | "normalizeRecoveryPhrase"
-  | "privacyCapabilitiesV1"
+  | "privacyCompiledProfileCatalogV1"
   | "privateKeyMultihash"
   | "publicKeyFromPrivate"
   | "publicKeyMultihash"
@@ -11939,8 +11947,8 @@ export function deriveConfidentialNullifierV2(input: {
   rho?: ArrayBufferView | ArrayBuffer | Buffer;
 }): { nullifier: Buffer; nullifierHex: string };
 
-export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: number;
-export const PRIVACY_CAPABILITY_VALIDATION_STATUS_V1: Readonly<{
+export const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES: number;
+export const PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1: Readonly<{
   VALID: 0;
   NULL_POINTER: 1;
   EMPTY: 2;
@@ -11949,10 +11957,15 @@ export const PRIVACY_CAPABILITY_VALIDATION_STATUS_V1: Readonly<{
   SCHEMA_MISMATCH: 5;
   NON_CANONICAL: 6;
   MALFORMED_ARCHIVE: 7;
-  INVALID_SNAPSHOT: 8;
+  INVALID_CATALOG: 8;
 }>;
 export function isPrivacyNativeAvailable(): boolean;
-export function privacyCapabilitiesV1(): Buffer;
+/**
+ * Return this native binary's local compiled-profile catalog. This is build
+ * metadata only; network readiness requires `getPrivacyCapabilitiesV1` and a
+ * fresh committed Torii response.
+ */
+export function privacyCompiledProfileCatalogV1(): Buffer;
 
 export interface Sm2Fixture {
   distid: string;
@@ -12050,6 +12063,69 @@ export function noritoDecodeOpenVerifyEnvelope(
   proof_bytes: number[];
   aux: number[];
 };
+export const PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1:
+  "iroha.privacy.exact12-typed-fixture-bundle.v1";
+export const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1: 2097152;
+export const PRIVACY_EXACT12_PROTOCOL_IDS_V1: readonly [
+  "zk-ace-pq-authorization-v0",
+  "anonymous-pgc-k-out-of-n-v1",
+  "verange-transparent-range-v1",
+  "iroha-zk-ams-v1",
+  "vega-existing-credential-zk-v0",
+  "iroha-zk-x509-stark-p256-v0",
+  "iroha-jindo-polynomial-commitment-v0",
+  "iroha-bootle-lantern-anoncred-v1",
+  "orchard-halo2-actions-v1",
+  "monero-fcmp-plus-plus-v1",
+  "iroha-ivm-private-note-stark-v1",
+  "pq-masp-stark-v0",
+];
+export type PrivacyExact12ProtocolIdV1 =
+  (typeof PRIVACY_EXACT12_PROTOCOL_IDS_V1)[number];
+export interface PrivacyExact12TypedFixtureRowV1 {
+  protocolId: PrivacyExact12ProtocolIdV1;
+  statementNorito: Uint8Array;
+  envelopeNorito: Uint8Array;
+  submitProofWireId: "iroha.privacy.submit_proof.v1";
+  submitProofInstructionNorito: Uint8Array;
+  transactionIntentProjectionNorito: Uint8Array;
+  transactionIntentDigest: Uint8Array;
+  unsignedTransactionPayloadNorito: Uint8Array;
+  signedTransactionVersionedNorito: Uint8Array;
+  signedTransactionHash: Uint8Array;
+}
+export interface PrivacyExact12TypedFixtureRowInputV1 {
+  protocolId: PrivacyExact12ProtocolIdV1;
+  statementNorito: BinaryLike;
+  envelopeNorito: BinaryLike;
+  submitProofWireId: "iroha.privacy.submit_proof.v1";
+  submitProofInstructionNorito: BinaryLike;
+  transactionIntentProjectionNorito: BinaryLike;
+  transactionIntentDigest: BinaryLike;
+  unsignedTransactionPayloadNorito: BinaryLike;
+  signedTransactionVersionedNorito: BinaryLike;
+  signedTransactionHash: BinaryLike;
+}
+export interface PrivacyExact12FixtureBundleV1 {
+  version: 1;
+  rows: PrivacyExact12TypedFixtureRowV1[];
+}
+export interface PrivacyExact12FixtureBundleInputV1 {
+  version: 1;
+  rows: ReadonlyArray<Readonly<PrivacyExact12TypedFixtureRowInputV1>>;
+}
+/** Decode an exact canonical-standard-base64 checked Exact12 archive. */
+export function noritoDecodePrivacyExact12FixtureBundleBase64V1(
+  value: string,
+): PrivacyExact12FixtureBundleV1;
+/** Decode one canonical native-independent Exact12 outer Norito archive. */
+export function noritoDecodePrivacyExact12FixtureBundleV1(
+  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+): PrivacyExact12FixtureBundleV1;
+/** Re-encode a complete Exact12 bundle with canonical outer Norito layout. */
+export function noritoEncodePrivacyExact12FixtureBundleV1(
+  value: Readonly<PrivacyExact12FixtureBundleInputV1>,
+): Uint8Array;
 export interface NoritoFrameValidationOptions {
   context?: string;
   expectedSchemaHash?: ArrayBufferView | ArrayBuffer | Buffer;
@@ -13764,5 +13840,4 @@ export const NumericV1: {
 
 export * from "./nexus-app.js";
 export * from "./transaction-codec.js";
-export * from "./ivm-artifact-admission-wasm.js";
 export * from "./smart-contract-deployment.js";

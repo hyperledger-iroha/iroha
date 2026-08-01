@@ -69,7 +69,10 @@ final class PrivacyNativeBridgeTests: XCTestCase {
             "unknown-privacy-protocol-v1",
         ] {
             XCTAssertThrowsError(try PrivacyProtocolIdV1(canonicalLabel: rejected)) {
-                XCTAssertEqual($0 as? PrivacyCapabilityBridgeError, .unknownProtocol)
+                XCTAssertEqual(
+                    $0 as? PrivacyCompiledProfileCatalogBridgeError,
+                    .unknownProtocol
+                )
             }
         }
     }
@@ -104,19 +107,85 @@ final class PrivacyNativeBridgeTests: XCTestCase {
     }
 
     func testSharedTypedValidatorStatusContractIsStable() {
-        XCTAssertEqual(PrivacyNativeBridge.nativeArchiveMaximumBytes, 256 * 1024)
+        XCTAssertEqual(
+            PrivacyNativeBridge.compiledProfileCatalogArchiveMaximumBytes,
+            256 * 1024
+        )
         XCTAssertEqual(
             PrivacyNativeBridge.exact12FixtureBundleMaximumBytes,
             2 * 1024 * 1024
         )
         XCTAssertEqual(
-            PrivacyCapabilityValidationStatusV1.allCases.map(\.rawValue),
+            PrivacyCompiledProfileCatalogValidationStatusV1.allCases.map(\.rawValue),
             Array(0...8)
         )
         XCTAssertEqual(
             PrivacyExact12FixtureValidationStatusV1.allCases.map(\.rawValue),
             Array(0...8)
         )
+    }
+
+    func testCompiledProfileCatalogPreflightRejectsEmptyAndOversizeWithoutNativeCalls() throws {
+        XCTAssertEqual(
+            try PrivacyNativeBridge.validateCompiledProfileCatalogV1(Data()),
+            .empty
+        )
+        XCTAssertEqual(
+            try PrivacyNativeBridge.validateCompiledProfileCatalogV1(
+                Data(
+                    repeating: 0,
+                    count: PrivacyNativeBridge.compiledProfileCatalogArchiveMaximumBytes + 1
+                )
+            ),
+            .archiveTooLarge
+        )
+    }
+
+    func testCompiledProfileCatalogRoundTripsAndRejectsAdversarialBytes() throws {
+        guard PrivacyNativeBridge.isNativeAvailable else {
+            XCTFail("ABI-21 NoritoBridge with compiled-profile catalog symbols is required.")
+            return
+        }
+        let canonical = try PrivacyNativeBridge.compiledProfileCatalogV1()
+        XCTAssertFalse(canonical.isEmpty)
+        XCTAssertLessThanOrEqual(
+            canonical.count,
+            PrivacyNativeBridge.compiledProfileCatalogArchiveMaximumBytes
+        )
+        XCTAssertEqual(
+            try PrivacyNativeBridge.validateCompiledProfileCatalogV1(canonical),
+            .valid
+        )
+        XCTAssertEqual(try PrivacyNativeBridge.compiledProfileCatalogV1(), canonical)
+
+        for truncated in [
+            Data(canonical.dropLast()),
+            Data(canonical.dropFirst()),
+            Data(canonical.prefix(canonical.count / 2)),
+        ] {
+            XCTAssertNotEqual(
+                try PrivacyNativeBridge.validateCompiledProfileCatalogV1(truncated),
+                .valid
+            )
+            XCTAssertThrowsError(
+                try PrivacyNativeBridge.requireCompiledProfileCatalogV1(truncated)
+            )
+        }
+
+        var trailing = canonical
+        trailing.append(0)
+        XCTAssertNotEqual(
+            try PrivacyNativeBridge.validateCompiledProfileCatalogV1(trailing),
+            .valid
+        )
+        for index in Set([0, canonical.count / 2, canonical.count - 1]) {
+            var mutated = canonical
+            mutated[index] ^= 0x80
+            XCTAssertNotEqual(
+                try PrivacyNativeBridge.validateCompiledProfileCatalogV1(mutated),
+                .valid
+            )
+        }
     }
 
     func testExact12FixturePreflightRejectsEmptyAndOversizeWithoutNativeCalls() throws {
@@ -183,7 +252,7 @@ final class PrivacyNativeBridgeTests: XCTestCase {
             )
         }
 
-        let crossSchemaArchive = try PrivacyNativeBridge.capabilitiesArchiveV1()
+        let crossSchemaArchive = try PrivacyNativeBridge.compiledProfileCatalogV1()
         XCTAssertNotEqual(
             try PrivacyNativeBridge.validateExact12FixtureBundleV1(crossSchemaArchive),
             .valid

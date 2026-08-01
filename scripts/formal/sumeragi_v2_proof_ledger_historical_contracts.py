@@ -30,6 +30,8 @@ REQUIRED_MODEL_MODULES = (
     "SumeragiV2TemporalLemmas",
     "SumeragiV2LivenessProofs",
     "SumeragiV2ServiceRankLemmas",
+    "SumeragiV2FiniteProducerEpisodes",
+    "SumeragiV2FiniteProducerEpisodeProofs",
     "SumeragiV2EffectiveLockAcquisition",
     "SumeragiV2EffectiveLockAcquisitionProofs",
     "SumeragiV2AsyncNetwork",
@@ -53,6 +55,7 @@ REQUIRED_MODEL_MODULES = (
     "SumeragiV2DurableDecisionRecoveryProofs",
     *(module for module, _ in ASYNC_LIVENESS_SHARDS),
     *ASYNC_CAUSAL_EPISODE_PROOF_MODULES,
+    "SumeragiV2AsyncFiniteProducerEpisodes",
     *ASYNC_TEMPORAL_CLOSURE_PROOF_MODULES,
     *ADEQUATE_LEADER_CONTINUATION_PROOF_MODULES,
     ASYNC_LIVENESS_FACADE,
@@ -1432,6 +1435,7 @@ HISTORICAL_INDEXED_SCHEDULER_FIELDS = (
     "asyncServeAdmissions",
     "asyncServeReservations",
     "asyncServeTombstones",
+    "asyncServeAttempts",
     "asyncOutstandingWork",
     "asyncIoReadyCompletions",
     "asyncLocalReadyCompletions",
@@ -1469,6 +1473,12 @@ HISTORICAL_INDEXED_RECOVERY_FIELDS = (
     "asyncRecoveryGeneration",
     "asyncRecoveryReplayQueue",
     "asyncHistoricalLockRestartAuthorities",
+)
+
+HISTORICAL_INDEXED_PRODUCER_FIELDS = (
+    "asyncProducerKnownObligations",
+    "asyncProducerConsumedEpisodes",
+    "asyncProducerOriginHistory",
 )
 
 HISTORICAL_INDEXED_INSTANCE_CONTRACTS = (

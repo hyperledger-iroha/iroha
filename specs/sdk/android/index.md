@@ -221,8 +221,8 @@ CUDA helpers are shipped behind the deterministic `CudaAccelerators` facade
 with a Kotlin-friendly wrapper in `CudaAcceleratorsKotlin`. The native backend
 remains disabled by default; enable it with `-Diroha.cuda.enableNative=true`
 and consult the CUDA operator guide (`gpu_operator_guide.md`) for setup and the
-manual smoke harness (`IROHA_CUDA_SELFTEST=1 ...run_tests.sh --tests
-org.hyperledger.iroha.android.gpu.CudaAcceleratorsNativeSmokeTests`).
+hardware-qualified JNI smoke command. The ordinary JVM suite excludes the
+GPU-only class; the nightly CUDA lane selects it explicitly and fails closed.
 
 ## Pending Work
 

@@ -8,35 +8,44 @@
 //! verification. It deliberately contains no X.509, private-note, or PQ-MASP
 //! policy.
 
-#[cfg(target_os = "linux")]
+use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::io::{Read as _, Seek as _, Write as _};
+#[cfg(all(test, target_os = "linux"))]
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    io::{Read as _, Seek as _, Write as _},
-};
 
+#[cfg(test)]
 use chacha20poly1305::{
     XChaCha20Poly1305,
     aead::{Aead as _, KeyInit as _, Payload},
 };
 use rand::TryRngCore;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use rayon::prelude::*;
-#[cfg(target_os = "linux")]
+#[cfg(all(test, target_os = "linux"))]
 use rustix::fs::{MemfdFlags, SealFlags, fcntl_get_seals, memfd_create};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
+#[cfg(test)]
 use zeroize::Zeroizing;
 
 use super::transparent_stark::{
     ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
-    ReplayableTraceMaskV1, Sha256MerkleTreeV1, TRANSCRIPT_FRAME_DOMAIN_V1, TransparentStarkErrorV1,
-    TransparentTranscriptV1, append_u16_v1, append_u32_v1, append_u64_v1,
-    derive_unique_query_indices_v1, ensure_fri_terminal_degree_fp4_v1, fri_fold_pair_fp4_v1,
-    fri_fold_pair_with_inverse_x_fp4_v1, goldilocks_batch_invert_v1,
-    goldilocks_fp4_evaluate_coset_v1, goldilocks_fp4_ifft_v1, goldilocks_ifft_v1,
-    goldilocks_primitive_root_v1, masked_trace_coefficients_on_coset_v1,
-    masked_trace_coefficients_with_mask_v1, masked_trace_lde_column_with_mask_v1,
-    random_goldilocks_fp4_v1, sample_trace_mask_v1, sha256_frame_v1, sha256_merkle_node_v1,
+    Sha256MerkleTreeV1, TransparentStarkErrorV1, TransparentTranscriptV1, append_u16_v1,
+    append_u32_v1, append_u64_v1, derive_unique_query_indices_v1,
+    ensure_fri_terminal_degree_fp4_v1, fri_fold_pair_fp4_v1, fri_fold_pair_with_inverse_x_fp4_v1,
+    goldilocks_fp4_evaluate_coset_v1, goldilocks_fp4_ifft_v1, goldilocks_primitive_root_v1,
+    random_goldilocks_fp4_v1, sha256_frame_v1, sha256_merkle_node_v1,
+};
+#[cfg(test)]
+use super::transparent_stark::{
+    ReplayableTraceMaskV1, goldilocks_batch_invert_v1, masked_trace_lde_column_with_mask_v1,
+};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::transparent_stark::{
+    TRANSCRIPT_FRAME_DOMAIN_V1, goldilocks_ifft_v1, masked_trace_coefficients_on_coset_v1,
+    masked_trace_coefficients_with_mask_v1, sample_trace_mask_v1,
 };
 
 const FRI_MASK_LEAF_DOMAIN_V1: &[u8] = b"iroha:privacy:aggregate-stark:fri-mask-oracle-leaf:v1";
@@ -1328,6 +1337,7 @@ pub(crate) fn row_tree_v1(
 }
 
 /// Root and canonical minimal frontier produced without retaining a Merkle tree.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StreamingMerkleCommitmentV1 {
     /// Root of the complete power-of-two leaf stream.
@@ -1342,6 +1352,7 @@ pub(crate) struct StreamingMerkleCommitmentV1 {
 /// one pending subtree per level and only those sibling hashes required by the
 /// requested canonical multiproof. Its memory is therefore
 /// `O(log(leaf_count) + frontier_len)` rather than `O(leaf_count)`.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct StreamingMerkleAccumulatorV1 {
     node_domain: &'static [u8],
     leaf_count: usize,
@@ -1351,6 +1362,7 @@ pub(crate) struct StreamingMerkleAccumulatorV1 {
     frontier: Vec<Option<[u8; 32]>>,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl StreamingMerkleAccumulatorV1 {
     /// Create an accumulator for an exact leaf count and sorted unique opening set.
     ///
@@ -1499,6 +1511,7 @@ impl StreamingMerkleAccumulatorV1 {
 }
 
 /// Commit an exact leaf iterator with logarithmic tree memory.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn streaming_merkle_commitment_v1<I>(
     node_domain: &'static [u8],
     leaf_count: usize,
@@ -1517,6 +1530,7 @@ where
 }
 
 /// Result of one column-streamed vector-row commitment pass.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StreamingRowCommitmentResultV1 {
     /// Root and canonical frontier of the committed vector rows.
@@ -1533,6 +1547,7 @@ pub(crate) struct StreamingRowCommitmentResultV1 {
 /// [`StreamingMerkleAccumulatorV1`], so neither leaves nor tree levels are
 /// retained. A second deterministic pass after Fiat–Shamir query derivation
 /// supplies the canonical frontier and the small set of opened rows.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct StreamingRowCommitmentV1 {
     rows: usize,
     width: usize,
@@ -1543,6 +1558,7 @@ pub(crate) struct StreamingRowCommitmentV1 {
     opened_rows: BTreeMap<usize, Vec<F>>,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl StreamingRowCommitmentV1 {
     /// Start an exact row commitment pass.
     pub(crate) fn new(
@@ -1672,6 +1688,7 @@ impl StreamingRowCommitmentV1 {
 /// This type deliberately implements neither `Clone` nor `Debug`. Dropping it
 /// recursively overwrites every mask coefficient through
 /// [`ReplayableTraceMaskV1`].
+#[cfg(test)]
 pub(crate) struct StreamingTraceMaskSetV1 {
     native_trace_log2: u8,
     lde_log2: u8,
@@ -1680,8 +1697,10 @@ pub(crate) struct StreamingTraceMaskSetV1 {
 
 /// Owner of one secret-bearing field column that overwrites every cell on
 /// every return path.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZeroizingFieldColumnV1(Vec<F>);
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZeroizingFieldColumnV1 {
     /// Transfer ownership to another zeroizing container without duplicating
     /// the secret-bearing allocation.
@@ -1690,6 +1709,7 @@ impl ZeroizingFieldColumnV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::ops::Deref for ZeroizingFieldColumnV1 {
     type Target = [F];
 
@@ -1698,12 +1718,14 @@ impl core::ops::Deref for ZeroizingFieldColumnV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZeroizingFieldColumnV1 {
     fn drop(&mut self) {
         zeroize_field_column_v1(&mut self.0);
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_field_column_v1(values: &mut [F]) {
     for value in values {
         value.0 = 0;
@@ -1734,6 +1756,7 @@ fn zeroize_extension_field_column_v1(values: &mut [E]) {
     }
 }
 
+#[cfg(test)]
 impl StreamingTraceMaskSetV1 {
     /// Number of committed columns.
     pub(crate) fn width(&self) -> usize {
@@ -1749,12 +1772,14 @@ impl StreamingTraceMaskSetV1 {
 /// domain, a smaller quotient domain, and transcript-derived DEEP points
 /// without anonymous matrix scratch. The type implements neither `Clone` nor
 /// `Debug`; every coefficient is overwritten recursively on drop.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct MaskedTracePolynomialSetV1 {
     native_trace_log2: u8,
     commitment_lde_log2: u8,
     columns: Vec<ZeroizingFieldColumnV1>,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MaskedTracePolynomialSetV1 {
     fn validate_v1(&self) -> Result<(usize, usize), AggregateStarkErrorV1> {
         let native_rows = checked_domain_size_v1(self.native_trace_log2)?;
@@ -1821,6 +1846,7 @@ impl MaskedTracePolynomialSetV1 {
     }
 
     /// Evaluate every retained column on one verifier-derived coset.
+    #[cfg(test)]
     pub(crate) fn evaluate_columns_on_coset_v1(
         &self,
         evaluation_log2: u8,
@@ -1843,6 +1869,7 @@ fn checked_domain_size_v1(log2: u8) -> Result<usize, AggregateStarkErrorV1> {
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_masked_trace_commitment_shape_v1(
     leaf_domain: &[u8],
     node_domain: &[u8],
@@ -1876,6 +1903,7 @@ fn validate_masked_trace_commitment_shape_v1(
 }
 
 /// Sample replayable masks and commit columns generated one at a time.
+#[cfg(test)]
 pub(crate) fn commit_masked_trace_columns_v1<R, S>(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -1944,6 +1972,7 @@ where
 
 /// Deterministically replay one streamed trace commitment with the original
 /// secret masks after Fiat–Shamir queries are fixed.
+#[cfg(test)]
 pub(crate) fn replay_masked_trace_columns_v1<S>(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -1991,6 +2020,7 @@ where
 /// to replay the exact commitment, evaluate smaller quotient cosets, and
 /// construct DEEP openings without materializing anonymous common-domain
 /// scratch.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn commit_masked_trace_polynomial_columns_v1<R, S>(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -2077,6 +2107,7 @@ where
 /// No native witness source or mask RNG is needed: the exact committed
 /// polynomials, including canonical trailing zero coefficients, are owned by
 /// `polynomials`.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn replay_masked_trace_polynomial_columns_v1(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -2110,10 +2141,14 @@ pub(crate) fn replay_masked_trace_polynomial_columns_v1(
     commitment.finish()
 }
 
+#[cfg(test)]
 const ENCRYPTED_FIELD_SCRATCH_AAD_DOMAIN_V1: &[u8] =
     b"iroha:privacy:aggregate-stark:encrypted-field-scratch-record:v1";
+#[cfg(test)]
 const XCHACHA20_POLY1305_TAG_BYTES_V1: usize = 16;
+#[cfg(test)]
 const XCHACHA20_NONCE_PREFIX_BYTES_V1: usize = 16;
+#[cfg(test)]
 const XCHACHA20_NONCE_BYTES_V1: usize = 24;
 
 /// Default number of common-domain rows authenticated in one scratch record.
@@ -2123,6 +2158,7 @@ const XCHACHA20_NONCE_BYTES_V1: usize = 24;
 /// domain at or above this size.
 pub(crate) const DEFAULT_ENCRYPTED_TRACE_SCRATCH_CHUNK_ROWS_V1: usize = 1 << 12;
 
+#[cfg(test)]
 fn encrypted_field_scratch_record_aad_v1(
     rows: usize,
     width: usize,
@@ -2146,6 +2182,7 @@ fn encrypted_field_scratch_record_aad_v1(
     .map_err(map_transparent_error_v1)
 }
 
+#[cfg(test)]
 fn encrypted_field_scratch_nonce_v1(
     nonce_prefix: &[u8; XCHACHA20_NONCE_PREFIX_BYTES_V1],
     record_index: u64,
@@ -2156,6 +2193,7 @@ fn encrypted_field_scratch_nonce_v1(
     bytes.into()
 }
 
+#[cfg(test)]
 fn encrypted_field_scratch_shape_v1(
     rows: usize,
     width: usize,
@@ -2205,6 +2243,7 @@ fn encrypted_field_scratch_shape_v1(
 /// substitution, reordering, and cross-matrix record reuse all fail closed.
 /// The ephemeral key is drawn independently from operating-system entropy so
 /// scratch encryption never perturbs deterministic proof-mask KATs.
+#[cfg(test)]
 pub(crate) struct EncryptedFieldMatrixScratchWriterV1 {
     file: std::fs::File,
     rows: usize,
@@ -2219,6 +2258,7 @@ pub(crate) struct EncryptedFieldMatrixScratchWriterV1 {
     nonce_prefix: Zeroizing<[u8; XCHACHA20_NONCE_PREFIX_BYTES_V1]>,
 }
 
+#[cfg(test)]
 fn encrypted_field_scratch_entropy_is_healthy_v1(
     key: &[u8; 32],
     nonce_prefix: &[u8; XCHACHA20_NONCE_PREFIX_BYTES_V1],
@@ -2235,6 +2275,7 @@ std::thread_local! {
         const { std::cell::Cell::new(0) };
 }
 
+#[cfg(test)]
 fn create_anonymous_scratch_file_v1() -> Result<std::fs::File, AggregateStarkErrorV1> {
     #[cfg(test)]
     ENCRYPTED_SCRATCH_FILE_CREATION_ATTEMPTS_V1.with(|attempts| {
@@ -2274,6 +2315,7 @@ fn encrypted_scratch_file_creation_attempts_v1() -> usize {
     ENCRYPTED_SCRATCH_FILE_CREATION_ATTEMPTS_V1.with(std::cell::Cell::get)
 }
 
+#[cfg(test)]
 impl EncryptedFieldMatrixScratchWriterV1 {
     /// Create an owner-private anonymous scratch with an independent ephemeral
     /// encryption key.
@@ -2429,6 +2471,7 @@ impl EncryptedFieldMatrixScratchWriterV1 {
 ///
 /// This type deliberately implements neither `Clone` nor `Debug`; all
 /// decrypted field cells are overwritten when it leaves scope.
+#[cfg(test)]
 pub(crate) struct EncryptedFieldMatrixBlockV1 {
     row_start: usize,
     row_count: usize,
@@ -2436,6 +2479,7 @@ pub(crate) struct EncryptedFieldMatrixBlockV1 {
     values: Vec<F>,
 }
 
+#[cfg(test)]
 impl EncryptedFieldMatrixBlockV1 {
     /// First common-domain row represented by this block.
     pub(crate) fn row_start(&self) -> usize {
@@ -2465,6 +2509,7 @@ impl EncryptedFieldMatrixBlockV1 {
     }
 }
 
+#[cfg(test)]
 impl Drop for EncryptedFieldMatrixBlockV1 {
     fn drop(&mut self) {
         for value in &mut self.values {
@@ -2478,6 +2523,7 @@ impl Drop for EncryptedFieldMatrixBlockV1 {
 /// Only masked polynomial evaluations are ever written. The anonymous file is
 /// closed and unlinked on drop, and its ephemeral key is recursively zeroized.
 /// At most one fixed-size row block is decrypted by [`Self::read_chunk`].
+#[cfg(test)]
 pub(crate) struct EncryptedFieldMatrixScratchV1 {
     file: std::fs::File,
     rows: usize,
@@ -2491,6 +2537,7 @@ pub(crate) struct EncryptedFieldMatrixScratchV1 {
     nonce_prefix: Zeroizing<[u8; XCHACHA20_NONCE_PREFIX_BYTES_V1]>,
 }
 
+#[cfg(test)]
 impl EncryptedFieldMatrixScratchV1 {
     /// Number of common-domain rows in the stored matrix.
     pub(crate) fn rows(&self) -> usize {
@@ -2632,6 +2679,7 @@ impl EncryptedFieldMatrixScratchV1 {
 
 /// Commit the exact row framing of a sealed encrypted scratch while retaining
 /// only one decrypted block, logarithmic Merkle state, and requested rows.
+#[cfg(test)]
 pub(crate) fn commit_encrypted_field_scratch_rows_v1(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -2683,6 +2731,7 @@ pub(crate) fn commit_encrypted_field_scratch_rows_v1(
 
 /// Replay a masked trace into authenticated anonymous scratch storage without
 /// retaining more than one native column and one LDE column in memory.
+#[cfg(test)]
 pub(crate) fn spill_replayed_masked_trace_columns_v1<S>(
     masks: &StreamingTraceMaskSetV1,
     mut source: S,
@@ -2720,6 +2769,7 @@ where
 /// for composition or post-query openings. Returning the sealed scratch
 /// prevents a second interpolation/FFT pass while retaining only one native
 /// column, one LDE column, and one decrypted row block in resident memory.
+#[cfg(test)]
 pub(crate) fn commit_masked_trace_columns_retaining_encrypted_scratch_with_chunk_rows_v1<R, S>(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -2805,6 +2855,7 @@ where
 
 /// Sample masks, commit, and retain the encrypted masked-LDE matrix using the
 /// generic bounded scratch-record height.
+#[cfg(test)]
 pub(crate) fn commit_masked_trace_columns_retaining_encrypted_scratch_v1<R, S>(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -2850,6 +2901,7 @@ where
 /// Callers that need composition or later openings must use
 /// [`commit_masked_trace_columns_retaining_encrypted_scratch_v1`] so the
 /// already-computed masked LDE is not discarded and recomputed.
+#[cfg(test)]
 pub(crate) fn commit_masked_trace_columns_via_encrypted_scratch_v1<R, S>(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -2883,6 +2935,7 @@ where
 }
 
 /// Low-resident-memory replay counterpart for an already sampled mask set.
+#[cfg(test)]
 pub(crate) fn replay_masked_trace_columns_via_encrypted_scratch_v1<S>(
     leaf_domain: &[u8],
     node_domain: &'static [u8],
@@ -2930,6 +2983,7 @@ pub(crate) fn composition_tree_v1(
 }
 
 /// Commit one aggregate composition lane without retaining a Merkle tree.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn streaming_composition_commitment_v1(
     domains: AggregateStarkDomainsV1,
     lane: usize,
@@ -3036,6 +3090,7 @@ pub(crate) fn split_composition_evaluations_v1(
 /// complete remainder is checked to be zero before the quotient is returned;
 /// a numerator that is only pointwise divisible on some evaluation set is
 /// therefore rejected.
+#[cfg(test)]
 pub(crate) fn divide_extension_polynomial_by_trace_vanishing_v1(
     numerator_coefficients: &[E],
     trace_log2: u8,
@@ -3088,6 +3143,7 @@ pub(crate) fn divide_extension_polynomial_by_trace_vanishing_v1(
 /// are materialized and batch-inverted because the vanishing values repeat
 /// with that exact period. Every pointwise division is multiplied back as an
 /// implementation invariant.
+#[cfg(test)]
 pub(crate) fn quotient_evaluations_from_constraint_coset_v1(
     numerator_evaluations: &[E],
     trace_log2: u8,
@@ -3153,6 +3209,7 @@ pub(crate) fn quotient_evaluations_from_constraint_coset_v1(
 /// coefficient chunks are then evaluated on the common commitment coset, so
 /// the resulting proof wire remains independent of the prover's smaller
 /// quotient domain.
+#[cfg(test)]
 pub(crate) fn composition_chunks_from_quotient_coset_v1(
     quotient_evaluations: &[E],
     quotient_coset_log2: u8,
@@ -3188,6 +3245,7 @@ pub(crate) fn composition_chunks_from_quotient_coset_v1(
 }
 
 /// Divide one constraint coset and canonically chunk the exact quotient.
+#[cfg(test)]
 pub(crate) fn composition_chunks_from_constraint_coset_v1(
     numerator_evaluations: &[E],
     trace_log2: u8,
@@ -3230,6 +3288,7 @@ pub(crate) fn recompose_composition_value_v1(
     Ok(value)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn evaluate_base_coefficients_at_fp4_v1(coefficients: &[F], point: E) -> E {
     coefficients
         .iter()
@@ -3250,6 +3309,7 @@ fn evaluate_fp4_coefficients_at_fp4_v1(coefficients: &[E], point: E) -> E {
         })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn base_coset_coefficients_v1(
     evaluations: &[F],
     lde_log2: u8,
@@ -3293,6 +3353,7 @@ fn fp4_coset_coefficients_v1(
 }
 
 /// Evaluate one committed base-field coset codeword at arbitrary Fp4 points.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_base_coset_polynomial_at_fp4_points_v1(
     evaluations: &[F],
     lde_log2: u8,
@@ -3319,6 +3380,7 @@ pub(crate) fn evaluate_fp4_coset_polynomial_at_point_v1(
     Ok(evaluate_fp4_coefficients_at_fp4_v1(&coefficients, point))
 }
 
+#[cfg(test)]
 fn evaluate_masked_native_column_at_points_v1(
     native: &[F],
     native_trace_log2: u8,
@@ -3345,6 +3407,7 @@ fn evaluate_masked_native_column_at_points_v1(
 
 /// Evaluate all replayable masked-native columns at `z` and
 /// `z * omega_H` without retaining their common-domain LDEs.
+#[cfg(test)]
 pub(crate) fn evaluate_masked_native_columns_at_deep_v1<S>(
     masks: &StreamingTraceMaskSetV1,
     point: E,
@@ -3385,6 +3448,7 @@ where
 /// The DEEP point must be canonical and outside the native trace subgroup.
 /// Evaluation is direct from the retained coefficients, so neither the native
 /// witness columns nor a commitment-domain codeword are reconstructed.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_masked_trace_polynomial_columns_at_deep_v1(
     polynomials: &MaskedTracePolynomialSetV1,
     point: E,
@@ -3441,6 +3505,7 @@ pub(crate) fn evaluate_composition_chunks_at_deep_v1(
 }
 
 /// Build a DEEP payload from retained materialized common-domain codewords.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_materialized_deep_proof_v1(
     trace_groups: &[AggregateTraceGroupMaterialV1],
     compositions: &[Vec<Vec<E>>],
@@ -3704,6 +3769,7 @@ pub(crate) fn fri_tree_v1(
 }
 
 /// Commit one FRI layer without retaining a Merkle tree.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn streaming_fri_commitment_v1(
     domains: AggregateStarkDomainsV1,
     lane: usize,
@@ -5099,6 +5165,7 @@ pub(crate) fn build_fri_lane_v1(
 }
 
 /// Bounded-memory transcript material for one FRI lane.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateStreamingFriLaneMaterialV1 {
     /// Layer roots, including the terminal layer.
@@ -5110,6 +5177,7 @@ pub(crate) struct AggregateStreamingFriLaneMaterialV1 {
 }
 
 /// Post-query openings and frontiers for one streamed FRI lane.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateStreamingFriLaneOpeningsV1 {
     /// Openings in the caller's canonical transcript-query order.
@@ -5120,6 +5188,7 @@ pub(crate) struct AggregateStreamingFriLaneOpeningsV1 {
 
 /// Commit and transcript-bind a complete FRI lane while retaining only one
 /// current layer and one half-sized successor layer.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_streaming_fri_lane_v1(
     parameters: AggregateStarkParametersV1,
     domains: AggregateStarkDomainsV1,
@@ -5184,6 +5253,7 @@ pub(crate) fn build_streaming_fri_lane_v1(
 
 /// Replay a committed FRI lane after transcript queries are fixed, retaining
 /// only the exact opened pairs and canonical minimal frontiers.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn open_streaming_fri_lane_v1(
     parameters: AggregateStarkParametersV1,
     domains: AggregateStarkDomainsV1,
@@ -5722,6 +5792,7 @@ fn verify_fri_query_v1(
 }
 
 /// Invoke the relation callback for every opened row and bind its results to FRI.
+#[cfg(test)]
 pub(crate) fn verify_opened_query_relations_v1<Evaluator: AggregateOpenedRowEvaluatorV1>(
     proof: &AggregateStarkProofV1,
     parameters: AggregateStarkParametersV1,

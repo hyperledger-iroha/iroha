@@ -524,10 +524,7 @@ run_javascript_parity() {
     --node "${node_binary}"
   (
     cd "${sdk_root}"
-    node --test \
-      test/cancelAssetLockV1.test.js \
-      test/sorafsAppealFinanceValidation.test.js \
-      test/sorafsOrchestrator.parity.test.js
+    node scripts/run-test-profile.mjs sorafs-native
   )
 }
 

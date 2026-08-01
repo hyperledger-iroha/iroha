@@ -1,10 +1,12 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 final class ZkInstructionUtils {
-  static final int PROOF_ATTACHMENT_MAX_BYTES = 64 * 1024 * 1024;
   private static final char[] HEX = "0123456789abcdef".toCharArray();
+  private static final String[] FORBIDDEN_PORTABLE_SEPARATORS =
+      new String[] {"..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:"};
 
   private ZkInstructionUtils() {}
 
@@ -26,16 +28,41 @@ final class ZkInstructionUtils {
 
   static String requirePortableComponent(final String value, final String name) {
     final String text = requireText(value, name);
-    if (text.length() > 256) {
-      throw new IllegalArgumentException(name + " must not exceed 256 characters");
+    final byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+    if (bytes.length > 256) {
+      throw new IllegalArgumentException(name + " must not exceed 256 UTF-8 bytes");
     }
-    for (int i = 0; i < text.length(); i++) {
-      final char ch = text.charAt(i);
-      if (ch < 0x21 || ch > 0x7e || ch == ':') {
-        throw new IllegalArgumentException(name + " must use portable ASCII without ':'");
+    if (!isPortableEndpoint(bytes[0]) || !isPortableEndpoint(bytes[bytes.length - 1])) {
+      throw new IllegalArgumentException(
+          name + " must start and end with a lowercase ASCII letter or digit");
+    }
+    for (final byte valueByte : bytes) {
+      if (!isPortableByte(valueByte)) {
+        throw new IllegalArgumentException(
+            name + " must use lowercase ASCII letters, digits, '-', '_', '/', ':', or '.'");
+      }
+    }
+    for (final String forbidden : FORBIDDEN_PORTABLE_SEPARATORS) {
+      if (text.contains(forbidden)) {
+        throw new IllegalArgumentException(name + " contains a non-canonical separator sequence");
       }
     }
     return text;
+  }
+
+  private static boolean isPortableEndpoint(final byte valueByte) {
+    final int value = valueByte & 0xff;
+    return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9');
+  }
+
+  private static boolean isPortableByte(final byte valueByte) {
+    final int value = valueByte & 0xff;
+    return isPortableEndpoint(valueByte)
+        || value == '-'
+        || value == '_'
+        || value == '/'
+        || value == ':'
+        || value == '.';
   }
 
   static String optionalVerifyingKeyId(final String value, final String name) {

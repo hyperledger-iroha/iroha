@@ -67,6 +67,7 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     assert "package_csharp_native_artifacts.py verify-package" in workflow
     assert "dotnet test Hyperledger.Iroha.Sdk.sln" in workflow
     assert "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION" not in validator_tests
+    assert "WhenAvailable" not in validator_tests
     assert "Assert.True(" in validator_tests
     assert (
         "ABI-21 connect_norito_bridge with Governance DAG symbols is required."

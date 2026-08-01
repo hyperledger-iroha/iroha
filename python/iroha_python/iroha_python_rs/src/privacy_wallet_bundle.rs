@@ -2417,7 +2417,7 @@ mod tests {
             [7; 32],
             &authority_for_seed([7; 32]),
             "iroha-zk-x509-stark-p256-v0",
-            "zk_x509_credential_presentation_v1",
+            "zk_x509_identity_presentation_v1",
             PUBLIC_ACTION.as_bytes(),
             WITNESS.as_bytes(),
         );

@@ -28,7 +28,7 @@ use iroha::{
 };
 use iroha_test_network::*;
 use iroha_test_samples::{
-    ALICE_ID, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, gen_account_in, load_sample_ivm,
+    ALICE_ID, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, gen_account_in,
 };
 use iroha_torii::{
     MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsQueryRequestDto,
@@ -42,6 +42,7 @@ const DOMAIN_REGISTRATION_RECOVERY_TIMEOUT: Duration = Duration::from_secs(60);
 const DOMAIN_REGISTRATION_RECOVERY_POLL: Duration = Duration::from_millis(250);
 const ACCOUNT_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(30);
 const ACCOUNT_VISIBILITY_POLL: Duration = Duration::from_millis(100);
+const CANONICAL_EXECUTOR: &[u8] = include_bytes!("../../defaults/executor.to");
 
 fn start_network(
     builder: NetworkBuilder,
@@ -62,8 +63,11 @@ fn multisig_supported(_client: &Client) -> bool {
     true
 }
 
-fn upgrade_executor(client: &Client, executor: impl AsRef<str>) -> Result<()> {
-    let upgrade_executor = Upgrade::new(Executor::new(load_sample_ivm(executor)));
+fn upgrade_executor(client: &Client) -> Result<()> {
+    let bytecode = iroha::data_model::transaction::executable::IvmBytecode::from_compiled(
+        CANONICAL_EXECUTOR.to_vec(),
+    );
+    let upgrade_executor = Upgrade::new(Executor::new(bytecode));
     client
         .submit_blocking(
             upgrade_executor,
@@ -1274,7 +1278,7 @@ fn multisig_register_materializes_missing_signatory_account_after_executor_upgra
     // This regression targets multisig account materialization after the executor
     // upgrade. Keep the domain bootstrap on the pre-upgrade executor so the test
     // stays scoped to the multisig path rather than unrelated domain admission.
-    upgrade_executor(&test_client, "executor_with_admin")?;
+    upgrade_executor(&test_client)?;
 
     let existing_signer = gen_account_in(&domain);
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit_blocking(
@@ -1334,7 +1338,7 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account_aft
     register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
     // Keep domain bootstrap outside the upgraded executor so this test continues
     // to isolate the post-upgrade multisig register behavior it actually covers.
-    upgrade_executor(&test_client, "executor_with_admin")?;
+    upgrade_executor(&test_client)?;
 
     let existing_signer = gen_account_in(&domain);
     let non_signatory = gen_account_in(&domain);

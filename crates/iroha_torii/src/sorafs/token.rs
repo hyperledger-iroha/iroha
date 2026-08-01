@@ -296,14 +296,21 @@ impl StreamTokenIssuer {
         expected_signer_qualification
             .validate()
             .map_err(|_| StreamTokenIssuerError::InvalidRuntimeSignerQualification)?;
-        let first = signer.qualification().map_err(map_runtime_signer_probe_error)?;
+        let first = signer
+            .qualification()
+            .map_err(map_runtime_signer_probe_error)?;
         first
             .validate()
             .map_err(|_| StreamTokenIssuerError::InvalidRuntimeSignerQualification)?;
-        if first != expected_signer_qualification {
+        if first != expected_signer_qualification
+            || signer.handle() != configured_handle
+            || signer.public_key() != configured_public_key
+        {
             return Err(StreamTokenIssuerError::RuntimeSignerQualificationMismatch);
         }
-        let second = signer.qualification().map_err(map_runtime_signer_probe_error)?;
+        let second = signer
+            .qualification()
+            .map_err(map_runtime_signer_probe_error)?;
         second
             .validate()
             .map_err(|_| StreamTokenIssuerError::RuntimeSignerQualificationChanged)?;
@@ -914,6 +921,7 @@ mod tests {
         handle: String,
         signing_key: SigningKey,
         advertised_public_key: [u8; 32],
+        first_probe_public_key: Option<[u8; 32]>,
         mode: TestSignerMode,
         qualification: StreamTokenRuntimeSignerQualificationV1,
         qualification_results: Mutex<
@@ -935,6 +943,7 @@ mod tests {
             Self {
                 handle: handle.to_owned(),
                 advertised_public_key: signing_key.verifying_key().to_bytes(),
+                first_probe_public_key: None,
                 signing_key,
                 mode,
                 qualification: StreamTokenRuntimeSignerQualificationV1::new(4, [0xb4; 32]),
@@ -960,6 +969,11 @@ mod tests {
                 .expect("test qualification results") = results;
             self
         }
+
+        fn with_first_probe_public_key(mut self, public_key: [u8; 32]) -> Self {
+            self.first_probe_public_key = Some(public_key);
+            self
+        }
     }
 
     impl StreamTokenRuntimeSigner for TestStreamTokenRuntimeSigner {
@@ -968,15 +982,18 @@ mod tests {
         }
 
         fn public_key(&self) -> [u8; 32] {
+            if self.qualification_calls.load(Ordering::Relaxed) == 1 {
+                return self
+                    .first_probe_public_key
+                    .unwrap_or(self.advertised_public_key);
+            }
             self.advertised_public_key
         }
 
         fn qualification(
             &self,
-        ) -> Result<
-            StreamTokenRuntimeSignerQualificationV1,
-            StreamTokenRuntimeSignerProbeErrorV1,
-        > {
+        ) -> Result<StreamTokenRuntimeSignerQualificationV1, StreamTokenRuntimeSignerProbeErrorV1>
+        {
             let index = self.qualification_calls.fetch_add(1, Ordering::Relaxed);
             self.qualification_results
                 .lock()
@@ -1252,40 +1269,24 @@ mod tests {
 
         config.signer_revision = None;
         assert!(matches!(
-            StreamTokenIssuer::from_config(
-                &config,
-                &configured_api_tokens(),
-                Some(signer.clone()),
-            ),
+            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(signer.clone()),),
             Err(StreamTokenIssuerError::MissingRuntimeSignerRevision)
         ));
         config.signer_revision = Some(4);
         config.signer_policy_digest = None;
         assert!(matches!(
-            StreamTokenIssuer::from_config(
-                &config,
-                &configured_api_tokens(),
-                Some(signer.clone()),
-            ),
+            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(signer.clone()),),
             Err(StreamTokenIssuerError::MissingRuntimeSignerPolicyDigest)
         ));
         config.signer_policy_digest = Some([0; 32]);
         assert!(matches!(
-            StreamTokenIssuer::from_config(
-                &config,
-                &configured_api_tokens(),
-                Some(signer.clone()),
-            ),
+            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(signer.clone()),),
             Err(StreamTokenIssuerError::InvalidRuntimeSignerQualification)
         ));
         config.signer_policy_digest = Some([0xb4; 32]);
         config.signer_revision = Some(5);
         assert!(matches!(
-            StreamTokenIssuer::from_config(
-                &config,
-                &configured_api_tokens(),
-                Some(signer.clone()),
-            ),
+            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(signer.clone()),),
             Err(StreamTokenIssuerError::RuntimeSignerQualificationMismatch)
         ));
 
@@ -1319,6 +1320,24 @@ mod tests {
         assert!(matches!(
             StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(drifting)),
             Err(StreamTokenIssuerError::RuntimeSignerQualificationChanged)
+        ));
+
+        let transient_identity_drift = Arc::new(
+            TestStreamTokenRuntimeSigner::new(
+                "pkcs11:prod/stream-token/v1",
+                [0x33; 32],
+                TestSignerMode::Sign,
+            )
+            .with_first_probe_public_key([0x7a; 32]),
+        );
+        let config = token_config(transient_identity_drift.public_key(), 2);
+        assert!(matches!(
+            StreamTokenIssuer::from_config(
+                &config,
+                &configured_api_tokens(),
+                Some(transient_identity_drift),
+            ),
+            Err(StreamTokenIssuerError::RuntimeSignerQualificationMismatch)
         ));
 
         let test_marked = Arc::new(TestStreamTokenRuntimeSigner::new(
@@ -1426,16 +1445,19 @@ mod tests {
             )
             .expect("startup qualification")
             .expect("enabled issuer");
-            assert!(matches!(
-                issuer.issue_token(
-                    quota_subject("credential-drift"),
-                    vec![0xAA],
-                    [0x11; 32],
-                    "sorafs.sf1@1.0.0".to_owned(),
-                    TokenOverrides::default(),
+            assert!(
+                matches!(
+                    issuer.issue_token(
+                        quota_subject("credential-drift"),
+                        vec![0xAA],
+                        [0x11; 32],
+                        "sorafs.sf1@1.0.0".to_owned(),
+                        TokenOverrides::default(),
+                    ),
+                    Err(StreamTokenIssuerError::RuntimeSignerQualificationChanged)
                 ),
-                Err(StreamTokenIssuerError::RuntimeSignerQualificationChanged)
-            ), "{label}");
+                "{label}"
+            );
             assert_eq!(
                 signer.calls.load(Ordering::Relaxed),
                 expected_sign_calls,
@@ -1470,13 +1492,10 @@ mod tests {
             ]),
         );
         let config = token_config(signer.public_key(), 1);
-        let issuer = StreamTokenIssuer::from_config(
-            &config,
-            &configured_api_tokens(),
-            Some(signer.clone()),
-        )
-        .expect("startup qualification")
-        .expect("enabled issuer");
+        let issuer =
+            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(signer.clone()))
+                .expect("startup qualification")
+                .expect("enabled issuer");
         let error = issuer
             .issue_token(
                 quota_subject("credential-unavailable-probe"),

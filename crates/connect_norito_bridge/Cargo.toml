@@ -26,6 +26,10 @@ privacy-production-enabled = ["iroha_data_model/kagemusha-production-enabled"]
 # JNI exports are absent unless this feature is selected explicitly; enabling
 # it does not change the production Kagemusha capability gate.
 kagemusha-candidate-evidence-lab = ["iroha_core/kagemusha-candidate-evidence-lab"]
+# Build the JNI acceleration surface against IVM's real CUDA backend. This is
+# selected only by hardware-qualified release validation; the default bridge
+# keeps the deterministic CPU fallback.
+cuda = ["ivm/cuda"]
 
 [dependencies]
 norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = false, features = ["node-codec", "std"] }

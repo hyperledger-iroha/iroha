@@ -6,6 +6,22 @@
 # DecisionAgreement, not from the write-once chain projection.
 EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "LeaderWirePhysicalFrozenCertificateRetainsPastCut",
+    ): (
+        "\\A snapshot, packet: "
+        "/\\ LeaderWirePhysicalFrozenCertificateFrontier(snapshot, packet) "
+        "/\\ [AsyncNext]_AsyncAllVars "
+        "=> /\\ ExactDecisionTargetNeutralFrozenSnapshotCarriers(snapshot)' "
+        "= ExactDecisionTargetNeutralFrozenSnapshotCarriers(snapshot) "
+        "/\\ \\A node \\in Responsive: "
+        "snapshot.schedulerCuts[node] "
+        "< AsyncNextCandidateLifecycleOrdinal(node)' "
+        "/\\ \\A node \\in Responsive: "
+        "snapshot.physicalCuts[node] "
+        "<= AsyncNextIngressPhysicalOrdinal(node)'"
+    ),
+    (
         "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
         "AdequateLeaderFixedSelectedOwnerUsesExactAsyncFairness",
     ): (
@@ -2633,7 +2649,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ gst "
         "/\\ [AsyncNext]_AsyncAllVars "
         "/\\ ~AsyncCandidateTransientMarkerExitThisStep(candidate) "
-        "=> /\\ ~AsyncCandidateTransientServiceMarked(candidate)' "
+        "=> /\\ AsyncCandidateTransientServiceActive(candidate)' "
         "/\\ ~CandidateScheduled(candidate)'"
     ),
     (
@@ -3225,7 +3241,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "packet.item.envelope.recipient, packet.item) "
         "/\\ packet.item.envelope.recipient "
         "\\in AsyncTimedServiceNodes "
-        "/\\ \\/ packet.item.source \\in AsyncTimedServiceNodes "
+        "/\\ \\/ packet.authenticatedSource \\in AsyncTimedServiceNodes "
         "\\/ /\\ packet.item.kind "
         '\\in {"CertifiedResponse", "CommitCertificateResponse"} '
         "/\\ IngressItemHasAuthenticatedHistory(packet.item) "

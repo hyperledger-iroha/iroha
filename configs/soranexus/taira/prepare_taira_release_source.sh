@@ -76,7 +76,18 @@ release_dir="$OUTPUT_DIR/dpn-validator-release"
 bundle_dir="$release_dir/source-bundle"
 mkdir -m 0700 "$release_dir" "$bundle_dir"
 base_url="https://raw.githubusercontent.com/soramitsu/dpn-api-rust/${VALIDATOR_RELEASE_REF}"
-curl_args=(--proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3)
+curl_args=(
+  --proto '=https'
+  --proto-redir '=https'
+  --tlsv1.2
+  --fail
+  --silent
+  --show-error
+  --location
+  --retry 3
+  --connect-timeout 30
+  --max-time 300
+)
 curl "${curl_args[@]}" --output "$release_dir/iroha_source_bundle.py" \
   "$base_url/scripts/iroha_source_bundle.py"
 for component in provenance.json tracked.patch untracked.tar untracked.manifest.json source.manifest.json; do
@@ -99,13 +110,20 @@ from pathlib import Path
 lock = Path(sys.argv[1])
 expected = sys.argv[2]
 bundle = Path(sys.argv[3])
-for path in [lock, *(bundle / name for name in (
-    "provenance.json",
-    "tracked.patch",
-    "untracked.tar",
-    "untracked.manifest.json",
-    "source.manifest.json",
-))]:
+for path in [
+    lock,
+    bundle.parent / "iroha_source_bundle.py",
+    *(
+        bundle / name
+        for name in (
+            "provenance.json",
+            "tracked.patch",
+            "untracked.tar",
+            "untracked.manifest.json",
+            "source.manifest.json",
+        )
+    ),
+]:
     info = path.lstat()
     if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1:
         raise SystemExit(f"downloaded release input is not one regular file: {path}")

@@ -36,6 +36,8 @@ on:
       - "scripts/check_mobile_sdk_artifacts_test.sh"
       - "scripts/check_native_sdk_abi21_artifact.py"
       - "scripts/tests/check_privacy_csharp_native_contract_test.py"
+      - "scripts/tests/check_privacy_jvm_native_contract_test.py"
+      - "scripts/tests/check_privacy_swift_native_contract_test.py"
       - "scripts/tests/mobile_sdk_python312_contract.sh"
       - "crates/connect_norito_bridge/Cargo.toml"
       - "crates/connect_norito_bridge/include/connect_norito_bridge.h"
@@ -85,14 +87,26 @@ on:
       - "javascript/iroha_js/src/index.js"
       - "javascript/iroha_js/src/instructionBuilders.js"
       - "javascript/iroha_js/src/norito.js"
+      - "javascript/iroha_js/src/proofAttachment.js"
       - "javascript/iroha_js/src/privacyCapabilities.js"
+      - "javascript/iroha_js/src/privacyCapabilityTransport.js"
+      - "javascript/iroha_js/src/strictLosslessJson.js"
+      - "javascript/iroha_js/src/toriiBrowserClient.js"
+      - "javascript/iroha_js/src/toriiClient.js"
       - "javascript/iroha_js/index.d.ts"
+      - "javascript/iroha_js/privacy-capabilities.d.ts"
       - "javascript/iroha_js/README.md"
       - "javascript/iroha_js/test/privacyFfiContractParity.test.js"
       - "javascript/iroha_js/test/privacyCatalogParity.test.js"
       - "javascript/iroha_js/test/privacyNative.test.js"
+      - "javascript/iroha_js/test/privacyCapabilities.test.js"
       - "javascript/iroha_js/test/instructionBuilders.test.js"
+      - "javascript/iroha_js/test/proofAttachmentParity.test.js"
+      - "javascript/iroha_js/test/privacyExact12FixtureBundle.test.js"
+      - "javascript/iroha_js/test/transactionBuilder.test.js"
+      - "fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64"
       - "javascript/iroha_js/test/package_dist.test.js"
+      - "javascript/iroha_js/test/packageTypes.test.js"
       - "javascript/iroha_js/test/crypto.browser.test.js"
       - "python/iroha_python/src/iroha_python/__init__.py"
       - "python/iroha_python/src/iroha_python/crypto.py"
@@ -124,24 +138,44 @@ on:
       - "IrohaSwift/README.md"
       - "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
       - "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ProofAttachment.swift"
       - "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ProofAttachmentNoritoTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift"
       - "java/iroha_android/README.md"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/LanePrivacyMerkleWitness.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/LanePrivacyProof.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/LanePrivacyWitness.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ProofAttachment.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ProofVerifierKeyRef.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ZkInstructionUtils.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtils.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyRecordDescription.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyStatus.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyExact12FixtureBundleV1.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyExact12FixtureCodecV1.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyExact12TypedFixtureRowV1.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/TransactionPayloadAdapter.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ProofAttachmentModelTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/norito/ProofAttachmentNoritoTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyExact12FixtureCodecV1Tests.java"
       - "kotlin/README.md"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstruction.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ZkAssetInstructions.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTag.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12FixtureCodecV1.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/TransactionPayloadAdapter.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ZkAssetInstructionsTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTagTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyExact12FixtureCodecV1Test.kt"
       - "csharp/README.md"
       - "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj"
       - "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs"
@@ -227,14 +261,73 @@ jobs:
           retention-days: 1
 
   privacy_swift_sdk_parse:
-    runs-on: macos-latest
-    timeout-minutes: 10
+    runs-on: macos-14
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Privacy Swift SDK parse
+      - id: privacy-python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+          update-environment: false
+      - name: Bind the canonical mobile Python
+        env:
+          SETUP_PYTHON_PATH: ${{ steps.privacy-python.outputs.python-path }}
+        run: |
+          mobile_python="$("$SETUP_PYTHON_PATH" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+      - name: Install exact Apple Rust toolchain and targets
+        shell: bash
+        run: |
+          env -i \
+            HOME="${HOME}" \
+            RUSTUP_DIST_SERVER="https://static.rust-lang.org" \
+            "${HOME}/.cargo/bin/rustup" toolchain install \
+              "1.93.1" \
+              --profile minimal \
+              --no-self-update
+          env -i \
+            HOME="${HOME}" \
+            RUSTUP_DIST_SERVER="https://static.rust-lang.org" \
+            "${HOME}/.cargo/bin/rustup" target add \
+              --toolchain "1.93.1" \
+              aarch64-apple-ios \
+              aarch64-apple-ios-sim \
+              x86_64-apple-ios \
+              aarch64-apple-darwin \
+              x86_64-apple-darwin
+      - name: Prime privacy Apple Cargo dependencies
+        run: |
+          env -i \
+            CARGO_NET_OFFLINE=false \
+            HOME="${HOME}" \
+            PATH="${HOME}/.cargo/bin:/usr/bin:/bin" \
+            "${HOME}/.cargo/bin/rustup" run "1.93.1" cargo fetch --locked
+      - name: Prepare external Apple native artifact roots
+        run: |
+          artifact_dir="$RUNNER_TEMP/iroha-privacy-swift-apple-artifacts"
+          build_dir="$RUNNER_TEMP/iroha-privacy-swift-apple-build"
+          scratch_dir="$RUNNER_TEMP/iroha-privacy-swift-package-build"
+          mkdir -p "$artifact_dir" "$build_dir" "$scratch_dir"
+          echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_SWIFT_SCRATCH_DIR=$scratch_dir" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
+      - name: Make reviewed Iroha source read-only
+        run: chmod -R a-w "$GITHUB_WORKSPACE"
+      - name: Build exact ABI-21 NoritoBridge XCFramework
+        run: NORITO_BRIDGE_PRESERVE_CARGO_TARGETS=1 scripts/build_norito_xcframework.sh
+      - name: Authenticate Apple native artifact
+        run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
+      - name: Swift privacy native fail-closed contract
+        run: python3 -I -B scripts/tests/check_privacy_swift_native_contract_test.py
+      - name: Privacy Swift SDK tests
         run: ci/check_privacy_swift_sdk.sh
 
   privacy_jvm_sdk_tests:
+    needs: privacy_native_bridge_tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -243,7 +336,20 @@ jobs:
         with:
           distribution: "temurin"
           java-version: "21"
+      - name: Download authenticated Linux ABI-21 privacy bridge
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: privacy-csharp-native-${{ github.sha }}
+          path: ${{ runner.temp }}/iroha-privacy-csharp-native
+      - name: JVM privacy native fail-closed contract
+        run: python3 -I -B scripts/tests/check_privacy_jvm_native_contract_test.py
       - name: Privacy JVM and Java SDK tests
+        env:
+          IROHA_NATIVE_LIBRARY_PATH: ${{ runner.temp }}/iroha-privacy-csharp-native
+          LD_LIBRARY_PATH: ${{ runner.temp }}/iroha-privacy-csharp-native
+          PRIVACY_JVM_NATIVE_ARTIFACT: ${{ runner.temp }}/iroha-privacy-csharp-native/libconnect_norito_bridge.so
+          PRIVACY_JVM_NATIVE_MANIFEST: ${{ runner.temp }}/iroha-privacy-csharp-native/native-sdk-abi21.json
+          PRIVACY_JVM_PYTHON_BIN: python3
         run: ci/check_privacy_jvm_sdk.sh
 
   privacy_csharp_sdk_tests:

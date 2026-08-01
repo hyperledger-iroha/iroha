@@ -714,7 +714,7 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
-    public void LinkedFixtureBundleMatchesNativeReferenceWhenAvailable()
+    public void LinkedFixtureBundleMatchesNativeReference()
     {
         Assert.True(
             SoraFsReferenceValidators.IsFixtureBundleAvailable(),
@@ -759,7 +759,7 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
-    public void OrderbookAndPdpFixturesMatchExactNativeReferenceOutcomesWhenAvailable()
+    public void OrderbookAndPdpFixturesMatchExactNativeReferenceOutcomes()
     {
         Assert.True(
             SoraFsReferenceValidators.IsOrderbookPdpAvailable(),
@@ -986,7 +986,7 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
-    public void OrderbookBuildersProduceAcceptedPayloadsWhenNativeAvailable()
+    public void OrderbookBuildersProduceAcceptedPayloads()
     {
         Assert.True(
             SoraFsReferenceValidators.IsOrderbookPdpAvailable(),
@@ -1066,7 +1066,7 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
-    public void GovernanceLogNodeMatchesModerationGoldenByteForByteWhenAvailable()
+    public void GovernanceLogNodeMatchesModerationGoldenByteForByte()
     {
         Assert.True(
             SoraFsReferenceValidators.IsAvailable(),
@@ -1101,7 +1101,7 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
-    public void GovernanceFixturesAndNegativeVectorsMatchNativeReferenceWhenAvailable()
+    public void GovernanceFixturesAndNegativeVectorsMatchNativeReference()
     {
         Assert.True(
             SoraFsReferenceValidators.IsAvailable(),

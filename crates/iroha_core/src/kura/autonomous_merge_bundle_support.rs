@@ -76,6 +76,7 @@ pub(crate) struct LaneReadyAuthorization {
     proposal: LaneBlockProposalV1,
     availability_body: LanePayloadAvailabilityBodyV1,
     reservation_group: LaneQueueReservationGroupBindingV1,
+    producer: PeerId,
     signer: PeerId,
     height_context_id: HeightContextId,
 }
@@ -109,6 +110,112 @@ impl LaneReadyAuthorization {
             && group.identity.lane_block_view == descriptor.lane_block_view
             && group.reservation_count
                 == u64::try_from(descriptor.accepted_transaction_hashes.len()).unwrap_or(u64::MAX)
+    }
+
+    /// Consume this exact durable-input authority at the READY signature
+    /// boundary after rechecking the complete first-release projection.
+    pub(crate) fn consume_signing_request(
+        self,
+        proposal: &LaneBlockProposalV1,
+        availability_body: &LanePayloadAvailabilityBodyV1,
+        signer: &PeerId,
+        height_context_id: HeightContextId,
+    ) -> bool {
+        if !self.matches_signing_request(proposal, availability_body, signer, height_context_id) {
+            return false;
+        }
+        let descriptor = &proposal.descriptor;
+        let Ok(validator_count) = u8::try_from(descriptor.validator_set.len()) else {
+            return false;
+        };
+        if validator_count == 0 || validator_count > 128 {
+            return false;
+        }
+        let validator_mask = if validator_count == 128 {
+            u128::MAX
+        } else {
+            (1_u128 << validator_count) - 1
+        };
+        let Some(producer_index) = descriptor
+            .validator_set
+            .iter()
+            .position(|peer| peer == &self.producer)
+        else {
+            return false;
+        };
+        let Some(signer_index) = descriptor
+            .validator_set
+            .iter()
+            .position(|peer| peer == signer)
+        else {
+            return false;
+        };
+        let Some(producer) = u32::try_from(producer_index)
+            .ok()
+            .and_then(|index| 1_u128.checked_shl(index))
+        else {
+            return false;
+        };
+        let Some(actor) = u32::try_from(signer_index)
+            .ok()
+            .and_then(|index| 1_u128.checked_shl(index))
+        else {
+            return false;
+        };
+        let selected_count = self.reservation_group.reservation_count;
+        if !(1..=u64::try_from(iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS)
+            .unwrap_or(u64::MAX))
+            .contains(&selected_count)
+        {
+            return false;
+        }
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(self.reservation_group);
+        let payload_owners = producer | actor;
+        let before = ProductionInFlightFirstReleaseStateProjection {
+            validator_count,
+            producer,
+            producer_selected_owner: producer,
+            replicated_carrier_owners: validator_mask & !producer,
+            payload_binding_a: payload_owners,
+            binding_a,
+            queue: ProductionInFlightFirstReleaseQueueProjection {
+                plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+                selected_count,
+                reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            },
+            carrier: ProductionInFlightFirstReleaseCarrierProjection {
+                kura_active: payload_owners,
+                execution_input_durable: actor,
+                ready_qc_durable: false,
+            },
+            session: ProductionInFlightFirstReleaseSessionProjection {
+                bodies: payload_owners,
+                ready_authorized: actor,
+                crashed: 0,
+                producer_alive: true,
+            },
+            history: ProductionInFlightFirstReleaseHistoryProjection {
+                ever_queue_plan_v4: true,
+                ever_reservation_v5: true,
+                ever_execution_input_durable: actor,
+                ever_ready_authorized: actor,
+                ..ProductionInFlightFirstReleaseHistoryProjection::default()
+            },
+            decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+            release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+        };
+        let mut after = before;
+        after.history.ready_signed = actor;
+        let projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_SIGN_READY,
+            actor,
+            target: 0,
+            before,
+            after,
+        };
+        check_production_in_flight_first_release_transition(projection)
+            .is_some_and(|checked| checked.into_projection() == projection)
     }
 }
 
@@ -713,6 +820,185 @@ impl Kura {
         let bundle_hash = bundle
             .bundle_hash()
             .map_err(|_| "autonomous merge bundle cannot be canonically hashed")?;
+
+        // Extract one lossless first-release trace from the exact durable
+        // bundle before it becomes merge eligible. The bitmap projection uses
+        // the certificate's canonical committee order; no proposer-local or
+        // current-topology state participates.
+        let descriptor = &bundle.certified.proposal.descriptor;
+        let validator_count = u8::try_from(descriptor.validator_set.len())
+            .map_err(|_| "autonomous merge committee exceeds the refinement width")?;
+        if validator_count == 0 || validator_count > 128 {
+            return Err("autonomous merge committee is outside the 1..=128 refinement width");
+        }
+        let validator_mask = if validator_count == 128 {
+            u128::MAX
+        } else {
+            (1_u128 << validator_count) - 1
+        };
+        let producer_index = descriptor
+            .validator_set
+            .iter()
+            .position(|peer| peer == &bundle.executable_payload().producer)
+            .ok_or("autonomous payload producer is absent from its certified committee")?;
+        let producer = 1_u128
+            .checked_shl(
+                u32::try_from(producer_index)
+                    .map_err(|_| "autonomous producer index exceeds the refinement width")?,
+            )
+            .ok_or("autonomous producer index exceeds the refinement width")?;
+        let bitmap_mask = |bitmap: &[u8]| {
+            if bitmap.len() != descriptor.validator_set.len().div_ceil(8) {
+                return Err("autonomous certificate bitmap has a noncanonical length");
+            }
+            let mut mask = 0_u128;
+            for (byte_index, byte) in bitmap.iter().copied().enumerate() {
+                for bit_index in 0..8_usize {
+                    if byte & (1_u8 << bit_index) == 0 {
+                        continue;
+                    }
+                    let index = byte_index
+                        .checked_mul(8)
+                        .and_then(|base| base.checked_add(bit_index))
+                        .ok_or("autonomous certificate bitmap index overflows")?;
+                    if index >= descriptor.validator_set.len() {
+                        return Err("autonomous certificate bitmap selects a padding bit");
+                    }
+                    mask |= 1_u128
+                        .checked_shl(u32::try_from(index).map_err(
+                            |_| "autonomous certificate signer exceeds the refinement width",
+                        )?)
+                        .ok_or("autonomous certificate signer exceeds the refinement width")?;
+                }
+            }
+            Ok(mask)
+        };
+        let availability_qc = bundle
+            .certified
+            .prepare_qc
+            .payload_availability_qc
+            .as_ref()
+            .ok_or("autonomous prepare QC lacks its durable READY certificate")?;
+        if availability_qc.validator_set != descriptor.validator_set {
+            return Err("autonomous READY committee differs from the lane certificate");
+        }
+        let ready_signers = bitmap_mask(&availability_qc.signers_bitmap)?;
+        let commit_signers = bitmap_mask(&bundle.certified.commit_qc.signers_bitmap)?;
+        let lane_commit_candidates = ready_signers & commit_signers;
+        if lane_commit_candidates == 0 {
+            return Err("autonomous READY and Commit QCs have no common authenticated signer");
+        }
+        let lane_commit_actor = 1_u128
+            .checked_shl(lane_commit_candidates.trailing_zeros())
+            .ok_or("autonomous lane commit signer exceeds the refinement width")?;
+        let reservation_group = lane_queue_reservation_group_binding_from_ordered_keys(
+            bundle.executable_payload().reservation_keys.iter(),
+        )
+        .map_err(|_| "autonomous reservation group is not canonical")?;
+        let selected_count = reservation_group.reservation_count;
+        if !(1..=u64::try_from(iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS)
+            .unwrap_or(u64::MAX))
+            .contains(&selected_count)
+        {
+            return Err("autonomous reservation count is outside the first-release bound");
+        }
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(reservation_group);
+        let payload_owners = ready_signers | producer;
+        if payload_owners & !validator_mask != 0 {
+            return Err("autonomous payload ownership exceeds its certified committee");
+        }
+        let trace_base = ProductionInFlightFirstReleaseStateProjection {
+            validator_count,
+            producer,
+            producer_selected_owner: producer,
+            replicated_carrier_owners: validator_mask & !producer,
+            payload_binding_a: payload_owners,
+            binding_a,
+            queue: ProductionInFlightFirstReleaseQueueProjection {
+                plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+                selected_count,
+                reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            },
+            carrier: ProductionInFlightFirstReleaseCarrierProjection {
+                kura_active: payload_owners,
+                execution_input_durable: ready_signers,
+                ready_qc_durable: false,
+            },
+            session: ProductionInFlightFirstReleaseSessionProjection {
+                bodies: payload_owners,
+                ready_authorized: ready_signers,
+                crashed: 0,
+                producer_alive: true,
+            },
+            history: ProductionInFlightFirstReleaseHistoryProjection {
+                ever_queue_plan_v4: true,
+                ever_reservation_v5: true,
+                ever_execution_input_durable: ready_signers,
+                ever_ready_authorized: ready_signers,
+                ready_signed: ready_signers,
+                ever_ready_qc_durable: false,
+                ..ProductionInFlightFirstReleaseHistoryProjection::default()
+            },
+            decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+            release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+        };
+
+        // The source reader observes an already-durable input. PersistExecutionInput
+        // is therefore an idempotent named step for one authenticated READY/Commit
+        // witness, while the following two steps extract the durable QC and lane
+        // decision carried by the exact same source bytes.
+        let mut input_after = trace_base;
+        input_after.carrier.execution_input_durable |= lane_commit_actor;
+        input_after.history.ever_execution_input_durable |= lane_commit_actor;
+        let input_projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT,
+            actor: lane_commit_actor,
+            target: 0,
+            before: trace_base,
+            after: input_after,
+        };
+        let checked_input = check_production_in_flight_first_release_transition(input_projection)
+            .ok_or(
+            "durable execution input failed the composed first-release transition gate",
+        )?;
+        if checked_input.into_projection() != input_projection {
+            return Err("checked durable execution-input projection changed before admission");
+        }
+
+        let mut ready_qc_after = input_after;
+        ready_qc_after.carrier.ready_qc_durable = true;
+        ready_qc_after.history.ever_ready_qc_durable = true;
+        let ready_qc_projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC,
+            actor: 0,
+            target: 0,
+            before: input_after,
+            after: ready_qc_after,
+        };
+        let checked_ready_qc =
+            check_production_in_flight_first_release_transition(ready_qc_projection)
+                .ok_or("durable READY QC failed the composed first-release transition gate")?;
+        if checked_ready_qc.into_projection() != ready_qc_projection {
+            return Err("checked durable READY-QC projection changed before admission");
+        }
+
+        let mut lane_commit_after = ready_qc_after;
+        lane_commit_after.decision.lane_commit_scope = binding_a;
+        lane_commit_after.decision.lane_commit_owner = lane_commit_actor;
+        let lane_commit_projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT,
+            actor: lane_commit_actor,
+            target: 0,
+            before: ready_qc_after,
+            after: lane_commit_after,
+        };
+        let checked_lane_commit =
+            check_production_in_flight_first_release_transition(lane_commit_projection)
+                .ok_or("lane CommitQC failed the composed first-release transition gate")?;
+        if checked_lane_commit.into_projection() != lane_commit_projection {
+            return Err("checked lane-commit projection changed before merge admission");
+        }
         Ok(DurableAutonomousLaneMergeSource {
             bundle,
             source_bundle,
@@ -1331,14 +1617,110 @@ impl Kura {
         }
         let durable_bytes = norito::encode_canonical(&durable)
             .map_err(|_| "READY execution input cannot be canonically hashed")?;
+        let durable_execution_input_hash = Hash::new_from_chunks(&[
+            LANE_READY_EXECUTION_INPUT_AUTHORIZATION_DOMAIN_V1,
+            durable_bytes.as_slice(),
+        ]);
+
+        // Project the exact committee positions named by the authenticated
+        // payload and signing request. The checked token is consumed only
+        // after the repair-disabled durable input and full reservation group
+        // have both been revalidated.
+        let validator_count = u8::try_from(descriptor.validator_set.len())
+            .map_err(|_| "READY committee exceeds the refinement width")?;
+        if validator_count == 0 || validator_count > 128 {
+            return Err("READY committee is outside the 1..=128 refinement width");
+        }
+        let validator_mask = if validator_count == 128 {
+            u128::MAX
+        } else {
+            (1_u128 << validator_count) - 1
+        };
+        let producer_index = descriptor
+            .validator_set
+            .iter()
+            .position(|peer| peer == &payload.producer)
+            .ok_or("READY payload producer is absent from its committee")?;
+        let signer_index = descriptor
+            .validator_set
+            .iter()
+            .position(|peer| peer == signer)
+            .ok_or("READY signer is absent from its committee")?;
+        let producer = 1_u128
+            .checked_shl(
+                u32::try_from(producer_index)
+                    .map_err(|_| "READY producer index exceeds the refinement width")?,
+            )
+            .ok_or("READY producer index exceeds the refinement width")?;
+        let actor = 1_u128
+            .checked_shl(
+                u32::try_from(signer_index)
+                    .map_err(|_| "READY signer index exceeds the refinement width")?,
+            )
+            .ok_or("READY signer index exceeds the refinement width")?;
+        let selected_count = reservation_group.reservation_count;
+        if !(1..=u64::try_from(iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS)
+            .unwrap_or(u64::MAX))
+            .contains(&selected_count)
+        {
+            return Err("READY reservation count is outside the first-release bound");
+        }
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(reservation_group);
+        let payload_owners = producer | actor;
+        let before = ProductionInFlightFirstReleaseStateProjection {
+            validator_count,
+            producer,
+            producer_selected_owner: producer,
+            replicated_carrier_owners: validator_mask & !producer,
+            payload_binding_a: payload_owners,
+            binding_a,
+            queue: ProductionInFlightFirstReleaseQueueProjection {
+                plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+                selected_count,
+                reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            },
+            carrier: ProductionInFlightFirstReleaseCarrierProjection {
+                kura_active: payload_owners,
+                execution_input_durable: actor,
+                ready_qc_durable: false,
+            },
+            session: ProductionInFlightFirstReleaseSessionProjection {
+                bodies: payload_owners,
+                ready_authorized: 0,
+                crashed: 0,
+                producer_alive: true,
+            },
+            history: ProductionInFlightFirstReleaseHistoryProjection {
+                ever_queue_plan_v4: true,
+                ever_reservation_v5: true,
+                ever_execution_input_durable: actor,
+                ..ProductionInFlightFirstReleaseHistoryProjection::default()
+            },
+            decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+            release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+        };
+        let mut after = before;
+        after.session.ready_authorized = actor;
+        after.history.ever_ready_authorized = actor;
+        let projection = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_AUTHORIZE_READY,
+            actor,
+            target: 0,
+            before,
+            after,
+        };
+        let checked = check_production_in_flight_first_release_transition(projection)
+            .ok_or("READY authorization failed the composed first-release transition gate")?;
+        if checked.into_projection() != projection {
+            return Err("checked READY authorization projection changed before minting");
+        }
         Ok(LaneReadyAuthorization {
-            durable_execution_input_hash: Hash::new_from_chunks(&[
-                LANE_READY_EXECUTION_INPUT_AUTHORIZATION_DOMAIN_V1,
-                durable_bytes.as_slice(),
-            ]),
+            durable_execution_input_hash,
             proposal: proposal.clone(),
             availability_body: availability_body.clone(),
             reservation_group,
+            producer: payload.producer.clone(),
             signer: signer.clone(),
             height_context_id,
         })

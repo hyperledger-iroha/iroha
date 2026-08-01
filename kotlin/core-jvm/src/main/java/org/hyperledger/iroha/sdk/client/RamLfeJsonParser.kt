@@ -98,11 +98,10 @@ object RamLfeJsonParser {
         return value as Map<String, Any>
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun asArrayOrEmpty(value: Any?, path: String): List<Any?> {
         if (value == null) return emptyList()
         check(value is List<*>) { "$path must be a JSON array" }
-        return value as List<Any?>
+        return value
     }
 
     private fun requiredString(value: Any?, path: String): String {

@@ -112,6 +112,7 @@
         deferred_effects: VecDeque<Vec<FakeEffect>>,
         deferred_dispatches: usize,
         deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
+        deferred_active_ordinals: BTreeSet<u128>,
         deferred_service_cursor: DeferredPriority,
         deferred_identity_unavailable: bool,
         deferred_evidence_overrides: VecDeque<DeferredServiceEvidence>,
@@ -136,6 +137,7 @@
                 deferred_effects: VecDeque::new(),
                 deferred_dispatches: 0,
                 deferred_admission_ordinals: DeferredAdmissionOrdinalSource::new(0),
+                deferred_active_ordinals: BTreeSet::new(),
                 deferred_service_cursor: DeferredPriority::Completion,
                 deferred_identity_unavailable: false,
                 deferred_evidence_overrides: VecDeque::new(),
@@ -230,7 +232,7 @@
         }
 
         fn all_deferred_admission_ordinals(&self) -> BTreeSet<u128> {
-            BTreeSet::new()
+            self.deferred_active_ordinals.clone()
         }
 
         fn synthetic_deferred_lifecycle_owner(
@@ -243,7 +245,8 @@
                 RuntimeFreshRootKind::StartupRecovery,
                 b"fake-deferred-owner",
             );
-            RuntimeLifecycleOwner::new(origin, evidence.admission_ordinal).ok()
+            let lifecycle_ordinal = evidence.admission_ordinal.checked_add(1)?;
+            RuntimeLifecycleOwner::new(origin, lifecycle_ordinal).ok()
         }
 
         fn dispatch_deferred(
@@ -841,6 +844,57 @@
             .expect("queue-ownership fixture stages an exact completion");
     }
 
+    /// Attach the same private local/causal runtime wrapper that production
+    /// dispatch installs around one exact adapter-owned Busy occurrence.
+    fn bind_local_deferred_lifecycle_for_test(
+        runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
+        deferred_admission_ordinal: u128,
+        semantic_identity: &[u8],
+    ) -> RuntimeLifecycleOwner {
+        let lifecycle_ordinal = runtime
+            .ingress
+            .lifecycle_ordinals
+            .reserve_one()
+            .expect("reserve one exact local lifecycle ordinal");
+        let origin = RuntimeCandidateCausalOrigin::mint_fresh_root(
+            runtime.round_tag(),
+            CommandClass::Completion,
+            RuntimeFreshRootKind::StartupRecovery,
+            semantic_identity,
+        );
+        let owner = RuntimeLifecycleOwner::new(origin, lifecycle_ordinal)
+            .expect("bind the local deferred lifecycle ordinal");
+        let physical_cut = runtime.ingress_physical_cut;
+        let runtime_seal = runtime
+            .driver
+            .bind_deferred_runtime_ownership(
+                deferred_admission_ordinal,
+                owner.causal_origin().lifecycle_key.clone(),
+                owner.lifecycle_ordinal(),
+                false,
+                None,
+                physical_cut,
+            )
+            .expect("seal the exact local Busy occurrence");
+        let deferred = RuntimeDeferredLifecycleOwnership::new(
+            owner.clone(),
+            deferred_admission_ordinal,
+            RuntimeDispatchIngress::LocalOrCausal,
+            None,
+            physical_cut,
+            runtime_seal,
+        )
+        .expect("freeze the exact local Busy occurrence");
+        assert!(
+            runtime
+                .deferred_lifecycle_ownership
+                .insert(deferred_admission_ordinal, deferred)
+                .is_none(),
+            "the fixture cannot replace an existing runtime wrapper"
+        );
+        owner
+    }
+
     fn fair_network_ownership(
         message: &wire::ConsensusMessageV2,
         sender: PeerId,
@@ -911,7 +965,7 @@
             .expect("open preowned leader-wire gate");
         ingress
             .bind_leader_wire_lifecycle_gate(
-                gate,
+                Arc::clone(&gate),
                 restore,
                 lifecycle_ordinals,
                 context.id(),
@@ -936,9 +990,41 @@
                 let mut ownership = admitted
                     .take_ingress_ownership()
                     .expect("preowned leader wire retains fair ownership");
+                assert!(
+                    ownership.leader_wire_runtime_receipt().is_some(),
+                    "checked dequeue atomically installs the durable runtime handoff"
+                );
+                let token = ownership
+                    .leader_wire_token()
+                    .expect("productive dequeue retains its immutable leader-wire token");
+                assert_eq!(
+                    gate.ingress_scheduler_ordinals()
+                        .expect("read durable owners after atomic handoff"),
+                    std::collections::BTreeSet::new(),
+                    "atomic handoff removes the owner from the durable Ingress selector"
+                );
+                {
+                    let state = ingress.state.lock();
+                    let record = state
+                        .leader_wire_lifecycles
+                        .get(&token.slot)
+                        .expect("atomic handoff retains the exact lifecycle record");
+                    assert_eq!(
+                        record.status,
+                        super::super::FairV2IngressLeaderWireStatus::Runtime,
+                        "atomic handoff publishes the in-memory Runtime owner"
+                    );
+                }
                 ingress
                     .bind_leader_wire_runtime_ownership(&mut ownership)
-                    .expect("bind preowned leader-wire runtime receipt");
+                    .expect("repeated preowned leader-wire bind is idempotent");
+                assert!(matches!(
+                    ingress.try_push(InboundBlockMessage::new(
+                        BlockMessage::V2(message.clone()),
+                        Some(semantic_origin.clone()),
+                    )),
+                    Ok(super::super::FairV2IngressPushDisposition::Coalesced)
+                ));
                 ownership
             })
             .collect();
@@ -1032,6 +1118,30 @@
             )),
             Ok(super::super::FairV2IngressPushDisposition::Enqueued)
         ));
+        let mut saw_predequeue_owner = false;
+        assert!(
+            ingress
+                .try_recv_if_checked(|inbound| {
+                    let ownership = inbound
+                        .ingress_ownership()
+                        .expect("queued leader-wire message retains fair ownership");
+                    assert!(ownership.runtime_physical_cut().is_none());
+                    assert!(ownership.leader_wire_token().is_some());
+                    assert!(ownership.leader_wire_runtime_receipt().is_none());
+                    let projected = RuntimeIngressOwnershipEvidence::from_fair_ingress(
+                        &message,
+                        ownership.clone(),
+                    )
+                    .expect("pre-dequeue identity remains valid for the capacity probe");
+                    assert!(projected.validate_exact());
+                    assert!(!projected.validate_frozen_physical());
+                    saw_predequeue_owner = true;
+                    false
+                })
+                .expect("rejected pre-dequeue probe preserves the queued owner")
+                .is_none()
+        );
+        assert!(saw_predequeue_owner);
         let mut admitted = ingress
             .try_recv()
             .expect("drain exact leader-wire proposal fixture");
@@ -1081,6 +1191,84 @@
         ));
     }
 
+    fn bind_authenticated_deferred_proposal_for_test(
+        runtime: &mut SerializedV2Runtime,
+        fixture: &LeaderWireProposalFixture,
+    ) -> (wire::Proposal, u128) {
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = &fixture.message.payload else {
+            unreachable!("leader-wire fixture carries Proposal")
+        };
+        let proposal = proposal.clone();
+        let ingress_ownership = RuntimeIngressOwnershipEvidence::from_fair_ingress(
+            &fixture.message,
+            fixture.ownership.clone(),
+        )
+        .expect("project exact leader-wire ownership into runtime");
+        let tagged = TaggedCommand::with_ingress_ownership(
+            runtime.round_tag(),
+            CommandClass::Normal,
+            AdapterCommand::Authenticated(AuthenticatedConsensusMessage::for_test(
+                fixture.message.clone(),
+            )),
+            Instant::now(),
+            ingress_ownership.clone(),
+        );
+        let lifecycle_ordinal = tagged
+            .lifecycle_ordinal
+            .expect("leader-wire command carries its scheduler ordinal");
+        let lifecycle_owner =
+            RuntimeLifecycleOwner::new(tagged.causal_origin.clone(), lifecycle_ordinal)
+                .expect("construct exact deferred lifecycle owner");
+        let (source_physical_ordinal, physical_cut) = ingress_ownership
+            .leader_wire_physical_carrier()
+            .expect("leader-wire carrier set is exact")
+            .expect("leader-wire carrier exposes its checked physical cut");
+        runtime
+            .driver
+            .defer_authenticated_proposal_for_test(runtime.round_tag(), &proposal)
+            .expect("stage Busy-deferred proposal");
+        let (_, deferred_ordinal) = runtime
+            .driver
+            .deferred_authenticated_message_owner(&fixture.message)
+            .expect("deferred proposal exposes its adapter ordinal");
+        let runtime_seal = runtime
+            .driver
+            .bind_deferred_runtime_ownership(
+                deferred_ordinal,
+                lifecycle_owner.causal_origin().lifecycle_key.clone(),
+                lifecycle_owner.lifecycle_ordinal(),
+                true,
+                Some(source_physical_ordinal),
+                physical_cut,
+            )
+            .expect("seal the exact deferred adapter occurrence");
+        let lifecycle_owner = RuntimeDeferredLifecycleOwnership::new(
+            lifecycle_owner,
+            deferred_ordinal,
+            RuntimeDispatchIngress::DirectAuthenticated,
+            Some(source_physical_ordinal),
+            physical_cut,
+            runtime_seal,
+        )
+        .expect("freeze the exact deferred physical cut");
+        assert!(
+            runtime
+                .deferred_ingress_ownership
+                .insert(deferred_ordinal, ingress_ownership.clone())
+                .is_none()
+        );
+        assert!(
+            runtime
+                .deferred_lifecycle_ownership
+                .insert(deferred_ordinal, lifecycle_owner)
+                .is_none()
+        );
+        runtime
+            .register_leader_wire_runtime_receipt(&ingress_ownership)
+            .expect("register deferred leader-wire receipt");
+        (proposal, deferred_ordinal)
+    }
+
     fn fair_network_ownership_with_route(
         message: &wire::ConsensusMessageV2,
         semantic_origin: PeerId,
@@ -1118,6 +1306,31 @@
             .arm_live_clocks(start)
             .expect("arm fake runtime after startup");
         runtime
+    }
+
+    fn deferred_lifecycle_ownership_for_test(
+        owner: RuntimeLifecycleOwner,
+        deferred_admission_ordinal: u128,
+        current_ingress: RuntimeDispatchIngress,
+        source_physical_ordinal: Option<u64>,
+        physical_cut: u128,
+    ) -> Result<RuntimeDeferredLifecycleOwnership, EnqueueError> {
+        let runtime_seal = DeferredRuntimeOwnershipSeal::for_test(
+            deferred_admission_ordinal,
+            owner.causal_origin().lifecycle_key.clone(),
+            owner.lifecycle_ordinal(),
+            current_ingress == RuntimeDispatchIngress::DirectAuthenticated,
+            source_physical_ordinal,
+            physical_cut,
+        );
+        RuntimeDeferredLifecycleOwnership::new(
+            owner,
+            deferred_admission_ordinal,
+            current_ingress,
+            source_physical_ordinal,
+            physical_cut,
+            runtime_seal,
+        )
     }
 
     fn enqueue_fake(
@@ -1316,16 +1529,29 @@
             FakeCommand::record(2),
         )
         .expect("enqueue second message");
+        let second_lifecycle_ordinal = runtime
+            .ingress
+            .commands
+            .back()
+            .and_then(|queued| queued.lifecycle_ordinal)
+            .expect("the second message owns its immutable lifecycle ordinal");
         runtime
             .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9))
-            .expect("the older frozen periodic lifecycle dispatches");
-        assert_eq!(runtime.driver.retransmits, vec![initial, initial]);
-        assert_eq!(runtime.driver.delivered, vec![(initial, 1)]);
+            .expect("the admitted message precedes the fresh periodic episode");
+        assert_eq!(runtime.driver.retransmits, vec![initial]);
+        assert_eq!(runtime.driver.delivered, vec![(initial, 1), (initial, 2)]);
+        assert!(
+            runtime
+                .retransmit_owner
+                .as_ref()
+                .is_some_and(|owner| owner.lifecycle_ordinal() > second_lifecycle_ordinal),
+            "the later runner freeze must mint a fresh periodic position after admitted work"
+        );
 
         runtime
             .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(10))
-            .expect("the admitted pre-deadline message drains before timeout");
-        assert_eq!(runtime.driver.delivered, vec![(initial, 1), (initial, 2)]);
+            .expect("the retained periodic episode drains before the later timeout owner");
+        assert_eq!(runtime.driver.retransmits, vec![initial, initial]);
         assert!(runtime.driver.timeouts.is_empty());
 
         runtime

@@ -192,8 +192,10 @@ signer_public_key_hex = "{valid_public_key}"
         ),
         (
             "missing signer policy digest",
-            enabled_overlay("pkcs11:prod/stream-token/v1", &valid_public_key)
-                .replace(&format!("signer_policy_digest_hex = \"{}\"\n", "b4".repeat(32)), ""),
+            enabled_overlay("pkcs11:prod/stream-token/v1", &valid_public_key).replace(
+                format!("signer_policy_digest_hex = \"{}\"\n", "b4".repeat(32)).as_str(),
+                "",
+            ),
             "signer_policy_digest_hex is required",
         ),
         (

@@ -1201,12 +1201,7 @@ impl LanePayloadAvailabilityVoteV1 {
         private_key: &PrivateKey,
         height_context_id: HeightContextId,
     ) -> Result<Self, LaneAutonomousArtifactError> {
-        if !authorization.matches_signing_request(
-            proposal,
-            &body,
-            &signer,
-            height_context_id,
-        ) {
+        if !authorization.consume_signing_request(proposal, &body, &signer, height_context_id) {
             return Err(LaneAutonomousArtifactError::AvailabilityAuthorizationMismatch);
         }
         validate_lane_payload_availability_body_shape(&body)?;

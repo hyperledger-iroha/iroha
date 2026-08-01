@@ -1139,6 +1139,27 @@ impl TransactionPayload {
             .and_then(|()| FeePaymentIntent::validate_metadata(&self.metadata))
     }
 
+    /// Return the canonical privacy transaction-intent projection bytes.
+    ///
+    /// This is the exact unsigned-payload preimage consumed by
+    /// [`Self::privacy_transaction_intent_digest_v1`]. Exposing the projection
+    /// removes independent SDK approximations: callers can decode and
+    /// byte-identically reproduce the Rust-owned normalization before signing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed error for zero or multiple submissions, dynamic/opaque
+    /// execution paths, or canonical encoding failure.
+    pub fn privacy_transaction_intent_projection_bytes_v1(
+        &self,
+    ) -> Result<Vec<u8>, PrivacyTransactionIntentErrorV1> {
+        let mut normalized = self.clone();
+        normalized.instructions =
+            normalize_privacy_executable_for_intent_v1(&normalized.instructions)?;
+        norito::encode_canonical(&normalized)
+            .map_err(|_| PrivacyTransactionIntentErrorV1::PayloadEncodingFailure)
+    }
+
     /// Derive the canonical privacy transaction-intent digest from this unsigned payload.
     ///
     /// V1 accepts exactly one direct typed [`SubmitPrivacyProofV1`] in either
@@ -1169,11 +1190,7 @@ impl TransactionPayload {
     pub fn privacy_transaction_intent_digest_v1(
         &self,
     ) -> Result<PrivacyTransactionIntentDigestV1, PrivacyTransactionIntentErrorV1> {
-        let mut normalized = self.clone();
-        normalized.instructions =
-            normalize_privacy_executable_for_intent_v1(&normalized.instructions)?;
-        let encoded = norito::to_bytes(&normalized)
-            .map_err(|_| PrivacyTransactionIntentErrorV1::PayloadEncodingFailure)?;
+        let encoded = self.privacy_transaction_intent_projection_bytes_v1()?;
         let encoded_len = u64::try_from(encoded.len())
             .map_err(|_| PrivacyTransactionIntentErrorV1::PayloadLengthOverflow)?;
         let mut hasher = blake3::Hasher::new();
@@ -3198,9 +3215,29 @@ mod tests {
     #[test]
     fn privacy_transaction_intent_projection_breaks_the_derived_digest_cycle_exactly() {
         let payload = finalized_privacy_payload();
+        let canonical_projection = payload
+            .privacy_transaction_intent_projection_bytes_v1()
+            .expect("canonical finalized projection bytes");
         let expected = payload
             .privacy_transaction_intent_digest_v1()
             .expect("canonical finalized projection");
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                payload
+                    .privacy_transaction_intent_projection_bytes_v1()
+                    .expect("ambient layout flags cannot alter the canonical projection"),
+                canonical_projection
+            );
+            assert_eq!(
+                payload
+                    .privacy_transaction_intent_digest_v1()
+                    .expect("ambient layout flags cannot alter the canonical intent"),
+                expected
+            );
+        }
         assert_canonical_privacy_intent_kat(&payload, expected);
         assert_privacy_proof_bytes_are_projected_out(&payload, expected);
         assert_stored_privacy_digests_are_checked(&payload, expected);

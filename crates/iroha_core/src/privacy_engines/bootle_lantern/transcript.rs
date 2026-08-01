@@ -571,6 +571,7 @@ impl PresentationTranscriptV1 {
     /// # Errors
     ///
     /// Rejects an empty stage tag or a field whose length cannot be encoded.
+    #[cfg(test)]
     pub(crate) fn derive_bytes(
         &self,
         stage: &[u8],
@@ -934,6 +935,7 @@ pub(crate) fn challenge_eta_is_valid_v1(challenge: ProofPolynomialV1) -> bool {
 /// Rejects a zero binding digest, empty commitment wire, a commitment wire
 /// whose length cannot be represented in the canonical frame, or fixed-work
 /// candidate rejection exhaustion.
+#[cfg(test)]
 pub(crate) fn derive_presentation_challenge_v1(
     binding: PresentationChallengeBindingV1,
     pre_challenge_commitments: &[u8],

@@ -23,9 +23,7 @@ use iroha_data_model::{
     },
     trigger::action::Repeats,
 };
-use ivm::prebuilt_fixtures::{
-    SYNTHETIC_EXECUTOR_FIXTURES, build_default_executor_program, build_synthetic_executor_program,
-};
+use ivm::prebuilt_fixtures::build_default_executor_program;
 use norito::json::{FastJsonWrite, JsonSerialize};
 
 // Public deterministic fixture material; this key must never authorize a real account.
@@ -340,18 +338,6 @@ fn main() -> Result<(), String> {
         smart_contract_code_hashes_fixture.as_bytes(),
         mode,
     )?;
-    for (tag, name) in SYNTHETIC_EXECUTOR_FIXTURES.iter().enumerate() {
-        let tag = u8::try_from(tag).expect("synthetic fixture inventory fits u8");
-        publish(
-            &root
-                .join("integration_tests/fixtures/ivm")
-                .join(name)
-                .with_extension("to"),
-            &build_synthetic_executor_program(tag),
-            mode,
-        )?;
-    }
-
     let stage = root
         .join("target/ivm-fixture-export")
         .join(process::id().to_string());

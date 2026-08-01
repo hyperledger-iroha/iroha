@@ -11,7 +11,7 @@ use std::{
     path::{Component, Path, PathBuf},
     process,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -39,10 +39,13 @@ use crate::{
     GovernanceDagRuntimeProviderQualificationV1, GovernanceDagSealedCheckpointStore,
     GovernanceDagSealedStateRecord, GovernanceDagSealedStateSlot,
     governance::{
+        GOVERNANCE_DAG_REQUEST_AUTH_MAX_ENVELOPE_LIFETIME_SECS_V1,
+        GOVERNANCE_DAG_REQUEST_AUTH_MAX_FUTURE_SKEW_SECS_V1,
         GOVERNANCE_RUNTIME_DAG_PRODUCER_CHECKPOINT_VERSION_V1, GovernanceFilesystemRootGuard,
         RuntimeDagProducerCheckpointV1, runtime_dag_producer_root_digest,
         validate_runtime_dag_snapshot_authority_lineage,
     },
+    governance_dag_sealed_state_payload_max_bytes_v1,
     governance_rooted_fs::{ExpectedFile, FileBinding, FileSnapshot, RetainedFile},
 };
 use axum::{
@@ -86,6 +89,7 @@ const MUTABLE_STATE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const RUNTIME_INDEX_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const CHECKPOINT_VERSION_V1: u8 = 1;
 const PUBLISH_INTENT_VERSION_V1: u8 = 1;
+const REQUEST_AUTH_REPLAY_STATE_VERSION_V1: u8 = 1;
 const RUNTIME_INDEX_SCHEMA: &str = "sorafs.governance_dag.runtime_signed_index.v1";
 const MIRROR_INDEX_SCHEMA: &str = "sorafs.governance_dag.mirror.v1";
 const MIRROR_INDEX_FILE: &str = "mirror-index.json";
@@ -340,8 +344,9 @@ struct OpaqueAuthenticator {
     handle: String,
     qualification: GovernanceDagRuntimeProviderQualificationV1,
     verification_policy: GovernanceDagRequestAuthenticationPolicyV1,
+    authentication_scope: GovernanceDagAuthenticationScope,
     provider: Arc<dyn GovernanceDagRequestAuthenticator>,
-    replay_cache: Arc<Mutex<GovernanceDagRequestAuthenticationReplayCacheV1>>,
+    replay_store: OpaqueCheckpointStore,
 }
 
 impl fmt::Debug for OpaqueAuthenticator {
@@ -361,6 +366,7 @@ impl fmt::Debug for OpaqueAuthenticator {
                 "max_future_skew_secs",
                 &self.verification_policy.max_future_skew_secs(),
             )
+            .field("authentication_scope", &self.authentication_scope)
             .field("provider", &"[REDACTED]")
             .finish_non_exhaustive()
     }
@@ -370,10 +376,10 @@ impl OpaqueAuthenticator {
     fn try_new(
         expected_handle: &str,
         expected_qualification: GovernanceDagRuntimeProviderQualificationV1,
-        expected_public_key: [u8; 32],
-        max_envelope_lifetime_secs: u64,
-        max_future_skew_secs: u64,
+        verification_policy: GovernanceDagRequestAuthenticationPolicyV1,
         provider: Arc<dyn GovernanceDagRequestAuthenticator>,
+        authentication_scope: GovernanceDagAuthenticationScope,
+        replay_store: OpaqueCheckpointStore,
         label: &'static str,
     ) -> Result<Self, GovernanceDagServiceError> {
         let handle = validate_runtime_handle(expected_handle, label)?;
@@ -382,12 +388,7 @@ impl OpaqueAuthenticator {
                 "{label} configured policy qualification is invalid"
             )));
         }
-        let verification_policy = validate_request_auth_policy(
-            expected_public_key,
-            max_envelope_lifetime_secs,
-            max_future_skew_secs,
-            label,
-        )?;
+        let expected_public_key = verification_policy.public_key();
         let provider_handle = validate_runtime_handle(provider.handle(), label)?;
         if provider_handle != handle {
             return Err(GovernanceDagServiceError::Config(format!(
@@ -426,10 +427,9 @@ impl OpaqueAuthenticator {
             handle,
             qualification: expected_qualification,
             verification_policy,
+            authentication_scope,
             provider,
-            replay_cache: Arc::new(Mutex::new(
-                GovernanceDagRequestAuthenticationReplayCacheV1::new(),
-            )),
+            replay_store,
         })
     }
 
@@ -473,20 +473,23 @@ impl OpaqueAuthenticator {
         envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
     ) -> Result<(), GovernanceDagServiceError> {
         let now = current_unix_timestamp_seconds();
-        let mut replay_cache = self.replay_cache.lock().map_err(|_| {
-            GovernanceDagServiceError::Network(
-                "Governance DAG request-auth replay state is unavailable".to_owned(),
-            )
-        })?;
+        let mut validation_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
         verify_governance_dag_request_authentication_v1(
             request,
             envelope,
-            request.scope(),
+            self.authentication_scope,
             &self.verification_policy,
             now,
-            &mut replay_cache,
+            &mut validation_cache,
         )
-        .map_err(|error| GovernanceDagServiceError::Network(error.to_string()))
+        .map_err(|error| GovernanceDagServiceError::Network(error.to_string()))?;
+        consume_sealed_request_auth_nonce(
+            &self.replay_store,
+            request_auth_replay_slot(self.authentication_scope),
+            envelope.nonce(),
+            envelope.expires_at_unix_secs(),
+            now,
+        )
     }
 }
 
@@ -648,6 +651,18 @@ struct PublishIntentBodyV1 {
     head_ipfs_cid: Option<String>,
 }
 
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+struct RequestAuthReplayEntryV1 {
+    nonce: [u8; 32],
+    expires_at_unix_secs: u64,
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+struct RequestAuthReplayStateV1 {
+    version: u8,
+    entries: Vec<RequestAuthReplayEntryV1>,
+}
+
 #[derive(Debug, Clone)]
 struct SourceBlock {
     block: GovernanceDagBlockV1,
@@ -719,7 +734,7 @@ struct PinnedEndpoint {
 
 #[derive(Debug)]
 enum HeadMode {
-    SignedHttp(PinnedEndpoint),
+    SignedHttp(Box<PinnedEndpoint>),
     Ipns { name: String, key_name: String },
 }
 
@@ -834,20 +849,7 @@ pub fn validate_governance_dag_service_runtime_providers(
     providers: &GovernanceDagServiceRuntimeProviders,
 ) -> Result<(), GovernanceDagServiceError> {
     let bindings = runtime_provider_bindings(view)?;
-    OpaqueAuthenticator::try_new(
-        bindings.ipfs_authenticator_handle(),
-        bindings.ipfs_authenticator_qualification(),
-        bindings.ipfs_request_auth_public_key(),
-        bindings.request_auth_max_envelope_lifetime_secs(),
-        bindings.request_auth_max_future_skew_secs(),
-        providers.ipfs_authenticator.clone().ok_or_else(|| {
-            GovernanceDagServiceError::Config(
-                "IPFS authentication is enabled but no runtime provider was injected".to_owned(),
-            )
-        })?,
-        "IPFS authenticator",
-    )?;
-    OpaqueCheckpointStore::try_new(
+    let checkpoint_store = OpaqueCheckpointStore::try_new(
         bindings.checkpoint_store_handle(),
         bindings.checkpoint_store_qualification(),
         providers.checkpoint_store.clone().ok_or_else(|| {
@@ -856,6 +858,24 @@ pub fn validate_governance_dag_service_runtime_providers(
                     .to_owned(),
             )
         })?,
+    )?;
+    OpaqueAuthenticator::try_new(
+        bindings.ipfs_authenticator_handle(),
+        bindings.ipfs_authenticator_qualification(),
+        validate_request_auth_policy(
+            bindings.ipfs_request_auth_public_key(),
+            bindings.request_auth_max_envelope_lifetime_secs(),
+            bindings.request_auth_max_future_skew_secs(),
+            "IPFS authenticator",
+        )?,
+        providers.ipfs_authenticator.clone().ok_or_else(|| {
+            GovernanceDagServiceError::Config(
+                "IPFS authentication is enabled but no runtime provider was injected".to_owned(),
+            )
+        })?,
+        GovernanceDagAuthenticationScope::Ipfs,
+        checkpoint_store.clone(),
+        "IPFS authenticator",
     )?;
     match (
         bindings.head_authenticator_handle(),
@@ -867,10 +887,15 @@ pub fn validate_governance_dag_service_runtime_providers(
             OpaqueAuthenticator::try_new(
                 handle,
                 qualification,
-                public_key,
-                bindings.request_auth_max_envelope_lifetime_secs(),
-                bindings.request_auth_max_future_skew_secs(),
+                validate_request_auth_policy(
+                    public_key,
+                    bindings.request_auth_max_envelope_lifetime_secs(),
+                    bindings.request_auth_max_future_skew_secs(),
+                    "signed-head authenticator",
+                )?,
                 provider,
+                GovernanceDagAuthenticationScope::SignedHead,
+                checkpoint_store.clone(),
                 "signed-head authenticator",
             )?;
         }
@@ -1324,19 +1349,24 @@ impl Service {
         let ipfs_authenticator = OpaqueAuthenticator::try_new(
             ipfs_authenticator_handle,
             ipfs_authenticator_qualification,
-            service.ipfs_request_auth_public_key.ok_or_else(|| {
-                GovernanceDagServiceError::Config(
-                    "IPFS request-auth public key is missing".to_owned(),
-                )
-            })?,
-            service.request_auth_max_envelope_lifetime_secs,
-            service.request_auth_max_future_skew_secs,
+            validate_request_auth_policy(
+                service.ipfs_request_auth_public_key.ok_or_else(|| {
+                    GovernanceDagServiceError::Config(
+                        "IPFS request-auth public key is missing".to_owned(),
+                    )
+                })?,
+                service.request_auth_max_envelope_lifetime_secs,
+                service.request_auth_max_future_skew_secs,
+                "IPFS authenticator",
+            )?,
             ipfs_authenticator.ok_or_else(|| {
                 GovernanceDagServiceError::Config(
                     "IPFS authentication is enabled but no runtime provider was injected"
                         .to_owned(),
                 )
             })?,
+            GovernanceDagAuthenticationScope::Ipfs,
+            checkpoint_store.clone(),
             "IPFS authenticator",
         )?;
         enum QualifiedHeadMode {
@@ -1367,19 +1397,24 @@ impl Service {
                 let authenticator = OpaqueAuthenticator::try_new(
                     handle,
                     qualification,
-                    service.head_request_auth_public_key.ok_or_else(|| {
-                        GovernanceDagServiceError::Config(
-                            "signed-head request-auth public key is missing".to_owned(),
-                        )
-                    })?,
-                    service.request_auth_max_envelope_lifetime_secs,
-                    service.request_auth_max_future_skew_secs,
+                    validate_request_auth_policy(
+                        service.head_request_auth_public_key.ok_or_else(|| {
+                            GovernanceDagServiceError::Config(
+                                "signed-head request-auth public key is missing".to_owned(),
+                            )
+                        })?,
+                        service.request_auth_max_envelope_lifetime_secs,
+                        service.request_auth_max_future_skew_secs,
+                        "signed-head authenticator",
+                    )?,
                     head_authenticator.ok_or_else(|| {
                         GovernanceDagServiceError::Config(
                             "signed-head authentication is enabled but no runtime provider was injected"
                                 .to_owned(),
                         )
                     })?,
+                    GovernanceDagAuthenticationScope::SignedHead,
+                    checkpoint_store.clone(),
                     "signed-head authenticator",
                 )?;
                 let url = service.signed_head_url.clone().ok_or_else(|| {
@@ -1470,7 +1505,7 @@ impl Service {
         )
         .await?;
         let head_mode = match qualified_head_mode {
-            QualifiedHeadMode::SignedHttp { url, authenticator } => HeadMode::SignedHttp(
+            QualifiedHeadMode::SignedHttp { url, authenticator } => HeadMode::SignedHttp(Box::new(
                 build_pinned_endpoint(
                     &url,
                     authenticator,
@@ -1479,7 +1514,7 @@ impl Service {
                     false,
                 )
                 .await?,
-            ),
+            )),
             QualifiedHeadMode::Ipns { name, key_name } => HeadMode::Ipns { name, key_name },
         };
         let checkpoint_generation_floor = checkpoint
@@ -2126,6 +2161,188 @@ fn current_unix_timestamp_seconds() -> u64 {
         .unwrap_or_default()
 }
 
+const fn request_auth_replay_slot(
+    scope: GovernanceDagAuthenticationScope,
+) -> GovernanceDagSealedStateSlot {
+    match scope {
+        GovernanceDagAuthenticationScope::Ipfs => GovernanceDagSealedStateSlot::IpfsRequestReplay,
+        GovernanceDagAuthenticationScope::SignedHead => {
+            GovernanceDagSealedStateSlot::SignedHeadRequestReplay
+        }
+    }
+}
+
+fn decode_request_auth_replay_state(
+    record: &GovernanceDagSealedStateRecord,
+    slot: GovernanceDagSealedStateSlot,
+    now_unix_secs: u64,
+) -> Result<RequestAuthReplayStateV1, GovernanceDagServiceError> {
+    let max_bytes = governance_dag_sealed_state_payload_max_bytes_v1(slot);
+    if record.payload.len() > max_bytes {
+        return Err(GovernanceDagServiceError::State(
+            "sealed request-auth replay state exceeds its byte bound".to_owned(),
+        ));
+    }
+    let state: RequestAuthReplayStateV1 = norito::decode_from_bytes_with_limits(
+        &record.payload,
+        request_auth_replay_decode_limits(max_bytes),
+    )
+    .map_err(|_| {
+        GovernanceDagServiceError::State(
+            "sealed request-auth replay state is not valid canonical Norito".to_owned(),
+        )
+    })?;
+    let canonical = norito::to_bytes(&state).map_err(|_| {
+        GovernanceDagServiceError::State(
+            "sealed request-auth replay state could not be canonically encoded".to_owned(),
+        )
+    })?;
+    if canonical != record.payload
+        || state.version != REQUEST_AUTH_REPLAY_STATE_VERSION_V1
+        || state.entries.len() > GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1
+    {
+        return Err(GovernanceDagServiceError::State(
+            "sealed request-auth replay state is noncanonical or out of bounds".to_owned(),
+        ));
+    }
+    let maximum_live_expiry = now_unix_secs
+        .saturating_add(GOVERNANCE_DAG_REQUEST_AUTH_MAX_FUTURE_SKEW_SECS_V1)
+        .saturating_add(GOVERNANCE_DAG_REQUEST_AUTH_MAX_ENVELOPE_LIFETIME_SECS_V1);
+    let mut previous_nonce = None;
+    for entry in &state.entries {
+        if entry.nonce.iter().all(|byte| *byte == 0)
+            || entry.expires_at_unix_secs == 0
+            || previous_nonce.is_some_and(|previous| previous >= entry.nonce)
+            || (entry.expires_at_unix_secs > now_unix_secs
+                && entry.expires_at_unix_secs > maximum_live_expiry)
+        {
+            return Err(GovernanceDagServiceError::State(
+                "sealed request-auth replay state contains invalid entries".to_owned(),
+            ));
+        }
+        previous_nonce = Some(entry.nonce);
+    }
+    Ok(state)
+}
+
+fn consume_sealed_request_auth_nonce(
+    store: &OpaqueCheckpointStore,
+    slot: GovernanceDagSealedStateSlot,
+    nonce: [u8; 32],
+    expires_at_unix_secs: u64,
+    now_unix_secs: u64,
+) -> Result<(), GovernanceDagServiceError> {
+    if !matches!(
+        slot,
+        GovernanceDagSealedStateSlot::IpfsRequestReplay
+            | GovernanceDagSealedStateSlot::SignedHeadRequestReplay
+    ) {
+        return Err(GovernanceDagServiceError::State(
+            "request-auth replay state selected a non-replay sealed slot".to_owned(),
+        ));
+    }
+    if nonce.iter().all(|byte| *byte == 0) {
+        return Err(GovernanceDagServiceError::Network(
+            GovernanceDagRequestAuthenticationErrorV1::MalformedEnvelope.to_string(),
+        ));
+    }
+    let maximum_expiry = now_unix_secs
+        .saturating_add(GOVERNANCE_DAG_REQUEST_AUTH_MAX_FUTURE_SKEW_SECS_V1)
+        .saturating_add(GOVERNANCE_DAG_REQUEST_AUTH_MAX_ENVELOPE_LIFETIME_SECS_V1);
+    if expires_at_unix_secs <= now_unix_secs || expires_at_unix_secs > maximum_expiry {
+        return Err(GovernanceDagServiceError::Network(
+            GovernanceDagRequestAuthenticationErrorV1::InvalidTiming.to_string(),
+        ));
+    }
+    let loaded = load_sealed_record(store, slot)?;
+    let (mut state, expected_revision, next_generation) = match loaded.as_ref() {
+        Some(record) => (
+            decode_request_auth_replay_state(record, slot, now_unix_secs)?,
+            Some(record.revision),
+            record.generation.checked_add(1).ok_or_else(|| {
+                GovernanceDagServiceError::State(
+                    "sealed request-auth replay generation is exhausted".to_owned(),
+                )
+            })?,
+        ),
+        None => (
+            RequestAuthReplayStateV1 {
+                version: REQUEST_AUTH_REPLAY_STATE_VERSION_V1,
+                entries: Vec::new(),
+            },
+            None,
+            1,
+        ),
+    };
+    state
+        .entries
+        .retain(|entry| entry.expires_at_unix_secs > now_unix_secs);
+    let insertion_index = match state
+        .entries
+        .binary_search_by_key(&nonce, |entry| entry.nonce)
+    {
+        Ok(_) => {
+            return Err(GovernanceDagServiceError::Network(
+                GovernanceDagRequestAuthenticationErrorV1::Replay.to_string(),
+            ));
+        }
+        Err(index) => index,
+    };
+    if state.entries.len() >= GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1 {
+        return Err(GovernanceDagServiceError::Network(
+            GovernanceDagRequestAuthenticationErrorV1::ReplayCacheFull.to_string(),
+        ));
+    }
+    state.entries.insert(
+        insertion_index,
+        RequestAuthReplayEntryV1 {
+            nonce,
+            expires_at_unix_secs,
+        },
+    );
+    let payload = norito::to_bytes(&state).map_err(|_| {
+        GovernanceDagServiceError::State(
+            "sealed request-auth replay state could not be canonically encoded".to_owned(),
+        )
+    })?;
+    if payload.is_empty() || payload.len() > governance_dag_sealed_state_payload_max_bytes_v1(slot)
+    {
+        return Err(GovernanceDagServiceError::State(
+            "sealed request-auth replay state exceeds its byte bound".to_owned(),
+        ));
+    }
+    let next = GovernanceDagSealedStateRecord::new(slot, next_generation, payload);
+    store.assert_identity()?;
+    let result = store
+        .provider
+        .compare_and_swap(slot, expected_revision, next.clone());
+    store.assert_identity()?;
+    result.map_err(|_| {
+        GovernanceDagServiceError::State(
+            "sealed request-auth replay compare-and-swap failed".to_owned(),
+        )
+    })?;
+
+    let observed = load_sealed_record(store, slot)?.ok_or_else(|| {
+        GovernanceDagServiceError::State(
+            "sealed request-auth replay state disappeared after compare-and-swap".to_owned(),
+        )
+    })?;
+    let observed_state = decode_request_auth_replay_state(&observed, slot, now_unix_secs)?;
+    let contains_exact_nonce = observed_state
+        .entries
+        .binary_search_by_key(&nonce, |entry| entry.nonce)
+        .ok()
+        .and_then(|index| observed_state.entries.get(index))
+        .is_some_and(|entry| entry.expires_at_unix_secs == expires_at_unix_secs);
+    if observed.generation < next.generation || !contains_exact_nonce {
+        return Err(GovernanceDagServiceError::State(
+            "sealed request-auth replay readback diverged".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn blake3_array(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
 }
@@ -2133,6 +2350,16 @@ fn blake3_array(bytes: &[u8]) -> [u8; 32] {
 fn durable_decode_limits(max_bytes: u64) -> DecodeLimits {
     let max = usize::try_from(max_bytes).unwrap_or(usize::MAX);
     DecodeLimits::new(150_000, max, 1_000_000, max.saturating_mul(2), 128)
+}
+
+fn request_auth_replay_decode_limits(max_bytes: usize) -> DecodeLimits {
+    DecodeLimits::new(
+        GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1,
+        max_bytes,
+        max_bytes.saturating_mul(8),
+        max_bytes.saturating_mul(CANONICAL_DECODE_ALLOCATION_MULTIPLIER),
+        128,
+    )
 }
 
 fn load_checkpoint(
@@ -2308,7 +2535,9 @@ fn load_sealed_record(
     };
     if record.generation == 0
         || record.payload.is_empty()
-        || record.payload.len() as u64 > MUTABLE_STATE_MAX_BYTES
+        || record.payload.len()
+            > governance_dag_sealed_state_payload_max_bytes_v1(slot)
+                .min(usize::try_from(MUTABLE_STATE_MAX_BYTES).unwrap_or(usize::MAX))
         || !record.has_valid_revision(slot)
     {
         return Err(GovernanceDagServiceError::State(
@@ -5511,7 +5740,7 @@ mod tests {
         fmt,
         process::{Child, Command, Stdio},
         sync::{
-            Arc, Mutex as StdMutex,
+            Arc, Barrier, Mutex as StdMutex,
             atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
         },
     };
@@ -5947,10 +6176,14 @@ mod tests {
         publish_intent: Option<GovernanceDagSealedStateRecord>,
         producer_checkpoint: Option<GovernanceDagSealedStateRecord>,
         producer_publish_intent: Option<GovernanceDagSealedStateRecord>,
+        ipfs_request_replay: Option<GovernanceDagSealedStateRecord>,
+        signed_head_request_replay: Option<GovernanceDagSealedStateRecord>,
         checkpoint_generation_floor: u64,
         intent_generation_floor: u64,
         producer_checkpoint_generation_floor: u64,
         producer_intent_generation_floor: u64,
+        ipfs_request_replay_generation_floor: u64,
+        signed_head_request_replay_generation_floor: u64,
     }
 
     struct TestSealedStore {
@@ -5960,6 +6193,8 @@ mod tests {
         qualification_refuse: AtomicBool,
         drift_during_operation: AtomicBool,
         refuse: AtomicBool,
+        replay_load_barrier: Option<Arc<Barrier>>,
+        replay_initial_loads_remaining: AtomicU64,
     }
 
     impl fmt::Debug for TestSealedStore {
@@ -5980,7 +6215,15 @@ mod tests {
                 qualification_refuse: AtomicBool::new(false),
                 drift_during_operation: AtomicBool::new(false),
                 refuse: AtomicBool::new(false),
+                replay_load_barrier: None,
+                replay_initial_loads_remaining: AtomicU64::new(0),
             }
+        }
+
+        fn with_replay_load_barrier(mut self, barrier: Arc<Barrier>) -> Self {
+            self.replay_load_barrier = Some(barrier);
+            self.replay_initial_loads_remaining = AtomicU64::new(2);
+            self
         }
 
         fn maybe_drift(&self) {
@@ -6004,6 +6247,10 @@ mod tests {
                 GovernanceDagSealedStateSlot::ProducerPublishIntent => {
                     &inner.producer_publish_intent
                 }
+                GovernanceDagSealedStateSlot::IpfsRequestReplay => &inner.ipfs_request_replay,
+                GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
+                    &inner.signed_head_request_replay
+                }
             }
         }
 
@@ -6017,6 +6264,10 @@ mod tests {
                 GovernanceDagSealedStateSlot::ProducerCheckpoint => &mut inner.producer_checkpoint,
                 GovernanceDagSealedStateSlot::ProducerPublishIntent => {
                     &mut inner.producer_publish_intent
+                }
+                GovernanceDagSealedStateSlot::IpfsRequestReplay => &mut inner.ipfs_request_replay,
+                GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
+                    &mut inner.signed_head_request_replay
                 }
             }
         }
@@ -6046,7 +6297,25 @@ mod tests {
                 return Err("kms_access_token=must-never-escape".to_owned());
             }
             let inner = self.inner.lock().map_err(|_| "poisoned".to_owned())?;
-            Ok(Self::slot(&inner, slot).clone())
+            let record = Self::slot(&inner, slot).clone();
+            drop(inner);
+            if matches!(
+                slot,
+                GovernanceDagSealedStateSlot::IpfsRequestReplay
+                    | GovernanceDagSealedStateSlot::SignedHeadRequestReplay
+            ) && self
+                .replay_initial_loads_remaining
+                .fetch_update(
+                    AtomicOrdering::SeqCst,
+                    AtomicOrdering::SeqCst,
+                    |remaining| remaining.checked_sub(1),
+                )
+                .is_ok()
+                && let Some(barrier) = &self.replay_load_barrier
+            {
+                barrier.wait();
+            }
+            Ok(record)
         }
 
         fn compare_and_swap(
@@ -6078,6 +6347,12 @@ mod tests {
                 GovernanceDagSealedStateSlot::ProducerPublishIntent => {
                     inner.producer_intent_generation_floor
                 }
+                GovernanceDagSealedStateSlot::IpfsRequestReplay => {
+                    inner.ipfs_request_replay_generation_floor
+                }
+                GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
+                    inner.signed_head_request_replay_generation_floor
+                }
             };
             let generation_valid = match slot {
                 GovernanceDagSealedStateSlot::Checkpoint => next.generation > floor,
@@ -6088,7 +6363,9 @@ mod tests {
                 }
                 GovernanceDagSealedStateSlot::PublishIntent => next.generation > floor,
                 GovernanceDagSealedStateSlot::ProducerCheckpoint
-                | GovernanceDagSealedStateSlot::ProducerPublishIntent => next.generation > floor,
+                | GovernanceDagSealedStateSlot::ProducerPublishIntent
+                | GovernanceDagSealedStateSlot::IpfsRequestReplay
+                | GovernanceDagSealedStateSlot::SignedHeadRequestReplay => next.generation > floor,
             };
             if !generation_valid {
                 return Err("monotonic generation rollback".to_owned());
@@ -6105,6 +6382,12 @@ mod tests {
                 }
                 GovernanceDagSealedStateSlot::ProducerPublishIntent => {
                     inner.producer_intent_generation_floor = next.generation;
+                }
+                GovernanceDagSealedStateSlot::IpfsRequestReplay => {
+                    inner.ipfs_request_replay_generation_floor = next.generation;
+                }
+                GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
+                    inner.signed_head_request_replay_generation_floor = next.generation;
                 }
             }
             *Self::slot_mut(&mut inner, slot) = Some(next);
@@ -6132,15 +6415,34 @@ mod tests {
         }
     }
 
-    fn test_authenticator(handle: &str) -> OpaqueAuthenticator {
+    fn test_replay_store() -> OpaqueCheckpointStore {
+        OpaqueCheckpointStore::try_new(
+            TEST_CHECKPOINT_STORE_HANDLE,
+            TEST_STORE_QUALIFICATION,
+            Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE)),
+        )
+        .expect("bind test sealed replay store")
+    }
+
+    fn test_request_auth_policy(
+        public_key: [u8; 32],
+    ) -> GovernanceDagRequestAuthenticationPolicyV1 {
+        validate_request_auth_policy(public_key, 30, 5, "test authenticator")
+            .expect("construct test request-auth policy")
+    }
+
+    fn test_authenticator(
+        handle: &str,
+        authentication_scope: GovernanceDagAuthenticationScope,
+    ) -> OpaqueAuthenticator {
         let provider = Arc::new(TestAuthenticator::new(handle, "test-only-hsm"));
         OpaqueAuthenticator::try_new(
             handle,
             TEST_AUTH_QUALIFICATION,
-            provider.public_key(),
-            30,
-            5,
+            test_request_auth_policy(provider.public_key()),
             provider,
+            authentication_scope,
+            test_replay_store(),
             "test authenticator",
         )
         .expect("bind test authenticator")
@@ -6212,6 +6514,24 @@ mod tests {
             provider,
         )
         .expect("bind test sealed checkpoint store")
+    }
+
+    fn test_authenticator_with_store(
+        provider: Arc<TestAuthenticator>,
+        authentication_scope: GovernanceDagAuthenticationScope,
+        store: Arc<TestSealedStore>,
+    ) -> OpaqueAuthenticator {
+        let handle = provider.handle().to_owned();
+        OpaqueAuthenticator::try_new(
+            &handle,
+            TEST_AUTH_QUALIFICATION,
+            test_request_auth_policy(provider.public_key()),
+            provider,
+            authentication_scope,
+            test_checkpoint_store(store),
+            "test authenticator",
+        )
+        .expect("bind test authenticator to shared sealed replay state")
     }
 
     fn runtime_boundary_view(root: &Path) -> SorafsGovernanceDagServiceView {
@@ -6556,7 +6876,10 @@ mod tests {
                     .build()
                     .expect("construct isolated Kubo HTTP client"),
                 authentication_scope: GovernanceDagAuthenticationScope::Ipfs,
-                authenticator: test_authenticator(TEST_IPFS_AUTH_HANDLE),
+                authenticator: test_authenticator(
+                    TEST_IPFS_AUTH_HANDLE,
+                    GovernanceDagAuthenticationScope::Ipfs,
+                ),
                 max_request_bytes: GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1 as u64,
             }
         }
@@ -7341,7 +7664,10 @@ listen_addr = "127.0.0.1:0"
             router,
             path,
             GovernanceDagAuthenticationScope::Ipfs,
-            test_authenticator(TEST_IPFS_AUTH_HANDLE),
+            test_authenticator(
+                TEST_IPFS_AUTH_HANDLE,
+                GovernanceDagAuthenticationScope::Ipfs,
+            ),
         )
         .await
     }
@@ -7444,7 +7770,14 @@ listen_addr = "127.0.0.1:0"
     async fn spawn_signed_head(
         inner: SignedHeadInner,
     ) -> (PinnedEndpoint, SignedHeadState, JoinHandle<()>) {
-        spawn_signed_head_with_authenticator(inner, test_authenticator(TEST_HEAD_AUTH_HANDLE)).await
+        spawn_signed_head_with_authenticator(
+            inner,
+            test_authenticator(
+                TEST_HEAD_AUTH_HANDLE,
+                GovernanceDagAuthenticationScope::SignedHead,
+            ),
+        )
+        .await
     }
 
     async fn spawn_signed_head_with_authenticator(
@@ -8600,7 +8933,10 @@ enabled = false
         };
         let ipfs = build_pinned_endpoint(
             "http://127.0.0.1:5001",
-            test_authenticator(TEST_IPFS_AUTH_HANDLE),
+            test_authenticator(
+                TEST_IPFS_AUTH_HANDLE,
+                GovernanceDagAuthenticationScope::Ipfs,
+            ),
             GovernanceDagAuthenticationScope::Ipfs,
             &config,
             true,
@@ -8609,7 +8945,10 @@ enabled = false
         assert!(ipfs.is_ok());
         let head = build_pinned_endpoint(
             "http://127.0.0.1:9099/head",
-            test_authenticator(TEST_HEAD_AUTH_HANDLE),
+            test_authenticator(
+                TEST_HEAD_AUTH_HANDLE,
+                GovernanceDagAuthenticationScope::SignedHead,
+            ),
             GovernanceDagAuthenticationScope::SignedHead,
             &config,
             false,
@@ -8694,10 +9033,10 @@ enabled = false
         let authenticator = OpaqueAuthenticator::try_new(
             TEST_IPFS_AUTH_HANDLE,
             TEST_AUTH_QUALIFICATION,
-            provider.public_key(),
-            30,
-            5,
+            test_request_auth_policy(provider.public_key()),
             provider,
+            GovernanceDagAuthenticationScope::Ipfs,
+            test_replay_store(),
             "IPFS authenticator",
         )
         .expect("bind test authenticator");
@@ -8763,10 +9102,10 @@ enabled = false
         let authenticator = OpaqueAuthenticator::try_new(
             TEST_IPFS_AUTH_HANDLE,
             TEST_AUTH_QUALIFICATION,
-            provider.public_key(),
-            30,
-            5,
+            test_request_auth_policy(provider.public_key()),
             provider.clone(),
+            GovernanceDagAuthenticationScope::Ipfs,
+            test_replay_store(),
             "IPFS authenticator",
         )
         .expect("bind runtime authenticator");
@@ -8814,10 +9153,10 @@ enabled = false
         let drifting_authenticator = OpaqueAuthenticator::try_new(
             TEST_IPFS_AUTH_HANDLE,
             TEST_AUTH_QUALIFICATION,
-            drifting_provider.public_key(),
-            30,
-            5,
+            test_request_auth_policy(drifting_provider.public_key()),
             drifting_provider.clone(),
+            GovernanceDagAuthenticationScope::Ipfs,
+            test_replay_store(),
             "IPFS authenticator",
         )
         .expect("bind stable runtime authenticator");
@@ -8840,10 +9179,10 @@ enabled = false
         let mismatch = OpaqueAuthenticator::try_new(
             "vault:governance/ipfs:other",
             TEST_AUTH_QUALIFICATION,
-            provider.public_key(),
-            30,
-            5,
+            test_request_auth_policy(provider.public_key()),
             provider,
+            GovernanceDagAuthenticationScope::Ipfs,
+            test_replay_store(),
             "IPFS authenticator",
         )
         .expect_err("mismatched authenticator handle must fail");
@@ -8859,10 +9198,10 @@ enabled = false
         let authenticator = OpaqueAuthenticator::try_new(
             TEST_IPFS_AUTH_HANDLE,
             TEST_AUTH_QUALIFICATION,
-            provider.public_key(),
-            30,
-            5,
+            test_request_auth_policy(provider.public_key()),
             provider,
+            GovernanceDagAuthenticationScope::Ipfs,
+            test_replay_store(),
             "IPFS authenticator",
         )
         .expect("bind request-auth verifier");
@@ -8953,6 +9292,203 @@ enabled = false
                     || error.to_string().contains("overlong"),
                 "{label} envelope returned unexpected error: {error}"
             );
+        }
+    }
+
+    #[test]
+    fn sealed_request_auth_replay_fences_two_replica_cas_race() {
+        let barrier = Arc::new(Barrier::new(2));
+        let shared_store = Arc::new(
+            TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE).with_replay_load_barrier(barrier),
+        );
+        let first = test_authenticator_with_store(
+            Arc::new(TestAuthenticator::new(
+                TEST_IPFS_AUTH_HANDLE,
+                "first-replica-hsm",
+            )),
+            GovernanceDagAuthenticationScope::Ipfs,
+            shared_store.clone(),
+        );
+        let second = test_authenticator_with_store(
+            Arc::new(TestAuthenticator::new(
+                TEST_IPFS_AUTH_HANDLE,
+                "second-replica-hsm",
+            )),
+            GovernanceDagAuthenticationScope::Ipfs,
+            shared_store,
+        );
+        let retry = second.clone();
+        let request = canonical_test_request(
+            GovernanceDagAuthenticationScope::Ipfs,
+            "POST",
+            "https://example.invalid/api/v0/pin/add?arg=shared",
+            &[("accept-encoding", "identity")],
+            b"",
+        );
+        let now = current_unix_timestamp_seconds();
+        let envelope = signed_test_request_auth_envelope(
+            TEST_IPFS_AUTH_HANDLE,
+            &request,
+            now,
+            now + 15,
+            [0xA7; 32],
+        );
+        let first_request = request.clone();
+        let first_envelope = envelope.clone();
+        let first_result =
+            std::thread::spawn(move || first.validate_envelope(&first_request, &first_envelope));
+        let second_request = request.clone();
+        let second_envelope = envelope.clone();
+        let second_result =
+            std::thread::spawn(move || second.validate_envelope(&second_request, &second_envelope));
+        let results = [
+            first_result.join().expect("join first replay consumer"),
+            second_result.join().expect("join second replay consumer"),
+        ];
+        assert_eq!(
+            results.iter().filter(|result| result.is_ok()).count(),
+            1,
+            "linearizable CAS must accept the shared nonce exactly once"
+        );
+        let conflict = results
+            .iter()
+            .find_map(|result| result.as_ref().err())
+            .expect("one replica must lose the replay-state CAS");
+        assert!(conflict.to_string().contains("compare-and-swap failed"));
+
+        let replay = retry
+            .validate_envelope(&request, &envelope)
+            .expect_err("a later replica must observe the committed duplicate nonce");
+        assert!(replay.to_string().contains("replay was rejected"));
+    }
+
+    #[test]
+    fn sealed_request_auth_replay_prunes_expiry_but_never_evicts_live_capacity() {
+        let now = 1_700_000_000_u64;
+        let entries = (0..GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1)
+            .map(|index| {
+                let mut nonce = [0_u8; 32];
+                nonce[0] = 1;
+                nonce[24..].copy_from_slice(
+                    &u64::try_from(index)
+                        .expect("replay cache index fits u64")
+                        .to_be_bytes(),
+                );
+                RequestAuthReplayEntryV1 {
+                    nonce,
+                    expires_at_unix_secs: now + 10,
+                }
+            })
+            .collect();
+        let state = RequestAuthReplayStateV1 {
+            version: REQUEST_AUTH_REPLAY_STATE_VERSION_V1,
+            entries,
+        };
+        let payload = norito::to_bytes(&state).expect("encode full replay state");
+        assert!(
+            payload.len()
+                <= governance_dag_sealed_state_payload_max_bytes_v1(
+                    GovernanceDagSealedStateSlot::IpfsRequestReplay,
+                )
+        );
+        let decoded: RequestAuthReplayStateV1 = norito::decode_from_bytes_with_limits(
+            &payload,
+            request_auth_replay_decode_limits(governance_dag_sealed_state_payload_max_bytes_v1(
+                GovernanceDagSealedStateSlot::IpfsRequestReplay,
+            )),
+        )
+        .expect("full replay state must decode within its resource budget");
+        assert_eq!(decoded, state);
+        let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        {
+            let mut inner = provider.inner.lock().expect("lock test sealed state");
+            inner.ipfs_request_replay = Some(GovernanceDagSealedStateRecord::new(
+                GovernanceDagSealedStateSlot::IpfsRequestReplay,
+                1,
+                payload,
+            ));
+            inner.ipfs_request_replay_generation_floor = 1;
+        }
+        let store = test_checkpoint_store(provider.clone());
+        let full = consume_sealed_request_auth_nonce(
+            &store,
+            GovernanceDagSealedStateSlot::IpfsRequestReplay,
+            [2; 32],
+            now + 20,
+            now,
+        )
+        .expect_err("live replay entries must never be evicted at capacity");
+        assert!(
+            full.to_string().contains("bounded capacity"),
+            "unexpected full replay-state error: {full}"
+        );
+
+        consume_sealed_request_auth_nonce(
+            &store,
+            GovernanceDagSealedStateSlot::IpfsRequestReplay,
+            [2; 32],
+            now + 20,
+            now + 11,
+        )
+        .expect("expired replay entries should be pruned before admission");
+        let observed = load_sealed_record(&store, GovernanceDagSealedStateSlot::IpfsRequestReplay)
+            .expect("load pruned replay state")
+            .expect("pruned replay state must exist");
+        let observed_state = decode_request_auth_replay_state(
+            &observed,
+            GovernanceDagSealedStateSlot::IpfsRequestReplay,
+            now + 11,
+        )
+        .expect("decode pruned replay state");
+        assert_eq!(
+            observed_state.entries,
+            vec![RequestAuthReplayEntryV1 {
+                nonce: [2; 32],
+                expires_at_unix_secs: now + 20,
+            }]
+        );
+        assert_eq!(observed.generation, 2);
+    }
+
+    #[test]
+    fn sealed_request_auth_replay_rejects_corrupted_state() {
+        let unsorted = norito::to_bytes(&RequestAuthReplayStateV1 {
+            version: REQUEST_AUTH_REPLAY_STATE_VERSION_V1,
+            entries: vec![
+                RequestAuthReplayEntryV1 {
+                    nonce: [0x22; 32],
+                    expires_at_unix_secs: 1_700_000_010,
+                },
+                RequestAuthReplayEntryV1 {
+                    nonce: [0x11; 32],
+                    expires_at_unix_secs: 1_700_000_010,
+                },
+            ],
+        })
+        .expect("encode structurally valid but unsorted replay state");
+        for (payload, expected_error) in [
+            (vec![0xFF], "not valid canonical Norito"),
+            (unsorted, "contains invalid entries"),
+        ] {
+            let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+            {
+                let mut inner = provider.inner.lock().expect("lock test sealed state");
+                inner.ipfs_request_replay = Some(GovernanceDagSealedStateRecord::new(
+                    GovernanceDagSealedStateSlot::IpfsRequestReplay,
+                    1,
+                    payload,
+                ));
+                inner.ipfs_request_replay_generation_floor = 1;
+            }
+            let error = consume_sealed_request_auth_nonce(
+                &test_checkpoint_store(provider),
+                GovernanceDagSealedStateSlot::IpfsRequestReplay,
+                [0x31; 32],
+                1_700_000_010,
+                1_700_000_000,
+            )
+            .expect_err("corrupted replay state must fail closed");
+            assert!(error.to_string().contains(expected_error));
         }
     }
 
@@ -9902,10 +10438,10 @@ enabled = false
         let authenticator = OpaqueAuthenticator::try_new(
             TEST_IPFS_AUTH_HANDLE,
             TEST_AUTH_QUALIFICATION,
-            provider.public_key(),
-            30,
-            5,
+            test_request_auth_policy(provider.public_key()),
             provider.clone(),
+            GovernanceDagAuthenticationScope::Ipfs,
+            test_replay_store(),
             "IPFS authenticator",
         )
         .expect("bind stable runtime authenticator");
@@ -10832,10 +11368,10 @@ enabled = false
             let authenticator = OpaqueAuthenticator::try_new(
                 TEST_HEAD_AUTH_HANDLE,
                 TEST_AUTH_QUALIFICATION,
-                provider.public_key(),
-                30,
-                5,
+                test_request_auth_policy(provider.public_key()),
                 provider.clone(),
+                GovernanceDagAuthenticationScope::SignedHead,
+                test_replay_store(),
                 "signed-head authenticator",
             )
             .expect("bind final-request authenticator");

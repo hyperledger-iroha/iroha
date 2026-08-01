@@ -26,15 +26,14 @@ pub(super) fn qualify_dependency(
     {
         return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
     }
-    let expected_qualification =
-        iroha_torii::sorafs::StreamTokenRuntimeSignerQualificationV1::new(
-            expected
-                .revision()
-                .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?,
-            expected
-                .policy_digest()
-                .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?,
-        );
+    let expected_qualification = iroha_torii::sorafs::StreamTokenRuntimeSignerQualificationV1::new(
+        expected
+            .revision()
+            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?,
+        expected
+            .policy_digest()
+            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?,
+    );
     expected_qualification
         .validate()
         .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
@@ -44,7 +43,10 @@ pub(super) fn qualify_dependency(
         .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)?;
     if first != expected_qualification
         || signer.handle() != expected.handle()
-        || signer.public_key() != expected.stream_token_signer_public_key().expect("validated key")
+        || signer.public_key()
+            != expected
+                .stream_token_signer_public_key()
+                .expect("validated key")
     {
         return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
     }
@@ -54,7 +56,10 @@ pub(super) fn qualify_dependency(
         .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)?;
     if second != first
         || signer.handle() != expected.handle()
-        || signer.public_key() != expected.stream_token_signer_public_key().expect("validated key")
+        || signer.public_key()
+            != expected
+                .stream_token_signer_public_key()
+                .expect("validated key")
     {
         return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
     }
@@ -76,7 +81,10 @@ const fn map_probe_error(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use iroha_torii::sorafs::{
         StreamTokenRuntimeSigner, StreamTokenRuntimeSignerProbeErrorV1,
@@ -90,11 +98,9 @@ mod tests {
     const POLICY_DIGEST: [u8; 32] = [0x42; 32];
 
     fn public_key() -> [u8; 32] {
-        let key_pair = iroha_crypto::KeyPair::try_from_seed(
-            vec![0x58; 32],
-            iroha_crypto::Algorithm::Ed25519,
-        )
-        .expect("test Ed25519 key pair");
+        let key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x58; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("test Ed25519 key pair");
         key_pair
             .public_key()
             .to_bytes()
@@ -110,20 +116,29 @@ mod tests {
     fn bindings() -> IrohaRuntimeProviderBindingsV1 {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "iroha3-taira".to_owned(),
-            bindings: vec![IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(
-                HANDLE,
-                public_key(),
-                REVISION,
-                POLICY_DIGEST,
-            )
-            .expect("valid stream-token signer binding")],
+            bindings: vec![
+                IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(
+                    HANDLE,
+                    public_key(),
+                    REVISION,
+                    POLICY_DIGEST,
+                )
+                .expect("valid stream-token signer binding"),
+            ],
         }
     }
 
     struct ProviderProbe {
         handle: &'static str,
         public_key: [u8; 32],
-        reports: Mutex<Vec<Result<StreamTokenRuntimeSignerQualificationV1, StreamTokenRuntimeSignerProbeErrorV1>>>,
+        reports: Mutex<
+            Vec<
+                Result<
+                    StreamTokenRuntimeSignerQualificationV1,
+                    StreamTokenRuntimeSignerProbeErrorV1,
+                >,
+            >,
+        >,
         calls: AtomicUsize,
     }
 
@@ -157,7 +172,9 @@ mod tests {
     fn dependencies(
         handle: &'static str,
         public_key: [u8; 32],
-        reports: Vec<Result<StreamTokenRuntimeSignerQualificationV1, StreamTokenRuntimeSignerProbeErrorV1>>,
+        reports: Vec<
+            Result<StreamTokenRuntimeSignerQualificationV1, StreamTokenRuntimeSignerProbeErrorV1>,
+        >,
     ) -> IrohaRuntimeDeps {
         IrohaRuntimeDeps::default().with_sorafs_stream_token_signer(Arc::new(ProviderProbe {
             handle,
@@ -186,10 +203,7 @@ mod tests {
             Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
         );
         assert_eq!(
-            qualify_dependency(
-                &bindings(),
-                &dependencies(HANDLE, [0x59; 32], vec![]),
-            ),
+            qualify_dependency(&bindings(), &dependencies(HANDLE, [0x59; 32], vec![]),),
             Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
         );
     }

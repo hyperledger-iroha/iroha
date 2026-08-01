@@ -83,41 +83,45 @@ IndexedDecisionWitness(initialContext) ==
        asyncServeAdmissions <- IndexedScheduler(initialContext, 14),
        asyncServeReservations <- IndexedScheduler(initialContext, 15),
        asyncServeTombstones <- IndexedScheduler(initialContext, 16),
-       asyncOutstandingWork <- IndexedScheduler(initialContext, 17),
-       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 18),
-       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 19),
-       asyncNextCompletionSource <- IndexedScheduler(initialContext, 20),
-       asyncIoControlAvailable <- IndexedScheduler(initialContext, 21),
-       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 22),
-       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 23),
-       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 24),
-       asyncDeferredHandoffs <- IndexedScheduler(initialContext, 25),
-       asyncNextDeferredClass <- IndexedScheduler(initialContext, 26),
-       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 27),
-       asyncCausalQueues <- IndexedScheduler(initialContext, 28),
-       asyncOutstandingTags <- IndexedScheduler(initialContext, 29),
-       asyncNodeDeadlines <- IndexedScheduler(initialContext, 30),
-       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 31),
-       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 32),
-       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 33),
-       asyncSentItems <- IndexedScheduler(initialContext, 34),
-       asyncRetainedControl <- IndexedScheduler(initialContext, 35),
-       asyncActiveRequests <- IndexedScheduler(initialContext, 36),
-       asyncCertifiedResponseClaim <- IndexedScheduler(initialContext, 37),
-       asyncTransport <- IndexedScheduler(initialContext, 38),
-       asyncIngressLanes <- IndexedScheduler(initialContext, 39),
-       asyncIngressReady <- IndexedScheduler(initialContext, 40),
-       asyncLeaderWireLifecycles <- IndexedScheduler(initialContext, 41),
-       asyncHeldChunks <- IndexedScheduler(initialContext, 42),
-       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 43),
-       asyncControlServiceState <- IndexedScheduler(initialContext, 44),
-       asyncServiceActivationState <- IndexedScheduler(initialContext, 45),
+       asyncServeAttempts <- IndexedScheduler(initialContext, 17),
+       asyncOutstandingWork <- IndexedScheduler(initialContext, 18),
+       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 19),
+       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 20),
+       asyncNextCompletionSource <- IndexedScheduler(initialContext, 21),
+       asyncIoControlAvailable <- IndexedScheduler(initialContext, 22),
+       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 23),
+       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 24),
+       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 25),
+       asyncDeferredHandoffs <- IndexedScheduler(initialContext, 26),
+       asyncNextDeferredClass <- IndexedScheduler(initialContext, 27),
+       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 28),
+       asyncCausalQueues <- IndexedScheduler(initialContext, 29),
+       asyncOutstandingTags <- IndexedScheduler(initialContext, 30),
+       asyncNodeDeadlines <- IndexedScheduler(initialContext, 31),
+       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 32),
+       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 33),
+       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 34),
+       asyncSentItems <- IndexedScheduler(initialContext, 35),
+       asyncRetainedControl <- IndexedScheduler(initialContext, 36),
+       asyncActiveRequests <- IndexedScheduler(initialContext, 37),
+       asyncCertifiedResponseClaim <- IndexedScheduler(initialContext, 38),
+       asyncTransport <- IndexedScheduler(initialContext, 39),
+       asyncIngressLanes <- IndexedScheduler(initialContext, 40),
+       asyncIngressReady <- IndexedScheduler(initialContext, 41),
+       asyncLeaderWireLifecycles <- IndexedScheduler(initialContext, 42),
+       asyncHeldChunks <- IndexedScheduler(initialContext, 43),
+       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 44),
+       asyncControlServiceState <- IndexedScheduler(initialContext, 45),
+       asyncServiceActivationState <- IndexedScheduler(initialContext, 46),
        asyncRecoveryPhase <- IndexedRecovery(initialContext, 1),
        asyncRecoveryNode <- IndexedRecovery(initialContext, 2),
        asyncRecoveryGeneration <- IndexedRecovery(initialContext, 3),
        asyncRecoveryReplayQueue <- IndexedRecovery(initialContext, 4),
        asyncHistoricalLockRestartAuthorities <-
          IndexedRecovery(initialContext, 5),
+       asyncProducerKnownObligations <- IndexedProducer(initialContext, 1),
+       asyncProducerConsumedEpisodes <- IndexedProducer(initialContext, 2),
+       asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
          IndexedFixedCorridorDeadlines(initialContext)
 
@@ -200,41 +204,45 @@ IndexedDecisionServiceWitness(initialContext) ==
        asyncServeAdmissions <- IndexedScheduler(initialContext, 14),
        asyncServeReservations <- IndexedScheduler(initialContext, 15),
        asyncServeTombstones <- IndexedScheduler(initialContext, 16),
-       asyncOutstandingWork <- IndexedScheduler(initialContext, 17),
-       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 18),
-       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 19),
-       asyncNextCompletionSource <- IndexedScheduler(initialContext, 20),
-       asyncIoControlAvailable <- IndexedScheduler(initialContext, 21),
-       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 22),
-       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 23),
-       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 24),
-       asyncDeferredHandoffs <- IndexedScheduler(initialContext, 25),
-       asyncNextDeferredClass <- IndexedScheduler(initialContext, 26),
-       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 27),
-       asyncCausalQueues <- IndexedScheduler(initialContext, 28),
-       asyncOutstandingTags <- IndexedScheduler(initialContext, 29),
-       asyncNodeDeadlines <- IndexedScheduler(initialContext, 30),
-       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 31),
-       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 32),
-       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 33),
-       asyncSentItems <- IndexedScheduler(initialContext, 34),
-       asyncRetainedControl <- IndexedScheduler(initialContext, 35),
-       asyncActiveRequests <- IndexedScheduler(initialContext, 36),
-       asyncCertifiedResponseClaim <- IndexedScheduler(initialContext, 37),
-       asyncTransport <- IndexedScheduler(initialContext, 38),
-       asyncIngressLanes <- IndexedScheduler(initialContext, 39),
-       asyncIngressReady <- IndexedScheduler(initialContext, 40),
-       asyncLeaderWireLifecycles <- IndexedScheduler(initialContext, 41),
-       asyncHeldChunks <- IndexedScheduler(initialContext, 42),
-       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 43),
-       asyncControlServiceState <- IndexedScheduler(initialContext, 44),
-       asyncServiceActivationState <- IndexedScheduler(initialContext, 45),
+       asyncServeAttempts <- IndexedScheduler(initialContext, 17),
+       asyncOutstandingWork <- IndexedScheduler(initialContext, 18),
+       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 19),
+       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 20),
+       asyncNextCompletionSource <- IndexedScheduler(initialContext, 21),
+       asyncIoControlAvailable <- IndexedScheduler(initialContext, 22),
+       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 23),
+       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 24),
+       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 25),
+       asyncDeferredHandoffs <- IndexedScheduler(initialContext, 26),
+       asyncNextDeferredClass <- IndexedScheduler(initialContext, 27),
+       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 28),
+       asyncCausalQueues <- IndexedScheduler(initialContext, 29),
+       asyncOutstandingTags <- IndexedScheduler(initialContext, 30),
+       asyncNodeDeadlines <- IndexedScheduler(initialContext, 31),
+       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 32),
+       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 33),
+       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 34),
+       asyncSentItems <- IndexedScheduler(initialContext, 35),
+       asyncRetainedControl <- IndexedScheduler(initialContext, 36),
+       asyncActiveRequests <- IndexedScheduler(initialContext, 37),
+       asyncCertifiedResponseClaim <- IndexedScheduler(initialContext, 38),
+       asyncTransport <- IndexedScheduler(initialContext, 39),
+       asyncIngressLanes <- IndexedScheduler(initialContext, 40),
+       asyncIngressReady <- IndexedScheduler(initialContext, 41),
+       asyncLeaderWireLifecycles <- IndexedScheduler(initialContext, 42),
+       asyncHeldChunks <- IndexedScheduler(initialContext, 43),
+       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 44),
+       asyncControlServiceState <- IndexedScheduler(initialContext, 45),
+       asyncServiceActivationState <- IndexedScheduler(initialContext, 46),
        asyncRecoveryPhase <- IndexedRecovery(initialContext, 1),
        asyncRecoveryNode <- IndexedRecovery(initialContext, 2),
        asyncRecoveryGeneration <- IndexedRecovery(initialContext, 3),
        asyncRecoveryReplayQueue <- IndexedRecovery(initialContext, 4),
        asyncHistoricalLockRestartAuthorities <-
          IndexedRecovery(initialContext, 5),
+       asyncProducerKnownObligations <- IndexedProducer(initialContext, 1),
+       asyncProducerConsumedEpisodes <- IndexedProducer(initialContext, 2),
+       asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
          IndexedFixedCorridorDeadlines(initialContext)
 
@@ -315,43 +323,59 @@ IndexedAdequateLeaderWitness(initialContext) ==
        asyncServeAdmissions <- IndexedScheduler(initialContext, 14),
        asyncServeReservations <- IndexedScheduler(initialContext, 15),
        asyncServeTombstones <- IndexedScheduler(initialContext, 16),
-       asyncOutstandingWork <- IndexedScheduler(initialContext, 17),
-       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 18),
-       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 19),
-       asyncNextCompletionSource <- IndexedScheduler(initialContext, 20),
-       asyncIoControlAvailable <- IndexedScheduler(initialContext, 21),
-       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 22),
-       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 23),
-       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 24),
-       asyncDeferredHandoffs <- IndexedScheduler(initialContext, 25),
-       asyncNextDeferredClass <- IndexedScheduler(initialContext, 26),
-       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 27),
-       asyncCausalQueues <- IndexedScheduler(initialContext, 28),
-       asyncOutstandingTags <- IndexedScheduler(initialContext, 29),
-       asyncNodeDeadlines <- IndexedScheduler(initialContext, 30),
-       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 31),
-       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 32),
-       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 33),
-       asyncSentItems <- IndexedScheduler(initialContext, 34),
-       asyncRetainedControl <- IndexedScheduler(initialContext, 35),
-       asyncActiveRequests <- IndexedScheduler(initialContext, 36),
-       asyncCertifiedResponseClaim <- IndexedScheduler(initialContext, 37),
-       asyncTransport <- IndexedScheduler(initialContext, 38),
-       asyncIngressLanes <- IndexedScheduler(initialContext, 39),
-       asyncIngressReady <- IndexedScheduler(initialContext, 40),
-       asyncLeaderWireLifecycles <- IndexedScheduler(initialContext, 41),
-       asyncHeldChunks <- IndexedScheduler(initialContext, 42),
-       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 43),
-       asyncControlServiceState <- IndexedScheduler(initialContext, 44),
-       asyncServiceActivationState <- IndexedScheduler(initialContext, 45),
+       asyncServeAttempts <- IndexedScheduler(initialContext, 17),
+       asyncOutstandingWork <- IndexedScheduler(initialContext, 18),
+       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 19),
+       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 20),
+       asyncNextCompletionSource <- IndexedScheduler(initialContext, 21),
+       asyncIoControlAvailable <- IndexedScheduler(initialContext, 22),
+       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 23),
+       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 24),
+       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 25),
+       asyncDeferredHandoffs <- IndexedScheduler(initialContext, 26),
+       asyncNextDeferredClass <- IndexedScheduler(initialContext, 27),
+       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 28),
+       asyncCausalQueues <- IndexedScheduler(initialContext, 29),
+       asyncOutstandingTags <- IndexedScheduler(initialContext, 30),
+       asyncNodeDeadlines <- IndexedScheduler(initialContext, 31),
+       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 32),
+       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 33),
+       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 34),
+       asyncSentItems <- IndexedScheduler(initialContext, 35),
+       asyncRetainedControl <- IndexedScheduler(initialContext, 36),
+       asyncActiveRequests <- IndexedScheduler(initialContext, 37),
+       asyncCertifiedResponseClaim <- IndexedScheduler(initialContext, 38),
+       asyncTransport <- IndexedScheduler(initialContext, 39),
+       asyncIngressLanes <- IndexedScheduler(initialContext, 40),
+       asyncIngressReady <- IndexedScheduler(initialContext, 41),
+       asyncLeaderWireLifecycles <- IndexedScheduler(initialContext, 42),
+       asyncHeldChunks <- IndexedScheduler(initialContext, 43),
+       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 44),
+       asyncControlServiceState <- IndexedScheduler(initialContext, 45),
+       asyncServiceActivationState <- IndexedScheduler(initialContext, 46),
        asyncRecoveryPhase <- IndexedRecovery(initialContext, 1),
        asyncRecoveryNode <- IndexedRecovery(initialContext, 2),
        asyncRecoveryGeneration <- IndexedRecovery(initialContext, 3),
        asyncRecoveryReplayQueue <- IndexedRecovery(initialContext, 4),
        asyncHistoricalLockRestartAuthorities <-
          IndexedRecovery(initialContext, 5),
+       asyncProducerKnownObligations <- IndexedProducer(initialContext, 1),
+       asyncProducerConsumedEpisodes <- IndexedProducer(initialContext, 2),
+       asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
          IndexedFixedCorridorDeadlines(initialContext)
+
+(***************************************************************************
+Exact indexed producer ownership.
+
+All three witnesses above share the product's per-context three-field
+producer journal in addition to the 46-field scheduler projection.  Thus a
+known/consumed producer episode or retained origin cannot alias another
+height/context instance, while the immutable Serve admission and terminal
+tombstone state remains in scheduler slots 11..16.  Retried historical or
+exact-Decision work therefore stays in one monotone lifecycle instead of
+recreating a drained owner through an unindexed witness variable.
+***************************************************************************)
 
 (***************************************************************************
 Indexed exact-source retention support.
@@ -394,9 +418,11 @@ BY Isa
        IndexedDecisionWitness!AsyncAllVars,
        IndexedDecisionWitness!AsyncSchedulerVars,
        IndexedDecisionWitness!AsyncRecoveryVars,
+       IndexedDecisionWitness!AsyncProducerVars,
        IndexedDecisionWitness!vars,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
-       IndexedRecovery, IndexedFixedCorridorDeadlines
+       IndexedRecovery, IndexedProducer,
+       IndexedFixedCorridorDeadlines
 
 THEOREM IndexedAdequateLeaderWitnessVariablesAreExact ==
   IndexedAsyncStateShape
@@ -408,9 +434,11 @@ BY Isa
        IndexedAdequateLeaderWitness!AsyncAllVars,
        IndexedAdequateLeaderWitness!AsyncSchedulerVars,
        IndexedAdequateLeaderWitness!AsyncRecoveryVars,
+       IndexedAdequateLeaderWitness!AsyncProducerVars,
        IndexedAdequateLeaderWitness!vars,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
-       IndexedRecovery, IndexedFixedCorridorDeadlines
+       IndexedRecovery, IndexedProducer,
+       IndexedFixedCorridorDeadlines
 
 THEOREM IndexedAsyncLiveSpecProjectsAdequateLeaderWitnessLiveSpec ==
   \A initialContext \in AdmissibleContextRecords:
@@ -422,7 +450,8 @@ BY Isa
        IndexedAdequateLeaderWitness!AsyncLiveSpecAt,
        IndexedAsyncStateAt,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
-       IndexedRecovery, IndexedFixedCorridorDeadlines
+       IndexedRecovery, IndexedProducer,
+       IndexedFixedCorridorDeadlines
 
 THEOREM IndexedDecisionServiceWitnessVariablesAreExact ==
   IndexedAsyncStateShape
@@ -434,9 +463,11 @@ BY Isa
        IndexedDecisionServiceWitness!AsyncAllVars,
        IndexedDecisionServiceWitness!AsyncSchedulerVars,
        IndexedDecisionServiceWitness!AsyncRecoveryVars,
+       IndexedDecisionServiceWitness!AsyncProducerVars,
        IndexedDecisionServiceWitness!vars,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
-       IndexedRecovery, IndexedFixedCorridorDeadlines
+       IndexedRecovery, IndexedProducer,
+       IndexedFixedCorridorDeadlines
 
 THEOREM IndexedInitProjectsEveryDecisionWitnessInit ==
   \A initialContext \in AdmissibleContextRecords:
@@ -491,9 +522,11 @@ PROOF
            DEF IndexedDecisionWitness!AsyncAllVars,
                IndexedDecisionWitness!AsyncSchedulerVars,
                IndexedDecisionWitness!AsyncRecoveryVars,
+               IndexedDecisionWitness!AsyncProducerVars,
                IndexedDecisionWitness!vars,
                IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
-               IndexedRecovery, IndexedFixedCorridorDeadlines
+               IndexedRecovery, IndexedProducer,
+               IndexedFixedCorridorDeadlines
       <3> QED BY <3>2
     <2> QED BY <1>1, <2>1, <2>2
   <1> QED BY <1>1
@@ -529,9 +562,11 @@ PROOF
            DEF IndexedAdequateLeaderWitness!AsyncAllVars,
                IndexedAdequateLeaderWitness!AsyncSchedulerVars,
                IndexedAdequateLeaderWitness!AsyncRecoveryVars,
+               IndexedAdequateLeaderWitness!AsyncProducerVars,
                IndexedAdequateLeaderWitness!vars,
                IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
-               IndexedRecovery, IndexedFixedCorridorDeadlines
+               IndexedRecovery, IndexedProducer,
+               IndexedFixedCorridorDeadlines
       <3> QED BY <3>2
     <2> QED BY <1>1, <2>1, <2>2
   <1> QED BY <1>1
@@ -547,13 +582,16 @@ BY IndexedBracketStepProjectsEveryDecisionWitnessStep, Isa
        IndexedDecisionServiceWitness!AsyncAllVars,
        IndexedDecisionServiceWitness!AsyncSchedulerVars,
        IndexedDecisionServiceWitness!AsyncRecoveryVars,
+       IndexedDecisionServiceWitness!AsyncProducerVars,
        IndexedDecisionServiceWitness!vars,
        IndexedDecisionWitness!AsyncAllVars,
        IndexedDecisionWitness!AsyncSchedulerVars,
        IndexedDecisionWitness!AsyncRecoveryVars,
+       IndexedDecisionWitness!AsyncProducerVars,
        IndexedDecisionWitness!vars,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
-       IndexedRecovery, IndexedFixedCorridorDeadlines
+       IndexedRecovery, IndexedProducer,
+       IndexedFixedCorridorDeadlines
 
 THEOREM IndexedChainInitEstablishesDecisionWitnessSupport ==
   IndexedChainInit => IndexedDecisionWitnessSupport
@@ -798,7 +836,7 @@ IndexedHistoricalRequestInIngress(
     initialContext, request) ==
   \E source \in IndexedAsync(initialContext)!AsyncIngressSources:
     request \in
-      SequenceSet(IndexedScheduler(initialContext, 39)
+      SequenceSet(IndexedScheduler(initialContext, 40)
                     [request.envelope.recipient][source])
 
 IndexedHistoricalRequestInServeQueue(
@@ -811,8 +849,8 @@ IndexedHistoricalRequestInServeQueue(
 
 IndexedHistoricalRequestPhysicalOwner(
     initialContext, request) ==
-  \/ request \in IndexedScheduler(initialContext, 36)
-  \/ \E packet \in IndexedScheduler(initialContext, 38):
+  \/ request \in IndexedScheduler(initialContext, 37)
+  \/ \E packet \in IndexedScheduler(initialContext, 39):
        packet.item = request
   \/ IndexedHistoricalRequestInIngress(initialContext, request)
   \/ IndexedHistoricalRequestInServeQueue(initialContext, request)
@@ -842,7 +880,7 @@ IndexedHistoricalCommitResponseIdentity(
 IndexedHistoricalCommitResponsePublished(initialContext, node) ==
   /\ IndexedHistoricalRecoveryTargetOwned(initialContext, node)
   /\ \E request, qc, response:
-       /\ response \in IndexedScheduler(initialContext, 34)
+       /\ response \in IndexedScheduler(initialContext, 35)
        /\ IndexedHistoricalCommitResponseIdentity(
             initialContext, node, request, qc, response)
 
@@ -857,7 +895,7 @@ CommitQC lineage.
 
 IndexedHistoricalCertificateCommandLineage(
     initialContext, node, qc, candidate) ==
-  \/ /\ candidate.evidence \in IndexedScheduler(initialContext, 34)
+  \/ /\ candidate.evidence \in IndexedScheduler(initialContext, 35)
      /\ candidate.evidence.kind = "CommitQC"
      /\ candidate.evidence.envelope =
           IndexedAsync(initialContext)!QcEnvelope(node, qc)
@@ -870,7 +908,7 @@ IndexedHistoricalCertificateCommandLineage(
           THEN candidate.evidence
           ELSE IndexedAsync(initialContext)!NoAsyncItem
   \/ \E response:
-       /\ response \in IndexedScheduler(initialContext, 34)
+       /\ response \in IndexedScheduler(initialContext, 35)
        /\ response.kind = "CommitCertificateResponse"
        /\ response.envelope.recipient = node
        /\ response.envelope.qc = qc
@@ -1268,11 +1306,12 @@ BY IndexedDecisionWitness(initialContext)!
        IndexedDecisionWitness!PreGstResponsiveReplay,
        IndexedDecisionWitness!ResetNodeSchedulerForRestart,
        IndexedDecisionWitness!AsyncAllVars,
+       IndexedDecisionWitness!AsyncProducerVars,
        IndexedAsync!QcAt,
        IndexedAsync!DecisionWal,
        IndexedAsync!QcEnvelope,
        IndexedAsync!DiscoveredCommitQcItem,
-       IndexedCore, IndexedScheduler
+       IndexedCore, IndexedScheduler, IndexedProducer
 
 THEOREM IndexedBracketStepPreservesHistoricalCertificateLocalLineage ==
   /\ IndexedDecisionWitnessSupport
@@ -1418,7 +1457,7 @@ IndexedHistoricalDecisionRecord(initialContext, node, qc) ==
 
 IndexedHistoricalDecisionCertifiedRequestActiveExact(
     initialContext, node, qc) ==
-  \E request \in IndexedScheduler(initialContext, 36):
+  \E request \in IndexedScheduler(initialContext, 37):
     request \in
       IndexedAsync(initialContext)!CertifiedRequestOutbox(node, qc)
 
@@ -3421,7 +3460,9 @@ BY IndexedFairActionsRemainEnabledInProduct,
        IndexedAsync!AsyncAllVars,
        IndexedAsync!AsyncSchedulerVars,
        IndexedAsync!AsyncRecoveryVars,
-       IndexedAsync!vars
+       IndexedAsync!AsyncProducerVars,
+       IndexedAsync!vars,
+       IndexedProducer
 
 THEOREM IndexedHistoricalOpenStepCreatesExactTarget ==
   \A initialContext \in AdmissibleContextRecords,
@@ -3815,6 +3856,24 @@ IndexedLocalAdequateLeaderProducerTransportClosureProperty ==
       AdequateLeaderTargetProducerTransportClosureProperty(
         IndexedChainSpec)
 
+IndexedLocalAdequateLeaderProducerTransportOccurrenceClosureProperty ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedAdequateLeaderWitness(initialContext)!
+      AdequateLeaderTargetProducerTransportOccurrenceClosureProperty(
+        IndexedChainSpec)
+
+IndexedLocalAdequateLeaderRetainedProducerNonDescentEpisodeStepProperty ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedAdequateLeaderWitness(initialContext)!
+      AdequateLeaderRetainedProducerNonDescentEpisodeStepProperty(
+        IndexedChainSpec)
+
+IndexedLocalAdequateLeaderRetainedProducerOccurrenceClosureProperty ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedAdequateLeaderWitness(initialContext)!
+      AdequateLeaderTargetRetainedProducerOccurrenceClosureProperty(
+        IndexedChainSpec)
+
 IndexedLocalAdequateLeaderProductiveEpisodeRankStepProperty ==
   \A initialContext \in AdmissibleContextRecords:
     IndexedAdequateLeaderWitness(initialContext)!
@@ -3961,9 +4020,10 @@ PROOF
              IndexedAdequateLeaderWitness!AsyncAllVars,
              IndexedAdequateLeaderWitness!AsyncSchedulerVars,
              IndexedAdequateLeaderWitness!AsyncRecoveryVars,
+             IndexedAdequateLeaderWitness!AsyncProducerVars,
              IndexedAdequateLeaderWitness!vars,
              IndexedAsyncStateAt, IndexedCore,
-             IndexedScheduler, IndexedRecovery
+             IndexedScheduler, IndexedRecovery, IndexedProducer
   <1> QED BY <1>1
 
 THEOREM IndexedAdequateLeaderLocalSourceJoinsResponsiveRoster ==
@@ -4187,11 +4247,33 @@ PROOF
            IndexedLocalAdequateLeaderFixedDeadlineAndResponsiveDisseminationProperty
   <1> QED BY <1>1
 
+THEOREM IndexedAdequateLeaderRetainedProducerStepAndOccurrenceClosureCompose ==
+  /\ IndexedLocalAdequateLeaderProducerTransportOccurrenceClosureProperty
+  /\ IndexedLocalAdequateLeaderRetainedProducerNonDescentEpisodeStepProperty
+    => IndexedLocalAdequateLeaderRetainedProducerOccurrenceClosureProperty
+PROOF
+  <1>1. ASSUME
+          /\ IndexedLocalAdequateLeaderProducerTransportOccurrenceClosureProperty
+          /\ IndexedLocalAdequateLeaderRetainedProducerNonDescentEpisodeStepProperty,
+        NEW initialContext \in AdmissibleContextRecords
+         PROVE IndexedAdequateLeaderWitness(initialContext)!
+                 AdequateLeaderTargetRetainedProducerOccurrenceClosureProperty(
+                   IndexedChainSpec)
+    <2> QED BY <1>1,
+         IndexedAdequateLeaderWitness(initialContext)!
+           AdequateLeaderRetainedProducerStepAndOccurrenceClosureCompose
+         DEF IndexedLocalAdequateLeaderProducerTransportOccurrenceClosureProperty,
+             IndexedLocalAdequateLeaderRetainedProducerNonDescentEpisodeStepProperty
+  <1> QED BY <1>1
+       DEF IndexedLocalAdequateLeaderRetainedProducerOccurrenceClosureProperty
+
 THEOREM IndexedAdequateLeaderCompletedProvidersSupplyLocalSemanticKernel ==
   /\ IndexedLiveChainSpec
   /\ IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty
   /\ IndexedLocalAdequateLeaderFreshSelfLeaderDecisionProperty
   /\ IndexedLocalAdequateLeaderProducerTransportClosureProperty
+  /\ IndexedLocalAdequateLeaderProducerTransportOccurrenceClosureProperty
+  /\ IndexedLocalAdequateLeaderRetainedProducerNonDescentEpisodeStepProperty
   /\ IndexedLocalAdequateLeaderProductiveEpisodeRankStepProperty
     => IndexedLocalAdequateLeaderSemanticKernelProperty
 PROOF
@@ -4199,6 +4281,8 @@ PROOF
                 /\ IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty
                 /\ IndexedLocalAdequateLeaderFreshSelfLeaderDecisionProperty
                 /\ IndexedLocalAdequateLeaderProducerTransportClosureProperty
+                /\ IndexedLocalAdequateLeaderProducerTransportOccurrenceClosureProperty
+                /\ IndexedLocalAdequateLeaderRetainedProducerNonDescentEpisodeStepProperty
                 /\ IndexedLocalAdequateLeaderProductiveEpisodeRankStepProperty,
               NEW initialContext \in AdmissibleContextRecords
          PROVE IndexedAdequateLeaderWitness(initialContext)!
@@ -4216,12 +4300,19 @@ PROOF
       BY <2>2
          DEF IndexedAdequateLeaderWitness!
                AdequateLeaderTargetProofInvariantsProperty
-    <2> QED BY <1>1, <2>2, <2>3,
+    <2>4. IndexedAdequateLeaderWitness(initialContext)!
+             AdequateLeaderTargetRetainedProducerOccurrenceClosureProperty(
+               IndexedChainSpec)
+      BY <1>1,
+         IndexedAdequateLeaderRetainedProducerStepAndOccurrenceClosureCompose
+         DEF IndexedLocalAdequateLeaderRetainedProducerOccurrenceClosureProperty
+    <2> QED BY <1>1, <2>2, <2>3, <2>4,
          IndexedAdequateLeaderWitness(initialContext)!
            AdequateLeaderCompletedLocalProviderKernelSuppliesSemanticKernel
          DEF IndexedLocalAdequateLeaderFreshSelfCorridorExposureProperty,
              IndexedLocalAdequateLeaderFreshSelfLeaderDecisionProperty,
              IndexedLocalAdequateLeaderProducerTransportClosureProperty,
+             IndexedLocalAdequateLeaderRetainedProducerOccurrenceClosureProperty,
              IndexedLocalAdequateLeaderProductiveEpisodeRankStepProperty,
              IndexedAdequateLeaderWitness!
                AdequateLeaderCompletedLocalProviderKernelProperty
@@ -4421,9 +4512,10 @@ PROOF
              IndexedDecisionServiceWitness!AsyncAllVars,
              IndexedDecisionServiceWitness!AsyncSchedulerVars,
              IndexedDecisionServiceWitness!AsyncRecoveryVars,
+             IndexedDecisionServiceWitness!AsyncProducerVars,
              IndexedDecisionServiceWitness!vars,
              IndexedAsyncStateAt, IndexedCore,
-             IndexedScheduler, IndexedRecovery
+             IndexedScheduler, IndexedRecovery, IndexedProducer
   <1> QED BY <1>1
 
 THEOREM IndexedChainSpecProvidesLocalExactDecisionStageService ==

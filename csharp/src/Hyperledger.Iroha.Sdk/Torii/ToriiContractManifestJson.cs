@@ -101,7 +101,6 @@ internal static class ToriiContractManifestJson
         "is_err",
         "unwrap_or",
         "unwrap_err_or",
-        "Amount",
     };
     private static readonly HashSet<string> RetiredNumericTypeNames = new(StringComparer.Ordinal)
     {
@@ -960,9 +959,9 @@ internal static class ToriiContractManifestJson
     {
         EnsureOnly(root, context, "id", "repeats", "filter", "authority", "metadata", "callback");
         var id = RequiredExactString(root, "id", $"{context}.id");
-        if (id == "Amount")
+        if (!IsCanonicalDeclarationIdentifier(id))
         {
-            throw new JsonException($"{context}.id must not use retired Kotodama source form Amount.");
+            throw new JsonException($"{context}.id must be a canonical Kotodama declaration identifier.");
         }
         var filter = RequiredExactString(root, "filter", $"{context}.filter");
         ValidateCanonicalBase64(filter, $"{context}.filter");
@@ -1021,9 +1020,9 @@ internal static class ToriiContractManifestJson
     {
         EnsureOnly(root, context, "namespace", "entrypoint");
         var callbackNamespace = OptionalExactString(root, "namespace", $"{context}.namespace");
-        if (callbackNamespace == "Amount")
+        if (callbackNamespace is not null && !IsCanonicalTypeDeclarationIdentifier(callbackNamespace))
         {
-            throw new JsonException($"{context}.namespace must not use retired Kotodama source form Amount.");
+            throw new JsonException($"{context}.namespace must be a canonical Kotodama type-declaration identifier.");
         }
         var entrypoint = RequiredExactString(root, "entrypoint", $"{context}.entrypoint");
         if (!IsCanonicalEntrypointName(entrypoint))
@@ -1521,9 +1520,9 @@ internal static class ToriiContractManifestJson
     private static JsonObject BuildTrigger(ToriiContractTriggerDescriptor value, string context)
     {
         var id = RequireExact(value.Id, $"{context}.id");
-        if (id == "Amount")
+        if (!IsCanonicalDeclarationIdentifier(id))
         {
-            throw new JsonException($"{context}.id must not use retired Kotodama source form Amount.");
+            throw new JsonException($"{context}.id must be a canonical Kotodama declaration identifier.");
         }
         ValidateCanonicalBase64(value.FilterBase64, $"{context}.filter");
         if (value.Authority is not null)
@@ -1562,9 +1561,9 @@ internal static class ToriiContractManifestJson
             throw new JsonException($"{context}.entrypoint must be a canonical Kotodama selector.");
         }
         ValidateExactStringOptional(value.Namespace, $"{context}.namespace");
-        if (value.Namespace == "Amount")
+        if (value.Namespace is not null && !IsCanonicalTypeDeclarationIdentifier(value.Namespace))
         {
-            throw new JsonException($"{context}.namespace must not use retired Kotodama source form Amount.");
+            throw new JsonException($"{context}.namespace must be a canonical Kotodama type-declaration identifier.");
         }
         return new JsonObject { ["namespace"] = value.Namespace, ["entrypoint"] = value.Entrypoint };
     }

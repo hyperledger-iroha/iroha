@@ -157,7 +157,6 @@ test("real current compiler artifact is source-bound and passes the browser stru
 
 test(
   "current Rust admission oracle proves executable validation missing from the structural JS boundary",
-  { skip: process.env.IROHA_JS_RUN_RUST_ARTIFACT_PARITY !== "1" },
   () => {
     const directory = mkdtempSync(path.join(tmpdir(), "iroha-js-rust-artifact-"));
     try {

@@ -415,17 +415,38 @@ applications never parse lineage paths.
 
 ## Native privacy bridge
 
-`PrivacyNativeBridge` is capability-only. `capabilitiesArchiveV1()` returns the
-canonical typed `PrivacyCapabilitySnapshotV1` Norito archive, and
+`PrivacyNativeBridge` exposes local build metadata only.
+`compiledProfileCatalogV1()` returns this binary's canonical typed
+`PrivacyCompiledProfileCatalogV1` Norito archive, and
 `protocolsV1()` exposes the closed `ProtocolIdV1` enum in exact wire order. The
 generic proof request/build/verify ABI and free-form algorithm selectors are
-absent; proofs must use protocol-specific typed APIs.
+absent; proofs must use protocol-specific typed APIs. The local catalog never
+establishes activation or readiness; proof submission requires a fresh
+committed `/v1/privacy/capabilities` snapshot from live Torii.
 
 Genesis `confidential_features` and `zk_policy_hash` values are opaque consensus
 fingerprints, never client-side proof or backend selectors.
 `ClientConfigManifestLoader` rejects those keys (and their camel-case aliases)
 at any depth. Proof construction must use Torii's committed
 `/v1/privacy/capabilities` response and the on-chain verifying-key registry.
+
+`PrivacyExact12FixtureCodecV1` decodes the first-release
+`PrivacyExact12FixtureBundleV1` entirely in Java; it does not load the native
+bridge. Pass one canonical standard-Base64 line (without the fixture file's
+final LF), or decode raw Norito bytes directly:
+
+```java
+PrivacyExact12FixtureBundleV1 bundle =
+    PrivacyExact12FixtureCodecV1.decodeCanonicalBase64(fixtureLine);
+byte[] canonicalArchive = PrivacyExact12FixtureCodecV1.encodeCanonical(bundle);
+PrivacyExact12FixtureCodecV1.requireCanonicalArchive(receivedArchive, canonicalArchive);
+```
+
+The codec requires the exact schema, version, twelve-row order, uncompressed
+`COMPACT_LEN` layout, and configured field/aggregate limits. It rejects
+alternate Base64, truncation, trailing or unknown data, and reordered rows.
+Use `requireCanonicalArchive` with an independently trusted fixture when exact
+cross-row and cross-field identity matters.
 
 The registry has exactly twelve IDs: `zk-ace-pq-authorization-v0`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
@@ -729,6 +750,10 @@ ANDROID_TRANSPORT_GUARD_AAR=java/iroha_android/android/build/outputs/aar/android
 bash ci/check_android_transport_guard.sh /path/to/classes.jar
 ```
 
+The guard is fail-closed: the compiled artifact, `jdeps`, and archive tooling
+must all be present and successfully inspect the candidate. There is no
+override for allowing JVM transports in an Android release.
+
 ### Transport defaults and troubleshooting
 
 - HTTP clients use a strict runtime split: Android loads `OkHttpTransportExecutorFactory`, while JVM
@@ -742,8 +767,8 @@ bash ci/check_android_transport_guard.sh /path/to/classes.jar
   `OkHttpWebSocketConnectorFactory.createDefault()`, while JVM callers should inject
   `JdkWebSocketConnectorFactory.createDefault()`. This keeps platform selection deterministic and
   avoids reflective discovery; `AndroidClientFactory` performs the injection for its clients.
-- Android artefacts must not contain `java.net.http` bytecode. The `android-and6` workflow now runs a
-  `transport-guard` job that assembles the release AAR and executes
+- Android artefacts must not contain `java.net.http` bytecode. The mobile SDK artifact workflow
+  assembles the Java release AAR and executes
   `ci/check_android_transport_guard.sh` (also available locally via `make android-transport-guard`)
   to fail when JVM-only classes leak into the Android bundle.
 - Guard failures usually mean the wrong artefact was scanned (set `ANDROID_TRANSPORT_GUARD_AAR` to
@@ -1410,9 +1435,10 @@ active and no native library is loaded (avoiding security warnings in CI).
 
 Kotlin callers should use `CudaAcceleratorsKotlin.*OrNull` helpers to receive
 `Long?`/`LongArray?` outputs instead of `Optional` wrappers. See the CUDA
-operator guide for native setup and the manual smoke harness
-(`specs/sdk/android/gpu_operator_guide.md`), which exercises the JNI
-bridge on CUDA-capable devices when `IROHA_CUDA_SELFTEST=1` is set.
+operator guide for native setup and the hardware-qualified smoke harness
+(`specs/sdk/android/gpu_operator_guide.md`). The ordinary JVM suite excludes
+that GPU-only class; the nightly CUDA lane selects it explicitly and any
+missing driver, JNI bridge, or CUDA result fails the lane.
 
 `SoftwareKeyProvider.exportDeterministic(...)` emits a versioned, AES-GCM
 wrapped export bundle (v4) using per-export salt/nonce. The bundle records the

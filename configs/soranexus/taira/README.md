@@ -751,7 +751,9 @@ identity:
   identity transferred from Linux before compiling the macOS/arm64 `irohad`
   and `kagami`. The exact binary then boots exactly four native peers, proves
   consensus advancement, replaces each peer child in turn through the shipped
-  supervisor, and proves fleet advancement after every restart.
+  supervisor, and proves fleet advancement after every restart. Both the
+  candidate binary and supervisor run from temporary root-controlled,
+  content-addressed validation paths so a child cannot rewrite its own harness.
 
 `capture_taira_macos_four_peer_receipt.py` emits the canonical receipt only
 after all four restart proofs pass and the original reset inputs are unchanged.
@@ -777,6 +779,8 @@ and layers use these fixed types:
 - `application/vnd.hyperledger.iroha.release-manifest.v1+json`
 - `application/vnd.hyperledger.iroha.release-manifest.signature.v1+ed25519`
 - `application/vnd.hyperledger.iroha.ed25519-public-key.v1`
+- `application/vnd.oci.image.manifest.v1+json` with the canonical
+  `application/vnd.oci.empty.v1+json` two-byte `{}` config descriptor
 
 The mutable-looking source tag is only a publication locator. The workflow
 accepts the digest returned by `oras push` only after `oras resolve` agrees,

@@ -55,6 +55,8 @@ SDK_FIXTURE_READERS = {
         "REQUIRED_FIXTURE_NAMES.associateWith",
         "readMandatoryFixture(root, relative)",
         "check(Files.isRegularFile(path))",
+        "CancelAssetLockInstruction.fromCanonicalFields(",
+        "CancelAssetLockInstruction.fromWirePayload(",
     ),
     (
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/"
@@ -284,11 +286,12 @@ def test_fixture_workflow_requires_its_installed_toolchains() -> None:
 
     workflow = read(".github/workflows/sorafs-fixtures-nightly.yml")
     fixture_gate = read("ci/check_sorafs_fixtures.sh")
-    assert 'SORAFS_FIXTURE_REQUIRE_TOOLCHAIN: "1"' in workflow
-    assert 'if [[ "${require_fixture_toolchain}" == "1" ]]' in fixture_gate
-    assert "fixture_tool_available node" in fixture_gate
-    assert "fixture_tool_available go" in fixture_gate
+    assert "SORAFS_FIXTURE_REQUIRE_TOOLCHAIN" not in workflow
+    assert "SORAFS_FIXTURE_REQUIRE_TOOLCHAIN" not in fixture_gate
+    assert "require_fixture_tool node" in fixture_gate
+    assert "require_fixture_tool go" in fixture_gate
     assert "error: ${check_label} requires ${tool_name}" in fixture_gate
+    assert "skipping ${check_label}" not in fixture_gate
 
 
 def test_reference_sdk_regeneration_is_closed_and_double_run_stable() -> None:
@@ -466,8 +469,11 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
         'RUSTDOC="${native_rustdoc}"',
     ):
         assert build_binding in parity_runner
-    assert "test/cancelAssetLockV1.test.js" in parity_runner
-    assert "test/sorafsAppealFinanceValidation.test.js" in parity_runner
+    assert "node scripts/run-test-profile.mjs sorafs-native" in parity_runner
+    javascript_profile_runner = read("javascript/iroha_js/scripts/run-test-profile.mjs")
+    assert '"cancelAssetLockV1.test.js"' in javascript_profile_runner
+    assert '"sorafsAppealFinanceValidation.test.js"' in javascript_profile_runner
+    assert '"sorafsOrchestrator.parity.test.js"' in javascript_profile_runner
     assert "swift test --filter SorafsOrchestratorParityTests" in parity_runner
     assert "swift test --filter CancelAssetLockV1Tests" in parity_runner
     assert "swift test --filter SorafsReferenceValidatorsTests" in parity_runner

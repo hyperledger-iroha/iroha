@@ -72,7 +72,6 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.crypto.keystore.attestation.IrohaKeyManagerTelemetryTests",
         "org.hyperledger.iroha.android.governance.GovernanceInstructionBuilderTests",
         "org.hyperledger.iroha.android.gpu.CudaAcceleratorsKotlinFacadeTests",
-        "org.hyperledger.iroha.android.gpu.CudaAcceleratorsNativeSmokeTests",
         "org.hyperledger.iroha.android.gpu.CudaAcceleratorsTests",
         "org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests",
         "org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoderTests",
@@ -111,7 +110,6 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.tx.SignedTransactionHasherTests",
         "org.hyperledger.iroha.android.tx.TransactionBuilderTests",
         "org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests",
-        "org.hyperledger.iroha.android.tx.TransactionPayloadFixtureExporter",
         "org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests",
       };
 

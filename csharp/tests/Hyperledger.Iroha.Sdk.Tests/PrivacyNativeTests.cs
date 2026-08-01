@@ -96,28 +96,35 @@ public sealed class PrivacyNativeTests
     [Fact]
     public void SharedTypedValidatorStatusContractIsStable()
     {
-        Assert.Equal(256 * 1024, PrivacyNative.PrivacyNativeArchiveMaxBytes);
+        Assert.Equal(
+            256 * 1024,
+            PrivacyNative.PrivacyCompiledProfileCatalogArchiveMaxBytes);
         Assert.Equal(
             2 * 1024 * 1024,
             PrivacyNative.PrivacyExact12FixtureBundleMaxBytes);
         Assert.Equal(
             Enumerable.Range(0, 9),
-            Enum.GetValues<PrivacyCapabilityValidationStatusV1>().Select(value => (int)value));
+            Enum.GetValues<PrivacyCompiledProfileCatalogValidationStatusV1>()
+                .Select(value => (int)value));
         Assert.Equal(
             Enumerable.Range(0, 9),
             Enum.GetValues<PrivacyExact12FixtureValidationStatusV1>()
                 .Select(value => (int)value));
         Assert.Empty(
-            typeof(PrivacyCapabilitiesArchive).GetConstructors(
+            typeof(PrivacyCompiledProfileCatalogArchive).GetConstructors(
                 BindingFlags.Public | BindingFlags.Instance));
         Assert.Empty(
             typeof(PrivacyExact12FixtureBundleArchive).GetConstructors(
                 BindingFlags.Public | BindingFlags.Instance));
         var validator = typeof(PrivacyNative).GetMethod(
-            "NativeValidateCapabilities",
+            "NativeValidateCompiledProfileCatalog",
             BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(validator);
         Assert.NotNull(validator!.GetCustomAttribute<System.Runtime.InteropServices.DllImportAttribute>());
+        Assert.Equal(
+            "iroha_privacy_validate_compiled_profile_catalog_v1",
+            validator.GetCustomAttribute<System.Runtime.InteropServices.DllImportAttribute>()!
+                .EntryPoint);
         var fixtureQuery = typeof(PrivacyNative).GetMethod(
             "NativeExact12FixtureBundle",
             BindingFlags.NonPublic | BindingFlags.Static);
@@ -134,6 +141,66 @@ public sealed class PrivacyNativeTests
             fixtureValidator!
                 .GetCustomAttribute<System.Runtime.InteropServices.DllImportAttribute>()!
                 .EntryPoint);
+    }
+
+    [Fact]
+    public void CompiledProfileCatalogPreflightRejectsNullEmptyAndOversizeWithoutNativeCalls()
+    {
+        Assert.Throws<ArgumentNullException>(
+            () => PrivacyNative.ValidateCompiledProfileCatalogV1(null!));
+        Assert.Equal(
+            PrivacyCompiledProfileCatalogValidationStatusV1.Empty,
+            PrivacyNative.ValidateCompiledProfileCatalogV1(Array.Empty<byte>()));
+        Assert.Equal(
+            PrivacyCompiledProfileCatalogValidationStatusV1.ArchiveTooLarge,
+            PrivacyNative.ValidateCompiledProfileCatalogV1(
+                new byte[PrivacyNative.PrivacyCompiledProfileCatalogArchiveMaxBytes + 1]));
+    }
+
+    [Fact]
+    public void CompiledProfileCatalogRoundTripsAndRejectsAdversarialBytes()
+    {
+        Assert.True(
+            PrivacyNative.IsAvailable(),
+            "ABI-21 connect_norito_bridge with compiled-profile catalog symbols is required.");
+
+        var catalog = PrivacyNative.CompiledProfileCatalogV1();
+        var canonical = catalog.NoritoBytes;
+        Assert.InRange(
+            canonical.Length,
+            1,
+            PrivacyNative.PrivacyCompiledProfileCatalogArchiveMaxBytes);
+        Assert.Equal(
+            PrivacyCompiledProfileCatalogValidationStatusV1.Valid,
+            PrivacyNative.ValidateCompiledProfileCatalogV1(canonical));
+        Assert.Equal(
+            canonical,
+            PrivacyNative.CompiledProfileCatalogV1().NoritoBytes);
+
+        foreach (var truncated in new[]
+        {
+            canonical[..^1],
+            canonical[1..],
+            canonical[..(canonical.Length / 2)],
+        })
+        {
+            Assert.NotEqual(
+                PrivacyCompiledProfileCatalogValidationStatusV1.Valid,
+                PrivacyNative.ValidateCompiledProfileCatalogV1(truncated));
+        }
+        var trailing = canonical.Concat(new byte[] { 0 }).ToArray();
+        Assert.NotEqual(
+            PrivacyCompiledProfileCatalogValidationStatusV1.Valid,
+            PrivacyNative.ValidateCompiledProfileCatalogV1(trailing));
+        foreach (var index in new[] { 0, canonical.Length / 2, canonical.Length - 1 }
+                     .Distinct())
+        {
+            var mutated = (byte[])canonical.Clone();
+            mutated[index] ^= 0x80;
+            Assert.NotEqual(
+                PrivacyCompiledProfileCatalogValidationStatusV1.Valid,
+                PrivacyNative.ValidateCompiledProfileCatalogV1(mutated));
+        }
     }
 
     [Fact]
@@ -201,7 +268,7 @@ public sealed class PrivacyNativeTests
                 PrivacyNative.ValidateExact12FixtureBundleV1(mutated));
         }
 
-        var crossSchemaArchive = PrivacyNative.CapabilitiesV1().NoritoBytes;
+        var crossSchemaArchive = PrivacyNative.CompiledProfileCatalogV1().NoritoBytes;
         Assert.NotEqual(
             PrivacyExact12FixtureValidationStatusV1.Valid,
             PrivacyNative.ValidateExact12FixtureBundleV1(crossSchemaArchive));

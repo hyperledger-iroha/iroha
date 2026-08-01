@@ -218,6 +218,14 @@ mod tests {
     fn token_config() -> SorafsTokenConfig {
         SorafsTokenConfig {
             enabled: true,
+            signer_handle: Some("pkcs11:prod/sorafs/stream-token/eu-1".to_owned()),
+            signer_public_key: Some([
+                0x15, 0x09, 0xA6, 0x11, 0xAD, 0x6D, 0x97, 0xB0, 0x1D, 0x87, 0x1E, 0x58, 0xED, 0x00,
+                0xC8, 0xFD, 0x7C, 0x39, 0x17, 0xB6, 0xCA, 0x61, 0xA8, 0xC2, 0x83, 0x3A, 0x19, 0xE0,
+                0x00, 0xAA, 0xC2, 0xE4,
+            ]),
+            signer_revision: Some(4),
+            signer_policy_digest: Some([0xb4; 32]),
             admission_provider_handle: Some(HANDLE.to_owned()),
             admission_provider_revision: Some(7),
             admission_provider_policy_digest: Some([0x42; 32]),

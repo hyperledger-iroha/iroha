@@ -85,17 +85,35 @@ reconstruction is an exact abstract stutter. The retired lane-wide removal
 operation is absent from the current V5 schema; the schema-bound bootstrap and
 operation decoder reject its old bytes without compatibility replay.
 
-One narrow production consumer now extracts and consumes the composed
-`DirectReleased` projection. The pre-Kura autonomous reservation-batch release
-path holds the Queue transition and FIFO locks while it revalidates QueuePlan
-V4, reservation V5, FIFO order, group binding, and committee geometry, then
-consumes its move-only checked token immediately before the reservation
-journal's `release_batch` append. Only after that durable append does it
-publish ordinary-FIFO ownership. This local slice is not a complete production
-trace-extraction theorem.
+Current production bindings cover several bounded slices. For selection, the
+canonical autonomous slot plan creates a move-only authorization containing
+the exact reservation scope, committee width, and one-hot producer. After
+exact QueuePlan V4/global registry/FIFO selection, Queue derives the complete
+ordered reservation-group identity, checks `SelectQueuePlanV4Conjunction`, and
+carries the checked `FsyncReservationV5` projection directly to the exact
+journal `put_batch` append. A 4,097-entry request fails before culling, FIFO
+mutation, or journal I/O.
+
+The durable merge-source reader revalidates the exact same group while checking
+`PersistExecutionInput`, `PersistReadyQc`, and `LaneCommit`. Kura's move-only
+READY authorization checks `AuthorizeReady` from repair-disabled durable input
+and carries the exact input hash, proposal, availability body, reservation
+group, producer, signer, and height context. Its one-shot signer rederives the
+committee bits and shared group identity, checks `SignReady`, and consumes the
+checked projection immediately before `Signature::try_new`.
+
+Canonical application checks `ApplyCarrier` before the WSV commit sink. Queue
+then checks each ordered `PersistReservationCommitted`,
+`PersistPlanTombstone`, and `ForgetReservationCommit` prefix against the same
+group. Separately, the pre-Kura reservation-batch release path holds the Queue
+transition and FIFO locks while it revalidates QueuePlan V4, reservation V5,
+FIFO order, group binding, and committee geometry, then consumes its move-only
+checked `DirectReleased` token immediately before the journal `release_batch`
+append. These local slices are not a complete production trace-extraction
+theorem.
 
 The remaining exact blocker is a machine-checked extraction from every other
-Rust QueuePlan journal V4, reservation journal V5, Kura, recovery,
+Rust QueuePlan journal V4 and reservation journal V5 transition, Kura, recovery,
 filesystem-error, restart, READY authorization/signature/QC, lane-commit,
 atomic WSV application, post-carrier cleanup, and remaining Release
 transitions into

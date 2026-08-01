@@ -1172,7 +1172,7 @@ QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS = (
             "assert_eq!(queue.queued_len(), 0);",
             "missing_reservation_payload_count",
             "live_record_count()",
-            "commit_lane_reservation(&key)",
+            "commit_lane_reservation_for_test(&key)",
             "lane_reservation_commit_barriers().is_empty()",
         ),
     ),

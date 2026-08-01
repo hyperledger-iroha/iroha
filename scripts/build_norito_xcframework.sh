@@ -212,10 +212,40 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" && "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1" ]]; then
-  echo "[-] --privacy-production-enabled cannot be combined with NORITO_BRIDGE_SKIP_CARGO_BUILDS=1" >&2
-  exit 1
-fi
+TEST_ONLY_PREBUILT_SLICES="${NORITO_BRIDGE_TEST_PREBUILT_SLICES:-0}"
+case "$TEST_ONLY_PREBUILT_SLICES" in
+  0) ;;
+  1)
+    if [[ "$ALLOW_DIRTY_SOURCE" != "1" \
+      || "$PRIVACY_PRODUCTION_ENABLED" == "1" \
+      || "${PYTEST_CURRENT_TEST:-}" != *"build_norito_xcframework_fallback_test.py"* ]]; then
+      echo "[-] test-only prebuilt slices require the fallback pytest, --allow-dirty-source, and the fail-closed privacy profile" >&2
+      exit 1
+    fi
+    canonical_test_build_dir="$(run_python312_clean -c \
+      'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+      "$BUILD_DIR")"
+    canonical_test_out_dir="$(run_python312_clean -c \
+      'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+      "$OUT_DIR")"
+    case "$canonical_test_build_dir/" in
+      "$ROOT_DIR/"*)
+        echo "[-] test-only prebuilt build directory must be outside the repository" >&2
+        exit 1
+        ;;
+    esac
+    case "$canonical_test_out_dir/" in
+      "$ROOT_DIR/"*)
+        echo "[-] test-only prebuilt output directory must be outside the repository" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  *)
+    echo "[-] NORITO_BRIDGE_TEST_PREBUILT_SLICES must be 0 or 1" >&2
+    exit 1
+    ;;
+esac
 
 CARGO_FEATURE_ARGS=()
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
@@ -226,8 +256,8 @@ else
   CARGO_FEATURE_PROFILE="privacy-production-disabled"
   echo "[+] Privacy proof dispatch remains fail-closed (default bridge build)" >&2
 fi
-# Keep feature variants in disjoint Cargo targets. In particular, the default
-# skip-build fast path must never package libraries left by an enabled build.
+# Keep feature variants in disjoint Cargo targets so no slice can be reused
+# across the production-enabled and fail-closed default profiles.
 CARGO_BUILD_DIR_BASE="$BUILD_DIR/cargo-ios${IPHONEOS_DEPLOYMENT_TARGET//./_}-sim${IPHONESIMULATOR_DEPLOYMENT_TARGET//./_}-${CARGO_FEATURE_PROFILE}"
 
 PINNED_RUST_TOOLCHAIN="1.93.1"
@@ -617,7 +647,8 @@ fi
 echo "[+] Using iOS deployment target (device): $IPHONEOS_DEPLOYMENT_TARGET" >&2
 echo "[+] Using iOS deployment target (simulator): $IPHONESIMULATOR_DEPLOYMENT_TARGET" >&2
 
-if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" == "1" || "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1" ]]; then
+if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" == "1" \
+  || "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
   rm -rf "$STAGE_DIR"
 else
   rm -rf "$CARGO_BUILD_DIR_BASE" "$STAGE_DIR"
@@ -726,8 +757,8 @@ run_hermetic_apple_cargo() {
   return "$cargo_status"
 }
 
-if [[ "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1" ]]; then
-  echo "[+] Skipping Rust static library builds; using existing target artifacts" >&2
+if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
+  echo "[+] Exercising fallback publication with sealed test-only prebuilt slices" >&2
   LIB_DEV="$CARGO_BUILD_DIR_DEVICE/$DEVICE_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
   LIB_SIM_ARM="$CARGO_BUILD_DIR_SIM_ARM/$SIM_ARM_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
   LIB_SIM_X64="$CARGO_BUILD_DIR_SIM_X64/$SIM_X64_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
@@ -803,27 +834,32 @@ if [[ -z "$BRIDGE_BUNDLE_VERSION" ]]; then
   BRIDGE_BUNDLE_VERSION="1"
 fi
 
-echo "[+] Creating simulator universal static library" >&2
 SIM_UNI="$STAGE_DIR/${FRAMEWORK_NAME}-sim-universal.a"
-env -i \
-  HOME="$USER_HOME_DIR" \
-  PATH="${LIPO_BINARY%/*}:/usr/bin:/bin" \
-  TMPDIR="$MOBILE_TMPDIR" \
-  LANG=C.UTF-8 \
-  LC_ALL=C.UTF-8 \
-  DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
-  "$LIPO_BINARY" -create -output "$SIM_UNI" "$LIB_SIM_ARM" "$LIB_SIM_X64"
-
-echo "[+] Creating macOS universal static library" >&2
 MAC_UNI="$STAGE_DIR/${FRAMEWORK_NAME}-macos-universal.a"
-env -i \
-  HOME="$USER_HOME_DIR" \
-  PATH="${LIPO_BINARY%/*}:/usr/bin:/bin" \
-  TMPDIR="$MOBILE_TMPDIR" \
-  LANG=C.UTF-8 \
-  LC_ALL=C.UTF-8 \
-  DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
-  "$LIPO_BINARY" -create -output "$MAC_UNI" "$LIB_MAC_ARM" "$LIB_MAC_X64"
+if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
+  cp "$LIB_SIM_ARM" "$SIM_UNI"
+  cp "$LIB_MAC_ARM" "$MAC_UNI"
+else
+  echo "[+] Creating simulator universal static library" >&2
+  env -i \
+    HOME="$USER_HOME_DIR" \
+    PATH="${LIPO_BINARY%/*}:/usr/bin:/bin" \
+    TMPDIR="$MOBILE_TMPDIR" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+    "$LIPO_BINARY" -create -output "$SIM_UNI" "$LIB_SIM_ARM" "$LIB_SIM_X64"
+
+  echo "[+] Creating macOS universal static library" >&2
+  env -i \
+    HOME="$USER_HOME_DIR" \
+    PATH="${LIPO_BINARY%/*}:/usr/bin:/bin" \
+    TMPDIR="$MOBILE_TMPDIR" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+    "$LIPO_BINARY" -create -output "$MAC_UNI" "$LIB_MAC_ARM" "$LIB_MAC_X64"
+fi
 
 echo "[+] Staging XCFramework slices" >&2
 HEADERS_DEV="$STAGE_DIR/device-headers"
@@ -840,7 +876,7 @@ mkdir -p "$HEADERS_DEV" "$HEADERS_SIM" "$HEADERS_MAC" "$(dirname "$LIB_DEV_STAGE
 # `lipo`, keeping only one copy of each final slice while xcodebuild packages
 # the XCFramework.
 if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" != "1" \
-    && "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" != "1" ]]; then
+  && "$TEST_ONLY_PREBUILT_SLICES" != "1" ]]; then
   mv "$LIB_DEV" "$LIB_DEV_STAGED"
   mv "$SIM_UNI" "$LIB_SIM_STAGED"
   mv "$MAC_UNI" "$LIB_MAC_STAGED"
@@ -931,18 +967,40 @@ EOF
 }
 
 echo "[+] Creating XCFramework" >&2
-if ! env -i \
-  HOME="$USER_HOME_DIR" \
-  PATH=/usr/bin:/bin \
-  TMPDIR="$MOBILE_TMPDIR" \
-  LANG=C.UTF-8 \
-  LC_ALL=C.UTF-8 \
-  DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
-  "$XCODEBUILD_BINARY" -create-xcframework \
-  -library "$LIB_DEV_STAGED" -headers "$HEADERS_DEV" \
-  -library "$LIB_SIM_STAGED" -headers "$HEADERS_SIM" \
-  -library "$LIB_MAC_STAGED" -headers "$HEADERS_MAC" \
-  -output "$PUBLISH_XCFRAMEWORK"; then
+if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
+  if [[ -n "${NORITO_BRIDGE_TEST_WAIT_MARKER:-}" ]]; then
+    case "$NORITO_BRIDGE_TEST_WAIT_MARKER" in
+      /*) ;;
+      *)
+        echo "[-] NORITO_BRIDGE_TEST_WAIT_MARKER must be absolute" >&2
+        exit 1
+        ;;
+    esac
+    : >"$NORITO_BRIDGE_TEST_WAIT_MARKER"
+    while true; do
+      /bin/sleep 1
+    done
+  fi
+  xcodebuild_status=65
+else
+  if env -i \
+    HOME="$USER_HOME_DIR" \
+    PATH=/usr/bin:/bin \
+    TMPDIR="$MOBILE_TMPDIR" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+    "$XCODEBUILD_BINARY" -create-xcframework \
+    -library "$LIB_DEV_STAGED" -headers "$HEADERS_DEV" \
+    -library "$LIB_SIM_STAGED" -headers "$HEADERS_SIM" \
+    -library "$LIB_MAC_STAGED" -headers "$HEADERS_MAC" \
+    -output "$PUBLISH_XCFRAMEWORK"; then
+    xcodebuild_status=0
+  else
+    xcodebuild_status=$?
+  fi
+fi
+if [[ "$xcodebuild_status" -ne 0 ]]; then
   echo "[!] xcodebuild reported a non-zero exit; rebuilding the fallback from an empty candidate" >&2
   rm -rf -- "$PUBLISH_XCFRAMEWORK"
   copy_static_xcframework_slice() {
@@ -990,6 +1048,9 @@ echo "[+] XCFramework staged: $PUBLISH_XCFRAMEWORK" >&2
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   touch "$PUBLISH_XCFRAMEWORK/.privacy-production-enabled"
 fi
+if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
+  touch "$PUBLISH_XCFRAMEWORK/.test-only-prebuilt-slices"
+fi
 
 IOS_BIN="$PUBLISH_XCFRAMEWORK/ios-arm64/${STATIC_LIB_NAME}"
 SIM_BIN="$PUBLISH_XCFRAMEWORK/ios-arm64_x86_64-simulator/${STATIC_LIB_NAME}"
@@ -1004,10 +1065,21 @@ SIM_HASH=$(shasum -a 256 "$SIM_BIN" | awk '{print $1}')
 MAC_HASH=$(shasum -a 256 "$MAC_BIN" | awk '{print $1}')
 HEADER_HASH=$(shasum -a 256 "$INC_DIR/connect_norito_bridge.h" | awk '{print $1}')
 BRIDGE_ABI_VERSION=$(sed -nE \
-  's/.*CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' \
-  "$CRATE_DIR/src/lib.rs" | head -n1)
-if [[ -z "$BRIDGE_ABI_VERSION" ]]; then
-  echo "[-] Unable to determine native bridge ABI version" >&2
+  's/^#define[[:space:]]+CONNECT_NORITO_BRIDGE_ABI_VERSION[[:space:]]+([0-9]+)[[:space:]]*$/\1/p' \
+  "$INC_DIR/connect_norito_bridge.h" | head -n1)
+DATA_MODEL_BRIDGE_ABI_VERSION=$(sed -nE \
+  's/^pub const PRIVACY_BRIDGE_ABI_VERSION_V1:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+);[[:space:]]*$/\1/p' \
+  "$ROOT_DIR/crates/iroha_data_model/src/privacy/protocol.rs" | head -n1)
+SOURCE_BRIDGE_ABI_BINDING_COUNT="$(
+  grep -Fxc \
+    'const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;' \
+    "$CRATE_DIR/src/lib.rs" || true
+)"
+if [[ -z "$BRIDGE_ABI_VERSION" \
+  || -z "$DATA_MODEL_BRIDGE_ABI_VERSION" \
+  || "$BRIDGE_ABI_VERSION" != "$DATA_MODEL_BRIDGE_ABI_VERSION" \
+  || "$SOURCE_BRIDGE_ABI_BINDING_COUNT" != "1" ]]; then
+  echo "[-] Native bridge ABI declarations are missing or disagree" >&2
   exit 1
 fi
 if [[ "$BRIDGE_ABI_VERSION" != "21" ]]; then
@@ -1022,13 +1094,18 @@ fi
 SOURCE_FINGERPRINT="$SOURCE_FINGERPRINT_START"
 PRIVACY_PRODUCTION_JSON=false
 CARGO_FEATURES_JSON='[]'
+TEST_ONLY_MANIFEST_FIELD=""
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   PRIVACY_PRODUCTION_JSON=true
   CARGO_FEATURES_JSON='["privacy-production-enabled"]'
 fi
+if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
+  TEST_ONLY_MANIFEST_FIELD='  "test_only_prebuilt_slices": true,'
+fi
 
 cat > "$PUBLISH_MANIFEST" <<EOF
 {
+${TEST_ONLY_MANIFEST_FIELD}
   "version": "$BRIDGE_VERSION",
   "native_bridge_abi_version": $BRIDGE_ABI_VERSION,
   "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
@@ -1133,6 +1210,11 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "iroha_privacy_compiled_profile_catalog_v1",
+    "iroha_privacy_validate_compiled_profile_catalog_v1",
+    "iroha_privacy_exact12_fixture_bundle_v1",
+    "iroha_privacy_validate_exact12_fixture_bundle_v1",
+    "iroha_privacy_free_buffer",
     "connect_norito_sorafs_reference_validate_bundle_json",
     "connect_norito_sorafs_reference_validate_governance_json",
     "connect_norito_sorafs_reference_validate_governance_dag_block_json",
@@ -1188,6 +1270,19 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v4"
+  ],
+  "forbidden_symbols": [
+    "connect_norito_get_chain_discriminant",
+    "connect_norito_set_chain_discriminant",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_request_authorization_create_v2",
+    "iroha_privacy_capabilities_v1",
+    "iroha_privacy_validate_capabilities_v1",
+    "iroha_privacy_proof_request_v1",
+    "iroha_privacy_build_proof_v1",
+    "iroha_privacy_verify_proof_v1",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
+    "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2"
   ],
   "kagemusha_mobile_artifact_roles": [
     {
@@ -1399,7 +1494,8 @@ PY
 
 run_isolated_python - \
   "$PUBLISH_XCFRAMEWORK" "$PUBLISH_MANIFEST" \
-  "$PUBLISH_MANIFEST_LINK" "$CANONICAL_MANIFEST_RELATIVE_TARGET" <<'PY'
+  "$PUBLISH_MANIFEST_LINK" "$CANONICAL_MANIFEST_RELATIVE_TARGET" \
+  "$TEST_ONLY_PREBUILT_SLICES" <<'PY'
 import hashlib
 import json
 import os
@@ -1422,6 +1518,7 @@ xcframework = Path(sys.argv[1])
 manifest_path = Path(sys.argv[2])
 manifest_link = Path(sys.argv[3])
 manifest_link_target = sys.argv[4]
+test_only_prebuilt_slices = sys.argv[5] == "1"
 expected_slices = {
     "ios-arm64": {
         "architectures": ["arm64"],
@@ -1537,6 +1634,13 @@ if manifest.get("privacy_production_enabled") is True:
     expected_top_level.add(privacy_marker.name)
 elif manifest.get("privacy_production_enabled") is not False:
     raise SystemExit("staged NoritoBridge manifest has a non-boolean privacy mode")
+test_only_marker = xcframework / ".test-only-prebuilt-slices"
+if test_only_prebuilt_slices:
+    if manifest.get("test_only_prebuilt_slices") is not True:
+        raise SystemExit("test-only staged NoritoBridge is missing its manifest marker")
+    expected_top_level.add(test_only_marker.name)
+elif "test_only_prebuilt_slices" in manifest or test_only_marker.exists():
+    raise SystemExit("release staged NoritoBridge contains test-only prebuilt slices")
 if {entry.name for entry in xcframework.iterdir()} != expected_top_level:
     raise SystemExit("staged NoritoBridge has unexpected top-level artifacts")
 
@@ -1575,7 +1679,35 @@ PY
 
 assert_bridge_source_seal "staged artifact validation"
 
-if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
+if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
+  TEST_CHECKER_MARKER="${NORITO_BRIDGE_CHECKER_MARKER:-}"
+  TEST_CHECKER_EXIT="${NORITO_BRIDGE_CHECKER_EXIT:-0}"
+  if [[ "$TEST_CHECKER_MARKER" != /* \
+    || ! -d "${TEST_CHECKER_MARKER%/*}" \
+    || -e "$TEST_CHECKER_MARKER" \
+    || -L "$TEST_CHECKER_MARKER" ]]; then
+    echo "[-] fallback pytest checker marker must be a new absolute file" >&2
+    exit 1
+  fi
+  case "$TEST_CHECKER_MARKER" in
+    "$ROOT_DIR/"*)
+      echo "[-] fallback pytest checker marker must be outside the repository" >&2
+      exit 1
+      ;;
+  esac
+  if [[ ! "$TEST_CHECKER_EXIT" =~ ^(0|[1-9][0-9]{0,2})$ \
+    || "$TEST_CHECKER_EXIT" -gt 125 ]]; then
+    echo "[-] NORITO_BRIDGE_CHECKER_EXIT must be a canonical value from 0 through 125" >&2
+    exit 1
+  fi
+  if ! (set -o noclobber; printf '%s\n' "$PUBLISH_ROOT" >"$TEST_CHECKER_MARKER"); then
+    echo "[-] fallback pytest checker marker could not be created exclusively" >&2
+    exit 1
+  fi
+  if [[ "$TEST_CHECKER_EXIT" != "0" ]]; then
+    exit "$TEST_CHECKER_EXIT"
+  fi
+elif [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
   MOBILE_SDK_ALLOW_DIRTY_SOURCE=1 \
     MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
     MOBILE_SDK_APPLE_CARGO_LOCK_PATH="$CARGO_LOCKFILE" \
@@ -1593,7 +1725,7 @@ fi
 assert_bridge_source_seal "pre-publication artifact verification"
 
 if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" != "1" \
-  && "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" != "1" ]]; then
+  && "$TEST_ONLY_PREBUILT_SLICES" != "1" ]]; then
   echo "[+] Removing generated Apple Cargo/staging intermediates before publication" >&2
   rm -rf "$CARGO_BUILD_DIR_BASE" "$STAGE_DIR"
 fi

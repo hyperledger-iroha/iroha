@@ -1182,6 +1182,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
         /// Persist carrier-extracted executable bytes through the ordinary
         /// autonomous lane path, then persist the execution input, and only then
         /// publish the separate immutable recovery seal.
+        #[cfg(test)]
         pub(crate) fn persist_historical_autonomous_lane_recovery_record(
             &self,
             record: &HistoricalAutonomousLaneRecoveryRecordV1,

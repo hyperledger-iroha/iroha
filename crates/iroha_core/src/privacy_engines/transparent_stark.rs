@@ -823,6 +823,7 @@ pub(crate) fn random_goldilocks_fp4_v1<R: TryRngCore>(
 }
 
 /// Draw one uniform nonzero quartic-extension element.
+#[cfg(test)]
 pub(crate) fn random_nonzero_goldilocks_fp4_v1<R: TryRngCore>(
     rng: &mut R,
 ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
@@ -1040,6 +1041,7 @@ pub(crate) fn sha256_merkle_node_v1(
 }
 
 /// Verify one exact binary Merkle path.
+#[cfg(test)]
 pub(crate) fn verify_sha256_merkle_path_v1(
     node_domain: &[u8],
     root: &[u8; 32],
@@ -1209,6 +1211,7 @@ impl TransparentTranscriptV1 {
         )
     }
 
+    #[cfg(test)]
     fn challenge_fp4_with_oracle(
         &mut self,
         label: &[u8],
@@ -1283,6 +1286,7 @@ pub(crate) fn derive_unique_query_indices_v1(
 }
 
 /// Compute one binary FRI fold.
+#[cfg(test)]
 pub(crate) fn fri_fold_pair_v1(
     low: GoldilocksFieldV1,
     high: GoldilocksFieldV1,
@@ -1299,6 +1303,7 @@ pub(crate) fn fri_fold_pair_v1(
 /// inverse point with one multiplication per entry.  Keeping that optimization
 /// here avoids duplicating the consensus-critical fold equation in each
 /// relation-specific engine.
+#[cfg(test)]
 pub(crate) fn fri_fold_pair_with_inverse_x_v1(
     low: GoldilocksFieldV1,
     high: GoldilocksFieldV1,
@@ -1353,6 +1358,7 @@ pub(crate) fn fri_fold_pair_with_inverse_x_fp4_v1(
 }
 
 /// Check the entire terminal FRI polynomial against an exact degree bound.
+#[cfg(test)]
 pub(crate) fn ensure_fri_terminal_degree_v1(
     values: &[GoldilocksFieldV1],
     log_size: u8,

@@ -23,9 +23,9 @@ export const PRIVACY_PROTOCOL_IDS_V1 = Object.freeze([
   "pq-masp-stark-v0",
 ]);
 
-const MAX_SAFE_U64 = Number.MAX_SAFE_INTEGER;
+const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U32 = 0xffff_ffff;
-const POLICY_DELAY_BLOCKS_V1 = 300;
+const POLICY_DELAY_BLOCKS_V1 = 300n;
 const PROTOCOL_BINDINGS = Object.freeze({
   "zk-ace-pq-authorization-v0": ["stark-fri-sha256-goldilocks", "native-goldilocks-stark-fri"],
   "anonymous-pgc-k-out-of-n-v1": ["anonymous-pgc-p256", "native-anonymous-pgc-p256"],
@@ -97,7 +97,7 @@ export function parsePrivacyCapabilitySnapshotV1(payload) {
   if (u32(snapshot.version, "privacy capability snapshot.version") !== PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1) {
     fail("version must be exactly 1", "privacy capability snapshot.version");
   }
-  const committedHeight = safeU64(snapshot.committed_height, "privacy capability snapshot.committed_height");
+  const committedHeight = u64(snapshot.committed_height, "privacy capability snapshot.committed_height");
   const consensusPolicy = parseConsensusPolicy(snapshot.consensus_policy, committedHeight);
   if (!Array.isArray(snapshot.protocols) || snapshot.protocols.length !== PRIVACY_PROTOCOL_IDS_V1.length) {
     fail("protocols must contain exactly the 12 canonical protocol rows", "privacy capability snapshot.protocols");
@@ -148,9 +148,9 @@ function parseConsensusPolicy(value, committedHeight) {
   if (policy.pending_tightening !== null) {
     const path = "privacy capability snapshot.consensus_policy.pending_tightening";
     const tightening = objectWithExactKeys(policy.pending_tightening, ["scheduled_at_height", "effective_at_height", "next_limits"], path);
-    const scheduled = positiveSafeU64(tightening.scheduled_at_height, `${path}.scheduled_at_height`);
-    const effective = positiveSafeU64(tightening.effective_at_height, `${path}.effective_at_height`);
-    if (scheduled > MAX_SAFE_U64 - POLICY_DELAY_BLOCKS_V1 || effective <= scheduled || effective < scheduled + POLICY_DELAY_BLOCKS_V1 || scheduled > committedHeight || effective <= committedHeight) {
+    const scheduled = positiveU64(tightening.scheduled_at_height, `${path}.scheduled_at_height`);
+    const effective = positiveU64(tightening.effective_at_height, `${path}.effective_at_height`);
+    if (scheduled > MAX_U64 - POLICY_DELAY_BLOCKS_V1 || effective <= scheduled || effective < scheduled + POLICY_DELAY_BLOCKS_V1 || scheduled > committedHeight || effective <= committedHeight) {
       fail("has invalid committed-height schedule", path);
     }
     const nextLimits = parseConsensusLimits(tightening.next_limits, `${path}.next_limits`);
@@ -298,15 +298,15 @@ function parseLifecycle(value, committedHeight, path) {
     ? ["proposed_at_height", "activate_at_height"]
     : ["proposed_at_height", "activated_at_height", "state_since_height"];
   const record = objectWithExactKeys(lifecycle.record, keys, `${path}.record`);
-  const proposed = positiveSafeU64(record.proposed_at_height, `${path}.record.proposed_at_height`);
+  const proposed = positiveU64(record.proposed_at_height, `${path}.record.proposed_at_height`);
   let normalized;
   if (state === "proposed") {
-    const activate = positiveSafeU64(record.activate_at_height, `${path}.record.activate_at_height`);
+    const activate = positiveU64(record.activate_at_height, `${path}.record.activate_at_height`);
     if (activate <= proposed || proposed > committedHeight || activate <= committedHeight) fail("has invalid proposed lifecycle heights", path);
     normalized = { proposed_at_height: proposed, activate_at_height: activate };
   } else {
-    const activated = state === "retired" && record.activated_at_height === null ? null : positiveSafeU64(record.activated_at_height, `${path}.record.activated_at_height`);
-    const since = positiveSafeU64(record.state_since_height, `${path}.record.state_since_height`);
+    const activated = state === "retired" && record.activated_at_height === null ? null : positiveU64(record.activated_at_height, `${path}.record.activated_at_height`);
+    const since = positiveU64(record.state_since_height, `${path}.record.state_since_height`);
     if (proposed > committedHeight || since > committedHeight || (activated !== null && activated > committedHeight)) fail("claims a state after committed height", path);
     if (activated === null ? state !== "retired" || since <= proposed : activated <= proposed || (state === "active" ? since < activated : since <= activated)) fail("has invalid lifecycle ordering", path);
     normalized = { proposed_at_height: proposed, activated_at_height: activated, state_since_height: since };
@@ -317,9 +317,9 @@ function parseLifecycle(value, committedHeight, path) {
 function parseProtocolTightening(value, current, committedHeight, path) {
   if (value === null) return null;
   const tightening = objectWithExactKeys(value, ["scheduled_at_height", "effective_at_height", "next_limits"], path);
-  const scheduled = positiveSafeU64(tightening.scheduled_at_height, `${path}.scheduled_at_height`);
-  const effective = positiveSafeU64(tightening.effective_at_height, `${path}.effective_at_height`);
-  if (scheduled > MAX_SAFE_U64 - POLICY_DELAY_BLOCKS_V1 || effective <= scheduled || effective < scheduled + POLICY_DELAY_BLOCKS_V1 || scheduled > committedHeight || effective <= committedHeight) fail("has invalid committed-height schedule", path);
+  const scheduled = positiveU64(tightening.scheduled_at_height, `${path}.scheduled_at_height`);
+  const effective = positiveU64(tightening.effective_at_height, `${path}.effective_at_height`);
+  if (scheduled > MAX_U64 - POLICY_DELAY_BLOCKS_V1 || effective <= scheduled || effective < scheduled + POLICY_DELAY_BLOCKS_V1 || scheduled > committedHeight || effective <= committedHeight) fail("has invalid committed-height schedule", path);
   const next = parseProtocolLimits(tightening.next_limits, current.protocol, `${path}.next_limits`);
   assertLimitsAtMost(next, current, `${path}.next_limits`);
   if (sameJson(next, current)) fail("must be a strict tightening", path);
@@ -386,8 +386,19 @@ function u32(value, path) {
   return value;
 }
 function positiveU32(value, path) { const result = u32(value, path); if (result === 0) fail("must be non-zero", path); return result; }
-function safeU64(value, path) { if (!Number.isSafeInteger(value) || value < 0 || value > MAX_SAFE_U64) fail("must be a safe uint64 integer", path); return value; }
-function positiveSafeU64(value, path) { const result = safeU64(value, path); if (result === 0) fail("must be non-zero", path); return result; }
+function u64(value, path) {
+  let result;
+  if (typeof value === "bigint") {
+    result = value;
+  } else if (Number.isSafeInteger(value) && !Object.is(value, -0)) {
+    result = BigInt(value);
+  } else {
+    fail("must be an exact canonical uint64 integer", path);
+  }
+  if (result < 0n || result > MAX_U64) fail("must be within the uint64 range", path);
+  return result;
+}
+function positiveU64(value, path) { const result = u64(value, path); if (result === 0n) fail("must be non-zero", path); return result; }
 function sameJson(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
 function fail(message, path) { throw new PrivacyCapabilitySnapshotError(message, path); }
 function deepFreeze(value) { if (value && typeof value === "object" && !Object.isFrozen(value)) { Object.freeze(value); for (const item of Object.values(value)) deepFreeze(item); } return value; }

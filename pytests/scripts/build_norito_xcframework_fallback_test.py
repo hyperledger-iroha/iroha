@@ -21,7 +21,7 @@ PUBLIC_STATIC_LIB_NAME = "libNoritoBridge.a"
 SLICE_IDS = (
     "ios-arm64",
     "ios-arm64_x86_64-simulator",
-    "macos-arm64",
+    "macos-arm64_x86_64",
 )
 BUILD_LOCK_NAME = ".NoritoBridge.build-publish.lockfile"
 
@@ -33,7 +33,7 @@ def test_cargo_slice_builds_are_locked_offline_and_single_job() -> None:
         for index, line in enumerate(lines)
         if line == "  run_hermetic_apple_cargo \\"
     ]
-    assert len(call_starts) == 4
+    assert len(call_starts) == 5
 
     calls = []
     for start in call_starts:
@@ -63,9 +63,15 @@ def test_cargo_slice_builds_are_locked_offline_and_single_job() -> None:
         ),
         (
             "apple-macos",
-            "$CARGO_BUILD_DIR_MACOS",
+            "$CARGO_BUILD_DIR_MACOS_ARM",
             "$MACOSX_SDKROOT",
-            "$MACOS_TRIPLE",
+            "$MACOS_ARM_TRIPLE",
+        ),
+        (
+            "apple-macos",
+            "$CARGO_BUILD_DIR_MACOS_X64",
+            "$MACOSX_SDKROOT",
+            "$MACOS_X64_TRIPLE",
         ),
     )
     for call, (profile, target_dir, sdkroot, triple) in zip(calls, expected_slices):
@@ -77,6 +83,10 @@ def test_cargo_slice_builds_are_locked_offline_and_single_job() -> None:
         )
         assert call[3].strip() == f'--target "{triple}" \\'
         assert call[4].strip().startswith('"${CARGO_FEATURE_ARGS[@]+')
+
+    source = "\n".join(lines)
+    assert "NORITO_BRIDGE_SKIP_CARGO_BUILDS" not in source
+    assert "Skipping Rust static library builds" not in source
 
 
 def _write_executable(path: Path, contents: str) -> None:
@@ -236,7 +246,8 @@ def _build_environment(
     _write_static_library(build_dir, "aarch64-apple-ios", "device")
     _write_static_library(build_dir, "aarch64-apple-ios-sim", "sim-arm")
     _write_static_library(build_dir, "x86_64-apple-ios", "sim-x64")
-    _write_static_library(build_dir, "aarch64-apple-darwin", "macos")
+    _write_static_library(build_dir, "aarch64-apple-darwin", "macos-arm")
+    _write_static_library(build_dir, "x86_64-apple-darwin", "macos-x64")
     _write_fake_tools(tools_dir)
 
     env = os.environ.copy()
@@ -248,7 +259,7 @@ def _build_environment(
         {
             "NORITO_BRIDGE_BUILD_DIR": str(build_dir),
             "NORITO_BRIDGE_OUT_DIR": str(out_dir),
-            "NORITO_BRIDGE_SKIP_CARGO_BUILDS": "1",
+            "NORITO_BRIDGE_TEST_PREBUILT_SLICES": "1",
             "NORITO_BRIDGE_CHECKER_EXIT": str(checker_exit),
             "NORITO_BRIDGE_CHECKER_MARKER": str(checker_marker),
             "PATH": f"{tools_dir}{os.pathsep}{env['PATH']}",
@@ -277,6 +288,18 @@ def _run_builder(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+def test_prebuilt_slice_seam_is_unavailable_outside_the_fallback_test(
+    tmp_path: Path,
+) -> None:
+    _, _, env, _ = _build_environment(tmp_path)
+    env.pop("PYTEST_CURRENT_TEST", None)
+
+    result = _run_builder(env)
+
+    assert result.returncode == 1
+    assert "test-only prebuilt slices require the fallback pytest" in result.stderr
+
+
 def test_manual_xcframework_fallback_writes_required_info_plist(
     tmp_path: Path,
 ) -> None:
@@ -298,7 +321,7 @@ def test_manual_xcframework_fallback_writes_required_info_plist(
     assert set(libraries) == {
         "ios-arm64",
         "ios-arm64_x86_64-simulator",
-        "macos-arm64",
+        "macos-arm64_x86_64",
     }
 
     for identifier, library in libraries.items():
@@ -320,8 +343,11 @@ def test_manual_xcframework_fallback_writes_required_info_plist(
         "arm64",
         "x86_64",
     ]
-    assert libraries["macos-arm64"]["SupportedPlatform"] == "macos"
-    assert libraries["macos-arm64"]["SupportedArchitectures"] == ["arm64"]
+    assert libraries["macos-arm64_x86_64"]["SupportedPlatform"] == "macos"
+    assert libraries["macos-arm64_x86_64"]["SupportedArchitectures"] == [
+        "arm64",
+        "x86_64",
+    ]
 
     public_manifest = out_dir / "NoritoBridge.artifacts.json"
     embedded_manifest = xcframework / "NoritoBridge.artifacts.json"
@@ -333,6 +359,8 @@ def test_manual_xcframework_fallback_writes_required_info_plist(
     assert public_manifest.resolve() == embedded_manifest.resolve()
     manifest = json.loads(public_manifest.read_text(encoding="utf-8"))
     assert manifest["native_bridge_abi_version"] == 21
+    assert manifest["test_only_prebuilt_slices"] is True
+    assert (xcframework / ".test-only-prebuilt-slices").is_file()
     assert set(manifest["hashes"]) == set(SLICE_IDS)
     for identifier in SLICE_IDS:
         binary = xcframework / identifier / PUBLIC_STATIC_LIB_NAME
@@ -389,7 +417,7 @@ def test_termination_cleans_lock_and_candidate_without_touching_live_pair(
 ) -> None:
     build_dir, out_dir, env, _ = _build_environment(tmp_path)
     wait_marker = tmp_path / "xcodebuild-waiting"
-    env["NORITO_BRIDGE_XCODE_WAIT_MARKER"] = str(wait_marker)
+    env["NORITO_BRIDGE_TEST_WAIT_MARKER"] = str(wait_marker)
     live_framework = out_dir / "NoritoBridge.xcframework"
     live_manifest = out_dir / "NoritoBridge.artifacts.json"
     original_manifest = live_manifest.read_bytes()
@@ -409,7 +437,10 @@ def test_termination_cleans_lock_and_candidate_without_touching_live_pair(
         stderr=subprocess.PIPE,
         start_new_session=True,
     )
-    deadline = time.monotonic() + 10
+    # Source authentication deliberately runs before the destructive publish
+    # phase. A large dirty worktree can make that preflight take longer than
+    # ten seconds even though the builder is making forward progress.
+    deadline = time.monotonic() + 60
     while not wait_marker.exists() and process.poll() is None:
         if time.monotonic() >= deadline:
             process.kill()

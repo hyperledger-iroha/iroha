@@ -147,16 +147,22 @@ if [[ "$HOST_OS" == "Darwin" ]]; then
       LANG=C.UTF-8 LC_ALL=C.UTF-8 DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
       /usr/bin/xcrun --find nm
   )"
-  JAVA_HOME_DIR="$(
-    /usr/bin/env -i HOME="$USER_HOME_DIR" PATH=/usr/bin:/bin TMPDIR=/tmp \
-      LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/libexec/java_home -v 21
-  )"
+  if [[ -n "${NORITO_MOBILE_JAVA_HOME:-}" ]]; then
+    JAVA_HOME_DIR="$NORITO_MOBILE_JAVA_HOME"
+  else
+    JAVA_HOME_DIR="$(
+      /usr/bin/env -i HOME="$USER_HOME_DIR" PATH=/usr/bin:/bin TMPDIR=/tmp \
+        LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/libexec/java_home -v 21
+    )"
+  fi
 else
   NM_BINARY="/usr/bin/nm"
   JAVA_HOME_DIR="${NORITO_MOBILE_JAVA_HOME:-}"
   [[ -n "$JAVA_HOME_DIR" ]] \
     || fail "NORITO_MOBILE_JAVA_HOME must pin the setup-java JDK on non-macOS hosts"
 fi
+[[ "$JAVA_HOME_DIR" == /* && -d "$JAVA_HOME_DIR" && ! -L "$JAVA_HOME_DIR" ]] \
+  || fail "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must provide an absolute regular JDK directory"
 NM_BINARY="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$NM_BINARY")"
 JAVA_HOME_DIR="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$JAVA_HOME_DIR")"
 JAVA_BINARY="$JAVA_HOME_DIR/bin/java"

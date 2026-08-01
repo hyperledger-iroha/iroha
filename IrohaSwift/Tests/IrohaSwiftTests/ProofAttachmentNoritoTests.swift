@@ -61,16 +61,158 @@ final class ProofAttachmentNoritoTests: XCTestCase {
         }
     }
 
-    func testProofAttachmentRejectsVerifyingKeySeparator() {
+    func testProofAttachmentAcceptsCanonicalColonNamespace() throws {
+        let attachment = try ProofAttachment(
+            backend: "halo2/ipa",
+            proof: Data([0x01]),
+            verifyingKey: .reference(.init(
+                backend: "halo2/ipa",
+                name: "halo2/ipa::transfer_v1"
+            ))
+        )
+        XCTAssertEqual(
+            attachment.verifyingKey,
+            .reference(.init(backend: "halo2/ipa", name: "halo2/ipa::transfer_v1"))
+        )
+    }
+
+    func testProofAttachmentRejectsNoncanonicalVerifierIdentifiersWithoutNormalization() {
+        let invalid = [
+            " leading", "trailing ", "Uppercase", ".hidden", "trailing_", "a..b",
+            "a//b", "a:::b", "a/:b", "a:/b", "a/.b", "a./b", "a:.b", "a.:b",
+            "a\\b", "a\u{200B}b"
+        ]
+        for name in invalid {
+            XCTAssertThrowsError(
+                try ProofAttachment(
+                    backend: "halo2/ipa",
+                    proof: Data([0x01]),
+                    verifyingKey: .reference(.init(backend: "halo2/ipa", name: name))
+                ),
+                "identifier \(name.debugDescription) must fail closed"
+            ) { error in
+                guard case ProofAttachmentError.invalidVerifyingKeyIdentifier = error else {
+                    return XCTFail("expected invalidVerifyingKeyIdentifier for \(name.debugDescription), got \(error)")
+                }
+            }
+        }
+    }
+
+    func testProofAttachmentRejectsOversizedVerifierIdentifier() {
+        let oversized = String(repeating: "a", count: 257)
+        XCTAssertThrowsError(
+            try ProofAttachment(
+                backend: "halo2/ipa",
+                proof: Data([0x01]),
+                verifyingKey: .reference(.init(backend: "halo2/ipa", name: oversized))
+            )
+        ) { error in
+            guard case let ProofAttachmentError.verifyingKeyIdentifierTooLong(field, maximum, actual) = error else {
+                return XCTFail("expected verifyingKeyIdentifierTooLong, got \(error)")
+            }
+            XCTAssertEqual(field, "verifyingKey.name")
+            XCTAssertEqual(maximum, 256)
+            XCTAssertEqual(actual, 257)
+        }
+    }
+
+    func testProofAttachmentRejectsZeroVerifyingKeyCommitment() {
         XCTAssertThrowsError(
             try ProofAttachment(
                 backend: "test",
                 proof: Data([0x01]),
-                verifyingKey: .reference(.init(backend: "halo2:ipa", name: "vk"))
+                verifyingKey: .reference(.init(backend: "test", name: "vk")),
+                verifyingKeyCommitment: Data(repeating: 0, count: 32)
             )
         ) { error in
-            guard case ProofAttachmentError.invalidVerifyingKeySeparator = error else {
-                return XCTFail("expected invalidVerifyingKeySeparator error")
+            guard case ProofAttachmentError.zeroVerifyingKeyCommitment = error else {
+                return XCTFail("expected zeroVerifyingKeyCommitment, got \(error)")
+            }
+        }
+    }
+
+    func testProofBoxLimitAppliesToCompleteEncodedField() throws {
+        let maximum = 64 * 1024 * 1024
+        let backendBytes = "halo2/ipa".utf8.count
+        XCTAssertEqual(
+            try ProofAttachment.canonicalProofBoxEncodedLength(
+                backendUTF8Count: backendBytes,
+                proofByteCount: maximum - 32 - backendBytes
+            ),
+            maximum
+        )
+        XCTAssertGreaterThan(
+            try ProofAttachment.canonicalProofBoxEncodedLength(
+                backendUTF8Count: backendBytes,
+                proofByteCount: maximum - 31 - backendBytes
+            ),
+            maximum
+        )
+    }
+
+    func testProofAttachmentEncodesCanonicalLanePrivacyThirdTail() throws {
+        let rawSibling = Data(repeating: 0x22, count: 32)
+        let merkle = try ProofAttachment.LanePrivacyProof.MerkleWitness(
+            leaf: Data(repeating: 0xAA, count: 32),
+            leafIndex: 1,
+            auditPath: [rawSibling, Data(repeating: 0x44, count: 32)]
+        )
+        XCTAssertEqual(merkle.auditPath[0].last, 0x23)
+        XCTAssertEqual(merkle.auditPath[1].last, 0x45)
+        let lane = ProofAttachment.LanePrivacyProof(
+            commitmentId: 7,
+            witness: .merkle(merkle)
+        )
+        let attachment = try ProofAttachment(
+            backend: "halo2/ipa",
+            proof: Data([0x01, 0x02]),
+            verifyingKey: .reference(.init(backend: "halo2/ipa", name: "vk_transfer")),
+            lanePrivacy: lane
+        )
+
+        var expected = Data()
+        expected.append(manualField(encodeString("halo2/ipa")))
+        expected.append(manualField(manualProofBoxPayload(backend: "halo2/ipa", bytes: Data([0x01, 0x02]))))
+        expected.append(manualField(manualVerifyingKeyIdPayload(backend: "halo2/ipa", name: "vk_transfer")))
+        expected.append(manualField(manualOptionPayload(nil)))
+        expected.append(manualField(manualOptionPayload(nil)))
+        expected.append(manualField(manualOptionPayload(manualLanePrivacyPayload(lane))))
+
+        XCTAssertEqual(try attachment.noritoPayload(), expected)
+    }
+
+    func testLanePrivacyRejectsInvalidMerkleResources() {
+        XCTAssertThrowsError(
+            try ProofAttachment.LanePrivacyProof.MerkleWitness(
+                leaf: Data(repeating: 0xAA, count: 32),
+                leafIndex: 0,
+                auditPath: []
+            )
+        ) { error in
+            guard case ProofAttachmentError.invalidLanePrivacyPathLength = error else {
+                return XCTFail("expected invalidLanePrivacyPathLength, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(
+            try ProofAttachment.LanePrivacyProof.MerkleWitness(
+                leaf: Data(repeating: 0xAA, count: 32),
+                leafIndex: 2,
+                auditPath: [Data(repeating: 0x22, count: 32)]
+            )
+        ) { error in
+            guard case ProofAttachmentError.invalidLanePrivacyLeafIndex = error else {
+                return XCTFail("expected invalidLanePrivacyLeafIndex, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(
+            try ProofAttachment.LanePrivacyProof.MerkleWitness(
+                leaf: Data(repeating: 0xAA, count: 32),
+                leafIndex: 0,
+                auditPath: [Data(repeating: 0x22, count: 31)]
+            )
+        ) { error in
+            guard case ProofAttachmentError.invalidLanePrivacyHashLength = error else {
+                return XCTFail("expected invalidLanePrivacyHashLength, got \(error)")
             }
         }
     }
@@ -150,6 +292,44 @@ final class ProofAttachmentNoritoTests: XCTestCase {
         payload.append(manualField(encodeString(backend)))
         payload.append(manualField(encodeString(name)))
         return payload
+    }
+
+    private func manualLanePrivacyPayload(_ lane: ProofAttachment.LanePrivacyProof) -> Data {
+        var payload = Data()
+        var commitmentId = lane.commitmentId.littleEndian
+        payload.append(manualField(Data(bytes: &commitmentId, count: 2)))
+
+        var witness = Data()
+        switch lane.witness {
+        case .merkle(let merkle):
+            var tag = UInt32(0).littleEndian
+            witness.append(Data(bytes: &tag, count: 4))
+
+            var merklePayload = Data()
+            merklePayload.append(manualField(manualFixedBytes(merkle.leaf)))
+            var proof = Data()
+            var leafIndex = merkle.leafIndex.littleEndian
+            proof.append(manualField(Data(bytes: &leafIndex, count: 4)))
+            var auditPath = Data()
+            auditPath.append(u64le(UInt64(merkle.auditPath.count)))
+            for sibling in merkle.auditPath {
+                auditPath.append(manualField(manualOptionPayload(sibling)))
+            }
+            proof.append(manualField(auditPath))
+            merklePayload.append(manualField(proof))
+            witness.append(manualField(merklePayload))
+        }
+        payload.append(manualField(witness))
+        return payload
+    }
+
+    private func manualFixedBytes(_ bytes: Data) -> Data {
+        var out = Data()
+        for byte in bytes {
+            out.append(u64le(1))
+            out.append(byte)
+        }
+        return out
     }
 
     private func manualOptionPayload(_ payload: Data?) -> Data {

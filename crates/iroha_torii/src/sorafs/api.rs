@@ -31886,7 +31886,8 @@ mod advert_tests {
     use crate::{
         build_sorafs_gateway_security, mk_app_state_for_tests, sorafs,
         sorafs::{
-            StreamTokenIssuer, StreamTokenRuntimeSigner, StreamTokenSigningError,
+            StreamTokenIssuer, StreamTokenRuntimeSigner, StreamTokenRuntimeSignerProbeErrorV1,
+            StreamTokenRuntimeSignerQualificationV1, StreamTokenSigningError,
             registry::{
                 RegistryCreditLedgerEntry, RegistryDeclaration, RegistryDispute,
                 RegistryFeeLedgerEntry,
@@ -44983,10 +44984,8 @@ mod advert_tests {
 
         fn qualification(
             &self,
-        ) -> Result<
-            StreamTokenRuntimeSignerQualificationV1,
-            StreamTokenRuntimeSignerProbeErrorV1,
-        > {
+        ) -> Result<StreamTokenRuntimeSignerQualificationV1, StreamTokenRuntimeSignerProbeErrorV1>
+        {
             let call = self
                 .qualification_calls
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

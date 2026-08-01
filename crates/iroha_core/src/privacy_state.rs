@@ -1777,6 +1777,7 @@ pub(crate) fn load_privacy_zk_x509_certificate_policy_v1(
 }
 
 /// Load the current self-chained signed-CRL record for one policy lineage.
+#[cfg(test)]
 pub(crate) fn load_privacy_zk_x509_crl_v1(
     trust_anchor_id: PrivacyIssuerIdV1,
     policy_id: PrivacyPolicyIdV1,
@@ -6084,6 +6085,7 @@ impl PrivacyNullifierKeyV1 {
 
     /// Return the exact X.509 policy namespace and certificate nullifier.
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn zk_x509_certificate_identity(
         self,
     ) -> Option<(PrivacyNamespaceV1, PrivacyNullifierV1)> {
@@ -6102,6 +6104,7 @@ impl PrivacyNullifierKeyV1 {
 
     /// Return the proof-managed pool namespace and nullifier, if present.
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn proof_managed_identity(
         self,
     ) -> Option<(PrivacyNamespaceV1, PrivacyNullifierV1)> {
@@ -6120,6 +6123,7 @@ impl PrivacyNullifierKeyV1 {
 
     /// Return the exact FCMP++ namespace and typed key image, if present.
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn fcmp_identity(self) -> Option<(PrivacyNamespaceV1, PrivacyFcmpKeyImageV1)> {
         match self {
             Self::FcmpKeyImage {
@@ -6163,6 +6167,7 @@ impl PrivacyNullifierKeyV1 {
 
     /// Ordered bounds covering consumed certificate nullifiers in one X.509 policy.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn zk_x509_certificate_nullifier_range(
         namespace: PrivacyNamespaceV1,
     ) -> core::ops::RangeInclusive<Self> {
@@ -6574,6 +6579,7 @@ impl PrivacyCommitmentKeyV1 {
 
     /// Return the proof-managed pool namespace, if this key belongs to one.
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn proof_managed_namespace(self) -> Option<PrivacyNamespaceV1> {
         match self {
             Self::ProofManagedPoolConfig { namespace }

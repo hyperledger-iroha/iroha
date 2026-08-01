@@ -9,6 +9,10 @@ import {
 } from "../src/crypto.browser.js";
 import * as srcBrowserCrypto from "../src/crypto.browser.js";
 import * as distBrowserCrypto from "../dist/crypto.browser.js";
+import * as srcBrowserFacade from "../src/browser.js";
+import * as distBrowserFacade from "../dist/browser.js";
+import * as srcPrivacyCapabilities from "../src/privacyCapabilities.js";
+import * as distPrivacyCapabilities from "../dist/privacyCapabilities.js";
 
 test("browser crypto bundle exposes Kaigi roster proof helper and omits retired ZK-ACE helpers", () => {
   assert.throws(
@@ -102,20 +106,50 @@ test("browser crypto exposes recovery phrase helpers in source and dist bundles"
   }
 });
 
-test("browser crypto exposes only the privacy capability bridge as a safe stub", () => {
+test("mapped browser crypto keeps the native-only local catalog fail closed", () => {
   for (const [label, crypto] of [["src", srcBrowserCrypto], ["dist", distBrowserCrypto]]) {
     assert.equal(crypto.isPrivacyNativeAvailable(), false, `${label} privacy bridge must be unavailable`);
     assert.throws(
-      () => crypto.privacyCapabilitiesV1(),
+      () => crypto.privacyCompiledProfileCatalogV1(),
       /unavailable in browser-only crypto builds/,
     );
     for (const retired of [
+      "privacyCapabilitiesV1",
       "privacyProofRequestV1",
       "privacyBuildProofV1",
       "privacyVerifyProofV1",
     ]) {
       assert.equal(retired in crypto, false, `${label} ${retired} must be retired`);
     }
+  }
+});
+
+test("broad browser facade omits the native catalog and retains the live Torii parser subpath", () => {
+  for (const [label, browser] of [
+    ["src", srcBrowserFacade],
+    ["dist", distBrowserFacade],
+  ]) {
+    assert.equal(
+      "privacyCompiledProfileCatalogV1" in browser,
+      false,
+      `${label} broad browser facade must omit native build metadata`,
+    );
+    assert.equal("privacyCapabilitiesV1" in browser, false);
+  }
+  for (const [label, capabilities] of [
+    ["src", srcPrivacyCapabilities],
+    ["dist", distPrivacyCapabilities],
+  ]) {
+    assert.equal(
+      typeof capabilities.getPrivacyCapabilitiesV1,
+      "function",
+      `${label} keeps the live Torii capability client`,
+    );
+    assert.equal(
+      typeof capabilities.parsePrivacyCapabilitySnapshotV1,
+      "function",
+      `${label} keeps the authoritative snapshot parser`,
+    );
   }
 });
 

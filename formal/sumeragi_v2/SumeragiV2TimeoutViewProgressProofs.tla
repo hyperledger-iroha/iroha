@@ -9176,8 +9176,9 @@ The stage number records only boundary handoff.  It is not used as a claim
 that waiting within retained control, packet, or ingress is progress.  Those
 non-descent episodes use the existing concrete fixed-clock packet rank, the
 exact ingress rank, and the frozen Candidate/Serve ordinal budget.  The
-snapshot prevents later causal, Control, Completion, priority, or Serve work
-from acquiring a predecessor position ahead of the admitted exact item.
+snapshot's logical scheduler cut and physical admission cut prevent later
+causal, Control, Completion, priority, retry, or Serve work from acquiring a
+predecessor position ahead of the admitted exact item.
 ***************************************************************************)
 
 TimeoutPhysicalControlItem(item) ==
@@ -9235,9 +9236,9 @@ TimeoutPhysicalControlSelectedPacket(item) ==
     \A other \in TimeoutPhysicalControlExactPackets(item):
       packet.sentAt <= other.sentAt
 
-TimeoutPhysicalControlPacketDependencyRank(item) ==
-  ExactDecisionTargetNeutralPacketDependencyRank(
-    TimeoutPhysicalControlSelectedPacket(item))
+TimeoutPhysicalControlPacketDependencyRank(item, snapshot) ==
+  ExactDecisionTargetNeutralPacketDependencyRankForSnapshot(
+    snapshot, TimeoutPhysicalControlSelectedPacket(item))
 
 TimeoutPhysicalControlIngressDependencyRank(item) ==
   ExactDecisionRequestIngressRank(item.envelope.recipient, item)
@@ -9259,20 +9260,50 @@ TimeoutPhysicalControlLifecycleStageOrdering ==
 TimeoutPhysicalControlFrozenSnapshot(clockValue) ==
   ExactDecisionTargetNeutralFixedClockSnapshot(clockValue)
 
+TimeoutPhysicalControlPacketSnapshotAtCut(
+    item, snapshot, clockValue) ==
+  /\ TimeoutPhysicalControlPacketOwner(item)
+  /\ clockValue = asyncNow
+  /\ snapshot = TimeoutPhysicalControlFrozenSnapshot(clockValue)
+  /\ ExactDecisionTargetNeutralSnapshotActive(snapshot, clockValue)
+
 TimeoutPhysicalControlFrozenPredecessorSet(snapshot) ==
   snapshot.predecessors
 
-TimeoutPhysicalControlFrozenProducerEpisodeBudget(snapshot) ==
-  ExactDecisionTargetNeutralProducerEpisodeBudget(snapshot)
+TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot) ==
+  snapshot.physicalCuts[item.envelope.recipient]
+
+TimeoutPhysicalControlFrozenCausalEpisodeRank(item, snapshot) ==
+  ExactDecisionTargetNeutralCausalEpisodeRankForSnapshot(
+    snapshot, item.envelope.recipient)
+
+TimeoutPhysicalControlFrozenProoflessProducerRank(item, snapshot) ==
+  ExactDecisionTargetNeutralProoflessProducerRankForSnapshot(
+    snapshot, item.envelope.recipient)
+
+TimeoutPhysicalControlFrozenComposedCausalEpisodeRank(item, snapshot) ==
+  ExactDecisionTargetNeutralComposedCausalEpisodeRankForSnapshot(
+    snapshot, item.envelope.recipient)
+
+TimeoutPhysicalControlFrozenProducerEpisodeRank(snapshot) ==
+  ExactDecisionTargetNeutralProducerEpisodeRank(snapshot)
 
 TimeoutPhysicalControlDependencyCertificate(item, snapshot) ==
   [stage |-> TimeoutPhysicalControlLifecycleStageRank(item),
-   packetRank |-> TimeoutPhysicalControlPacketDependencyRank(item),
+   packetRank |-> TimeoutPhysicalControlPacketDependencyRank(item, snapshot),
    ingressRank |-> TimeoutPhysicalControlIngressDependencyRank(item),
+   physicalCut |->
+     TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot),
    predecessors |->
      TimeoutPhysicalControlFrozenPredecessorSet(snapshot),
-   producerBudget |->
-     TimeoutPhysicalControlFrozenProducerEpisodeBudget(snapshot)]
+   prooflessProducerRank |->
+     TimeoutPhysicalControlFrozenProoflessProducerRank(item, snapshot),
+   causalEpisodeRank |->
+     TimeoutPhysicalControlFrozenCausalEpisodeRank(item, snapshot),
+   composedCausalEpisodeRank |->
+     TimeoutPhysicalControlFrozenComposedCausalEpisodeRank(item, snapshot),
+   producerEpisodeRank |->
+     TimeoutPhysicalControlFrozenProducerEpisodeRank(snapshot)]
 
 THEOREM TimeoutPhysicalControlLifecycleStageOrderingIsWellFounded ==
   IsWellFoundedOn(
@@ -9282,16 +9313,84 @@ BY NatLessThanWellFounded, Isa
    DEF TimeoutPhysicalControlLifecycleStageOrdering,
        TimeoutPhysicalControlLifecycleStageCarrier
 
-THEOREM TimeoutPhysicalControlPacketRankUsesFrozenExactOccurrence ==
-  \A item:
+THEOREM TimeoutPhysicalControlSnapshotPinsPastPhysicalCut ==
+  \A item \in AsyncNetworkItems, snapshot:
     /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionTargetNeutralSnapshotActive(snapshot, asyncNow)
+    /\ TimeoutPhysicalControlItem(item)
+    /\ [AsyncNext]_AsyncAllVars
+    => /\ TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot) \in Nat
+       /\ TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot)
+            <= AsyncNextIngressPhysicalOrdinal(
+                 item.envelope.recipient)
+       /\ TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot)
+            <= AsyncNextIngressPhysicalOrdinal(
+                 item.envelope.recipient)'
+       /\ TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot)'
+            = TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot)
+BY ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent,
+   ExactDecisionTargetNeutralFrozenSnapshotCarriersArePrimeInvariant,
+   IsaT(120)
+   DEF TimeoutPhysicalControlFrozenPhysicalCut,
+       TimeoutPhysicalControlItem,
+       ExactDecisionTargetNeutralSnapshotActive,
+       AsyncAllVars
+
+\* A timeout/control item is not itself a leader-wire lifecycle.  Its packet
+\* frontier therefore freezes the physical cut of the competing leader-wire
+\* producer lifecycles directly, before the control item enters ingress.
+THEOREM TimeoutPhysicalControlPacketSnapshotCapturesPhysicalCut ==
+  \A item \in AsyncNetworkItems,
+     snapshot, clockValue:
+    TimeoutPhysicalControlPacketSnapshotAtCut(
+      item, snapshot, clockValue)
+      => TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot)
+           = AsyncNextIngressPhysicalOrdinal(item.envelope.recipient)
+BY Isa
+   DEF TimeoutPhysicalControlPacketSnapshotAtCut,
+       TimeoutPhysicalControlFrozenSnapshot,
+       TimeoutPhysicalControlFrozenPhysicalCut,
+       ExactDecisionTargetNeutralFixedClockSnapshot,
+       ExactDecisionTargetNeutralCurrentPhysicalCuts
+
+THEOREM TimeoutPhysicalControlPacketRankUsesFrozenExactOccurrence ==
+  \A item, snapshot:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionTargetNeutralSnapshotActive(snapshot, asyncNow)
     /\ TimeoutPhysicalControlPacketOwner(item)
     /\ TimeoutPhysicalControlSelectedPacket(item)
          \in OverdueResponsivePackets
-    => TimeoutPhysicalControlPacketDependencyRank(item)
+    => TimeoutPhysicalControlPacketDependencyRank(item, snapshot)
          \in HistoricalDiscoveryPacketDependencyCarrier
-BY ExactDecisionTargetNeutralPacketDependencyRankInCarrier
+BY ExactDecisionTargetNeutralPacketDependencyRankForSnapshotInCarrier,
+   Isa
    DEF TimeoutPhysicalControlPacketDependencyRank
+
+THEOREM TimeoutPhysicalControlProducerEpisodeRankUsesFrozenPastCut ==
+  \A item \in AsyncNetworkItems, snapshot:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionTargetNeutralSnapshotActive(snapshot, asyncNow)
+    /\ TimeoutPhysicalControlItem(item)
+    => /\ TimeoutPhysicalControlFrozenProoflessProducerRank(item, snapshot)
+             \in ExactDecisionTargetNeutralProoflessProducerCarrier
+       /\ TimeoutPhysicalControlFrozenCausalEpisodeRank(item, snapshot)
+             \in AsyncCausalEpisodeStructuralRankCarrier
+       /\ TimeoutPhysicalControlFrozenComposedCausalEpisodeRank(
+             item, snapshot)
+             \in ExactDecisionTargetNeutralComposedCausalEpisodeCarrier
+       /\ TimeoutPhysicalControlFrozenProducerEpisodeRank(snapshot)
+             \in ExactDecisionTargetNeutralProducerEpisodeCarrier
+       /\ IsWellFoundedOn(
+            ExactDecisionTargetNeutralProducerEpisodeOrdering,
+            ExactDecisionTargetNeutralProducerEpisodeCarrier)
+BY ExactDecisionTargetNeutralEpisodeRankIsInCarrier,
+   ExactDecisionTargetNeutralProoflessProducerOrderingIsWellFounded,
+   ExactDecisionTargetNeutralComposedCausalEpisodeOrderingIsWellFounded,
+   ExactDecisionTargetNeutralProducerEpisodeOrderingIsWellFounded
+   DEF TimeoutPhysicalControlFrozenProoflessProducerRank,
+       TimeoutPhysicalControlFrozenCausalEpisodeRank,
+       TimeoutPhysicalControlFrozenComposedCausalEpisodeRank,
+       TimeoutPhysicalControlFrozenProducerEpisodeRank
 
 THEOREM TimeoutPhysicalControlIngressRankUsesExactAdmissionOrdinal ==
   \A item:
@@ -9489,9 +9588,11 @@ exists.  Once the immutable packet exists, the route-neutral packet rank
 consumes the finite due prefix.  Admission transfers the same item to its
 reserved ingress ordinal, whose exact lexicographic rank drains all frozen
 priority/lane/source/runner predecessors.  Equal-count Candidate/Serve owner
-replacement and count-increasing causal replenishment consume the separate
-finite ordinal episode; neither is counted as rank descent.  Tombstones make
-the final item-to-candidate handoff monotone under duplicate retransmission.
+replacement is charged by the exact occurrence/work/reach tail below the
+frozen past scheduler cut.  Count-increasing source replenishment consumes
+the source-qualified ingress journal coordinate; it is not itself called
+progress.  Tombstones make the final item-to-candidate handoff monotone under
+duplicate retransmission.
 ***************************************************************************)
 
 THEOREM AsyncSpecProvidesTimeoutPhysicalControlTransportKernels ==
@@ -9504,12 +9605,28 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
    ExactDecisionAsyncSpecAlwaysCandidateTombstones,
    ExactDecisionTargetNeutralFixedClockOrderingIsWellFounded,
    ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
-   ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
-   ExactDecisionTargetNeutralNonDescentConsumesOrdinal,
+   ExactDecisionTargetNeutralActiveSnapshotConcreteRankIsInCarrier,
+   ExactDecisionTargetNeutralSnapshotPredecessorsDoNotReplenishAtFixedClock,
+   ExactDecisionTargetNeutralSnapshotRemainsActiveAtFixedClock,
+   ExactDecisionTargetNeutralSnapshotProducerEpisodeStepIsDescentOrFrame,
+   ExactDecisionTargetNeutralSnapshotProducerEpisodeDoesNotReplenish,
+   ExactDecisionTargetNeutralProducerEpisodeBottomHasNoLowerRank,
+   ExactDecisionTargetNeutralEpisodeRankIsInCarrier,
+   ExactDecisionTargetNeutralProducerEpisodeOrderingIsWellFounded,
    ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness,
+   CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner,
+   ExternalCandidateProducerContinuationSelectionIsReady,
+   LocalContinuationReadyEnablesFairResolution,
+   ConditionalTransportContinuationReadyEnablesFairService,
+   VolatileBodyContinuationReadyEnablesFairService,
+   CandidateProducerContinuationFrozenSourceFairResolutionStrictlyDescends,
+   AsyncTickEnabledHasConcreteSuccessor,
    ExactDecisionRequestIngressRankOrderingIsWellFounded,
    TimeoutPhysicalControlLifecycleStageOrderingIsWellFounded,
+   TimeoutPhysicalControlSnapshotPinsPastPhysicalCut,
+   TimeoutPhysicalControlPacketSnapshotCapturesPhysicalCut,
    TimeoutPhysicalControlPacketRankUsesFrozenExactOccurrence,
+   TimeoutPhysicalControlProducerEpisodeRankUsesFrozenPastCut,
    TimeoutPhysicalControlIngressRankUsesExactAdmissionOrdinal,
    TimeoutPhysicalControlRetainedClockHasNaturalRankOrIsDue,
    TimeoutPhysicalControlTickLowersRetainedClockRank,
@@ -9538,8 +9655,11 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
        TimeoutPhysicalControlPacketDependencyRank,
        TimeoutPhysicalControlIngressDependencyRank,
        TimeoutPhysicalControlFrozenSnapshot,
+       TimeoutPhysicalControlPacketSnapshotAtCut,
        TimeoutPhysicalControlFrozenPredecessorSet,
-       TimeoutPhysicalControlFrozenProducerEpisodeBudget,
+       TimeoutPhysicalControlFrozenPhysicalCut,
+       TimeoutPhysicalControlFrozenCausalEpisodeRank,
+       TimeoutPhysicalControlFrozenProducerEpisodeRank,
        TimeoutPhysicalControlExactPackets,
        TimeoutPhysicalControlSelectedPacket,
        TimeoutVoteRetainedControlOwner,

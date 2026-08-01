@@ -373,6 +373,7 @@ make_android_outputs() {
 import hashlib
 import json
 from pathlib import Path
+import struct
 import sys
 import zipfile
 
@@ -387,9 +388,47 @@ abis = ("arm64-v8a", "x86_64")
 library_name = "libconnect_norito_bridge.so"
 libraries = {}
 generated_libraries = {}
+
+
+def stripped_elf(machine, marker):
+    ident = b"\x7fELF" + bytes((2, 1, 1, 0)) + bytes(8)
+    header = struct.pack(
+        "<HHIQQQIHHHHHH",
+        3,
+        machine,
+        1,
+        0,
+        64,
+        120,
+        0,
+        64,
+        56,
+        1,
+        64,
+        2,
+        1,
+    )
+    program_header = struct.pack("<IIQQQQQQ", 2, 4, 248, 0, 0, 16, 16, 8)
+    null_section = bytes(64)
+    string_section = struct.pack(
+        "<IIQQQQIIQQ", 1, 3, 0, 0, 248, 11, 0, 0, 1, 0
+    )
+    return (
+        ident
+        + header
+        + program_header
+        + null_section
+        + string_section
+        + b"\x00.shstrtab\x00"
+        + marker
+    )
+
+
 for abi in abis:
-    payload = f"fixture-{mode}-{abi}\n".encode("ascii")
-    raw_payload = f"raw-fixture-{mode}-{abi}\n".encode("ascii")
+    machine = 183 if abi == "arm64-v8a" else 62
+    marker = f"fixture-{mode}-{abi}\n".encode("ascii")
+    payload = stripped_elf(machine, marker)
+    raw_payload = b"raw-cargo-ndk\n" + payload
     path = root / (
         "kotlin/client-android/build/generated/jniLibs/"
         f"{mode}/{abi}/{library_name}"
@@ -817,6 +856,11 @@ SWIFT
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "iroha_privacy_compiled_profile_catalog_v1",
+    "iroha_privacy_validate_compiled_profile_catalog_v1",
+    "iroha_privacy_exact12_fixture_bundle_v1",
+    "iroha_privacy_validate_exact12_fixture_bundle_v1",
+    "iroha_privacy_free_buffer",
     "connect_norito_sorafs_reference_validate_bundle_json",
     "connect_norito_sorafs_reference_validate_governance_json",
     "connect_norito_sorafs_reference_validate_governance_dag_block_json",
@@ -872,6 +916,19 @@ SWIFT
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v4"
+  ],
+  "forbidden_symbols": [
+    "connect_norito_get_chain_discriminant",
+    "connect_norito_set_chain_discriminant",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_request_authorization_create_v2",
+    "iroha_privacy_capabilities_v1",
+    "iroha_privacy_validate_capabilities_v1",
+    "iroha_privacy_proof_request_v1",
+    "iroha_privacy_build_proof_v1",
+    "iroha_privacy_verify_proof_v1",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
+    "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2"
   ],
   "hashes": {
     "ios-arm64": "$hash_a",
@@ -1023,7 +1080,12 @@ run_expect_pass() {
   local root="$1"
   shift
   local output
-  if ! output="$(MOBILE_SDK_SKIP_BINARY_INSPECTION=1 bash "$CHECK_SCRIPT" "$root" "$@" 2>&1)"; then
+  local apple_artifact_dir="${MOBILE_SDK_APPLE_ARTIFACT_DIR:-$root/dist}"
+  if ! output="$(PATH="$STRICT_INSPECTION_TOOLS:$PATH" \
+      MOBILE_SDK_ANDROID_NM="$STRICT_INSPECTION_TOOLS/llvm-nm" \
+      MOBILE_SDK_TEST_APPLE_MANIFEST="$apple_artifact_dir/NoritoBridge.xcframework/NoritoBridge.artifacts.json" \
+      MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
+      bash "$CHECK_SCRIPT" "$root" "$@" 2>&1)"; then
     printf '%s\n' "$output" >&2
     fail "expected validation to pass for $root"
   fi
@@ -1034,7 +1096,12 @@ run_expect_fail() {
   local expected="$2"
   shift 2
   local output
-  if output="$(MOBILE_SDK_SKIP_BINARY_INSPECTION=1 bash "$CHECK_SCRIPT" "$root" "$@" 2>&1)"; then
+  local apple_artifact_dir="${MOBILE_SDK_APPLE_ARTIFACT_DIR:-$root/dist}"
+  if output="$(PATH="$STRICT_INSPECTION_TOOLS:$PATH" \
+      MOBILE_SDK_ANDROID_NM="$STRICT_INSPECTION_TOOLS/llvm-nm" \
+      MOBILE_SDK_TEST_APPLE_MANIFEST="$apple_artifact_dir/NoritoBridge.xcframework/NoritoBridge.artifacts.json" \
+      MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
+      bash "$CHECK_SCRIPT" "$root" "$@" 2>&1)"; then
     printf '%s\n' "$output" >&2
     fail "expected validation to fail for $root"
   fi
@@ -1060,9 +1127,8 @@ SH
   cat >"$tools/nm" <<'SH'
 #!/usr/bin/env bash
 binary="${*: -1}"
-root="${binary%%/dist/*}"
 "${MOBILE_SDK_TEST_PYTHON_BINARY:?}" -I -S - \
-  "$root/dist/NoritoBridge.artifacts.json" "$binary" <<'PY'
+  "${MOBILE_SDK_TEST_APPLE_MANIFEST:?}" "$binary" <<'PY'
 import json
 import os
 import sys
@@ -1117,6 +1183,8 @@ for symbol in shell_array("KAGEMUSHA_C_SYMBOLS"):
     emit(symbol)
 for symbol in shell_array("SORAFS_APPEAL_FINANCE_C_SYMBOLS"):
     emit(symbol)
+for symbol in shell_array("PRIVACY_COMPILED_PROFILE_C_SYMBOLS"):
+    emit(symbol)
 for namespace in (
     "org_hyperledger_iroha_sdk_offline",
     "org_hyperledger_iroha_android_offline",
@@ -1126,6 +1194,8 @@ for namespace in (
 for symbol in shell_array("VALIDATION_FEE_JNI_SYMBOLS"):
     emit(symbol)
 for symbol in shell_array("SORAFS_APPEAL_FINANCE_JNI_SYMBOLS"):
+    emit(symbol)
+for symbol in shell_array("PRIVACY_COMPILED_PROFILE_JNI_SYMBOLS"):
     emit(symbol)
 for symbol in shell_array("NATIVE_SIGNER_JNI_CONTRACT_SYMBOLS"):
     emit(symbol)
@@ -1153,7 +1223,8 @@ run_expect_binary_fail() {
   local expected="$2"
   local tools="$3"
   local output
-  if output="$(PATH="$tools:$PATH" MOBILE_SDK_SKIP_BINARY_INSPECTION=0 \
+  if output="$(PATH="$tools:$PATH" \
+      MOBILE_SDK_TEST_APPLE_MANIFEST="$root/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json" \
       MOBILE_SDK_TEST_EXTRA_KAGEMUSHA=1 bash "$CHECK_SCRIPT" "$root" --apple-only 2>&1)"; then
     printf '%s\n' "$output" >&2
     fail "expected strict binary validation to fail for $root"
@@ -1174,7 +1245,7 @@ run_expect_apple_forbidden_binary_fail() {
   local tools="$4"
   local output
   if output="$(PATH="$tools:$PATH" \
-      MOBILE_SDK_SKIP_BINARY_INSPECTION=0 \
+      MOBILE_SDK_TEST_APPLE_MANIFEST="$root/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json" \
       MOBILE_SDK_TEST_FORBIDDEN_SYMBOL="$symbol" \
       MOBILE_SDK_TEST_FORBIDDEN_APPLE_SLICE="$slice" \
       bash "$CHECK_SCRIPT" "$root" --apple-only 2>&1)"; then
@@ -1196,7 +1267,6 @@ run_expect_android_binary_pass() {
   local output
   if ! output="$(PATH="$tools:$PATH" \
       MOBILE_SDK_ANDROID_NM="$tools/llvm-nm" \
-      MOBILE_SDK_SKIP_BINARY_INSPECTION=0 \
       MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
       bash "$CHECK_SCRIPT" "$root" --android-only --require-built-android 2>&1)"; then
     printf '%s\n' "$output" >&2
@@ -1211,7 +1281,6 @@ run_expect_android_binary_fail() {
   local output
   if output="$(PATH="$tools:$PATH" \
       MOBILE_SDK_ANDROID_NM="$tools/llvm-nm" \
-      MOBILE_SDK_SKIP_BINARY_INSPECTION=0 \
       MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
       MOBILE_SDK_TEST_EXTRA_ANDROID_KAGEMUSHA=1 \
       bash "$CHECK_SCRIPT" "$root" --android-only --require-built-android 2>&1)"; then
@@ -1234,7 +1303,6 @@ run_expect_android_missing_symbol_fail() {
   local output
   if output="$(PATH="$tools:$PATH" \
       MOBILE_SDK_ANDROID_NM="$tools/llvm-nm" \
-      MOBILE_SDK_SKIP_BINARY_INSPECTION=0 \
       MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
       MOBILE_SDK_TEST_OMIT_ANDROID_SYMBOL="$symbol" \
       bash "$CHECK_SCRIPT" "$root" --android-only --require-built-android 2>&1)"; then
@@ -1258,7 +1326,6 @@ run_expect_android_forbidden_binary_fail() {
   local output
   if output="$(PATH="$tools:$PATH" \
       MOBILE_SDK_ANDROID_NM="$tools/llvm-nm" \
-      MOBILE_SDK_SKIP_BINARY_INSPECTION=0 \
       MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
       MOBILE_SDK_TEST_FORBIDDEN_SYMBOL="$symbol" \
       MOBILE_SDK_TEST_FORBIDDEN_ANDROID_ABI="$abi" \
@@ -1281,7 +1348,6 @@ run_expect_android_unstripped_fail() {
   local output
   if output="$(PATH="$tools:$PATH" \
       MOBILE_SDK_ANDROID_NM="$tools/llvm-nm" \
-      MOBILE_SDK_SKIP_BINARY_INSPECTION=0 \
       MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
       MOBILE_SDK_TEST_ANDROID_UNSTRIPPED=1 \
       bash "$CHECK_SCRIPT" "$root" --android-only --require-built-android 2>&1)"; then
@@ -1296,6 +1362,13 @@ run_expect_android_unstripped_fail() {
       ;;
   esac
 }
+
+STRICT_INSPECTION_TOOLS="$TMP_DIR/strict-inspection-tools"
+make_apple_inspection_tools "$STRICT_INSPECTION_TOOLS"
+make_android_inspection_tools "$STRICT_INSPECTION_TOOLS"
+if grep -Fq 'MOBILE_SDK_SKIP_BINARY_INSPECTION' "$CHECK_SCRIPT"; then
+  fail "mobile SDK checker retains the retired binary-inspection bypass"
+fi
 
 fixture="$TMP_DIR/valid"
 make_fixture "$fixture"
@@ -1882,6 +1955,23 @@ run_expect_fail \
   "$non_universal_macos" \
   "NoritoBridge Info.plist does not declare the canonical universal Apple slices"
 
+test_only_prebuilt_manifest="$TMP_DIR/test-only-prebuilt-manifest"
+make_fixture "$test_only_prebuilt_manifest"
+sed -i.bak '/"version": "1.0.0",/a\
+  "test_only_prebuilt_slices": false,' \
+  "$test_only_prebuilt_manifest/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$test_only_prebuilt_manifest/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
+run_expect_fail \
+  "$test_only_prebuilt_manifest" \
+  "release artifact manifest must not contain test_only_prebuilt_slices"
+
+test_only_prebuilt_marker="$TMP_DIR/test-only-prebuilt-marker"
+make_fixture "$test_only_prebuilt_marker"
+touch "$test_only_prebuilt_marker/dist/NoritoBridge.xcframework/.test-only-prebuilt-slices"
+run_expect_fail \
+  "$test_only_prebuilt_marker" \
+  "release artifact must not carry the test-only prebuilt-slices marker"
+
 missing_hash="$TMP_DIR/missing-hash"
 make_fixture "$missing_hash"
 cat >"$missing_hash/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json" <<'JSON'
@@ -1956,6 +2046,31 @@ run_expect_apple_forbidden_binary_fail \
   "connect_norito_kagemusha_request_authorization_create_v2" \
   "ios-arm64" \
   "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "iroha_privacy_capabilities_v1" \
+  "ios-arm64" \
+  "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "iroha_privacy_validate_capabilities_v1" \
+  "macos-arm64_x86_64" \
+  "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "iroha_privacy_proof_request_v1" \
+  "ios-arm64_x86_64-simulator" \
+  "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "iroha_privacy_build_proof_v1" \
+  "ios-arm64" \
+  "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "iroha_privacy_verify_proof_v1" \
+  "macos-arm64_x86_64" \
+  "$inspection_tools"
 
 symbol_inventory_mismatch="$TMP_DIR/symbol-inventory-mismatch"
 make_fixture "$symbol_inventory_mismatch"
@@ -1964,6 +2079,16 @@ sed -i.bak \
   "$symbol_inventory_mismatch/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
 rm -f "$symbol_inventory_mismatch/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$symbol_inventory_mismatch" "required symbol inventory is missing or non-canonical"
+
+forbidden_symbol_inventory_mismatch="$TMP_DIR/forbidden-symbol-inventory-mismatch"
+make_fixture "$forbidden_symbol_inventory_mismatch"
+sed -i.bak \
+  's/iroha_privacy_verify_proof_v1/unexpected_forbidden_symbol/' \
+  "$forbidden_symbol_inventory_mismatch/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$forbidden_symbol_inventory_mismatch/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
+run_expect_fail \
+  "$forbidden_symbol_inventory_mismatch" \
+  "forbidden symbol inventory is missing or non-canonical"
 
 extra_manifest_symbol="$TMP_DIR/extra-manifest-symbol"
 make_fixture "$extra_manifest_symbol"
@@ -2060,7 +2185,9 @@ cp -R "$with_android_outputs" "$packaged_android_outputs"
 mkdir -p "$packaged_android_outputs/scripts"
 cp "$CHECK_SCRIPT" "$packaged_android_outputs/scripts/check_mobile_sdk_artifacts.sh"
 cp "$PACKAGE_SCRIPT" "$packaged_android_outputs/scripts/package_mobile_sdk_artifacts.sh"
-if MOBILE_SDK_SKIP_BINARY_INSPECTION=1 \
+if PATH="$STRICT_INSPECTION_TOOLS:$PATH" \
+  MOBILE_SDK_ANDROID_NM="$STRICT_INSPECTION_TOOLS/llvm-nm" \
+  MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
   bash "$packaged_android_outputs/scripts/package_mobile_sdk_artifacts.sh" \
     --root "$packaged_android_outputs" \
     --android \
@@ -2080,7 +2207,9 @@ cp -R \
 cp -R \
   "$with_android_outputs/kotlin/client-android/build/." \
   "$packaged_android_gradle_root/client-android/"
-MOBILE_SDK_SKIP_BINARY_INSPECTION=1 \
+PATH="$STRICT_INSPECTION_TOOLS:$PATH" \
+  MOBILE_SDK_ANDROID_NM="$STRICT_INSPECTION_TOOLS/llvm-nm" \
+  MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
   MOBILE_SDK_ANDROID_ARTIFACT_DIR="$packaged_android_artifacts" \
   bash "$packaged_android_outputs/scripts/package_mobile_sdk_artifacts.sh" \
   --root "$packaged_android_outputs" \
@@ -2411,6 +2540,31 @@ run_expect_android_forbidden_binary_fail \
   "$android_inspection_tools"
 run_expect_android_forbidden_binary_fail \
   "$with_android_outputs" \
+  "iroha_privacy_capabilities_v1" \
+  "arm64-v8a" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_validate_capabilities_v1" \
+  "x86_64" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_proof_request_v1" \
+  "arm64-v8a" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_build_proof_v1" \
+  "x86_64" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_verify_proof_v1" \
+  "arm64-v8a" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
   "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2" \
   "arm64-v8a" \
   "$android_inspection_tools"
@@ -2431,6 +2585,42 @@ run_expect_android_missing_symbol_fail \
   "$with_android_outputs" \
   "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json" \
   "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_compiled_profile_catalog_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_validate_compiled_profile_catalog_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_exact12_fixture_bundle_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_validate_exact12_fixture_bundle_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_free_buffer" \
+  "$android_inspection_tools"
+for privacy_jni_symbol in \
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeBridgeAbiVersion \
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeCompiledProfileCatalog \
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateCompiledProfileCatalog \
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle \
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle \
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeBridgeAbiVersion \
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeCompiledProfileCatalog \
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateCompiledProfileCatalog \
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle \
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle; do
+  run_expect_android_missing_symbol_fail \
+    "$with_android_outputs" \
+    "$privacy_jni_symbol" \
+    "$android_inspection_tools"
+done
 run_expect_android_missing_symbol_fail \
   "$with_android_outputs" \
   "Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson" \

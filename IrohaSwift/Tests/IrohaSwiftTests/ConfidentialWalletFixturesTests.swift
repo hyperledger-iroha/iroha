@@ -170,9 +170,6 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
     }
 
     private static func makeFixtureSigningKey() throws -> SigningKey {
-        guard #available(macOS 10.15, iOS 13.0, *) else {
-            throw XCTSkip("Curve25519 requires macOS 10.15 / iOS 13")
-        }
         let privateKeyBytes = try XCTUnwrap(
             Data(hexString: fixturePrivateKeyHex),
             "invalid fixture private key hex"

@@ -125,6 +125,50 @@ pub enum ConsensusMode {
     Npos,
 }
 
+impl ConsensusMode {
+    /// Return the canonical handshake and signing-domain tag for this mode.
+    #[must_use]
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::Permissioned => PERMISSIONED_TAG,
+            Self::Npos => NPOS_TAG,
+        }
+    }
+
+    /// Return the canonical BLS domain for this mode.
+    #[must_use]
+    pub const fn bls_domain(self) -> &'static str {
+        match self {
+            Self::Permissioned => PERMISSIONED_BLS_DOMAIN,
+            Self::Npos => NPOS_BLS_DOMAIN,
+        }
+    }
+
+    /// Return whether this is permissioned consensus.
+    #[must_use]
+    pub const fn is_permissioned(self) -> bool {
+        matches!(self, Self::Permissioned)
+    }
+}
+
+impl From<crate::parameter::system::SumeragiConsensusMode> for ConsensusMode {
+    fn from(mode: crate::parameter::system::SumeragiConsensusMode) -> Self {
+        match mode {
+            crate::parameter::system::SumeragiConsensusMode::Permissioned => Self::Permissioned,
+            crate::parameter::system::SumeragiConsensusMode::Npos => Self::Npos,
+        }
+    }
+}
+
+impl From<ConsensusMode> for crate::parameter::system::SumeragiConsensusMode {
+    fn from(mode: ConsensusMode) -> Self {
+        match mode {
+            ConsensusMode::Permissioned => Self::Permissioned,
+            ConsensusMode::Npos => Self::Npos,
+        }
+    }
+}
+
 /// A validator and its voting power at one height.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -4282,6 +4326,24 @@ mod tests {
     use super::*;
 
     include!("consensus_v2/wire_schema_tests.rs");
+
+    #[test]
+    fn consensus_modes_project_canonical_protocol_identities() {
+        assert_eq!(ConsensusMode::Permissioned.tag(), PERMISSIONED_TAG);
+        assert_eq!(ConsensusMode::Npos.tag(), NPOS_TAG);
+        assert_eq!(
+            ConsensusMode::Permissioned.bls_domain(),
+            PERMISSIONED_BLS_DOMAIN
+        );
+        assert_eq!(ConsensusMode::Npos.bls_domain(), NPOS_BLS_DOMAIN);
+        assert!(ConsensusMode::Permissioned.is_permissioned());
+        assert!(!ConsensusMode::Npos.is_permissioned());
+
+        for mode in [ConsensusMode::Permissioned, ConsensusMode::Npos] {
+            let parameter_mode = crate::parameter::system::SumeragiConsensusMode::from(mode);
+            assert_eq!(ConsensusMode::from(parameter_mode), mode);
+        }
+    }
 
     #[test]
     fn execution_commitment_enforces_topup_shape_count_and_combined_root() {

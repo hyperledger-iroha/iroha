@@ -4204,7 +4204,7 @@ pub mod soracloud_gateway {
         ApiSurface::Protocol,
         Listener::Torii,
     )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+    .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "public SoraDNS virtual-host gateway",
@@ -4217,7 +4217,7 @@ pub mod soracloud_gateway {
         ApiSurface::Protocol,
         Listener::Torii,
     )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+    .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_route_match(RouteMatch::Wildcard)
     .with_path_policy(PathPolicy::ProtocolException {
@@ -4231,7 +4231,7 @@ pub mod soracloud_gateway {
         ApiSurface::Protocol,
         Listener::Torii,
     )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+    .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "public SoraCloud runtime gateway",
@@ -4244,7 +4244,7 @@ pub mod soracloud_gateway {
         ApiSurface::Protocol,
         Listener::Torii,
     )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+    .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_route_match(RouteMatch::Wildcard)
     .with_path_policy(PathPolicy::ProtocolException {
@@ -5223,6 +5223,26 @@ mod tests {
                 .all(|route| route.path() != "/soradns/{fqdn}/"),
             "the first-release gateway must not expose a trailing-slash alias"
         );
+    }
+
+    #[test]
+    fn public_runtime_gateway_authentication_is_exactly_scoped() {
+        let catalog_routes = CATALOGED_ROUTES
+            .iter()
+            .filter(|route| route.stable_route_id().starts_with("protocol.soracloud."))
+            .collect::<Vec<_>>();
+        assert_eq!(catalog_routes.len(), soracloud_gateway::ROUTES.len());
+        assert_eq!(soracloud_gateway::ROUTES.len(), 4);
+
+        for route in soracloud_gateway::ROUTES {
+            assert!(catalog_routes.iter().any(|catalog| **catalog == *route));
+            assert_eq!(route.surface(), ApiSurface::Protocol);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::Unauthenticated
+            );
+            assert_eq!(route.projections(), RouteProjections::NONE);
+        }
     }
 
     #[test]

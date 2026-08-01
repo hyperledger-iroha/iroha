@@ -6355,6 +6355,22 @@ pub mod sorafs {
         }
     }
 
+    impl FindSorafsReputationJournalEventBySourceId {
+        /// Return the exact domain-separated source identifier.
+        #[must_use]
+        pub const fn source_id(&self) -> ReputationJournalSourceIdV1 {
+            self.source_id
+        }
+
+        /// Return the optional immutable finalized-view anchor.
+        #[must_use]
+        pub const fn expected_finalized_cursor(
+            &self,
+        ) -> Option<ReputationJournalFinalizedCursorV1> {
+            self.expected_finalized_cursor
+        }
+    }
+
     impl fmt::Display for FindSorafsReputationJournalEventBySourceId {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(
@@ -6475,6 +6491,25 @@ pub mod sorafs {
                 "Find SoraFS moderation events at finalized height {} with limit {}",
                 self.expected_finalized_cursor.height, self.limit
             )
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn reputation_source_query_exposes_typed_fields() {
+            let source_id = ReputationJournalSourceIdV1([0xA5; 32]);
+            let cursor = ReputationJournalFinalizedCursorV1 {
+                height: 7,
+                block_hash: [0x5A; 32],
+                finalized_at_unix_ms: 11,
+            };
+            let query = FindSorafsReputationJournalEventBySourceId::new(source_id, Some(cursor));
+
+            assert_eq!(query.source_id(), source_id);
+            assert_eq!(query.expected_finalized_cursor(), Some(cursor));
         }
     }
 

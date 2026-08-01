@@ -52,7 +52,7 @@ test("bundle-size targets retain audited ceilings and browser graph guards", () 
     [
       {
         label: "toriiClient.js",
-      limitKb: 978,
+        limitKb: 983,
         forbidNodeInputs: false,
         forbidGlobalBuffer: false,
       },
@@ -208,10 +208,6 @@ test("browser graph audit derives every explicit browser-conditioned package exp
     { target: "./dist/blake2b.js", subpaths: ["./blake2b"] },
     { target: "./dist/ivmArtifact.js", subpaths: ["./ivm-artifact"] },
     {
-      target: "./dist/ivmArtifactAdmissionWasm.js",
-      subpaths: ["./ivm-artifact-admission-wasm"],
-    },
-    {
       target: "./dist/toriiBrowserClient.js",
       subpaths: ["./torii", "./torii-browser"],
     },
@@ -338,7 +334,7 @@ test("public browser aggregate bundles without Node inputs or global Buffer shim
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 59);
-  assert.equal(result.outputFiles[0].contents.byteLength, 474_956);
+  assert.equal(result.outputFiles[0].contents.byteLength, 473_390);
   assert.ok(
     result.outputFiles[0].contents.byteLength <= Math.floor(458_081 * 1.05),
     "public browser aggregate regressed more than 5% from the protected pre-reset tree",
@@ -387,16 +383,16 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
     ["canonicalRequest.js (browser)", 97_869],
   ]);
   const maximumGrowth = new Map([
-    ["toriiClient.js", 1.06],
+    ["toriiClient.js", (983 * 1024) / 945_975],
     ["transactionCodec.js (browser)", 1.05],
     ["nexusApp.js (browser)", 1.05],
     ["canonicalRequest.js (browser)", 1.05],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 1_000_409, modules: 61 }],
-    ["transactionCodec.js (browser)", { bytes: 298_550, modules: 45 }],
-    ["nexusApp.js (browser)", { bytes: 378_321, modules: 55 }],
-    ["canonicalRequest.js (browser)", { bytes: 98_090, modules: 34 }],
+    ["toriiClient.js", { bytes: 1_006_517, modules: 62 }],
+    ["transactionCodec.js (browser)", { bytes: 303_764, modules: 46 }],
+    ["nexusApp.js (browser)", { bytes: 383_534, modules: 56 }],
+    ["canonicalRequest.js (browser)", { bytes: 98_089, modules: 34 }],
   ]);
   const { build } = await import("esbuild");
   for (const target of BUNDLE_TARGETS.filter(({ label }) => expected.has(label))) {
@@ -416,6 +412,19 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
       bytes: result.outputFiles[0].contents.byteLength,
       modules: Object.keys(result.metafile.inputs).length,
     };
+    if ([
+      "toriiClient.js",
+      "transactionCodec.js (browser)",
+      "nexusApp.js (browser)",
+    ].includes(target.label)) {
+      assert.equal(
+        Object.keys(result.metafile.inputs).filter((input) =>
+          /(?:^|[/\\])proofAttachment\.js$/u.test(input),
+        ).length,
+        1,
+        `${target.label} must retain exactly one canonical ProofAttachment module`,
+      );
+    }
     if (target.label === "toriiClient.js") {
       assert.equal(
         Object.keys(result.metafile.inputs).some(
@@ -424,6 +433,11 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
         ),
         false,
         "Torii must use the local synchronous BLS validator, not bundle noble's full curve implementation",
+      );
+      assert.equal(
+        target.limitKb * 1024 - actual.bytes,
+        75,
+        "Torii hard ceiling must retain only the audited 75-byte headroom",
       );
     }
     assert.deepEqual(actual, expected.get(target.label), target.label);
@@ -460,7 +474,7 @@ test("Kotodama compiler browser export stays below 53 KiB without Node or Buffer
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 6);
-  assert.equal(result.outputFiles[0].contents.byteLength, 52_769);
+  assert.equal(result.outputFiles[0].contents.byteLength, 52_928);
   assert.ok(
     result.outputFiles[0].contents.byteLength <= Math.floor(52_156 * 1.05),
     "Kotodama compiler browser export regressed more than 5% from the protected pre-reset tree",

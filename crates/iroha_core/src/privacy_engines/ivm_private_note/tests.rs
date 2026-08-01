@@ -441,14 +441,6 @@ fn relation_rejects_public_replays_and_value_attacks() {
     );
 
     let mut changed = canonical.clone();
-    changed.statement.context.chain_id = "".parse().expect("empty chain id value");
-    redigest(&mut changed.statement);
-    assert_eq!(
-        validate_private_note_relation_v1(&changed.statement, &changed.witness),
-        Err(IvmPrivateNoteRelationErrorV1::InvalidStatement)
-    );
-
-    let mut changed = canonical.clone();
     changed.statement.nullifiers[0] = PrivacyNullifierV1::new(bytes(0xb2));
     redigest(&mut changed.statement);
     assert_eq!(

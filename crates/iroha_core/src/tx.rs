@@ -76,7 +76,7 @@ type StateTelemetry = ();
 type NexusDataSpaceId = iroha_data_model::nexus::DataSpaceId;
 type NexusLaneId = iroha_data_model::nexus::LaneId;
 
-/// Decode an exact Norito-framed [`TransactionEntrypoint`] and return its canonical identity.
+/// Decode one canonical Norito-framed [`TransactionEntrypoint`] and return its identity.
 ///
 /// The identity is derived from the decoded signed intent rather than the transport frame. This
 /// prevents alternate framing, authorization-proof changes, or zero-filled logical tails from
@@ -84,8 +84,7 @@ type NexusLaneId = iroha_data_model::nexus::LaneId;
 pub(crate) fn entrypoint_hash_from_framed_bytes(
     framed: &[u8],
 ) -> Result<HashOf<TransactionEntrypoint>, norito::core::Error> {
-    let view = norito::core::from_bytes_view(framed)?;
-    let entrypoint: TransactionEntrypoint = view.decode_exact()?;
+    let entrypoint: TransactionEntrypoint = norito::decode_canonical(framed)?;
     Ok(entrypoint.hash())
 }
 
@@ -1276,15 +1275,8 @@ impl<'tx> AcceptedTransaction<'tx> {
         tx: SignedTransaction,
         signed_bytes: Option<Arc<Vec<u8>>>,
     ) -> Self {
-        let (canonical_signed_payload, canonical_signed_payload_flags) =
-            Self::canonical_signed_payload_with_flags(&tx);
-        let canonical_signed_bytes = Arc::new(
-            norito::core::frame_bare_with_header_flags::<SignedTransaction>(
-                &canonical_signed_payload,
-                canonical_signed_payload_flags,
-            )
-            .expect("frame accepted signed transaction"),
-        );
+        let canonical_signed_bytes =
+            Arc::new(norito::encode_canonical(&tx).expect("encode accepted signed transaction"));
         let signed_bytes = signed_bytes
             .filter(|bytes| bytes.as_slice() == canonical_signed_bytes.as_slice())
             .unwrap_or(canonical_signed_bytes);
@@ -1333,54 +1325,19 @@ impl<'tx> AcceptedTransaction<'tx> {
         norito::codec::encode_with_header_flags(tx)
     }
 
+    #[cfg(test)]
     fn external_entrypoint_hash_from_signed(
         tx: &SignedTransaction,
     ) -> HashOf<TransactionEntrypoint> {
         tx.hash_as_entrypoint()
     }
 
+    #[cfg(test)]
     fn external_entrypoint_hash_from_signed_frame(
         signed_frame: &[u8],
     ) -> Result<HashOf<TransactionEntrypoint>, norito::core::Error> {
-        let view = norito::core::from_bytes_view(signed_frame)?;
-        let transaction: SignedTransaction = view.decode_exact()?;
+        let transaction: SignedTransaction = norito::decode_canonical(signed_frame)?;
         Ok(transaction.hash_as_entrypoint())
-    }
-
-    fn external_entrypoint_bytes_from_signed_payload(
-        signed_payload: &[u8],
-        signed_payload_flags: u8,
-    ) -> Arc<Vec<u8>> {
-        let entrypoint_flags = signed_payload_flags | norito::core::default_encode_flags();
-        let mut payload = Vec::with_capacity(
-            4usize
-                .saturating_add(10)
-                .saturating_add(signed_payload.len()),
-        );
-        norito::core::NoritoSerialize::serialize(&0u32, &mut payload)
-            .expect("u32 discriminant serialization cannot fail");
-        let payload_len = u64::try_from(signed_payload.len())
-            .expect("signed transaction payload length fits u64");
-        norito::core::write_len_to_vec_with_flags(&mut payload, payload_len, entrypoint_flags);
-        payload.extend_from_slice(signed_payload);
-        Arc::new(
-            norito::core::frame_bare_with_header_flags::<TransactionEntrypoint>(
-                &payload,
-                entrypoint_flags,
-            )
-            .expect("frame synthesized external transaction entrypoint bytes"),
-        )
-    }
-
-    fn external_entrypoint_bytes_from_signed_frame(signed_frame: &[u8]) -> Option<Arc<Vec<u8>>> {
-        let view = norito::core::from_bytes_view(signed_frame).ok()?;
-        if view.schema() != <SignedTransaction as norito::core::NoritoSerialize>::schema_hash() {
-            return None;
-        }
-        Some(Self::external_entrypoint_bytes_from_signed_payload(
-            view.as_bytes(),
-            view.flags(),
-        ))
     }
 
     fn framed_padding_for<T>() -> usize {
@@ -1496,9 +1453,9 @@ impl<'tx> AcceptedTransaction<'tx> {
                 .ok()
             })
             .map(Arc::new);
-        let entrypoint_bytes = Some(Self::external_entrypoint_bytes_from_signed_payload(
-            signed_payload.as_slice(),
-            signed_payload_flags,
+        let entrypoint_bytes = Some(Arc::new(
+            norito::encode_canonical(&TransactionEntrypoint::External(tx.clone()))
+                .expect("encode canonical external transaction entrypoint"),
         ));
         let encoded_len = signed_bytes
             .as_ref()
@@ -2734,14 +2691,10 @@ impl<'tx> AcceptedTransaction<'tx> {
     #[must_use]
     pub(crate) fn entrypoint_bytes(&self) -> Arc<Vec<u8>> {
         Arc::clone(self.entrypoint_bytes.get_or_init(|| {
-            if matches!(self.entrypoint(), TransactionEntrypoint::External(_))
-                && let Some(Some(signed_bytes)) = self.signed_bytes.get()
-                && let Some(entrypoint_bytes) =
-                    Self::external_entrypoint_bytes_from_signed_frame(signed_bytes.as_slice())
-            {
-                return entrypoint_bytes;
-            }
-            Arc::new(norito::to_bytes(self.entrypoint()).expect("encode transaction entrypoint"))
+            Arc::new(
+                norito::encode_canonical(self.entrypoint())
+                    .expect("encode canonical transaction entrypoint"),
+            )
         }))
     }
 
@@ -7456,7 +7409,8 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "signed-frame-hash".into())])
         .sign(keypair.private_key());
-        let signed_bytes = norito::to_bytes(&signed).expect("signed transaction encodes");
+        let signed_bytes =
+            norito::encode_canonical(&signed).expect("signed transaction encodes canonically");
 
         assert_eq!(
             AcceptedTransaction::external_entrypoint_hash_from_signed_frame(&signed_bytes)
@@ -7471,6 +7425,20 @@ pub mod tests {
         assert!(matches!(
             AcceptedTransaction::external_entrypoint_hash_from_signed_frame(&corrupted),
             Err(norito::core::Error::ChecksumMismatch)
+        ));
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&signed).expect("encode alternate-layout signed transaction")
+        };
+        assert_ne!(alternate, signed_bytes);
+        norito::decode_from_bytes::<SignedTransaction>(&alternate)
+            .expect("ordinary Norito accepts its advertised layout");
+        assert!(matches!(
+            AcceptedTransaction::external_entrypoint_hash_from_signed_frame(&alternate),
+            Err(norito::core::Error::NonCanonicalEncoding)
         ));
     }
 
@@ -7528,11 +7496,10 @@ pub mod tests {
             )
             .expect("signed transaction encodes"),
         );
-        let expected_entrypoint_bytes =
-            AcceptedTransaction::external_entrypoint_bytes_from_signed_payload(
-                signed_payload.as_slice(),
-                signed_payload_flags,
-            );
+        let expected_entrypoint_bytes = Arc::new(
+            norito::encode_canonical(&TransactionEntrypoint::External(signed.clone()))
+                .expect("external entrypoint encodes canonically"),
+        );
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
 
@@ -7569,8 +7536,8 @@ pub mod tests {
             .expect("signed transaction encodes")
             .len();
         let expected_entrypoint_bytes =
-            norito::to_bytes(&TransactionEntrypoint::External(signed.clone()))
-                .expect("entrypoint transaction encodes");
+            norito::encode_canonical(&TransactionEntrypoint::External(signed.clone()))
+                .expect("entrypoint transaction encodes canonically");
         let versioned =
             <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
 
@@ -7588,7 +7555,7 @@ pub mod tests {
                 .as_ref()
                 .expect("canonical signed bytes are seeded from ingress")
                 .as_slice(),
-            norito::to_bytes(&signed).unwrap().as_slice()
+            norito::encode_canonical(&signed).unwrap().as_slice()
         );
         assert_eq!(
             decoded
@@ -7972,7 +7939,7 @@ pub mod tests {
         .sign(keypair.private_key());
         let entrypoint = TransactionEntrypoint::External(signed.clone());
         let entrypoint_bytes =
-            norito::to_bytes(&entrypoint).expect("entrypoint transaction encodes");
+            norito::encode_canonical(&entrypoint).expect("entrypoint transaction encodes");
 
         let expected = AcceptedTransaction::prepare_signed_metadata(&signed);
         let actual = AcceptedTransaction::prepare_gossip_signed_metadata(

@@ -743,10 +743,10 @@
 
     #[test]
     fn zk_x509_candidate_profile_and_resource_facts_are_total_before_capture() {
-        let first =
-            compiled_zk_x509_profile_material_v1().expect("release-candidate profile material");
-        let second =
-            compiled_zk_x509_profile_material_v1().expect("deterministic profile material");
+        let first = zk_x509_release_candidate_profile_material_v1()
+            .expect("release-candidate profile material");
+        let second = zk_x509_release_candidate_profile_material_v1()
+            .expect("deterministic profile material");
         assert_eq!(first, second);
         assert_eq!(
             first.protocol_id,

@@ -1764,6 +1764,7 @@ impl KagemushaUniversalProtocolTargetV1 {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug)]
 struct KagemushaProtocolBootstrapCircuit<F>
 where
@@ -1773,6 +1774,7 @@ where
     marker: std::marker::PhantomData<F>,
 }
 
+#[cfg(test)]
 impl<F> halo2_proofs::plonk::Circuit<F> for KagemushaProtocolBootstrapCircuit<F>
 where
     F: halo2_base::utils::ScalarField,
@@ -1822,6 +1824,7 @@ where
     ) -> Result<halo2_base::gates::circuit::BaseCircuitParams, String>;
 }
 
+#[cfg(test)]
 impl<F> KagemushaBootstrapCircuitV1<F> for KagemushaProtocolBootstrapCircuit<F>
 where
     F: halo2_base::utils::ScalarField,

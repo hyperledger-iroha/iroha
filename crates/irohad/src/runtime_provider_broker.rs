@@ -7654,7 +7654,7 @@ mod protocol {
                     receipt: None,
                     declared_successor_receipts: 0,
                     canonical_successor_receipts: Vec::new(),
-                    absence_proof: Some(absence_proof),
+                    absence_proof: Some(*absence_proof),
                 })
             }
         }
@@ -7707,7 +7707,7 @@ mod protocol {
                     .validate_at_checkpoint(exact, request.expected_checkpoint_head, bounds)
                     .map_err(|_| BrokerError::Rejected)?;
                 Ok(sorafs_node::PorFinalizedReplayArchiveLookupV1::Found(
-                    readback,
+                    Box::new(readback),
                 ))
             }
             2 => {
@@ -7727,7 +7727,7 @@ mod protocol {
                     )
                     .map_err(|_| BrokerError::Rejected)?;
                 Ok(sorafs_node::PorFinalizedReplayArchiveLookupV1::Absent(
-                    absence,
+                    Box::new(absence),
                 ))
             }
             _ => Err(BrokerError::Rejected),
@@ -10441,6 +10441,8 @@ mod protocol {
             sorafs_node::GovernanceDagSealedStateSlot::PublishIntent => 2,
             sorafs_node::GovernanceDagSealedStateSlot::ProducerCheckpoint => 3,
             sorafs_node::GovernanceDagSealedStateSlot::ProducerPublishIntent => 4,
+            sorafs_node::GovernanceDagSealedStateSlot::IpfsRequestReplay => 5,
+            sorafs_node::GovernanceDagSealedStateSlot::SignedHeadRequestReplay => 6,
         }
     }
 
@@ -10452,6 +10454,8 @@ mod protocol {
             2 => Ok(sorafs_node::GovernanceDagSealedStateSlot::PublishIntent),
             3 => Ok(sorafs_node::GovernanceDagSealedStateSlot::ProducerCheckpoint),
             4 => Ok(sorafs_node::GovernanceDagSealedStateSlot::ProducerPublishIntent),
+            5 => Ok(sorafs_node::GovernanceDagSealedStateSlot::IpfsRequestReplay),
+            6 => Ok(sorafs_node::GovernanceDagSealedStateSlot::SignedHeadRequestReplay),
             _ => Err(BrokerError::Protocol),
         }
     }
@@ -29739,6 +29743,29 @@ mod protocol {
                 binding_calls: AtomicU64,
             }
 
+            #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+            struct PorReplayArchiveChallengeStateFixtureV1 {
+                challenge: sorafs_manifest::por::PorChallengeV1,
+                proof_digest: Option<[u8; 32]>,
+                proof_submitted_at: Option<u64>,
+            }
+
+            #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+            #[norito(schema_name = "sorafs_node::por::PorFinalizedReplayArchiveRecordV1")]
+            struct PorReplayArchiveRecordFixtureV1 {
+                finalized: PorReplayArchiveFinalizedStateFixtureV1,
+            }
+
+            #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+            struct PorReplayArchiveFinalizedStateFixtureV1 {
+                state: PorReplayArchiveChallengeStateFixtureV1,
+                verdict: sorafs_manifest::por::AuditVerdictV1,
+                stats: sorafs_node::PorVerdictStats,
+                repair_task_id: Option<[u8; 32]>,
+                reputation_sequence: u64,
+                reputation_terminal: iroha_data_model::sorafs::reputation::PorTerminalOutcomeV1,
+            }
+
             impl ServerTestPorReplayArchive {
                 fn exact(binding: sorafs_node::PorFinalizedReplayArchiveBindingV1) -> Self {
                     Self {
@@ -33071,6 +33098,154 @@ mod protocol {
                     max_successor_proof_bytes: 1_048_576,
                 });
                 binding
+            }
+
+            fn server_test_ed25519_signature(payload: &[u8]) -> [u8; 64] {
+                let signature = iroha_crypto::Signature::try_new(
+                    server_test_request_auth_keypair().private_key(),
+                    payload,
+                )
+                .expect("sign replay-archive test payload");
+                signature
+                    .payload()
+                    .try_into()
+                    .expect("Ed25519 signatures are exactly 64 bytes")
+            }
+
+            fn por_replay_archive_record_fixture() -> sorafs_node::PorFinalizedReplayArchiveRecordV1
+            {
+                use iroha_data_model::sorafs::reputation::{
+                    PorTerminalOutcomeV1, PorTerminalStatusV1,
+                };
+                use sorafs_manifest::{
+                    por::{
+                        AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1,
+                        POR_CHALLENGE_VERSION_V1, PorChallengeV1, derive_challenge_id,
+                        derive_challenge_seed,
+                    },
+                    provider_advert::{AdvertSignature, SignatureAlgorithm},
+                };
+
+                const ISSUED_AT: u64 = 1_700_000_000;
+                const SUBMITTED_AT: u64 = 1_700_000_100;
+                const DECIDED_AT: u64 = 1_700_000_300;
+                const DEADLINE_AT: u64 = 1_700_000_600;
+
+                let manifest_digest = [0x22; 32];
+                let provider_id = [0x33; 32];
+                let epoch_id = 123;
+                let drand_round = 456;
+                let drand_randomness = [0x41; 32];
+                let seed =
+                    derive_challenge_seed(&drand_randomness, None, &manifest_digest, epoch_id);
+                let challenge_id = derive_challenge_id(
+                    &seed,
+                    &manifest_digest,
+                    &provider_id,
+                    epoch_id,
+                    drand_round,
+                );
+                let challenge = PorChallengeV1 {
+                    version: POR_CHALLENGE_VERSION_V1,
+                    challenge_id,
+                    manifest_digest,
+                    provider_id,
+                    epoch_id,
+                    drand_round,
+                    drand_randomness,
+                    drand_signature: [0x61; 48],
+                    vrf_output: None,
+                    vrf_proof: None,
+                    forced: true,
+                    chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
+                    seed,
+                    sample_tier: 1,
+                    sample_count: 1,
+                    sample_indices: vec![0],
+                    issued_at: ISSUED_AT,
+                    deadline_at: DEADLINE_AT,
+                };
+                challenge
+                    .validate()
+                    .expect("valid replay-archive challenge");
+
+                let proof_digest = [0x52; 32];
+                let mut verdict = AuditVerdictV1 {
+                    version: AUDIT_VERDICT_VERSION_V1,
+                    manifest_digest,
+                    provider_id,
+                    challenge_id,
+                    proof_digest: Some(proof_digest),
+                    outcome: AuditOutcomeV1::Success,
+                    failure_reason: None,
+                    decided_at: DECIDED_AT,
+                    auditor_signatures: vec![AdvertSignature {
+                        algorithm: SignatureAlgorithm::Ed25519,
+                        public_key: Vec::new(),
+                        signature: Vec::new(),
+                    }],
+                    metadata: Vec::new(),
+                };
+                let auditor = iroha_crypto::KeyPair::try_from_seed(
+                    vec![0x13; 32],
+                    iroha_crypto::Algorithm::Ed25519,
+                )
+                .expect("replay-archive auditor keypair");
+                let verdict_payload = verdict
+                    .signature_payload_bytes()
+                    .expect("encode replay-archive verdict signature payload");
+                verdict.auditor_signatures[0].public_key =
+                    auditor.public_key().to_bytes().1.to_vec();
+                verdict.auditor_signatures[0].signature =
+                    iroha_crypto::Signature::try_new(auditor.private_key(), &verdict_payload)
+                        .expect("sign replay-archive verdict")
+                        .payload()
+                        .to_vec();
+                verdict.validate().expect("valid replay-archive verdict");
+                verdict
+                    .verify_signatures()
+                    .expect("authenticated replay-archive verdict");
+
+                let fixture = PorReplayArchiveRecordFixtureV1 {
+                    finalized: PorReplayArchiveFinalizedStateFixtureV1 {
+                        state: PorReplayArchiveChallengeStateFixtureV1 {
+                            challenge,
+                            proof_digest: Some(proof_digest),
+                            proof_submitted_at: Some(SUBMITTED_AT),
+                        },
+                        verdict,
+                        stats: sorafs_node::PorVerdictStats {
+                            success_samples: 1,
+                            failed_samples: 0,
+                        },
+                        repair_task_id: None,
+                        reputation_sequence: 1,
+                        reputation_terminal: PorTerminalOutcomeV1 {
+                            challenge_id,
+                            manifest_digest,
+                            epoch_id,
+                            drand_round,
+                            forced: true,
+                            sample_count: 1,
+                            failed_samples: 0,
+                            issued_at_unix_ms: ISSUED_AT * 1_000,
+                            deadline_at_unix_ms: DEADLINE_AT * 1_000,
+                            responded_at_unix_ms: Some(SUBMITTED_AT * 1_000),
+                            decided_at_unix_ms: DECIDED_AT * 1_000,
+                            proof_digest: Some(proof_digest),
+                            repair_task_id: None,
+                            verifier_latency_ms: Some(
+                                u32::try_from((DECIDED_AT - SUBMITTED_AT) * 1_000)
+                                    .expect("test verifier latency fits u32"),
+                            ),
+                            status: PorTerminalStatusV1::Verified,
+                        },
+                    },
+                };
+                let canonical = encode_canonical(&fixture, MAX_POR_REPLAY_ARCHIVE_RECORD_BYTES_V1)
+                    .expect("encode replay-archive record fixture");
+                decode_por_replay_archive_record(&canonical)
+                    .expect("fixture is the canonical production record layout")
             }
 
             fn privacy_cycle_prf_runtime_binding() -> ProviderBindingWireV1 {
@@ -37563,7 +37738,10 @@ mod protocol {
                     MAX_OPERATION_FRAME_BYTES_V1,
                 )
                 .expect("encode exact qualification");
-                assert_eq!(validate_operation_result(&request, STATUS_OK_V1, &exact), Ok(()));
+                assert_eq!(
+                    validate_operation_result(&request, STATUS_OK_V1, &exact),
+                    Ok(())
+                );
                 let substituted = encode_canonical(
                     &QualificationResultWireV1 {
                         revision: 8,
@@ -37625,8 +37803,8 @@ mod protocol {
                     drift: false,
                     calls: AtomicU64::new(0),
                 });
-                let backends = RuntimeProviderBrokerBackendsV1::new()
-                    .with_stream_token_signer(exact.clone());
+                let backends =
+                    RuntimeProviderBrokerBackendsV1::new().with_stream_token_signer(exact.clone());
                 make_server_observation(&binding, &backends)
                     .expect("observe exact stream-token signer twice");
                 assert_eq!(exact.calls.load(Ordering::SeqCst), 2);
@@ -38321,6 +38499,27 @@ mod protocol {
                     ),
                 )
                 .expect("exact checkpoint backend must qualify");
+            }
+
+            #[test]
+            fn governance_checkpoint_slot_wire_mapping_roundtrips_replay_state() {
+                use sorafs_node::GovernanceDagSealedStateSlot as Slot;
+
+                for (slot, wire) in [
+                    (Slot::Checkpoint, 1),
+                    (Slot::PublishIntent, 2),
+                    (Slot::ProducerCheckpoint, 3),
+                    (Slot::ProducerPublishIntent, 4),
+                    (Slot::IpfsRequestReplay, 5),
+                    (Slot::SignedHeadRequestReplay, 6),
+                ] {
+                    assert_eq!(sealed_slot_to_wire(slot), wire);
+                    assert_eq!(sealed_slot_from_wire(wire), Ok(slot));
+                }
+                assert_eq!(sealed_slot_from_wire(0), Err(BrokerError::Protocol));
+                assert_eq!(sealed_slot_from_wire(7), Err(BrokerError::Protocol));
+                assert!(!sealed_slot_is_transient(Slot::IpfsRequestReplay));
+                assert!(!sealed_slot_is_transient(Slot::SignedHeadRequestReplay));
             }
 
             #[test]
@@ -39982,6 +40181,113 @@ mod protocol {
                 assert_eq!(
                     make_server_observation(&binding, &drifted),
                     Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
+                );
+            }
+
+            #[test]
+            fn por_replay_archive_lookup_results_round_trip_found_and_absent() {
+                let binding = por_replay_archive_runtime_binding();
+                let exact = por_replay_archive_exact_binding(&binding)
+                    .expect("exact replay-archive binding");
+                let (limits, bounds) = por_replay_archive_configured_proof_bounds(&binding)
+                    .expect("bounded replay-archive proof policy");
+                let record = por_replay_archive_record_fixture();
+                let receipt_digest =
+                    sorafs_node::PorFinalizedReplayArchiveReceiptV1::signing_digest(
+                        exact, &record, None,
+                    )
+                    .expect("derive replay-archive receipt digest");
+                let receipt = sorafs_node::PorFinalizedReplayArchiveReceiptV1::try_new(
+                    exact,
+                    &record,
+                    None,
+                    server_test_ed25519_signature(&receipt_digest),
+                )
+                .expect("authenticate replay-archive receipt");
+
+                let found_request = PorReplayArchiveLookupRequestWireV1 {
+                    challenge_id: record.challenge_id(),
+                    expected_checkpoint_head: receipt,
+                    max_successor_receipts: limits.max_successor_receipts,
+                    max_successor_proof_bytes: limits.max_successor_proof_bytes,
+                };
+                let found = sorafs_node::PorFinalizedReplayArchiveLookupV1::Found(Box::new(
+                    sorafs_node::PorFinalizedReplayArchiveReadbackV1 {
+                        record: record.clone(),
+                        receipt,
+                        successor_receipts: Vec::new(),
+                    },
+                ));
+                let found_wire =
+                    por_replay_archive_lookup_to_wire(found.clone(), &found_request, exact, bounds)
+                        .expect("validate and encode found lookup");
+                let found_bytes =
+                    encode_canonical(&found_wire, MAX_POR_REPLAY_ARCHIVE_FRAME_BYTES_V1)
+                        .expect("encode found lookup wire");
+                let found_decoded = decode_canonical::<PorReplayArchiveLookupOutcomeWireV1>(
+                    &found_bytes,
+                    MAX_POR_REPLAY_ARCHIVE_FRAME_BYTES_V1,
+                )
+                .expect("decode found lookup wire");
+                assert_eq!(found_decoded, found_wire);
+                assert_eq!(
+                    por_replay_archive_lookup_from_wire(&found_decoded, &found_request, &binding,),
+                    Ok(found)
+                );
+
+                let absent_challenge_id = [0xFA; 32];
+                let absence_digest =
+                    sorafs_node::PorFinalizedReplayArchiveAbsenceProofV1::signing_digest(
+                        exact,
+                        absent_challenge_id,
+                        receipt,
+                    )
+                    .expect("derive replay-archive absence digest");
+                let absence = sorafs_node::PorFinalizedReplayArchiveAbsenceProofV1::try_new(
+                    exact,
+                    absent_challenge_id,
+                    receipt,
+                    server_test_ed25519_signature(&absence_digest),
+                )
+                .expect("authenticate replay-archive absence proof");
+                let absent_request = PorReplayArchiveLookupRequestWireV1 {
+                    challenge_id: absent_challenge_id,
+                    expected_checkpoint_head: receipt,
+                    max_successor_receipts: limits.max_successor_receipts,
+                    max_successor_proof_bytes: limits.max_successor_proof_bytes,
+                };
+                let absent =
+                    sorafs_node::PorFinalizedReplayArchiveLookupV1::Absent(Box::new(absence));
+                let absent_wire = por_replay_archive_lookup_to_wire(
+                    absent.clone(),
+                    &absent_request,
+                    exact,
+                    bounds,
+                )
+                .expect("validate and encode absent lookup");
+                let absent_bytes =
+                    encode_canonical(&absent_wire, MAX_POR_REPLAY_ARCHIVE_FRAME_BYTES_V1)
+                        .expect("encode absent lookup wire");
+                let absent_decoded = decode_canonical::<PorReplayArchiveLookupOutcomeWireV1>(
+                    &absent_bytes,
+                    MAX_POR_REPLAY_ARCHIVE_FRAME_BYTES_V1,
+                )
+                .expect("decode absent lookup wire");
+                assert_eq!(absent_decoded, absent_wire);
+                assert_eq!(
+                    por_replay_archive_lookup_from_wire(&absent_decoded, &absent_request, &binding,),
+                    Ok(absent)
+                );
+
+                let mut substituted_request = absent_request;
+                substituted_request.challenge_id = [0xFB; 32];
+                assert_eq!(
+                    por_replay_archive_lookup_from_wire(
+                        &absent_decoded,
+                        &substituted_request,
+                        &binding,
+                    ),
+                    Err(BrokerError::Rejected)
                 );
             }
 

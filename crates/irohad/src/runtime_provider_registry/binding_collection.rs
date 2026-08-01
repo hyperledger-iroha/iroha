@@ -259,7 +259,7 @@ fn collect_storage_security_bindings(
                 policy_digest,
             )?);
         }
-        (None, None, None, None) => {}
+        (None, None, None, None) if !storage.stream_tokens.enabled => {}
         _ => {
             return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
                 IrohaRuntimeProviderSlotV1::StreamTokenSigner,
@@ -275,7 +275,7 @@ fn collect_storage_security_bindings(
             let compliance = config.torii.sorafs_gateway.compliance.as_ref().ok_or(
                 IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
                     IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission,
-                )
+                ),
             )?;
             let gateway_id =
                 iroha_data_model::sorafs::reputation::derive_stream_token_gateway_id_v1(

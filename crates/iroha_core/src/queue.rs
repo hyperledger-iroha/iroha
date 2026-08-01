@@ -139,11 +139,21 @@ use crate::{
         queue_plan_admission_registry_match,
     },
     sumeragi::{
+        lane_planner::AutonomousLaneReservationSelectionAuthorization,
         status,
         v2_core::{
             CanonicalIdentityProjection, IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_CANONICAL_PAYLOAD,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED,
             IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT,
-            IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4,
+            IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_ABSENT, IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+            IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_ABSENT,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN,
+            IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED,
             IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED,
             IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
             ProductionInFlightFirstReleaseCarrierProjection,
@@ -996,7 +1006,7 @@ pub struct LaneQueueReservationReplaySummary {
     pub restored: usize,
     /// Restored reservations whose transaction payload has not been replayed into the queue yet.
     pub awaiting_transaction_replay: usize,
-    /// Exact commit barriers retained until pending-plan tombstones become durable.
+    /// Exact commit barriers awaiting QueuePlan tombstones and/or ordered ForgetCommit.
     pub commit_barriers: usize,
     /// Prepared ordered releases whose transactions remain lane-owned.
     pub release_barriers: usize,
@@ -1148,6 +1158,26 @@ where
     })
 }
 
+/// Project one exact FIFO-ordered reservation group into the shared
+/// first-release carrier identity domain.
+///
+/// Every production refinement seam uses this function: READY authorization,
+/// durable lane certification, canonical WSV application, and post-carrier
+/// Queue cleanup.  The group hash covers every complete reservation key in
+/// order, including its exact QueuePlan admission binding, so none of those
+/// stages can substitute a proposal-only, bundle-only, or per-transaction
+/// identity while still claiming one composed carrier trace.
+#[must_use]
+pub(crate) fn canonical_lane_queue_reservation_group_identity_projection(
+    binding: LaneQueueReservationGroupBindingV1,
+) -> CanonicalIdentityProjection {
+    CanonicalIdentityProjection::from_bytes(
+        IDENTITY_DOMAIN_PAYLOAD,
+        IDENTITY_KIND_CANONICAL_PAYLOAD,
+        *binding.reservation_group_hash.as_ref(),
+    )
+}
+
 /// One complete live queue owner captured for restart classification.
 ///
 /// The record keeps the durable FIFO identity and exact QueuePlan claim alongside the reservation
@@ -1283,7 +1313,10 @@ struct LaneQueueReservationStore {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PlanJournalDurability {
-    Synced,
+    /// This call durably appended the exact QueuePlan tombstone.
+    SyncedNew,
+    /// The exact QueuePlan tombstone was already durable after restart.
+    SyncedExisting,
     StartupPending,
 }
 
@@ -3488,6 +3521,7 @@ impl Queue {
     /// # Errors
     /// Returns an error when the journal is absent, the lane incarnation/route is stale, an exact
     /// identity conflicts, or the durable batch write fails.
+    #[cfg(test)]
     pub fn reserve_transactions_for_lane(
         &self,
         state: &State,
@@ -3510,8 +3544,9 @@ impl Queue {
     /// they are never temporarily removed and reinserted by lane selection.
     ///
     /// # Errors
-    /// Returns the same exact-identity, lifecycle, and durability errors as
-    /// [`Self::reserve_transactions_for_lane`].
+    /// Returns an exact-identity, lifecycle, authority, bound, or durability
+    /// error before publishing autonomous ownership.
+    #[cfg(test)]
     pub fn reserve_transactions_for_lane_excluding(
         &self,
         state: &State,
@@ -3521,7 +3556,7 @@ impl Queue {
     ) -> Result<Vec<LaneReservedTransaction>, LaneQueueReservationError> {
         self.reserve_transactions_for_lane_bounded(
             state,
-            scope,
+            AutonomousLaneReservationSelectionAuthorization::single_validator_for_test(scope),
             LaneQueueReservationSelectionLimits {
                 max_transactions,
                 max_scan: self.capacity,
@@ -3543,16 +3578,42 @@ impl Queue {
     /// A transaction containing an executable batch is one indivisible queue entry.
     ///
     /// # Errors
-    /// Returns the same exact-identity, lifecycle, and durability errors as
-    /// [`Self::reserve_transactions_for_lane`].
-    pub fn reserve_transactions_for_lane_bounded(
+    /// Returns an error when slot authority, lifecycle, route, identity, bounds,
+    /// or reservation-journal durability cannot be proven exactly.
+    pub(crate) fn reserve_transactions_for_lane_bounded(
         &self,
         state: &State,
-        scope: LaneQueueReservationScopeV1,
+        authorization: AutonomousLaneReservationSelectionAuthorization,
         limits: LaneQueueReservationSelectionLimits,
         excluded_entrypoint_hashes: &BTreeSet<HashOf<TransactionEntrypoint>>,
         routing_mode: LaneQueueReservationRoutingMode,
     ) -> Result<Vec<LaneReservedTransaction>, LaneQueueReservationError> {
+        if limits.max_transactions.get() > iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS
+        {
+            return Err(LaneQueueReservationError::InvalidIdentity(format!(
+                "autonomous lane reservation limit {} exceeds the first-release maximum {}",
+                limits.max_transactions,
+                iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS,
+            )));
+        }
+        let scope = authorization.scope();
+        let validator_count = authorization.validator_count();
+        let producer = authorization.producer();
+        if validator_count == 0 || validator_count > 128 {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "autonomous lane selection requires a 1..=128 validator committee".to_owned(),
+            ));
+        }
+        let validator_mask = if validator_count == 128 {
+            u128::MAX
+        } else {
+            (1_u128 << validator_count) - 1
+        };
+        if producer == 0 || producer & !validator_mask != 0 || producer & (producer - 1) != 0 {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "autonomous lane selection has noncanonical committee authority".to_owned(),
+            ));
+        }
         if self.lane_reservation_startup_reconciliation_pending() {
             return Err(LaneQueueReservationError::StartupReconciliationPending);
         }
@@ -3832,6 +3893,88 @@ impl Queue {
         if self.lane_reservation_journal.lock().is_none() {
             return Err(LaneQueueReservationError::JournalNotInstalled);
         }
+        let checked_reservation_fsync = if selected.is_empty() {
+            None
+        } else {
+            let group_binding = lane_queue_reservation_group_binding_from_ordered_keys(
+                selected.iter().map(|(record, ..)| &record.key),
+            )
+            .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+            let selected_count = u64::try_from(selected.len()).map_err(|_| {
+                LaneQueueReservationError::InvalidIdentity(
+                    "autonomous lane selection count does not fit u64".to_owned(),
+                )
+            })?;
+            if selected_count != group_binding.reservation_count {
+                return Err(LaneQueueReservationError::InvalidIdentity(
+                    "autonomous lane selection differs from its exact reservation group".to_owned(),
+                ));
+            }
+            let binding_a =
+                canonical_lane_queue_reservation_group_identity_projection(group_binding);
+            let initial = ProductionInFlightFirstReleaseStateProjection {
+                validator_count,
+                producer,
+                producer_selected_owner: producer,
+                replicated_carrier_owners: validator_mask & !producer,
+                payload_binding_a: producer,
+                binding_a,
+                queue: ProductionInFlightFirstReleaseQueueProjection {
+                    plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_ABSENT,
+                    selected_count: 0,
+                    reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_ABSENT,
+                },
+                carrier: ProductionInFlightFirstReleaseCarrierProjection::default(),
+                session: ProductionInFlightFirstReleaseSessionProjection {
+                    bodies: producer,
+                    producer_alive: true,
+                    ..ProductionInFlightFirstReleaseSessionProjection::default()
+                },
+                history: ProductionInFlightFirstReleaseHistoryProjection::default(),
+                decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+                release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+            };
+            let mut selected_state = initial;
+            selected_state.queue.plan_state = IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED;
+            selected_state.queue.selected_count = selected_count;
+            selected_state.history.ever_queue_plan_v4 = true;
+            let selected_projection = ProductionInFlightFirstReleaseTransitionProjection {
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4,
+                actor: 0,
+                target: 0,
+                before: initial,
+                after: selected_state,
+            };
+            let checked_selection = check_production_in_flight_first_release_transition(
+                selected_projection,
+            )
+            .ok_or(LaneQueueReservationError::InvalidIdentity(String::from(
+                "QueuePlan conjunction failed the composed first-release transition gate",
+            )))?;
+            if checked_selection.into_projection() != selected_projection {
+                return Err(LaneQueueReservationError::InvalidIdentity(
+                    "checked QueuePlan conjunction changed before reservation ownership".to_owned(),
+                ));
+            }
+
+            let mut reserved_state = selected_state;
+            reserved_state.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE;
+            reserved_state.history.ever_reservation_v5 = true;
+            let reservation_fsync_projection = ProductionInFlightFirstReleaseTransitionProjection {
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5,
+                actor: 0,
+                target: 0,
+                before: selected_state,
+                after: reserved_state,
+            };
+            let invalid_fsync = LaneQueueReservationError::InvalidIdentity(String::from(
+                "reservation V5 fsync failed the composed first-release transition gate",
+            ));
+            let checked =
+                check_production_in_flight_first_release_transition(reservation_fsync_projection)
+                    .ok_or(invalid_fsync)?;
+            Some((checked, reservation_fsync_projection))
+        };
         let selected_hashes = selected
             .iter()
             .map(|(record, ..)| record.key.signed_transaction_hash)
@@ -3890,7 +4033,15 @@ impl Queue {
             return Ok(Vec::new());
         }
 
+        let (checked_reservation_fsync, reservation_fsync_projection) =
+            checked_reservation_fsync.expect("non-empty selection has checked V5 fsync evidence");
         let append_result = self.apply_lane_reservation_journal(|journal| {
+            if checked_reservation_fsync.into_projection() != reservation_fsync_projection {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "checked reservation V5 fsync projection changed before append",
+                ));
+            }
             journal.put_batch(selected.iter().map(|(record, ..)| record.clone()).collect())
         });
 
@@ -4649,46 +4800,120 @@ impl Queue {
         barriers
     }
 
-    /// Durably commit and consume one exact lane reservation.
+    /// Durably commit one complete FIFO-ordered autonomous reservation group.
     ///
-    /// This removes the transaction and all queue accounting after the reservation commit frame is
-    /// synced. Repeating the exact commit is harmless; a different identity for the same signed
-    /// hash fails closed.
+    /// Every key and every live Queue owner is preflighted before the first
+    /// mutation. The transition lock and per-hash durability ownership are
+    /// then retained across the complete bounded group, so a semantic conflict
+    /// in a later member can never partially consume an earlier member. I/O
+    /// failure may leave a durable prefix, which an exact retry resumes using
+    /// the same full-group identity.
     ///
     /// # Errors
     /// Returns an exact-identity conflict or durable journal failure.
-    pub fn commit_lane_reservation(
+    pub fn commit_lane_reservation_group(
+        &self,
+        ordered_keys: &[LaneQueueReservationKeyV2],
+    ) -> Result<usize, LaneQueueReservationError> {
+        self.commit_lane_reservation_group_prefix(ordered_keys, ordered_keys.len())
+    }
+
+    #[cfg(test)]
+    /// Persist only the leading reservation-Commit prefix of one complete
+    /// group, leaving its QueuePlan and Commit barriers for crash recovery.
+    pub(crate) fn commit_lane_reservation_group_prefix_for_test(
+        &self,
+        ordered_keys: &[LaneQueueReservationKeyV2],
+        prefix_len: usize,
+    ) -> Result<usize, LaneQueueReservationError> {
+        self.commit_lane_reservation_group_prefix(ordered_keys, prefix_len)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn commit_lane_reservation_for_test(
         &self,
         key: &LaneQueueReservationKeyV2,
     ) -> Result<LaneQueueReservationOutcome, LaneQueueReservationError> {
+        Ok(
+            if self.commit_lane_reservation_group(core::slice::from_ref(key))? == 1 {
+                LaneQueueReservationOutcome::Finalized
+            } else {
+                LaneQueueReservationOutcome::AlreadyFinalized
+            },
+        )
+    }
+
+    fn commit_lane_reservation_group_prefix(
+        &self,
+        ordered_keys: &[LaneQueueReservationKeyV2],
+        prefix_len: usize,
+    ) -> Result<usize, LaneQueueReservationError> {
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
-        key.validate()
-            .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+        let group_binding =
+            lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
+                .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+        if prefix_len == 0 || prefix_len > ordered_keys.len() {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "lane reservation commit prefix is outside its exact non-empty group".to_owned(),
+            ));
+        }
+
         let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
         let queue_guard = self.push_remove_lock.lock();
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
         let store = self.lane_reservations.lock();
-        store.ensure_no_conflict(key)?;
-        store.ensure_not_release_prepared(key)?;
-        let live_record = store
-            .live_by_hash
-            .get(&key.signed_transaction_hash)
-            .cloned();
-        let retrying_commit_barrier = store.commit_barriers.contains(key);
-        if live_record.is_none() && !retrying_commit_barrier {
-            return Ok(LaneQueueReservationOutcome::AlreadyFinalized);
-        }
-        let newly_committed = live_record.is_some();
-        if let Some(record) = live_record.as_ref() {
-            self.validate_live_reservation_against_queue(record)?;
-        }
-
-        let hash = key.signed_transaction_hash;
-        let queued_owner =
+        let mut seen_live = false;
+        let mut seen_commit_barrier = false;
+        let mut seen_finalized = false;
+        for key in ordered_keys {
+            store.ensure_no_conflict(key)?;
+            store.ensure_not_release_prepared(key)?;
+            let live_record = store
+                .live_by_hash
+                .get(&key.signed_transaction_hash)
+                .cloned();
+            let retrying_commit_barrier = store.commit_barriers.contains(key);
+            if live_record.is_none() && !retrying_commit_barrier {
+                if seen_live || seen_commit_barrier {
+                    return Err(LaneQueueReservationError::InvalidIdentity(
+                        "lane reservation group has a finalized member after a live or Commit-barrier prefix"
+                            .to_owned(),
+                    ));
+                }
+                seen_finalized = true;
+                let hash = key.signed_transaction_hash;
+                if self.txs.contains_key(&hash)
+                    || self.routing_plans.contains_key(&hash)
+                    || self.durable_plan_claims.contains_key(&hash)
+                    || self.fifo_order_by_hash.contains_key(&hash)
+                {
+                    return Err(LaneQueueReservationError::Conflict { hash });
+                }
+                continue;
+            }
+            if let Some(record) = live_record.as_ref() {
+                if seen_finalized {
+                    return Err(LaneQueueReservationError::InvalidIdentity(
+                        "lane reservation group has a live member after a finalized prefix"
+                            .to_owned(),
+                    ));
+                }
+                seen_live = true;
+                self.validate_live_reservation_against_queue(record)?;
+            } else {
+                if seen_live {
+                    return Err(LaneQueueReservationError::InvalidIdentity(
+                        "lane reservation group has a Commit barrier after a live suffix"
+                            .to_owned(),
+                    ));
+                }
+                seen_commit_barrier = true;
+            }
+            let hash = key.signed_transaction_hash;
             if let Some(tx) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) {
                 let plan = self
                     .routing_plans
@@ -4701,115 +4926,483 @@ impl Queue {
                 {
                     return Err(LaneQueueReservationError::Conflict { hash });
                 }
-                Some((tx, plan))
-            } else {
-                None
-            };
-        let transition = self
-            .begin_durability_transition_locked([hash])
+            } else if self.routing_plans.contains_key(&hash)
+                || self.routing_decisions.contains_key(&hash)
+            {
+                return Err(LaneQueueReservationError::Conflict { hash });
+            }
+        }
+        let durability_transition = self
+            .begin_durability_transition_locked(
+                ordered_keys.iter().map(|key| key.signed_transaction_hash),
+            )
             .map_err(|hash| LaneQueueReservationError::Conflict { hash })?;
         drop(store);
         drop(queue_guard);
+        let stop_after_commit_prefix = (prefix_len < ordered_keys.len()).then_some(prefix_len);
+        let finalized =
+            self.commit_lane_reservation(ordered_keys, group_binding, stop_after_commit_prefix)?;
+        drop(durability_transition);
+        Ok(finalized)
+    }
 
-        if live_record.is_some() {
-            self.apply_lane_reservation_journal(|journal| journal.commit(*key))?;
+    /// Commit one complete group while its transition and per-hash
+    /// durability authority are held by [`Self::commit_lane_reservation_group`].
+    fn commit_lane_reservation(
+        &self,
+        ordered_keys: &[LaneQueueReservationKeyV2],
+        group_binding: LaneQueueReservationGroupBindingV1,
+        stop_after_commit_prefix: Option<usize>,
+    ) -> Result<usize, LaneQueueReservationError> {
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
+        if ordered_keys.is_empty()
+            || usize::try_from(group_binding.reservation_count).ok() != Some(ordered_keys.len())
+            || ordered_keys.iter().any(|key| {
+                LaneQueueReservationGroupIdentityV1::from_key(key) != group_binding.identity
+            })
+        {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "lane reservation commit input differs from its exact ordered group".to_owned(),
+            ));
+        }
+        // Every cleanup frame is one ordered key in the composed model. Bind
+        // the complete three-phase prefix trace to the same exact FIFO-ordered
+        // QueuePlan conjunction used by READY, lane certification, and
+        // canonical WSV application. Retain the already-established canonical
+        // WSV owner throughout Commit -> plan tombstone -> ForgetCommit.
+        let binding_a = canonical_lane_queue_reservation_group_identity_projection(group_binding);
+        let cleanup_state = |plan_state, reservation_state, committed, tombstoned, forgotten| {
+            ProductionInFlightFirstReleaseStateProjection {
+                validator_count: 1,
+                producer: 1,
+                producer_selected_owner: 1,
+                replicated_carrier_owners: 0,
+                payload_binding_a: 1,
+                binding_a,
+                queue: ProductionInFlightFirstReleaseQueueProjection {
+                    plan_state,
+                    selected_count: group_binding.reservation_count,
+                    reservation_state,
+                },
+                carrier: ProductionInFlightFirstReleaseCarrierProjection {
+                    kura_active: 1,
+                    execution_input_durable: 1,
+                    ready_qc_durable: true,
+                },
+                session: ProductionInFlightFirstReleaseSessionProjection {
+                    bodies: 1,
+                    ready_authorized: 1,
+                    crashed: 0,
+                    producer_alive: true,
+                },
+                history: ProductionInFlightFirstReleaseHistoryProjection {
+                    ever_queue_plan_v4: true,
+                    ever_reservation_v5: true,
+                    ever_execution_input_durable: 1,
+                    ever_ready_authorized: 1,
+                    ready_signed: 1,
+                    ever_ready_qc_durable: true,
+                    reservation_committed_prefix: committed,
+                    queue_plan_tombstoned_prefix: tombstoned,
+                    reservation_commit_forgotten_prefix: forgotten,
+                    pending_high_water: 0,
+                    released_high_water: 0,
+                },
+                decision: ProductionInFlightFirstReleaseDecisionProjection {
+                    lane_commit_scope: binding_a,
+                    release_scope: CanonicalIdentityProjection::zero(),
+                    lane_commit_owner: 1,
+                    release_owner: 0,
+                    wsv_committed: true,
+                    application_count: 1,
+                    applied_by: 1,
+                },
+                release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+            }
+        };
+        let commit_limit = stop_after_commit_prefix.unwrap_or(ordered_keys.len());
+        let mut newly_committed = 0usize;
+        for (index, key) in ordered_keys.iter().take(commit_limit).enumerate() {
+            let queue_guard = self.push_remove_lock.lock();
+            if self.transaction_selection_durability_faulted() {
+                return Err(LaneQueueReservationError::DurabilityFault);
+            }
+            let store = self.lane_reservations.lock();
+            store.ensure_no_conflict(key)?;
+            store.ensure_not_release_prepared(key)?;
+            let live_record = store
+                .live_by_hash
+                .get(&key.signed_transaction_hash)
+                .cloned();
+            let retrying_commit_barrier = store.commit_barriers.contains(key);
+            if live_record.is_none() {
+                drop(store);
+                drop(queue_guard);
+                if retrying_commit_barrier {
+                    continue;
+                }
+                continue;
+            }
+            self.validate_live_reservation_against_queue(
+                live_record
+                    .as_ref()
+                    .expect("live reservation was just classified"),
+            )?;
+            drop(store);
+            drop(queue_guard);
+
+            let committed_before = u64::try_from(index).map_err(|_| {
+                LaneQueueReservationError::InvalidIdentity(
+                    "lane reservation Commit prefix does not fit u64".to_owned(),
+                )
+            })?;
+            let committed_after = committed_before.saturating_add(1);
+            let before = cleanup_state(
+                IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+                committed_before,
+                0,
+                0,
+            );
+            let after = cleanup_state(
+                IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+                if committed_after == group_binding.reservation_count {
+                    IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED
+                } else {
+                    IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE
+                },
+                committed_after,
+                0,
+                0,
+            );
+            let projection = ProductionInFlightFirstReleaseTransitionProjection {
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED,
+                actor: 0,
+                target: u128::from(committed_after),
+                before,
+                after,
+            };
+            let checked = check_production_in_flight_first_release_transition(projection)
+                .ok_or_else(|| {
+                    LaneQueueReservationError::InvalidIdentity(
+                        "reservation Commit failed the composed first-release transition gate"
+                            .to_owned(),
+                    )
+                })?;
+            self.apply_lane_reservation_journal(|journal| {
+                if checked.into_projection() != projection {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "checked reservation Commit projection changed before append",
+                    ));
+                }
+                journal.commit(*key)
+            })?;
             let queue_guard = self.push_remove_lock.lock();
             let mut store = self.lane_reservations.lock();
-            store.live_by_hash.remove(&hash);
+            store.live_by_hash.remove(&key.signed_transaction_hash);
             if !store.commit_barriers.contains(key) {
                 store.commit_barriers.push(*key);
             }
             self.reconcile_missing_reservation_payloads_locked(&mut store);
             drop(store);
             drop(queue_guard);
+            newly_committed = newly_committed.saturating_add(1);
         }
 
-        let journal_durability = match self.remove_plan_journal_for_reservation_commit(key) {
-            Ok(PlanJournalDurability::Synced) => PlanJournalDurability::Synced,
-            Ok(PlanJournalDurability::StartupPending) => {
-                // Keep the durable commit barrier indefinitely when no pending-plan journal is
-                // installed. If one is installed later, installation finalizes these barriers
-                // before any replay can make the old plan eligible.
-                PlanJournalDurability::StartupPending
+        let publish_fault = self.compact_lane_reservations_off_lock();
+        if publish_fault {
+            self.publish_latched_lane_reservation_durability_fault(None);
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
+        if stop_after_commit_prefix.is_some() {
+            self.publish_backpressure_state(self.active_len(), None);
+            return Ok(newly_committed);
+        }
+
+        let forgotten_prefix = {
+            let store = self.lane_reservations.lock();
+            let prefix = ordered_keys
+                .iter()
+                .take_while(|key| {
+                    !store
+                        .live_by_hash
+                        .contains_key(&key.signed_transaction_hash)
+                        && !store.commit_barriers.contains(key)
+                })
+                .count();
+            if ordered_keys.iter().any(|key| {
+                store
+                    .live_by_hash
+                    .contains_key(&key.signed_transaction_hash)
+            }) {
+                return Err(LaneQueueReservationError::InvalidIdentity(
+                    "lane reservation Commit phase ended with a live member".to_owned(),
+                ));
             }
-            Err(error) => {
+            u64::try_from(prefix).map_err(|_| {
+                LaneQueueReservationError::InvalidIdentity(
+                    "lane reservation forgotten prefix does not fit u64".to_owned(),
+                )
+            })?
+        };
+
+        // Phase two durably tombstones every exact QueuePlan only after every
+        // reservation Commit is durable. A crash leaves a bounded tombstone
+        // prefix behind the complete Commit-barrier group.
+        for (index, key) in ordered_keys.iter().enumerate() {
+            let queue_guard = self.push_remove_lock.lock();
+            if self.transaction_selection_durability_faulted() {
+                return Err(LaneQueueReservationError::DurabilityFault);
+            }
+            let store = self.lane_reservations.lock();
+            store.ensure_no_conflict(key)?;
+            store.ensure_not_release_prepared(key)?;
+            if store
+                .live_by_hash
+                .contains_key(&key.signed_transaction_hash)
+            {
+                return Err(LaneQueueReservationError::InvalidIdentity(
+                    "QueuePlan tombstone phase observed a live reservation".to_owned(),
+                ));
+            }
+            if !store.commit_barriers.contains(key) {
+                drop(store);
+                drop(queue_guard);
+                continue;
+            }
+            let hash = key.signed_transaction_hash;
+            let queued_owner =
+                if let Some(tx) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) {
+                    let plan = self
+                        .routing_plans
+                        .get(&hash)
+                        .map(|entry| entry.clone())
+                        .ok_or(LaneQueueReservationError::Conflict { hash })?;
+                    if tx.as_accepted().hash_as_entrypoint() != key.entrypoint_hash
+                        || plan.digest() != key.routing_plan_digest
+                        || plan.coordinator_leg() != key.coordinator_leg
+                    {
+                        return Err(LaneQueueReservationError::Conflict { hash });
+                    }
+                    Some((tx, plan))
+                } else {
+                    None
+                };
+            drop(store);
+            drop(queue_guard);
+
+            let tombstoned_before = u64::try_from(index).map_err(|_| {
+                LaneQueueReservationError::InvalidIdentity(
+                    "QueuePlan tombstone prefix does not fit u64".to_owned(),
+                )
+            })?;
+            let tombstoned_after = tombstoned_before.saturating_add(1);
+            let before = cleanup_state(
+                IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED,
+                group_binding.reservation_count,
+                tombstoned_before,
+                forgotten_prefix,
+            );
+            let after = cleanup_state(
+                if tombstoned_after == group_binding.reservation_count {
+                    IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED
+                } else {
+                    IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED
+                },
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED,
+                group_binding.reservation_count,
+                tombstoned_after,
+                forgotten_prefix,
+            );
+            let plan_tombstone_projection = ProductionInFlightFirstReleaseTransitionProjection {
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE,
+                actor: 0,
+                target: u128::from(tombstoned_after),
+                before,
+                after,
+            };
+            let checked_plan_tombstone =
+                check_production_in_flight_first_release_transition(plan_tombstone_projection)
+                    .ok_or_else(|| {
+                        LaneQueueReservationError::InvalidIdentity(
+                            "QueuePlan tombstone failed the composed first-release transition gate"
+                                .to_owned(),
+                        )
+                    })?;
+            let journal_durability = match self.remove_plan_journal_for_reservation_commit(key) {
+                Ok(PlanJournalDurability::SyncedNew) => {
+                    if checked_plan_tombstone.into_projection() != plan_tombstone_projection {
+                        let error = std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "checked QueuePlan tombstone projection changed during append",
+                        );
+                        let publish_fault =
+                            self.latch_lane_reservation_post_plan_fault_locked(&error);
+                        if publish_fault {
+                            self.publish_latched_lane_reservation_durability_fault(None);
+                        }
+                        self.publish_backpressure_state(self.active_len(), None);
+                        return Err(LaneQueueReservationError::Journal(error));
+                    }
+                    PlanJournalDurability::SyncedNew
+                }
+                Ok(PlanJournalDurability::SyncedExisting) => {
+                    // Restart found the exact tombstone already durable. No
+                    // second abstract action occurred, so the capability is
+                    // not consumed.
+                    drop(checked_plan_tombstone);
+                    PlanJournalDurability::SyncedExisting
+                }
+                Ok(PlanJournalDurability::StartupPending) => {
+                    // Keep the complete Commit-barrier group indefinitely when
+                    // no pending-plan journal is installed.
+                    drop(checked_plan_tombstone);
+                    PlanJournalDurability::StartupPending
+                }
+                Err(error) => {
+                    let publish_fault = self.compact_lane_reservations_off_lock();
+                    if publish_fault {
+                        self.publish_latched_lane_reservation_durability_fault(None);
+                    }
+                    self.publish_backpressure_state(self.active_len(), None);
+                    return Err(LaneQueueReservationError::Journal(error));
+                }
+            };
+            let queue_guard = self.push_remove_lock.lock();
+            let mut store = self.lane_reservations.lock();
+            self.remove_hashes_from_fifo_locked(&HashSet::from([hash]));
+            if let Some((tx, plan)) = queued_owner {
+                self.remove_transaction_locked(&tx, &plan, None);
+            }
+            // Payload-less startup owners still carry the FIFO identity
+            // reconstructed from their reservation journal. The canonical
+            // carrier consumes that identity even when no transaction body
+            // needed materializing in this process.
+            self.fifo_order_by_hash.remove(&hash);
+            self.remove_queued_age(&hash);
+            self.removed_hashes.remove(&hash);
+            self.reconcile_missing_reservation_payloads_locked(&mut store);
+            drop(store);
+            drop(queue_guard);
+            if journal_durability == PlanJournalDurability::StartupPending {
                 let publish_fault = self.compact_lane_reservations_off_lock();
                 if publish_fault {
                     self.publish_latched_lane_reservation_durability_fault(None);
                 }
                 self.publish_backpressure_state(self.active_len(), None);
-                return Err(LaneQueueReservationError::Journal(error));
+                return Ok(newly_committed);
             }
-        };
-        let queue_guard = self.push_remove_lock.lock();
-        let mut store = self.lane_reservations.lock();
-        self.remove_hashes_from_fifo_locked(&HashSet::from([hash]));
-        if let Some((tx, plan)) = queued_owner {
-            self.remove_transaction_locked(&tx, &plan, None);
-        }
-        self.reconcile_missing_reservation_payloads_locked(&mut store);
-        drop(store);
-        drop(queue_guard);
-        if journal_durability == PlanJournalDurability::StartupPending {
-            drop(transition);
-            let publish_fault = self.compact_lane_reservations_off_lock();
-            if publish_fault {
-                self.publish_latched_lane_reservation_durability_fault(None);
+            #[cfg(test)]
+            if self
+                .hold_next_lane_reservation_commit_after_barrier
+                .swap(false, Ordering::AcqRel)
+            {
+                let publish_fault = self.compact_lane_reservations_off_lock();
+                if publish_fault {
+                    self.publish_latched_lane_reservation_durability_fault(None);
+                }
+                self.publish_backpressure_state(self.active_len(), None);
+                return Ok(newly_committed);
             }
-            self.publish_backpressure_state(self.active_len(), None);
-            return Ok(if newly_committed {
-                LaneQueueReservationOutcome::Finalized
-            } else {
-                LaneQueueReservationOutcome::AlreadyFinalized
-            });
         }
-        #[cfg(test)]
-        if self
-            .hold_next_lane_reservation_commit_after_barrier
-            .swap(false, Ordering::AcqRel)
-        {
-            drop(transition);
-            let publish_fault = self.compact_lane_reservations_off_lock();
-            if publish_fault {
-                self.publish_latched_lane_reservation_durability_fault(None);
+
+        // Phase three forgets the Commit barriers in the same exact order only
+        // after the complete QueuePlan tombstone prefix is durable.
+        for (index, key) in ordered_keys.iter().enumerate() {
+            let queue_guard = self.push_remove_lock.lock();
+            let store = self.lane_reservations.lock();
+            store.ensure_no_conflict(key)?;
+            if store
+                .live_by_hash
+                .contains_key(&key.signed_transaction_hash)
+            {
+                return Err(LaneQueueReservationError::InvalidIdentity(
+                    "reservation ForgetCommit phase observed a live reservation".to_owned(),
+                ));
             }
-            self.publish_backpressure_state(self.active_len(), None);
-            return Ok(if newly_committed {
-                LaneQueueReservationOutcome::Finalized
-            } else {
-                LaneQueueReservationOutcome::AlreadyFinalized
-            });
-        }
-        if let Err(error) =
-            self.apply_lane_reservation_journal(|journal| journal.forget_commit(*key))
-        {
-            let fault = std::io::Error::other(error.to_string());
-            let publish_fault = self.latch_lane_reservation_post_plan_fault_locked(&fault);
-            if publish_fault {
-                self.publish_latched_lane_reservation_durability_fault(None);
+            if !store.commit_barriers.contains(key) {
+                drop(store);
+                drop(queue_guard);
+                continue;
             }
-            self.publish_backpressure_state(self.active_len(), None);
-            return Err(error);
+            drop(store);
+            drop(queue_guard);
+
+            let forgotten_before = u64::try_from(index).map_err(|_| {
+                LaneQueueReservationError::InvalidIdentity(
+                    "reservation ForgetCommit prefix does not fit u64".to_owned(),
+                )
+            })?;
+            let forgotten_after = forgotten_before.saturating_add(1);
+            let before = cleanup_state(
+                IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED,
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED,
+                group_binding.reservation_count,
+                group_binding.reservation_count,
+                forgotten_before,
+            );
+            let after = cleanup_state(
+                IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED,
+                if forgotten_after == group_binding.reservation_count {
+                    IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN
+                } else {
+                    IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED
+                },
+                group_binding.reservation_count,
+                group_binding.reservation_count,
+                forgotten_after,
+            );
+            let projection = ProductionInFlightFirstReleaseTransitionProjection {
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT,
+                actor: 0,
+                target: u128::from(forgotten_after),
+                before,
+                after,
+            };
+            let checked = check_production_in_flight_first_release_transition(projection)
+                .ok_or_else(|| {
+                    LaneQueueReservationError::InvalidIdentity(
+                        "reservation ForgetCommit failed the composed first-release transition gate"
+                            .to_owned(),
+                    )
+                })?;
+            if let Err(error) = self.apply_lane_reservation_journal(|journal| {
+                if checked.into_projection() != projection {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "checked reservation ForgetCommit projection changed before append",
+                    ));
+                }
+                journal.forget_commit(*key)
+            }) {
+                let fault = std::io::Error::other(error.to_string());
+                let publish_fault = self.latch_lane_reservation_post_plan_fault_locked(&fault);
+                if publish_fault {
+                    self.publish_latched_lane_reservation_durability_fault(None);
+                }
+                self.publish_backpressure_state(self.active_len(), None);
+                return Err(error);
+            }
+            let queue_guard = self.push_remove_lock.lock();
+            let mut store = self.lane_reservations.lock();
+            store
+                .commit_barriers
+                .retain(|committed_key| committed_key != key);
+            self.reconcile_missing_reservation_payloads_locked(&mut store);
+            drop(store);
+            drop(queue_guard);
         }
-        let queue_guard = self.push_remove_lock.lock();
-        let mut store = self.lane_reservations.lock();
-        store
-            .commit_barriers
-            .retain(|committed_key| committed_key != key);
-        self.reconcile_missing_reservation_payloads_locked(&mut store);
-        drop(store);
-        drop(transition);
-        drop(queue_guard);
+
         let publish_fault = self.compact_lane_reservations_off_lock();
         if publish_fault {
             self.publish_latched_lane_reservation_durability_fault(None);
         }
         self.publish_backpressure_state(self.active_len(), None);
-        Ok(if newly_committed {
-            LaneQueueReservationOutcome::Finalized
-        } else {
-            LaneQueueReservationOutcome::AlreadyFinalized
-        })
+        Ok(newly_committed)
     }
 
     /// Return exact live reservation identities for restart reconciliation and diagnostics.
@@ -5655,7 +6248,7 @@ impl Queue {
         status::set_tx_queue_pressure(self.pressure_snapshot());
     }
 
-    /// Return exact crash barriers whose queue-plan tombstones are not yet independently durable.
+    /// Return exact crash barriers awaiting QueuePlan tombstones and/or ordered ForgetCommit.
     #[must_use]
     pub fn lane_reservation_commit_barriers(&self) -> Vec<LaneQueueReservationKeyV2> {
         let mut keys = self.lane_reservations.lock().commit_barriers.clone();
@@ -6977,7 +7570,12 @@ impl Queue {
         if removal == QueuePlanJournalExactRemoveResult::Removed {
             self.durable_plan_claims.remove(&hash);
         }
-        Ok(PlanJournalDurability::Synced)
+        Ok(match removal {
+            QueuePlanJournalExactRemoveResult::Removed => PlanJournalDurability::SyncedNew,
+            QueuePlanJournalExactRemoveResult::AlreadyAbsent => {
+                PlanJournalDurability::SyncedExisting
+            }
+        })
     }
 
     fn record_plan_journal_removes_deferred(

@@ -4729,46 +4729,44 @@ impl Read for StagedChunkPayloadReader<'_> {
         if buffer.is_empty() {
             return Ok(0);
         }
-        loop {
-            if self
-                .current_chunk
-                .as_ref()
-                .is_some_and(|chunk| chunk.remaining == 0)
-            {
-                self.finish_current_chunk()?;
-            }
-            if self.current_chunk.is_none() && !self.open_next_chunk()? {
-                return Ok(0);
-            }
-            let current = self.current_chunk.as_mut().ok_or_else(|| {
-                io::Error::other("staged chunk reader failed to retain the opened chunk")
-            })?;
-            let maximum = usize::try_from(current.remaining).unwrap_or(usize::MAX);
-            let read_limit = buffer.len().min(maximum);
-            let read = current.file.read(&mut buffer[..read_limit])?;
-            if read == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    format!(
-                        "staged chunk `{}` ended before its declared length",
-                        current.record.path.display()
-                    ),
-                ));
-            }
-            let read_u64 = u64::try_from(read).map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "staged chunk read length exceeds u64",
-                )
-            })?;
-            current.remaining = current.remaining.checked_sub(read_u64).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "staged chunk read exceeded its declared length",
-                )
-            })?;
-            return Ok(read);
+        if self
+            .current_chunk
+            .as_ref()
+            .is_some_and(|chunk| chunk.remaining == 0)
+        {
+            self.finish_current_chunk()?;
         }
+        if self.current_chunk.is_none() && !self.open_next_chunk()? {
+            return Ok(0);
+        }
+        let current = self.current_chunk.as_mut().ok_or_else(|| {
+            io::Error::other("staged chunk reader failed to retain the opened chunk")
+        })?;
+        let maximum = usize::try_from(current.remaining).unwrap_or(usize::MAX);
+        let read_limit = buffer.len().min(maximum);
+        let read = current.file.read(&mut buffer[..read_limit])?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!(
+                    "staged chunk `{}` ended before its declared length",
+                    current.record.path.display()
+                ),
+            ));
+        }
+        let read_u64 = u64::try_from(read).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "staged chunk read length exceeds u64",
+            )
+        })?;
+        current.remaining = current.remaining.checked_sub(read_u64).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "staged chunk read exceeded its declared length",
+            )
+        })?;
+        Ok(read)
     }
 }
 

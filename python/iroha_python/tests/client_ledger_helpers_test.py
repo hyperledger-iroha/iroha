@@ -56,6 +56,26 @@ FEE_PAYMENT = authority_fee_payment(charge_limits=[])
 VK_LOCAL_SIGNING_CONTEXT = LocalSigningContext("vk-test")
 
 
+def canonical_proof_attachment(
+    *,
+    backend: str = "halo2/ipa",
+    proof_bytes: bytes = b"proof-bytes",
+    vk_backend: str | None = None,
+    vk_name: str = "vk_transfer",
+) -> dict[str, object]:
+    return {
+        "backend": backend,
+        "proof": {"backend": backend, "bytes": proof_bytes},
+        "vk_ref": {"backend": vk_backend or backend, "name": vk_name},
+    }
+
+
+def iroha_hash_bytes(payload: bytes) -> bytes:
+    digest = bytearray(hashlib.blake2b(payload, digest_size=32).digest())
+    digest[-1] |= 1
+    return bytes(digest)
+
+
 def test_data_model_version_matches_current_wire_contract() -> None:
     assert DATA_MODEL_VERSION == 4
 
@@ -2639,13 +2659,9 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
     source = account_address(0x61)
     destination = account_address(0x62)
-    proof = {
-        "backend": "halo2/ipa",
-        "proof_bytes": b"proof-bytes",
-        "verifying_key_ref": "halo2/ipa:vk_transfer",
-        "verifying_key_commitment": "44" * 32,
-        "envelope_hash": "55" * 32,
-    }
+    proof = canonical_proof_attachment()
+    proof["vk_commitment"] = b"\x44" * 32
+    proof["envelope_hash"] = iroha_hash_bytes(b"proof-bytes")
 
     instructions = [
         Instruction.register_zk_asset(
@@ -2748,11 +2764,7 @@ def test_native_privacy_bundle_actions_reject_nonempty_drafts(method_name: str) 
 
 def test_zk_instruction_helpers_accept_tuple_inputs() -> None:
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
-    proof = {
-        "backend": "halo2/ipa",
-        "proof_bytes": b"proof-bytes",
-        "verifying_key_ref": "halo2/ipa:vk_transfer",
-    }
+    proof = canonical_proof_attachment()
 
     instruction = Instruction.zk_transfer_prepared(
         asset_definition_id,
@@ -2793,11 +2805,7 @@ def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
             "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
             ["aa" * 32],
             ["bb" * 32],
-            {
-                "backend": "halo2/ipa",
-                "proof_bytes": b"proof-bytes",
-                "verifying_key_ref": "other:vk_transfer",
-            },
+            canonical_proof_attachment(vk_backend="other"),
         )
 
 
@@ -2989,10 +2997,10 @@ def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
                 asset,
                 ["aa" * 32],
                 ["bb" * 32],
-                {key: value for key, value in proof.items() if key != "proof_bytes"},
+                {**proof, "proof": {"backend": "halo2/ipa"}},
             ),
             ValueError,
-            "proof_bytes",
+            "proof.bytes",
             id="transfer-missing-proof-bytes",
         ),
         pytest.param(
@@ -3000,10 +3008,10 @@ def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
                 asset,
                 ["aa" * 32],
                 ["bb" * 32],
-                {**proof, "proof_bytes": b""},
+                {**proof, "proof": {"backend": "halo2/ipa", "bytes": b""}},
             ),
             ValueError,
-            "proof_bytes",
+            "proof.bytes",
             id="transfer-empty-proof",
         ),
         pytest.param(
@@ -3011,11 +3019,11 @@ def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
                 asset,
                 ["aa" * 32],
                 ["bb" * 32],
-                {**proof, "proof_b64": "not base64!", "proof_bytes": None},
+                {**proof, "proof_b64": "cHJvb2Y="},
             ),
             ValueError,
-            "base64",
-            id="transfer-invalid-base64-proof",
+            "unknown first-release field",
+            id="transfer-retired-flat-base64-proof",
         ),
         pytest.param(
             lambda asset, _source, destination, proof: Instruction.unshield_prepared(
@@ -3023,7 +3031,7 @@ def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
                 destination,
                 "-1",
                 ["aa" * 32],
-                {**proof, "verifying_key_ref": "halo2/ipa:vk_unshield"},
+                canonical_proof_attachment(vk_name="vk_unshield"),
             ),
             ValueError,
             "public_amount",
@@ -3035,7 +3043,7 @@ def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
                 destination,
                 "1",
                 ["aa" * 32],
-                {**proof, "verifying_key_ref": "halo2/ipa:vk_unshield"},
+                canonical_proof_attachment(vk_name="vk_unshield"),
                 outputs=["bb" * 32, "bb" * 32],
             ),
             ValueError,
@@ -3052,11 +3060,7 @@ def test_zk_instruction_helpers_reject_adversarial_inputs(
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
     source = account_address(0x66)
     destination = account_address(0x67)
-    proof = {
-        "backend": "halo2/ipa",
-        "proof_bytes": b"proof-bytes",
-        "verifying_key_ref": "halo2/ipa:vk_transfer",
-    }
+    proof = canonical_proof_attachment()
 
     with pytest.raises(error_type, match=match):
         factory(asset_definition_id, source, destination, proof)
@@ -3124,7 +3128,7 @@ def test_zk_instruction_helpers_reject_adversarial_inputs(
                 account,
                 -1,
                 inputs=["aa" * 32],
-                proof={**proof, "verifying_key_ref": "halo2/ipa:vk_unshield"},
+                proof=canonical_proof_attachment(vk_name="vk_unshield"),
             ),
             ValueError,
             "public_amount",
@@ -3145,11 +3149,7 @@ def test_zk_transaction_draft_rejects_invalid_inputs(
             fee_payment=authority_fee_payment(charge_limits=[]),
         )
     )
-    proof = {
-        "backend": "halo2/ipa",
-        "proof_bytes": b"proof-bytes",
-        "verifying_key_ref": "halo2/ipa:vk_transfer",
-    }
+    proof = canonical_proof_attachment()
 
     with pytest.raises(error_type, match=match):
         call(draft, "7MBRDd8cGFBZkFGdDMwV7S6FPwbw", account, proof)
@@ -3161,11 +3161,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
     source = account_address(0x63)
     destination = account_address(0x64)
-    proof = {
-        "backend": "halo2/ipa",
-        "proof_bytes": b"proof-bytes",
-        "verifying_key_ref": "halo2/ipa:vk_transfer",
-    }
+    proof = canonical_proof_attachment()
 
     def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
         captured.append((draft, kwargs))
@@ -3298,8 +3294,8 @@ def test_zk_ace_transaction_amount_boundary_is_canonical_and_exact() -> None:
                 "outputs": ["bb" * 32],
                 "proof": {
                     "backend": "halo2/ipa",
-                    "proof_bytes": b"proof-bytes",
-                    "verifying_key_ref": "halo2/ipa:vk_transfer",
+                    "proof": {"backend": "halo2/ipa", "bytes": b"proof-bytes"},
+                    "vk_ref": {"backend": "halo2/ipa", "name": "vk_transfer"},
                 },
             },
             ValueError,
@@ -3333,8 +3329,8 @@ def test_zk_ace_transaction_amount_boundary_is_canonical_and_exact() -> None:
                 "public_amount": 1,
                 "inputs": ["aa" * 32],
                 "proof": {
-                    "proof_bytes": b"proof-bytes",
-                    "verifying_key_ref": "halo2/ipa:vk_unshield",
+                    "proof": {"backend": "halo2/ipa", "bytes": b"proof-bytes"},
+                    "vk_ref": {"backend": "halo2/ipa", "name": "vk_unshield"},
                 },
             },
             ValueError,

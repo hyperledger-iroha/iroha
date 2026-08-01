@@ -342,15 +342,15 @@
 
     #[derive(Debug)]
     struct PrebuiltGovernanceDagCheckpointStoreState {
-        records: [Option<sorafs_node::GovernanceDagSealedStateRecord>; 4],
-        generation_floors: [u64; 4],
+        records: [Option<sorafs_node::GovernanceDagSealedStateRecord>; 6],
+        generation_floors: [u64; 6],
     }
 
     impl Default for PrebuiltGovernanceDagCheckpointStoreState {
         fn default() -> Self {
             Self {
                 records: std::array::from_fn(|_| None),
-                generation_floors: [0; 4],
+                generation_floors: [0; 6],
             }
         }
     }
@@ -392,6 +392,8 @@
                 sorafs_node::GovernanceDagSealedStateSlot::PublishIntent => 1,
                 sorafs_node::GovernanceDagSealedStateSlot::ProducerCheckpoint => 2,
                 sorafs_node::GovernanceDagSealedStateSlot::ProducerPublishIntent => 3,
+                sorafs_node::GovernanceDagSealedStateSlot::IpfsRequestReplay => 4,
+                sorafs_node::GovernanceDagSealedStateSlot::SignedHeadRequestReplay => 5,
             }
         }
 

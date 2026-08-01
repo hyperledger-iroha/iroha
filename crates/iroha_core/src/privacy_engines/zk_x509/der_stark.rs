@@ -18,23 +18,29 @@
 use thiserror::Error;
 
 use super::{
-    der::{
-        ZK_X509_DER_MAX_DOCUMENT_BYTES_V1, ZK_X509_DER_MAX_NESTING_DEPTH_V1,
-        ZK_X509_DER_MAX_VALUES_V1,
-    },
     der_air::{
         ZK_X509_DER_AIR_MAX_DOCUMENTS_V1, ZK_X509_DER_AIR_MAX_EMBEDDED_DOCUMENTS_V1,
-        ZK_X509_DER_AIR_UNIVERSAL_SELECTORS_V1, ZK_X509_RFC5280_MAX_TOP_LEVEL_DOCUMENT_BYTES_V1,
-        ZkX509DerDocumentTraceV1, ZkX509DerNodeRowV1, build_strict_der_document_trace_v1,
+        ZK_X509_DER_AIR_UNIVERSAL_SELECTORS_V1,
     },
+    der_limits::{ZK_X509_DER_MAX_NESTING_DEPTH_V1, ZK_X509_DER_MAX_VALUES_V1},
     profile::ZK_X509_TRACE_MASK_DEGREE_V1,
+};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::{
+    der_air::{
+        ZK_X509_RFC5280_MAX_TOP_LEVEL_DOCUMENT_BYTES_V1, ZkX509DerDocumentTraceV1,
+        ZkX509DerNodeRowV1, build_strict_der_document_trace_v1,
+    },
+    der_limits::ZK_X509_DER_MAX_DOCUMENT_BYTES_V1,
 };
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 
 /// Stable identity of the fixed-capacity strict-DER numeric adapter.
+#[cfg(test)]
 pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-der-stark-air-v1-incompatible:native-log19:base76:aux196:fixed14:constraints898:degree7:two-base-and-four-aux-physical-chunks:registered-expression-degree-ceiling7:multi-direction-affine-audit-attains-seven:mask-multiplier-degree801:mask-coefficients802:quotient-bound3151335:quotient-coset-capacity4194303:fri-chunk-capacity1048575:four-chunk-composition-capacity4194303:zero-sized-public-shape:constant-registration-transcript:no-private-document-count-length-parser-or-comparator-disclosure:committed-private-parser-and-comparator-active-prefixes:canonical-inactive-rows:carried-private-document-count-range-bound:parser-cap65536:comparator-cap262144:padding196608:proof-document-max4096:proof-total-document-bytes32768:generic-oracle-max16384:streaming-byte-parser:identifier-u32-base128-minimal:length-definite-minimal-max16384:node-count-max2048:depth-max16:constructed-frame-push-pop-four-lane-product:universal-tag-one-hot-without-witness-branch:primitive-boolean-null-integer-enumerated-oid-bit-string:set-pair-four-lane-product:set-byte-zero-safe-log-derivative-with-singular-count-equality:input-byte-and-node-event-four-lane-products:private-document-product-internal-not-public:verifier-fixed-parser-and-comparator-and-padding-ranges:cross-adapter-claims:rfc5280-and-byte-memory-consumer-registrations=complete:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
+#[cfg(test)]
 pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_SHA256_V1: [u8; 32] = [
     0xd5, 0x2f, 0xc3, 0x6d, 0x71, 0x55, 0xc6, 0x4c, 0xa1, 0xe9, 0xe0, 0x1f, 0x96, 0x8b, 0xac, 0x70,
     0x21, 0xc9, 0x2f, 0x18, 0x1e, 0x41, 0x5b, 0x45, 0x20, 0x72, 0x19, 0x94, 0x71, 0x94, 0xb5, 0x83,
@@ -147,6 +153,7 @@ const PHASE_LENGTH_BODY: usize = 3;
 const PHASE_FINALIZE_HEADER: usize = 4;
 const PHASE_PRIMITIVE_CONTENT: usize = 5;
 const PHASE_BOUNDARY: usize = 6;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const PHASE_SET_COMPARATOR: usize = 7;
 
 const UNIVERSAL_TAGS_V1: [u32; ZK_X509_DER_AIR_UNIVERSAL_SELECTORS_V1] = [
@@ -237,6 +244,7 @@ const AUX_ENTERS_CHILD: usize = AUX_PRIMITIVE_ENTRY + 1;
 const _: () = assert!(AUX_ENTERS_CHILD + 1 == ZK_X509_DER_STARK_AUX_WIDTH_V1);
 
 /// Private proof geometry committed inside the DER base trace.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerStarkPrivateShapeV1 {
     pub(crate) document_lengths: Vec<u16>,
@@ -244,6 +252,7 @@ pub(crate) struct ZkX509DerStarkPrivateShapeV1 {
     pub(crate) comparator_rows: usize,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509DerStarkPrivateShapeV1 {
     pub(crate) fn active_rows(&self) -> Result<usize, ZkX509DerStarkErrorV1> {
         self.parser_rows
@@ -334,24 +343,30 @@ impl ZkX509DerStarkShapeV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) const fn active_rows(&self) -> usize {
         ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1
     }
 
+    #[cfg(test)]
     pub(crate) const fn transcript_bytes(&self) -> &'static [u8] {
         b"zk-x509-der-stark-fixed-registration-v1"
     }
 }
 
 /// Verifier-owned constant fixed schedule; it never stores native fixed rows.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerStarkFixedScheduleV1;
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509DerStarkFixedScheduleV1 {
+    #[cfg(test)]
     pub(crate) const fn active_rows(&self) -> usize {
         ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1
     }
 
+    #[cfg(test)]
     pub(crate) const fn aggregate_rows(&self) -> usize {
         ZK_X509_DER_STARK_TRACE_SIZE_V1
     }
@@ -392,6 +407,7 @@ impl ZkX509DerStarkFixedScheduleV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn compile_zk_x509_der_stark_fixed_schedule_v1(
     shape: ZkX509DerStarkShapeV1,
 ) -> Result<ZkX509DerStarkFixedScheduleV1, ZkX509DerStarkErrorV1> {
@@ -467,8 +483,10 @@ pub(crate) fn derive_zk_x509_der_stark_challenges_v1(
 /// Numeric DER adapter failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509DerStarkErrorV1 {
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 DER STARK public shape is invalid")]
     Shape,
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 DER STARK resource envelope is exceeded")]
     Resource,
     #[error("zk-X509 DER STARK transcript challenge is invalid")]
@@ -480,6 +498,7 @@ pub(crate) enum ZkX509DerStarkErrorV1 {
 }
 
 /// Base trace before challenge-dependent bus products are populated.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509DerStarkBaseV1 {
     pub(crate) private_shape: ZkX509DerStarkPrivateShapeV1,
@@ -487,12 +506,14 @@ pub(crate) struct ZkX509DerStarkBaseV1 {
     pub(crate) rows: Vec<[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]>,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkX509DerStarkBaseV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkX509DerStarkBaseV1 { <private material redacted> }")
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509DerStarkBaseV1 {
     /// Recursively overwrite all private geometry and committed field rows.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -515,6 +536,7 @@ impl ZkX509DerStarkBaseV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zk_x509_der_stark_compact_row_native_index_v1(
     shape: &ZkX509DerStarkPrivateShapeV1,
     compact_index: usize,
@@ -574,6 +596,7 @@ pub(crate) struct ZkX509DerStarkNodeEventV1 {
 
 /// Challenge-dependent strict-DER trace. Only active rows are materialized;
 /// aggregate padding rows are reconstructed from the final accumulators.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerStarkTraceV1 {
     pub(crate) base: ZkX509DerStarkBaseV1,
@@ -584,6 +607,7 @@ pub(crate) struct ZkX509DerStarkTraceV1 {
 ///
 /// Stack, SET-pair, and lookup terminals must close internally. Node and
 /// input-byte terminals are exported for RFC 5280 and byte-memory consumers.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerStarkTerminalsV1 {
     pub(crate) stack_push: [F; ZK_X509_DER_STARK_BUS_LANES_V1],
@@ -599,6 +623,7 @@ pub(crate) struct ZkX509DerStarkTerminalsV1 {
     pub(crate) input_byte: [F; ZK_X509_DER_STARK_BUS_LANES_V1],
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FrameV1 {
     id: u64,
@@ -611,6 +636,7 @@ struct FrameV1 {
     previous_end: u64,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ParserStateV1 {
     document: u64,
@@ -642,6 +668,7 @@ struct ParserStateV1 {
     boundary_parent: FrameV1,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ParserStateV1 {
     fn for_document(document: usize, document_len: usize) -> Result<Self, ZkX509DerStarkErrorV1> {
         Ok(Self {
@@ -677,6 +704,7 @@ impl ParserStateV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_bits_v1(
     row: &mut [F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
     start: usize,
@@ -688,6 +716,7 @@ fn write_bits_v1(
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn inverse_or_zero_v1(value: u64) -> F {
     if value == 0 {
         F::ZERO
@@ -696,6 +725,7 @@ fn inverse_or_zero_v1(value: u64) -> F {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn encode_parser_state_v1(
     state: &ParserStateV1,
     byte: Option<u8>,
@@ -797,14 +827,17 @@ fn encode_parser_state_v1(
     Ok(row)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn node_usize_v1(value: F) -> Result<usize, ZkX509DerStarkErrorV1> {
     usize::try_from(value.0).map_err(|_| ZkX509DerStarkErrorV1::Resource)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn node_u64_v1(value: F) -> u64 {
     value.0
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn direct_children_v1(
     trace: &ZkX509DerDocumentTraceV1,
     node_index: usize,
@@ -835,6 +868,7 @@ fn direct_children_v1(
         .collect())
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn primitive_kind_v1(node: &ZkX509DerNodeRowV1) -> u8 {
     // 0=other, 1=BOOLEAN, 2=INTEGER, 3=BIT STRING, 4=NULL,
     // 5=OBJECT IDENTIFIER, 6=ENUMERATED.
@@ -844,6 +878,7 @@ fn primitive_kind_v1(node: &ZkX509DerNodeRowV1) -> u8 {
         .map_or(0, |position| u8::try_from(position + 1).expect("kind fits"))
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn emit_parser_row_v1(
     rows: &mut Vec<[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]>,
     byte_rows: &mut [Vec<usize>],
@@ -868,6 +903,7 @@ fn emit_parser_row_v1(
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn emit_node_v1(
     trace: &ZkX509DerDocumentTraceV1,
     encoded: &[u8],
@@ -1158,6 +1194,7 @@ fn emit_node_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn encode_comparator_row_v1(
     document: usize,
     pair_id: usize,
@@ -1238,6 +1275,7 @@ fn encode_comparator_row_v1(
 /// The logical parser is used only as a prover-side witness compiler and
 /// differential oracle. The verifier consumes `rows`, `shape`, and numeric
 /// residues and never calls the host parser.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_der_stark_base_v1(
     documents: &[&[u8]],
 ) -> Result<ZkX509DerStarkBaseV1, ZkX509DerStarkErrorV1> {
@@ -1573,6 +1611,7 @@ fn byte_denominator_v1(tuple: [F; 12], lane: usize, challenges: ZkX509DerStarkCh
     challenges.byte_lookup[lane].add(compress_tuple_v1(&tuple, challenges.tuple[lane]))
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn derive_zk_x509_der_stark_private_document_product_v1(
     shape: &ZkX509DerStarkPrivateShapeV1,
     challenges: ZkX509DerStarkChallengesV1,
@@ -1602,6 +1641,7 @@ pub(crate) fn derive_zk_x509_der_stark_public_terminals_v1(
     Ok(ZkX509DerStarkPublicTerminalsV1)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn read_aux_lanes_v1(
     row: &[F; ZK_X509_DER_STARK_AUX_WIDTH_V1],
     offset: usize,
@@ -1611,6 +1651,7 @@ fn read_aux_lanes_v1(
         .expect("four DER bus lanes")
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_aux_lanes_v1(
     row: &mut [F; ZK_X509_DER_STARK_AUX_WIDTH_V1],
     offset: usize,
@@ -1619,6 +1660,7 @@ fn write_aux_lanes_v1(
     row[offset..offset + ZK_X509_DER_STARK_BUS_LANES_V1].copy_from_slice(&values);
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn zk_x509_der_stark_terminals_v1(
     trace: &ZkX509DerStarkTraceV1,
 ) -> Result<ZkX509DerStarkTerminalsV1, ZkX509DerStarkErrorV1> {
@@ -1641,6 +1683,7 @@ pub(crate) fn zk_x509_der_stark_terminals_v1(
     })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn zk_x509_der_stark_terminal_claims_v1(
     trace: &ZkX509DerStarkTraceV1,
 ) -> Result<ZkX509DerStarkTerminalClaimsV1, ZkX509DerStarkErrorV1> {
@@ -1668,6 +1711,7 @@ pub(crate) fn evaluate_zk_x509_der_stark_terminal_claim_residues_v1(
     })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_zero_test_witness_v1(
     row: &mut [F; ZK_X509_DER_STARK_AUX_WIDTH_V1],
     selector_column: usize,
@@ -1684,6 +1728,7 @@ fn write_zero_test_witness_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn populate_low_degree_auxiliaries_v1(
     base: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
     fixed: &[F; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
@@ -1847,6 +1892,7 @@ fn populate_low_degree_auxiliaries_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn validate_zk_x509_der_stark_base_trace_v1(
     base: &ZkX509DerStarkBaseV1,
 ) -> Result<(), ZkX509DerStarkErrorV1> {
@@ -1896,6 +1942,7 @@ pub(crate) fn validate_zk_x509_der_stark_base_trace_v1(
 }
 
 /// Attach all post-base-commitment permutation and lookup accumulators.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_der_stark_trace_v1(
     base: ZkX509DerStarkBaseV1,
     challenges: ZkX509DerStarkChallengesV1,
@@ -2122,6 +2169,7 @@ pub(crate) fn build_zk_x509_der_stark_trace_v1(
 }
 
 /// Reconstruct one native-domain base row, including exact zero padding.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn zk_x509_der_stark_aggregate_base_row_v1(
     base: &ZkX509DerStarkBaseV1,
     index: usize,
@@ -2178,6 +2226,7 @@ pub(crate) fn zk_x509_der_stark_aggregate_base_row_v1(
 
 /// Reconstruct one native-domain auxiliary row. Padding carries every public
 /// and cross-adapter terminal while all local inverse witnesses are zero.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn zk_x509_der_stark_aggregate_aux_row_v1(
     trace: &ZkX509DerStarkTraceV1,
     index: usize,
@@ -2260,6 +2309,7 @@ pub(crate) fn zk_x509_der_stark_aggregate_aux_row_v1(
     Ok(row)
 }
 
+#[cfg(test)]
 pub(crate) fn zk_x509_der_stark_native_base_cell_v1(
     base: &ZkX509DerStarkBaseV1,
     row: usize,
@@ -2271,6 +2321,7 @@ pub(crate) fn zk_x509_der_stark_native_base_cell_v1(
     Ok(zk_x509_der_stark_aggregate_base_row_v1(base, row)?[column])
 }
 
+#[cfg(test)]
 pub(crate) fn zk_x509_der_stark_native_aux_cell_v1(
     trace: &ZkX509DerStarkTraceV1,
     row: usize,
@@ -2282,6 +2333,7 @@ pub(crate) fn zk_x509_der_stark_native_aux_cell_v1(
     Ok(zk_x509_der_stark_aggregate_aux_row_v1(trace, row)?[column])
 }
 
+#[cfg(test)]
 pub(crate) fn zk_x509_der_stark_native_fixed_cell_v1(
     schedule: &ZkX509DerStarkFixedScheduleV1,
     row: usize,
@@ -2293,6 +2345,7 @@ pub(crate) fn zk_x509_der_stark_native_fixed_cell_v1(
     Ok(schedule.fixed_row(row)?[column])
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn allocate_native_column_v1() -> Result<Vec<F>, ZkX509DerStarkErrorV1> {
     let mut column = Vec::new();
     column
@@ -2303,6 +2356,7 @@ fn allocate_native_column_v1() -> Result<Vec<F>, ZkX509DerStarkErrorV1> {
 
 /// Generate one base column over the full native domain. Callers can commit
 /// and drop it before requesting the next column.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_der_stark_native_base_column_v1(
     base: &ZkX509DerStarkBaseV1,
     column_index: usize,
@@ -2319,6 +2373,7 @@ pub(crate) fn build_zk_x509_der_stark_native_base_column_v1(
 
 /// Generate one auxiliary column over the full native domain, carrying the
 /// exact final terminal through aggregate padding.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_der_stark_native_aux_column_v1(
     trace: &ZkX509DerStarkTraceV1,
     column_index: usize,
@@ -2334,6 +2389,7 @@ pub(crate) fn build_zk_x509_der_stark_native_aux_column_v1(
 }
 
 /// Generate one verifier-owned fixed column over the full native domain.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_der_stark_native_fixed_column_v1(
     schedule: &ZkX509DerStarkFixedScheduleV1,
     column_index: usize,
@@ -3894,6 +3950,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
 /// Challenge-dependent stack, event, and byte-lookup identities are appended
 /// by the full evaluator below; keeping this base evaluator separate makes
 /// pre-commitment mutation audits exhaustive.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_zk_x509_der_stark_base_residues_v1(
     current: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
     next: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],

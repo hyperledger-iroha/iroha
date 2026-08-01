@@ -107,7 +107,7 @@ fn v5_generator_final_protocol_compile_uses_direct_instances() {
     assert!(config.contains("query_instance: false"));
     assert!(config.contains("num_instance: [73]"));
 
-    let source = include_str!("kagemusha_recursion_adapter.rs");
+    let source = include_str!("../kagemusha_recursion_adapter.rs");
     let generator = source
         .split_once("fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(")
         .expect("artifact generator")
@@ -124,7 +124,7 @@ fn v5_generator_final_protocol_compile_uses_direct_instances() {
 
 #[test]
 fn v5_compact_step_count_is_witness_bound_not_fixed() {
-    let source = include_str!("kagemusha_recursion_adapter.rs");
+    let source = include_str!("../kagemusha_recursion_adapter.rs");
     let header = source
         .split_once("fn constrain_kagemusha_compact_eq_header_v5(")
         .expect("StepEq compact-header relation")
@@ -159,7 +159,7 @@ fn v5_compact_step_count_is_witness_bound_not_fixed() {
 
 #[test]
 fn v5_runtime_prover_retains_raw_vks_and_stages_pk_then_terminal_vks() {
-    let source = include_str!("kagemusha_recursion_adapter.rs");
+    let source = include_str!("../kagemusha_recursion_adapter.rs");
     let prover_fields = source
         .split_once("pub(crate) struct KagemushaPastaCycleProverV4 {")
         .expect("runtime prover fields")
@@ -210,7 +210,7 @@ fn v5_runtime_prover_retains_raw_vks_and_stages_pk_then_terminal_vks() {
 
 #[test]
 fn source_qualification_defers_full_proving_key_parse_until_prover_use() {
-    let source = include_str!("kagemusha_recursion_adapter.rs");
+    let source = include_str!("../kagemusha_recursion_adapter.rs");
     for (start, end) in [
         (
             "fn qualify_kagemusha_eq_artifacts_v4(",
@@ -254,7 +254,7 @@ fn source_qualification_defers_full_proving_key_parse_until_prover_use() {
 
 #[test]
 fn v5_spool_parsers_contain_vendored_halo2_reader_panics() {
-    let source = include_str!("kagemusha_recursion_adapter.rs");
+    let source = include_str!("../kagemusha_recursion_adapter.rs");
     for (start, end) in [
         (
             "fn parse_kagemusha_eq_pk_spool_v5(",
@@ -279,7 +279,7 @@ fn v5_spool_parsers_contain_vendored_halo2_reader_panics() {
 
 #[test]
 fn v5_scalar_audit_prepass_is_witness_only() {
-    let source = include_str!("kagemusha_recursion_adapter.rs");
+    let source = include_str!("../kagemusha_recursion_adapter.rs");
     let prepass = source
         .split_once("fn collect_kagemusha_scalar_audits_v4<C>(")
         .expect("scalar audit prepass")
@@ -293,7 +293,7 @@ fn v5_scalar_audit_prepass_is_witness_only() {
 
 #[test]
 fn v5_generator_never_builds_or_retains_both_parity_circuits() {
-    let source = include_str!("kagemusha_recursion_adapter.rs");
+    let source = include_str!("../kagemusha_recursion_adapter.rs");
     let generator = source
         .split_once("fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(")
         .expect("artifact generator")
@@ -347,7 +347,7 @@ fn v5_generator_never_builds_or_retains_both_parity_circuits() {
 #[test]
 fn v5_generator_uses_one_disposable_rayon_worker() {
     assert_eq!(KAGEMUSHA_GENERATION_RAYON_THREADS_V5, 1);
-    let source = include_str!("kagemusha_recursion_adapter.rs");
+    let source = include_str!("../kagemusha_recursion_adapter.rs");
     let wrapper = source
         .split_once("pub fn generate_kagemusha_pasta_cycle_artifacts_v4(")
         .expect("public artifact generator")
@@ -418,7 +418,7 @@ fn kagemusha_params_require_the_canonical_transparent_derivation() {
 
 #[test]
 fn runtime_profile_validation_never_regenerates_a_bootstrap_key() {
-    let source = include_str!("kagemusha_recursion_adapter.rs");
+    let source = include_str!("../kagemusha_recursion_adapter.rs");
     let runtime_validation = source
         .split_once("fn validate_kagemusha_profile_protocol_v4<C>(")
         .expect("runtime profile validator")

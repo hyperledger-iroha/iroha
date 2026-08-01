@@ -579,7 +579,7 @@ impl ReputationJournalSourceFinalizedViewV1 {
     ) -> Result<(), ReputationRuntimeError> {
         if chain_id.as_str().is_empty()
             || maximum_height == 0
-            || query.source_id == ReputationJournalSourceIdV1::ZERO
+            || query.source_id() == ReputationJournalSourceIdV1::ZERO
         {
             return Err(ReputationRuntimeError::InvalidQueryPage);
         }
@@ -598,7 +598,7 @@ impl ReputationJournalSourceFinalizedViewV1 {
         finalized_cursor
             .validate()
             .map_err(|_| ReputationRuntimeError::InvalidQueryPage)?;
-        if let Some(expected) = query.expected_finalized_cursor {
+        if let Some(expected) = query.expected_finalized_cursor() {
             expected
                 .validate()
                 .map_err(|_| ReputationRuntimeError::InvalidQueryPage)?;
@@ -612,7 +612,7 @@ impl ReputationJournalSourceFinalizedViewV1 {
         event
             .validate(finalized_cursor)
             .map_err(|_| ReputationRuntimeError::InvalidQueryPage)?;
-        if event.entry.source_id != query.source_id {
+        if event.entry.source_id != query.source_id() {
             return Err(ReputationRuntimeError::InvalidQueryPage);
         }
         Ok(())

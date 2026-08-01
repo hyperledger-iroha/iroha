@@ -220,6 +220,100 @@
         );
     });
 
+    v2_apply_test!(
+        committed_merge_group_preflights_all_state_members_before_queue_cleanup,
+        {
+            let fixture = ApplyFixture::new();
+            let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+            let queue = Queue::from_config(QueueConfig::default(), events_sender);
+            let journal_dir = tempfile::tempdir().expect("reservation journal directory");
+            queue
+                .install_plan_journal(
+                    journal_dir.path().join("queue-plans.norito"),
+                    1024 * 1024,
+                    true,
+                )
+                .expect("install queue-plan journal");
+            queue
+                .install_lane_reservation_journal(
+                    journal_dir.path().join("lane-reservations.norito"),
+                    1024 * 1024,
+                )
+                .expect("install reservation journal");
+
+            let owner = Hash::new(b"all-member preflight owner");
+            let proposal = Hash::new(b"all-member preflight proposal");
+            let first = fixture
+                .body
+                .external_transactions()
+                .next()
+                .expect("fixture transaction")
+                .clone();
+            let second = TransactionBuilder::new(
+                fixture.context.chain_id.clone(),
+                fixture.service.genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(
+                Level::INFO,
+                "later committed-group member".to_owned(),
+            )])
+            .sign(fixture.genesis_key.private_key());
+            let members = [first, second]
+                .into_iter()
+                .map(|transaction| {
+                    let (key, entrypoint) = reserve_transaction_for_test_with_identity(
+                        fixture.state.as_ref(),
+                        &queue,
+                        transaction,
+                        owner,
+                        proposal,
+                    );
+                    (entrypoint, key)
+                })
+                .collect::<Vec<_>>();
+            let keys = members.iter().map(|(_, key)| *key).collect::<Vec<_>>();
+            let (_parent, entry) = merge_entry_with_reservations(&fixture.context, members);
+            fixture.state.record_direct_committed_transactions(
+                [keys[0].signed_transaction_hash],
+                NonZeroUsize::new(1).expect("committed height"),
+            );
+
+            let error = finalize_certified_merge_reservations(
+                fixture.state.as_ref(),
+                &queue,
+                &entry,
+            )
+            .expect_err("a missing later State member must reject before Queue mutation");
+            assert!(matches!(
+                error,
+                V2ReservationLifecycleError::UncommittedMergeTransaction { transaction_hash }
+                    if transaction_hash == keys[1].signed_transaction_hash
+            ));
+            assert_eq!(
+                queue.live_lane_reservations().len(),
+                2,
+                "all group owners must remain live after failed full-State preflight"
+            );
+            assert!(queue.lane_reservation_commit_barriers().is_empty());
+
+            fixture.state.record_direct_committed_transactions(
+                [keys[1].signed_transaction_hash],
+                NonZeroUsize::new(1).expect("committed height"),
+            );
+            assert_eq!(
+                finalize_certified_merge_reservations(
+                    fixture.state.as_ref(),
+                    &queue,
+                    &entry,
+                )
+                .expect("retry exact fully committed group"),
+                2
+            );
+            assert!(queue.live_lane_reservations().is_empty());
+        }
+    );
+
     v2_apply_test!(committed_merge_reservation_rejects_bare_norito, {
         let fixture = ApplyFixture::new();
         let transaction = fixture
@@ -489,7 +583,7 @@
         }
     );
 
-    v2_apply_test!(committed_group_recovery_accepts_exact_forgotten_prefix, {
+    v2_apply_test!(committed_group_recovery_accepts_exact_commit_prefix, {
         let fixture = ApplyFixture::new();
         let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
         let queue = Queue::from_config(QueueConfig::default(), events_sender);
@@ -546,9 +640,9 @@
         let keys = members.iter().map(|(_, key)| *key).collect::<Vec<_>>();
         assert_eq!(
             queue
-                .commit_lane_reservation(&keys[0])
-                .expect("complete the already-forgotten prefix commit"),
-            LaneQueueReservationOutcome::Finalized
+                .commit_lane_reservation_group_prefix_for_test(&keys, 1)
+                .expect("persist the first reservation Commit-prefix barrier"),
+            1
         );
         assert_eq!(
             queue
@@ -558,6 +652,7 @@
                 .ordered_keys,
             keys[1..].to_vec()
         );
+        assert_eq!(queue.lane_reservation_commit_barriers(), vec![keys[0]]);
 
         let (parent, entry) = merge_entry_with_reservations(&fixture.context, members);
         let carrier = body_with_exact_merge_execution_header(&entry);
@@ -584,7 +679,7 @@
             )
             .expect("reconcile exact committed suffix"),
             LaneReservationReconciliationSummary {
-                recovered: 2,
+                recovered: 3,
                 finalized_committed: 2,
                 ..LaneReservationReconciliationSummary::default()
             }
@@ -667,12 +762,11 @@
                 Hash::new(b"mixed commit barrier later owner"),
                 Hash::new(b"mixed commit barrier later proposal"),
             );
-            queue.hold_next_lane_reservation_commit_after_barrier_for_test();
             assert_eq!(
                 queue
-                    .commit_lane_reservation(&first_keys[0])
+                    .commit_lane_reservation_group_prefix_for_test(&first_keys, 1)
                     .expect("stop first member at durable Commit barrier"),
-                LaneQueueReservationOutcome::Finalized
+                1
             );
             assert_eq!(
                 queue.lane_reservation_commit_barriers(),
@@ -772,9 +866,8 @@
         })
         .collect::<Vec<_>>();
         let keys = transactions.iter().map(|(_, key)| *key).collect::<Vec<_>>();
-        queue.hold_next_lane_reservation_commit_after_barrier_for_test();
         queue
-            .commit_lane_reservation(&keys[0])
+            .commit_lane_reservation_group_prefix_for_test(&keys, 1)
             .expect("retain exact replayed Commit barrier");
         let (parent, entry) = merge_entry_with_reservations(&fixture.context, transactions);
         let carrier = body_with_exact_merge_execution_header(&entry);

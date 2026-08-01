@@ -125,6 +125,7 @@ const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_TOTAL_MAX_V1: u64 =
 const GOVERNANCE_DAG_SEALED_STATE_MAX_BYTES_V1: usize = 192 * 1024 * 1024;
 const GOVERNANCE_RUNTIME_DAG_PRODUCER_CHECKPOINT_SEALED_MAX_BYTES_V1: usize = 64 * 1024;
 const GOVERNANCE_RUNTIME_DAG_PRODUCER_INTENT_SEALED_MAX_BYTES_V1: usize = 64 * 1024;
+const GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_SEALED_MAX_BYTES_V1: usize = 256 * 1024;
 
 /// Public, non-secret qualification returned by a Governance DAG runtime provider.
 ///
@@ -253,8 +254,10 @@ const GOVERNANCE_DAG_REQUEST_AUTH_DOMAIN_V1: &[u8] =
 const GOVERNANCE_DAG_REQUEST_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.governance-dag.http-request-digest.v1\0";
 const GOVERNANCE_DAG_REQUEST_AUTH_HEADER_PREFIX_V1: &str = "x-sorafs-governance-auth-";
-const GOVERNANCE_DAG_REQUEST_AUTH_MAX_ENVELOPE_LIFETIME_SECS_V1: u64 = 300;
-const GOVERNANCE_DAG_REQUEST_AUTH_MAX_FUTURE_SKEW_SECS_V1: u64 = 60;
+/// Hard V1 ceiling for one signed request-authentication envelope lifetime.
+pub(crate) const GOVERNANCE_DAG_REQUEST_AUTH_MAX_ENVELOPE_LIFETIME_SECS_V1: u64 = 300;
+/// Hard V1 ceiling for future issuance skew in request authentication.
+pub(crate) const GOVERNANCE_DAG_REQUEST_AUTH_MAX_FUTURE_SKEW_SECS_V1: u64 = 60;
 
 /// One canonical, explicitly public HTTP header selected for authentication.
 ///
@@ -1419,6 +1422,10 @@ pub enum GovernanceDagSealedStateSlot {
     ProducerCheckpoint,
     /// Exact local signed-producer filesystem transaction intent.
     ProducerPublishIntent,
+    /// Live request-authentication nonces for Kubo/IPFS/IPNS operations.
+    IpfsRequestReplay,
+    /// Live request-authentication nonces for signed-head operations.
+    SignedHeadRequestReplay,
 }
 
 impl GovernanceDagSealedStateSlot {
@@ -1429,6 +1436,10 @@ impl GovernanceDagSealedStateSlot {
             Self::ProducerCheckpoint => b"sorafs.governance_dag.sealed.producer-checkpoint.v1",
             Self::ProducerPublishIntent => {
                 b"sorafs.governance_dag.sealed.producer-publish-intent.v1"
+            }
+            Self::IpfsRequestReplay => b"sorafs.governance_dag.sealed.ipfs-request-replay.v1",
+            Self::SignedHeadRequestReplay => {
+                b"sorafs.governance_dag.sealed.signed-head-request-replay.v1"
             }
         }
     }
@@ -1450,6 +1461,10 @@ pub const fn governance_dag_sealed_state_payload_max_bytes_v1(
         }
         GovernanceDagSealedStateSlot::ProducerPublishIntent => {
             GOVERNANCE_RUNTIME_DAG_PRODUCER_INTENT_SEALED_MAX_BYTES_V1
+        }
+        GovernanceDagSealedStateSlot::IpfsRequestReplay
+        | GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
+            GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_SEALED_MAX_BYTES_V1
         }
         GovernanceDagSealedStateSlot::Checkpoint | GovernanceDagSealedStateSlot::PublishIntent => {
             GOVERNANCE_DAG_SEALED_STATE_MAX_BYTES_V1
@@ -1514,7 +1529,8 @@ pub fn governance_dag_sealed_state_revision(
 /// Implementations must seal payloads at rest and enforce linearizable
 /// compare-and-swap. A generation may stay equal while an in-flight publish
 /// intent advances, but it must never decrease. Checkpoint generation must
-/// strictly advance, and deletes must compare-and-swap the exact last revision.
+/// strictly advance, request-replay generations must strictly advance, and
+/// deletes must compare-and-swap the exact last transient-intent revision.
 pub trait GovernanceDagSealedCheckpointStore: Send + Sync + fmt::Debug {
     /// Opaque, non-secret deployment handle for this store.
     fn handle(&self) -> &str;
@@ -2489,12 +2505,14 @@ impl FilesystemGovernancePublisher {
         let entry = update_publish_index(
             &self.root,
             &self.root_guard,
-            payload_kind,
-            encoded_path,
-            json_path,
-            digest_hex,
-            encoded_len,
-            labels,
+            PublishIndexUpdate {
+                payload_kind,
+                encoded_path,
+                json_path,
+                digest_hex,
+                encoded_len,
+                labels,
+            },
         )?;
         ensure_governance_car_segment(&self.root, &self.root_guard, &entry)
     }
@@ -4353,16 +4371,28 @@ fn validate_governance_state_metadata(path: &Path, metadata: &fs::Metadata) -> i
     Ok(())
 }
 
+struct PublishIndexUpdate<'a> {
+    payload_kind: &'a str,
+    encoded_path: &'a Path,
+    json_path: &'a Path,
+    digest_hex: &'a str,
+    encoded_len: usize,
+    labels: JsonMap,
+}
+
 fn update_publish_index(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
-    payload_kind: &str,
-    encoded_path: &Path,
-    json_path: &Path,
-    digest_hex: &str,
-    encoded_len: usize,
-    labels: JsonMap,
+    update: PublishIndexUpdate<'_>,
 ) -> Result<PublishIndexEntryForCar, GovernancePublishError> {
+    let PublishIndexUpdate {
+        payload_kind,
+        encoded_path,
+        json_path,
+        digest_hex,
+        encoded_len,
+        labels,
+    } = update;
     let index_path = root.join(GOVERNANCE_PUBLISH_INDEX_FILE);
     let mut index = read_publish_index(root, &index_path)?;
     let mut entries = match index.remove("entries") {
@@ -7232,12 +7262,14 @@ pub(crate) fn validate_runtime_dag_snapshot_authority_lineage<'a>(
     validate_runtime_dag_authority_lineage_for_chain(&authority_lineage, &blocks, head)
 }
 
+type RuntimeDagIndexTransitionV1 = ([u8; 32], [u8; 32], Option<Vec<u8>>);
+
 fn canonical_runtime_dag_index_for_transition(
     root: &Path,
     previous: &RuntimeDagProviderBindingV1,
     next: &RuntimeDagProviderBindingV1,
     checkpoint: &RuntimeDagProducerCheckpointV1,
-) -> Result<([u8; 32], [u8; 32], Option<Vec<u8>>), GovernancePublishError> {
+) -> Result<RuntimeDagIndexTransitionV1, GovernancePublishError> {
     let index_path = root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
     if checkpoint.block_count == 0 {
         if fs::symlink_metadata(&index_path).is_ok() {
@@ -8158,9 +8190,9 @@ fn validate_runtime_dag_producer_intent_bounds(
             )
         })?;
         if json_len > GOVERNANCE_MUTABLE_INDEX_MAX_BYTES {
-            return Err(GovernancePublishError::other(format!(
-                "governance runtime DAG producer intent JSON exceeds the per-file byte limit"
-            )));
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG producer intent JSON exceeds the per-file byte limit",
+            ));
         }
         add_runtime_dag_audit_bytes(&mut total, json_len)?;
     }
@@ -12530,15 +12562,15 @@ mod tests {
 
     #[derive(Debug)]
     struct TestRuntimeDagCheckpointStoreState {
-        records: [Option<GovernanceDagSealedStateRecord>; 4],
-        generation_floors: [u64; 4],
+        records: [Option<GovernanceDagSealedStateRecord>; 6],
+        generation_floors: [u64; 6],
     }
 
     impl Default for TestRuntimeDagCheckpointStoreState {
         fn default() -> Self {
             Self {
                 records: std::array::from_fn(|_| None),
-                generation_floors: [0; 4],
+                generation_floors: [0; 6],
             }
         }
     }
@@ -12567,6 +12599,8 @@ mod tests {
                 GovernanceDagSealedStateSlot::PublishIntent => 1,
                 GovernanceDagSealedStateSlot::ProducerCheckpoint => 2,
                 GovernanceDagSealedStateSlot::ProducerPublishIntent => 3,
+                GovernanceDagSealedStateSlot::IpfsRequestReplay => 4,
+                GovernanceDagSealedStateSlot::SignedHeadRequestReplay => 5,
             }
         }
     }
@@ -15004,6 +15038,18 @@ mod tests {
                 GovernanceDagSealedStateSlot::ProducerPublishIntent,
             ),
             64 * 1024
+        );
+        assert_eq!(
+            governance_dag_sealed_state_payload_max_bytes_v1(
+                GovernanceDagSealedStateSlot::IpfsRequestReplay,
+            ),
+            256 * 1024
+        );
+        assert_eq!(
+            governance_dag_sealed_state_payload_max_bytes_v1(
+                GovernanceDagSealedStateSlot::SignedHeadRequestReplay,
+            ),
+            256 * 1024
         );
         assert!(
             governance_dag_sealed_state_payload_max_bytes_v1(

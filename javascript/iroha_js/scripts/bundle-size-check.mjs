@@ -19,11 +19,13 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "node",
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The
-    // protected pre-reset tree measured 945,975 bytes on the same pinned runner.
-    // The authenticated SoraFS reputation and billing clients bring current V1 to
-    // 1,000,409 bytes (+5.75%); the 978 KiB ceiling remains below a 6% regression
-    // from that documented predecessor.
-    limitKb: 978,
+    // protected pre-reset tree measured 945,975 bytes on the same pinned runner;
+    // current V1 is 1,006,517 bytes (+6.40%). Canonical ProofAttachment handling
+    // accounts for 5,215 bytes and one module in the shared transaction graph;
+    // strict lossless integer parsing and the associated wire hardening bring the
+    // complete Torii delta from the prior 1,000,409-byte/61-module baseline to
+    // 6,108 bytes and one module. The minimal 983 KiB ceiling leaves 75 bytes.
+    limitKb: 983,
   }),
   Object.freeze({
     label: "transactionCodec.js (browser)",
@@ -32,7 +34,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "es2020",
     // Browser package mapping is defined for checked-in dist paths, so audit the
     // shipped entrypoint rather than the Node-capable source graph. The protected
-    // pre-reset tree measured 290,498 bytes; current V1 is 298,550 bytes (+2.77%).
+    // pre-reset tree measured 290,498 bytes. Canonical ProofAttachment handling
+    // adds one required module and brings current V1 to 303,764 bytes (+4.57%).
     // The 297 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 297,
     forbidNodeInputs: true,
@@ -44,8 +47,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
-    // pre-reset tree and 378,321 bytes in current V1 (+1.86%). The 380 KiB ceiling
-    // remains below a 5% predecessor regression.
+    // pre-reset tree. Canonical ProofAttachment handling adds one required module
+    // and brings current V1 to 383,534 bytes (+3.27%). The 380 KiB ceiling remains
+    // below a 5% predecessor regression.
     limitKb: 380,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
@@ -55,7 +59,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "canonicalRequest.js"),
     platform: "browser",
     target: "es2020",
-    // Protected pre-reset baseline: 97,869 bytes. Current V1: 98,090 bytes
+    // Protected pre-reset baseline: 97,869 bytes. Current V1: 98,089 bytes
     // (+0.23%). The 100 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 100,
     forbidNodeInputs: true,
@@ -77,8 +81,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // Pinned-esbuild predecessor is 52,156 bytes. Exact V1 manifest state-type,
-    // feature-bit, and dynamic-access validation produces 52,769 bytes
-    // (+1.18%); the 53 KiB ceiling keeps this required boundary hardening
+    // feature-bit, dynamic-access, and trigger-identifier validation produces
+    // 52,928 bytes (+1.48%); the 53 KiB ceiling keeps this required boundary hardening
     // below the release-wide 5% regression limit.
     limitKb: 53,
     forbidNodeInputs: true,
@@ -90,8 +94,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The protected pre-reset browser aggregate measured 458,081 bytes on the
-    // same pinned runner; current V1 is 474,956 bytes (+3.68%). The 469 KiB
-    // ceiling remains below a 5% predecessor regression.
+    // same pinned runner; named Norito imports keep current V1 at 473,390 bytes
+    // (+3.34%). The 469 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 469,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
@@ -334,7 +338,6 @@ export async function runBundleSizeCheck({
   await checkDistExport(pkg, "./nexus-app", "browser");
   await checkDistExport(pkg, "./canonical-request", "browser");
   await checkDistExport(pkg, "./ivm-artifact", "browser");
-  await checkDistExport(pkg, "./ivm-artifact-admission-wasm", "browser");
   await checkDistExport(pkg, "./kotodama-compiler", "browser");
   await checkDistExport(pkg, "./browser", "browser");
 }

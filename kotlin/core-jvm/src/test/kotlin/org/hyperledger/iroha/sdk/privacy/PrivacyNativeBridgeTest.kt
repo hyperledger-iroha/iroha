@@ -101,14 +101,17 @@ class PrivacyNativeBridgeTest {
 
     @Test
     fun sharedTypedValidatorStatusContractIsStable() {
-        assertEquals(256 * 1024, PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES)
+        assertEquals(
+            256 * 1024,
+            PrivacyNativeBridge.COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
+        )
         assertEquals(
             2 * 1024 * 1024,
             PrivacyNativeBridge.EXACT12_FIXTURE_BUNDLE_MAX_BYTES,
         )
         assertEquals(
             (0..8).toList(),
-            PrivacyNativeBridge.ValidationStatusV1.values().map { it.code },
+            PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.values().map { it.code },
         )
         assertEquals(
             (0..8).toList(),
@@ -116,7 +119,7 @@ class PrivacyNativeBridgeTest {
         )
         val validator =
             PrivacyNativeBridge::class.java.declaredMethods.single {
-                it.name == "nativeValidateCapabilities"
+                it.name == "nativeValidateCompiledProfileCatalog"
             }
         assertEquals(true, java.lang.reflect.Modifier.isNative(validator.modifiers))
         assertEquals(Int::class.javaPrimitiveType, validator.returnType)
@@ -132,6 +135,69 @@ class PrivacyNativeBridgeTest {
         assertEquals(ByteArray::class.java, fixtureQuery.returnType)
         assertEquals(true, java.lang.reflect.Modifier.isNative(fixtureValidator.modifiers))
         assertEquals(Int::class.javaPrimitiveType, fixtureValidator.returnType)
+    }
+
+    @Test
+    fun compiledProfileCatalogPreflightRejectsNullEmptyAndOversizeWithoutNativeCalls() {
+        assertEquals(
+            PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.NULL_POINTER,
+            PrivacyNativeBridge.validateCompiledProfileCatalogV1(null),
+        )
+        assertEquals(
+            PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.EMPTY,
+            PrivacyNativeBridge.validateCompiledProfileCatalogV1(byteArrayOf()),
+        )
+        assertEquals(
+            PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.ARCHIVE_TOO_LARGE,
+            PrivacyNativeBridge.validateCompiledProfileCatalogV1(
+                ByteArray(PrivacyNativeBridge.COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES + 1),
+            ),
+        )
+    }
+
+    @Test
+    fun compiledProfileCatalogRoundTripsAndRejectsAdversarialBytes() {
+        assertTrue(
+            PrivacyNativeBridge.isNativeAvailable(),
+            "ABI-21 connect_norito_bridge with compiled-profile catalog JNI exports is required",
+        )
+
+        val canonical = PrivacyNativeBridge.compiledProfileCatalogV1()
+        assertTrue(canonical.isNotEmpty())
+        assertTrue(
+            canonical.size <= PrivacyNativeBridge.COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
+        )
+        assertEquals(
+            PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID,
+            PrivacyNativeBridge.validateCompiledProfileCatalogV1(canonical),
+        )
+        assertContentEquals(canonical, PrivacyNativeBridge.compiledProfileCatalogV1())
+
+        listOf(
+            canonical.copyOfRange(0, canonical.size - 1),
+            canonical.copyOfRange(1, canonical.size),
+            canonical.copyOfRange(0, canonical.size / 2),
+        ).forEach { truncated ->
+            assertNotEquals(
+                PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID,
+                PrivacyNativeBridge.validateCompiledProfileCatalogV1(truncated),
+            )
+            assertFailsWith<IllegalStateException> {
+                PrivacyNativeBridge.requireCompiledProfileCatalog(truncated)
+            }
+        }
+        assertNotEquals(
+            PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID,
+            PrivacyNativeBridge.validateCompiledProfileCatalogV1(canonical + byteArrayOf(0)),
+        )
+        setOf(0, canonical.size / 2, canonical.size - 1).forEach { index ->
+            val mutated = canonical.copyOf()
+            mutated[index] = (mutated[index].toInt() xor 0x80).toByte()
+            assertNotEquals(
+                PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID,
+                PrivacyNativeBridge.validateCompiledProfileCatalogV1(mutated),
+            )
+        }
     }
 
     @Test
@@ -153,15 +219,11 @@ class PrivacyNativeBridgeTest {
     }
 
     @Test
-    fun exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesWhenAvailable() {
-        val available = PrivacyNativeBridge.isNativeAvailable()
-        if (System.getenv("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE") == "1") {
-            assertTrue(
-                available,
-                "ABI-21 connect_norito_bridge with exact-12 fixture JNI exports is required",
-            )
-        }
-        if (!available) return
+    fun exact12FixtureBundleRoundTripsAndRejectsAdversarialBytes() {
+        assertTrue(
+            PrivacyNativeBridge.isNativeAvailable(),
+            "ABI-21 connect_norito_bridge with exact-12 fixture JNI exports is required",
+        )
 
         val fetched = PrivacyNativeBridge.exact12FixtureBundleV1()
         val canonical = fetched.copyOf()
@@ -208,7 +270,7 @@ class PrivacyNativeBridgeTest {
         assertNotEquals(
             PrivacyNativeBridge.Exact12FixtureValidationStatusV1.VALID,
             PrivacyNativeBridge.validateExact12FixtureBundleV1(
-                PrivacyNativeBridge.capabilitiesArchiveV1(),
+                PrivacyNativeBridge.compiledProfileCatalogV1(),
             ),
         )
     }

@@ -29,11 +29,6 @@ public final class HttpClientTransportPendingQueueTests {
   private HttpClientTransportPendingQueueTests() {}
 
   public static void main(final String[] args) throws Exception {
-    if (!ToriiMockServer.isSupported()) {
-      System.out.println(
-          "[IrohaAndroid] HttpClientTransportPendingQueueTests skipped (mock server unavailable).");
-      return;
-    }
     flushesPendingQueueBeforeNewSubmission();
     queuesFailedSubmissionAndEmitsTelemetry();
     System.out.println("[IrohaAndroid] HttpClientTransportPendingQueueTests passed.");

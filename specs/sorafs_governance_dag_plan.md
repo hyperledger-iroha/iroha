@@ -95,9 +95,16 @@ rejected. The source also exports a transport-agnostic inbound verifier for the
 exact eight authentication headers. It binds the endpoint scope, method,
 canonical absolute URL and query, selected public headers, body length and
 BLAKE3 digest, freshness interval, nonce, and pinned Ed25519 signature before
-backend dispatch. That receiver is not installed in deployment-owned Kubo or
-head-service ingress, and its bounded caller-owned replay cache is process-local
-rather than sealed or cross-replica. The source tree supplies both the
+backend dispatch. Before any outbound IPFS or signed-head request leaves the
+standard service, its locally verified envelope consumes the nonce through an
+independent config-pinned sealed-CAS slot for that exact scope. The canonical
+Norito state is strictly nonce-sorted, retains at most 4,096 live entries,
+prunes only expired entries, advances a strict generation, and requires exact
+post-CAS readback; a concurrent replica, ambiguous CAS, corrupt state, or live
+capacity exhaustion fails closed. The deployment-owned receiver is still not
+installed in Kubo or head-service ingress, and the low-level inbound verifier's
+caller-owned replay cache remains process-local until that receiver supplies
+its own sealed cross-replica replay adapter. The source tree supplies both the
 authenticated client and an injected broker-server library boundary. SF-12
 still requires a supervised deployment-owned broker executable, genuine
 HSM/sealed-store and authenticated Kubo/head backends, receiver installation
@@ -381,8 +388,10 @@ Still outstanding:
   adapters that derive their qualification revision/digest from the external
   control plane and reject revoked/stale policy internally, and capture
   multi-instance rollout/rollback evidence. Install the exact inbound verifier
-  in the deployment-owned Kubo/head receivers and replace its process-local
-  replay cache with sealed cross-replica state. The generic packaged binary
+  in the deployment-owned Kubo/head receivers with a receiver-side sealed
+  cross-replica replay adapter. The standard outbound path already consumes
+  verified nonces through separate sealed IPFS and signed-head slots, but that
+  does not install or qualify the external receiver. The generic packaged binary
   now lives with `irohad`, requires a canonical public chain ID, projects only
   the IPFS authenticator, optional signed-head authenticator, and sealed
   checkpoint-store roles, and resolves them through the stock fixed local

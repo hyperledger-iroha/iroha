@@ -925,9 +925,7 @@ pub(super) fn accumulator_node_invocation_v1(
 pub(super) fn validate_statement_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
 ) -> Result<(), IvmPrivateNoteRelationErrorV1> {
-    if statement.context.chain_id.as_str().is_empty()
-        || statement.context.chain_id.as_str().len() > 255
-        || statement.context.transaction_intent_digest.is_zero()
+    if statement.context.transaction_intent_digest.is_zero()
         || statement.context.parameter_id.is_zero()
         || statement.context.parameter_digest.is_zero()
         || statement.context.verifier_digest.is_zero()

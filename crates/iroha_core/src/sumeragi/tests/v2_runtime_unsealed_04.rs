@@ -230,6 +230,7 @@
 
         let deferred_store = runtime_manifest(&context, 0x92);
         let (durable, _) = receipts(&deferred_store);
+        let active_before_store = runtime.driver.all_deferred_admission_ordinals();
         runtime
             .driver
             .defer_body_pipeline_stage_for_test(
@@ -238,6 +239,18 @@
                 DeferredBodyPipelineStageForTest::BodyStored,
             )
             .expect("stage a Busy-deferred durable-store completion");
+        let store_ordinals = runtime
+            .driver
+            .all_deferred_admission_ordinals()
+            .difference(&active_before_store)
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(store_ordinals.len(), 1);
+        let store_owner = bind_local_deferred_lifecycle_for_test(
+            &mut runtime,
+            store_ordinals[0],
+            b"body-store-pipeline-retirement-owner",
+        );
         runtime
             .enqueue_body_stored(
                 owner_tag,
@@ -247,6 +260,35 @@
             )
             .expect("a retransmit coalesces with the Busy-deferred store owner");
         assert_eq!(runtime.queued_commands(), 0);
+        assert_eq!(
+            runtime
+                .minimum_active_lifecycle_ordinal()
+                .expect("inspect the exact Busy-deferred store owner"),
+            Some(store_owner.lifecycle_ordinal())
+        );
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    deferred_store.round,
+                    deferred_store.subject,
+                )
+                .expect("retire the coalesced Busy-deferred store owner"),
+            RetiredBodyPipelineCompletions {
+                body_available: 0,
+                body_stored: 1,
+                validation: 0,
+                local_proposal: 0,
+            }
+        );
+        assert!(runtime.deferred_lifecycle_ownership.is_empty());
+        assert!(runtime.deferred_ingress_ownership.is_empty());
+        assert_eq!(
+            runtime
+                .minimum_active_lifecycle_ordinal()
+                .expect("retirement cannot retain a phantom store owner"),
+            None
+        );
 
         let deferred_validation = runtime_manifest(&context, 0x93);
         let (_, validated) = receipts(&deferred_validation);
@@ -267,6 +309,13 @@
             )
             .expect("a retransmit coalesces with the Busy-deferred validation owner");
         assert_eq!(runtime.queued_commands(), 0);
+        runtime
+            .retire_body_pipeline_completions(
+                owner_tag,
+                deferred_validation.round,
+                deferred_validation.subject,
+            )
+            .expect("retire the coalesced Busy-deferred validation owner");
 
         let deferred_proposal = runtime_manifest(&context, 0x94);
         let (durable, validated) = receipts(&deferred_proposal);
@@ -282,12 +331,13 @@
             .enqueue_local_proposal(owner_tag, deferred_proposal.clone(), durable, validated)
             .expect("a retransmit coalesces with the Busy-deferred proposal owner");
         assert_eq!(runtime.queued_commands(), 0);
-
-        for manifest in [deferred_store, deferred_validation, deferred_proposal] {
-            runtime
-                .retire_body_pipeline_completions(owner_tag, manifest.round, manifest.subject)
-                .expect("each coalesced Busy-deferred pipeline has one exact owner");
-        }
+        runtime
+            .retire_body_pipeline_completions(
+                owner_tag,
+                deferred_proposal.round,
+                deferred_proposal.subject,
+            )
+            .expect("retire the coalesced Busy-deferred proposal owner");
     }
 
     #[test]
@@ -440,6 +490,7 @@
             source_tag.view() + 1,
             Generation::new(source_tag.generation().get() + 1),
         );
+        let active_before_body = runtime.driver.all_deferred_admission_ordinals();
         assert!(
             runtime
                 .driver
@@ -447,6 +498,19 @@
                 .expect("stage exact completion behind the signer fence")
                 .into_effects()
                 .is_empty()
+        );
+        let body_ordinals = runtime
+            .driver
+            .all_deferred_admission_ordinals()
+            .difference(&active_before_body)
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(body_ordinals.len(), 1);
+        let body_ordinal = body_ordinals[0];
+        let body_owner = bind_local_deferred_lifecycle_for_test(
+            &mut runtime,
+            body_ordinal,
+            b"body-available-retirement-owner",
         );
         let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
             manifest: manifest.clone(),
@@ -496,6 +560,14 @@
             (1, 1),
             "coalescing retains exactly one destination owner"
         );
+        assert_eq!(
+            runtime
+                .deferred_lifecycle_ownership
+                .get(&body_ordinal)
+                .map(RuntimeDeferredLifecycleOwnership::owner),
+            Some(&body_owner),
+            "coalescing cannot retire the wrapper of the retained Busy owner"
+        );
         assert!(
             !runtime
                 .rebind_body_available(source_tag, rebound, &manifest)
@@ -521,9 +593,93 @@
         );
         assert!(
             runtime
+                .deferred_lifecycle_ownership
+                .contains_key(&body_ordinal)
+        );
+        assert!(
+            runtime
                 .retire_body_available(same_view_rebound, &manifest)
                 .expect("the unique destination owner remains retireable")
         );
+        assert!(
+            !runtime
+                .deferred_lifecycle_ownership
+                .contains_key(&body_ordinal),
+            "retirement cannot leave the drained Busy owner at the global minimum"
+        );
+        assert!(runtime.deferred_ingress_ownership.is_empty());
+
+        // Exercise the opposite coalescing direction: a Busy source loses to
+        // an already-installed FIFO destination. The adapter occurrence and
+        // its sealed runtime wrapper must retire in the same transition.
+        let retirement_directory =
+            TempDir::new().expect("temporary Busy-source coalescing directory");
+        let (mut retirement_runtime, retirement_context, _keys) =
+            authenticated_network_runtime(&retirement_directory, RuntimeQueueConfig::new(8, 1, 1));
+        let retirement_source = retirement_runtime.round_tag();
+        let retirement_manifest = runtime_manifest(&retirement_context, 0x8F);
+        retirement_runtime
+            .driver
+            .defer_body_pipeline_stage_for_test(
+                retirement_source,
+                &retirement_manifest,
+                DeferredBodyPipelineStageForTest::BodyAvailable,
+            )
+            .expect("stage the exact Busy source completion");
+        let retirement_ordinals = retirement_runtime
+            .driver
+            .all_deferred_admission_ordinals()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(retirement_ordinals.len(), 1);
+        let retirement_ordinal = retirement_ordinals[0];
+        bind_local_deferred_lifecycle_for_test(
+            &mut retirement_runtime,
+            retirement_ordinal,
+            b"body-available-rebind-retirement-owner",
+        );
+        let retirement_rebound = EventTag::new(
+            retirement_source.height(),
+            retirement_source.view() + 1,
+            Generation::new(retirement_source.generation().get() + 1),
+        );
+        observe_enter_view_for_test(
+            &mut retirement_runtime,
+            retirement_source,
+            retirement_rebound,
+            &retirement_manifest,
+        );
+        stage_completion_for_queue_test(
+            &mut retirement_runtime,
+            retirement_rebound,
+            AdapterCommand::BodyAvailable {
+                manifest: retirement_manifest.clone(),
+            },
+        );
+        assert!(
+            retirement_runtime
+                .rebind_body_available(retirement_source, retirement_rebound, &retirement_manifest,)
+                .expect("the existing FIFO destination coalesces the Busy source")
+        );
+        assert!(
+            !retirement_runtime
+                .deferred_lifecycle_ownership
+                .contains_key(&retirement_ordinal),
+            "Busy-source coalescing cannot leave its runtime wrapper alive"
+        );
+        assert!(
+            !retirement_runtime
+                .driver
+                .all_deferred_admission_ordinals()
+                .contains(&retirement_ordinal)
+        );
+        assert_eq!(retirement_runtime.queued_commands(), 1);
+        assert!(
+            retirement_runtime
+                .retire_body_available(retirement_rebound, &retirement_manifest)
+                .expect("the retained FIFO destination remains uniquely retireable")
+        );
+        assert_eq!(retirement_runtime.queued_commands(), 0);
     }
 
     #[test]

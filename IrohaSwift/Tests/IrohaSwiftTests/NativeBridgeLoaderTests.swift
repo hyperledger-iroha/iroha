@@ -271,13 +271,9 @@ final class BridgePolicyHintTests: XCTestCase {
     }
 }
 
+#if canImport(Darwin)
 final class BridgeAvailabilitySurfaceTests: XCTestCase {
     func testTransferEncodingFailsWhenBridgeUnavailable() throws {
-        #if canImport(Darwin)
-        guard #available(macOS 10.15, iOS 13.0, *) else {
-            throw XCTSkip("CryptoKit is unavailable on this platform.")
-        }
-
         NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
         defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
 
@@ -301,13 +297,9 @@ final class BridgeAvailabilitySurfaceTests: XCTestCase {
             }
             XCTAssertTrue(error.localizedDescription.contains("NoritoBridge.xcframework"))
         }
-        #else
-        throw XCTSkip("Bridge availability is only meaningful on Darwin targets.")
-        #endif
     }
 
     func testConnectCodecUnavailableWhenBridgeDisabled() throws {
-        #if canImport(Darwin)
         NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
         NoritoNativeBridge.shared.overrideConnectCodecAvailabilityForTests(false)
         defer {
@@ -329,8 +321,6 @@ final class BridgeAvailabilitySurfaceTests: XCTestCase {
             }
             XCTAssertTrue(error.localizedDescription.contains("NoritoBridge.xcframework"))
         }
-        #else
-        throw XCTSkip("Bridge availability is only meaningful on Darwin targets.")
-        #endif
     }
 }
+#endif

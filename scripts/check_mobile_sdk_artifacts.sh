@@ -438,6 +438,14 @@ SORAFS_APPEAL_FINANCE_C_SYMBOLS=(
   connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json
 )
 
+PRIVACY_COMPILED_PROFILE_C_SYMBOLS=(
+  iroha_privacy_compiled_profile_catalog_v1
+  iroha_privacy_validate_compiled_profile_catalog_v1
+  iroha_privacy_exact12_fixture_bundle_v1
+  iroha_privacy_validate_exact12_fixture_bundle_v1
+  iroha_privacy_free_buffer
+)
+
 REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_bridge_abi_version
   connect_norito_free
@@ -450,6 +458,7 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_canonical_json_blake3_v1
   connect_norito_encode_account_onboarding_plan_body_v1
   connect_norito_alias_instruction_round_trip_v1
+  "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}"
   connect_norito_sorafs_reference_validate_bundle_json
   connect_norito_sorafs_reference_validate_governance_json
   connect_norito_sorafs_reference_validate_governance_dag_block_json
@@ -460,13 +469,19 @@ REQUIRED_BRIDGE_SYMBOLS=(
   "${KAGEMUSHA_C_SYMBOLS[@]}"
 )
 
-# These process-global controls and fail-only compatibility entry points are
-# forbidden from every first-release Apple and Android native slice.
+# These process-global controls, retired privacy proof-construction exports,
+# and fail-only compatibility entry points are forbidden from every
+# first-release Apple and Android native slice.
 FORBIDDEN_MOBILE_BRIDGE_SYMBOLS=(
   connect_norito_get_chain_discriminant
   connect_norito_set_chain_discriminant
   connect_norito_kagemusha_recipient_registration_lineage_verify_v1
   connect_norito_kagemusha_request_authorization_create_v2
+  iroha_privacy_capabilities_v1
+  iroha_privacy_validate_capabilities_v1
+  iroha_privacy_proof_request_v1
+  iroha_privacy_build_proof_v1
+  iroha_privacy_verify_proof_v1
   Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2
   Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2
 )
@@ -543,6 +558,19 @@ SORAFS_APPEAL_FINANCE_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson
   Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeHasAppealFinanceSymbols
   Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson
+)
+
+PRIVACY_COMPILED_PROFILE_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeCompiledProfileCatalog
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateCompiledProfileCatalog
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle
+  Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeCompiledProfileCatalog
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateCompiledProfileCatalog
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle
 )
 
 NATIVE_SIGNER_JNI_CONTRACT_SYMBOLS=(
@@ -1605,6 +1633,7 @@ check_xcframework() {
   local checked_in_swift_loader="$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
   local swift_loader="$checked_in_swift_loader"
   local privacy_marker="$xcframework/.privacy-production-enabled"
+  local test_only_prebuilt_marker="$xcframework/.test-only-prebuilt-slices"
   local slices=(ios-arm64 ios-arm64_x86_64-simulator macos-arm64_x86_64)
   local slice
 
@@ -1709,7 +1738,29 @@ PY
     fail "public NoritoBridge artifact manifest has a non-canonical symlink target"
   fi
   require_file "$manifest" "NoritoBridge artifact manifest"
+  if [[ -e "$test_only_prebuilt_marker" || -L "$test_only_prebuilt_marker" ]]; then
+    fail "NoritoBridge release artifact must not carry the test-only prebuilt-slices marker"
+  fi
   if [[ -f "$manifest" ]]; then
+    if ! run_isolated_checker_python - "$manifest" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+try:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, UnicodeError, ValueError):
+    # The canonical manifest parser below reports malformed input.
+    raise SystemExit(0)
+raise SystemExit(
+    1
+    if isinstance(payload, dict) and "test_only_prebuilt_slices" in payload
+    else 0
+)
+PY
+    then
+      fail "NoritoBridge release artifact manifest must not contain test_only_prebuilt_slices"
+    fi
     local prospective_validation="${MOBILE_SDK_STAGED_BUILD_VALIDATION:-0}"
     local prospective_loader="${MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH:-}"
     if [[ "$prospective_validation" != "0" || -n "$prospective_loader" ]]; then
@@ -1989,6 +2040,19 @@ PY
     then
       fail "NoritoBridge artifact required symbol inventory is missing or non-canonical"
     fi
+    if ! run_isolated_checker_python - "$manifest" "${FORBIDDEN_MOBILE_BRIDGE_SYMBOLS[@]}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+expected = sys.argv[2:]
+actual = payload.get("forbidden_symbols")
+raise SystemExit(0 if actual == expected else 1)
+PY
+    then
+      fail "NoritoBridge artifact forbidden symbol inventory is missing or non-canonical"
+    fi
     if [[ -f "$swift_loader" ]] \
       && ! run_isolated_checker_python - "$swift_loader" "${REQUIRED_BRIDGE_SYMBOLS[@]}" <<'PY'
 import re
@@ -2076,72 +2140,62 @@ PY
       fi
     fi
 
-    if [[ "${MOBILE_SDK_SKIP_BINARY_INSPECTION:-0}" != "1" ]]; then
-      local index symbol actual_arches
-      for index in "${!slices[@]}"; do
-        slice="${slices[$index]}"
-        local binary="$xcframework/$slice/libNoritoBridge.a"
-        [[ -f "$binary" ]] || continue
-        if ! command -v lipo >/dev/null 2>&1; then
-          fail "lipo is required for strict Apple artifact validation"
-          break
-        fi
-        actual_arches="$(lipo -archs "$binary" 2>/dev/null || true)"
-        case "$slice" in
-          ios-arm64)
-            if [[ "$actual_arches" != "arm64" ]]; then
-              fail "NoritoBridge $slice architectures must be arm64 (found ${actual_arches:-unreadable})"
-            fi
-            ;;
-          ios-arm64_x86_64-simulator|macos-arm64_x86_64)
-            if [[ " $actual_arches " != *" arm64 "* \
-              || " $actual_arches " != *" x86_64 "* \
-              || "$(wc -w <<<"$actual_arches" | tr -d '[:space:]')" != "2" ]]; then
-              fail "NoritoBridge $slice architectures must be arm64 and x86_64 (found ${actual_arches:-unreadable})"
-            fi
-            ;;
-        esac
-        if ! command -v nm >/dev/null 2>&1; then
-          fail "nm is required for strict Apple artifact validation"
-          break
-        fi
-        local symbols
-        symbols="$(nm -gj "$binary" 2>/dev/null || true)"
-        for symbol in "${REQUIRED_BRIDGE_SYMBOLS[@]}"; do
-          if ! grep -Eq "^_?${symbol}$" <<<"$symbols"; then
-            fail "NoritoBridge $slice is missing required symbol $symbol"
+    local index symbol actual_arches
+    for index in "${!slices[@]}"; do
+      slice="${slices[$index]}"
+      local binary="$xcframework/$slice/libNoritoBridge.a"
+      [[ -f "$binary" ]] || continue
+      if ! command -v lipo >/dev/null 2>&1; then
+        fail "lipo is required for strict Apple artifact validation"
+        break
+      fi
+      actual_arches="$(lipo -archs "$binary" 2>/dev/null || true)"
+      case "$slice" in
+        ios-arm64)
+          if [[ "$actual_arches" != "arm64" ]]; then
+            fail "NoritoBridge $slice architectures must be arm64 (found ${actual_arches:-unreadable})"
           fi
-        done
-        for symbol in "${FORBIDDEN_MOBILE_BRIDGE_SYMBOLS[@]}"; do
-          if grep -Eq "^_?${symbol}$" <<<"$symbols"; then
-            fail "NoritoBridge $slice exports forbidden first-release symbol $symbol"
+          ;;
+        ios-arm64_x86_64-simulator|macos-arm64_x86_64)
+          if [[ " $actual_arches " != *" arm64 "* \
+            || " $actual_arches " != *" x86_64 "* \
+            || "$(wc -w <<<"$actual_arches" | tr -d '[:space:]')" != "2" ]]; then
+            fail "NoritoBridge $slice architectures must be arm64 and x86_64 (found ${actual_arches:-unreadable})"
           fi
-        done
-        if ! run_isolated_checker_python - "$binary" "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
-import subprocess
-import sys
-
-binary = sys.argv[1]
-expected = set(sys.argv[2:])
-result = subprocess.run(
-    ["nm", "-gj", binary],
-    check=False,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.DEVNULL,
-    text=True,
-)
-actual = {
-    line.strip().removeprefix("_")
-    for line in result.stdout.splitlines()
-    if line.strip().removeprefix("_").startswith("connect_norito_kagemusha_")
-}
-raise SystemExit(0 if result.returncode == 0 and actual == expected else 1)
-PY
-        then
-          fail "NoritoBridge $slice Kagemusha export inventory is not exact"
+          ;;
+      esac
+      if ! command -v nm >/dev/null 2>&1; then
+        fail "nm is required for strict Apple artifact validation"
+        break
+      fi
+      local symbols
+      symbols="$(nm -gj "$binary" 2>/dev/null || true)"
+      for symbol in "${REQUIRED_BRIDGE_SYMBOLS[@]}"; do
+        if ! grep -Eq "^_?${symbol}$" <<<"$symbols"; then
+          fail "NoritoBridge $slice is missing required symbol $symbol"
         fi
       done
-    fi
+      for symbol in "${FORBIDDEN_MOBILE_BRIDGE_SYMBOLS[@]}"; do
+        if grep -Eq "^_?${symbol}$" <<<"$symbols"; then
+          fail "NoritoBridge $slice exports forbidden first-release symbol $symbol"
+        fi
+      done
+      if ! run_isolated_checker_python - "${KAGEMUSHA_C_SYMBOLS[@]}" 3<<<"$symbols" <<'PY'
+import os
+import sys
+
+expected = set(sys.argv[1:])
+actual = {
+    line.strip().removeprefix("_")
+    for line in os.fdopen(3)
+    if line.strip().removeprefix("_").startswith("connect_norito_kagemusha_")
+}
+raise SystemExit(0 if actual == expected else 1)
+PY
+      then
+        fail "NoritoBridge $slice Kagemusha export inventory is not exact"
+      fi
+    done
   fi
 }
 
@@ -2210,6 +2264,7 @@ check_android_native_symbols() {
   local expected_jni=(
     "${VALIDATION_FEE_JNI_SYMBOLS[@]}"
     "${SORAFS_APPEAL_FINANCE_JNI_SYMBOLS[@]}"
+    "${PRIVACY_COMPILED_PROFILE_JNI_SYMBOLS[@]}"
     "${NATIVE_SIGNER_JNI_CONTRACT_SYMBOLS[@]}"
   )
 
@@ -2242,6 +2297,7 @@ check_android_native_symbols() {
   if ! run_isolated_checker_python - "$abi" \
     "${KAGEMUSHA_C_SYMBOLS[@]}" \
     "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}" \
+    "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}" \
     -- "${expected_jni[@]}" 3<<<"$symbols" <<'PY'
 import os
 import sys
@@ -2892,10 +2948,8 @@ check_android_package() {
         if [[ "$(hash_file "$source_native")" != "$(hash_zip_entry "$client_aar" "$aar_entry")" ]]; then
           fail "client-android $abi native bridge differs between generated output and release aar"
         fi
-        if [[ "${MOBILE_SDK_SKIP_BINARY_INSPECTION:-0}" != "1" ]]; then
-          check_android_native_stripped "$source_native" "$abi"
-          check_android_native_symbols "$source_native" "$abi"
-        fi
+        check_android_native_stripped "$source_native" "$abi"
+        check_android_native_symbols "$source_native" "$abi"
       fi
     done
   fi

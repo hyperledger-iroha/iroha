@@ -48,9 +48,20 @@ use super::{
         IDENTITY_KIND_EXECUTION_COMMITMENT, IDENTITY_KIND_FINALITY_ARTIFACT,
         IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_QUORUM_CERTIFICATE,
         IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
-        ProductionApplicationTraceProjection, ProductionDecisionIdentityProjection,
-        ProductionDurableBodyIdentityProjection, ProductionQuorumCertificateIdentityProjection,
-        TagProjection, check_production_application_transition,
+        IN_FLIGHT_FIRST_RELEASE_ACTION_APPLY_CARRIER, IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+        IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE, ProductionApplicationTraceProjection,
+        ProductionDecisionIdentityProjection, ProductionDurableBodyIdentityProjection,
+        ProductionInFlightFirstReleaseCarrierProjection,
+        ProductionInFlightFirstReleaseDecisionProjection,
+        ProductionInFlightFirstReleaseHistoryProjection,
+        ProductionInFlightFirstReleaseQueueProjection,
+        ProductionInFlightFirstReleaseReleaseProjection,
+        ProductionInFlightFirstReleaseSessionProjection,
+        ProductionInFlightFirstReleaseStateProjection,
+        ProductionInFlightFirstReleaseTransitionProjection,
+        ProductionQuorumCertificateIdentityProjection, TagProjection,
+        check_production_application_transition,
+        check_production_in_flight_first_release_transition,
     },
     v2_effects::{ApplyTask, DurableApplyCompletion, EffectWorkId},
 };
@@ -66,9 +77,10 @@ use crate::{
     lane_consensus::{LaneExecutablePayloadV1, deterministic_lane_author},
     queue::{
         LaneQueueReservationError, LaneQueueReservationGroupIdentityV1,
-        LaneQueueReservationOutcome, LaneQueueReservationReconciliationGroupV1,
-        LaneQueueReservationReconciliationSnapshotV1, LaneQueueReservationReleaseBarrierV3, Queue,
-        RoutingDecision,
+        LaneQueueReservationReconciliationGroupV1, LaneQueueReservationReconciliationSnapshotV1,
+        LaneQueueReservationReleaseBarrierV3, Queue, RoutingDecision,
+        canonical_lane_queue_reservation_group_identity_projection,
+        lane_queue_reservation_group_binding_from_ordered_keys,
     },
     state::{MergeLedgerCommitError, MergeLedgerPublicationMode, State},
 };
@@ -369,17 +381,23 @@ fn finalize_certified_merge_reservations(
     queue: &Queue,
     entry: &MergeLedgerEntry,
 ) -> Result<usize, V2ReservationLifecycleError> {
-    let reservations = crate::state::certified_merge_queue_reservations(entry)?;
-    let mut finalized = 0usize;
-    for (transaction_hash, reservation) in reservations {
-        if !state.has_committed_transaction(transaction_hash) {
+    let groups = crate::state::certified_merge_queue_reservation_groups(entry)?;
+
+    // Authenticate the complete canonical State membership cut before the
+    // first Queue journal mutation. A malformed or partially committed later
+    // group must leave every earlier reservation owner untouched.
+    for (transaction_hash, _) in groups.iter().flatten() {
+        if !state.has_committed_transaction(*transaction_hash) {
             return Err(V2ReservationLifecycleError::UncommittedMergeTransaction {
-                transaction_hash,
+                transaction_hash: *transaction_hash,
             });
         }
-        if queue.commit_lane_reservation(&reservation)? == LaneQueueReservationOutcome::Finalized {
-            finalized = finalized.saturating_add(1);
-        }
+    }
+
+    let mut finalized = 0usize;
+    for group in groups {
+        let ordered_keys = group.into_iter().map(|(_, key)| key).collect::<Vec<_>>();
+        finalized = finalized.saturating_add(queue.commit_lane_reservation_group(&ordered_keys)?);
     }
     Ok(finalized)
 }
@@ -1517,10 +1535,10 @@ pub(crate) fn validate_installed_historical_autonomous_lane_recoveries(
 #[derive(Clone)]
 struct ReservationReconciliationGroupInput {
     group: LaneQueueReservationReconciliationGroupV1,
-    /// Queue owners which remain after any earlier per-key Commit/ForgetCommit
-    /// transitions. Committed groups replace `group.ordered_keys` with the
-    /// complete canonical MergeLedger membership during read-only preflight,
-    /// but mutate only this observed subset.
+    /// Queue owners which remain after an earlier grouped Commit-prefix or
+    /// ForgetCommit-prefix crash. Committed groups replace
+    /// `group.ordered_keys` with the complete canonical MergeLedger membership
+    /// during read-only preflight and resume against that full identity.
     owned_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
     release_barrier: Option<LaneQueueReservationReleaseBarrierV3>,
     committed: bool,
@@ -1800,12 +1818,12 @@ pub(crate) fn plan_lane_reservation_ownership(
         }
     }
 
-    // A crash between per-key Commit and ForgetCommit transitions can leave
-    // any exact subset of a committed proposal group split between live
-    // records and Commit barriers. Fold both owner forms into one group before
-    // consulting State or Kura. Canonical MergeLedger evidence below restores
-    // the complete ordered membership; digest order is never treated as group
-    // order.
+    // A crash inside the grouped Commit or ForgetCommit phases can leave an
+    // exact prefix/suffix split between live records, Commit barriers, and
+    // already-forgotten members. Fold the two remaining owner forms into one
+    // group before consulting State or Kura. Canonical MergeLedger evidence
+    // below restores the complete ordered membership; digest order is never
+    // treated as group order.
     for key in &commit_barriers {
         unique_recovered.insert(key.signed_transaction_hash);
         let identity = reservation_group_identity(key);
@@ -1893,9 +1911,9 @@ pub(crate) fn plan_lane_reservation_ownership(
     }
 
     // Reconstruct each committed proposal's complete canonical ordered group
-    // from its exact indexed MergeLedger carrier. Queue ownership can be any
-    // exact non-empty subset after a crash between per-key Commit/ForgetCommit
-    // transitions, but the carrier must contain one unique full group; every
+    // from its exact indexed MergeLedger carrier. Queue ownership can be an
+    // exact non-empty phase prefix/suffix after a grouped crash, but the
+    // carrier must contain one unique full group; every
     // full-group transaction must already be in State and indexed to that same
     // carrier. No Queue owner is consumed until all groups pass this preflight.
     let mut globally_seen_committed = BTreeMap::new();
@@ -2068,7 +2086,7 @@ pub(crate) fn plan_lane_reservation_ownership(
     for input in &inputs {
         if input.committed {
             actions.push(ReservationReconciliationAction::Commit(
-                input.owned_keys.clone(),
+                input.group.ordered_keys.clone(),
             ));
             continue;
         }
@@ -2472,11 +2490,9 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
     };
     for action in &actions {
         if let ReservationReconciliationAction::Commit(keys) = action {
-            for key in keys {
-                if queue.commit_lane_reservation(key)? == LaneQueueReservationOutcome::Finalized {
-                    summary.finalized_committed = summary.finalized_committed.saturating_add(1);
-                }
-            }
+            summary.finalized_committed = summary
+                .finalized_committed
+                .saturating_add(queue.commit_lane_reservation_group(keys)?);
         }
     }
     for action in actions {
@@ -3356,6 +3372,290 @@ impl V2ApplyService {
         // canonical.
         self.retain_decided_merge_sidecar(context, &body)?;
 
+        // For a fresh autonomous carrier, extract one checked ApplyCarrier
+        // transition per independently certified lane. The compact merge
+        // reference is part of the finality-authenticated proposal; its exact
+        // full entry and source bundles are reloaded and revalidated here
+        // before any token is allowed to span the WSV commit boundary.
+        let mut checked_carrier_applications = Vec::new();
+        if state_height < height.get()
+            && let Some(reference) = body
+                .execution_context()
+                .and_then(|bundle| bundle.merge_entry.as_ref())
+            && reference.execution_batch_hash.is_some()
+        {
+            let entry = self
+                .kura
+                .merge_entry_by_hash(reference.entry_hash)?
+                .ok_or_else(|| {
+                    V2ApplyError::Validation(
+                        "finality-authenticated autonomous merge sidecar is unavailable".to_owned(),
+                    )
+                })?;
+            if !reference.matches_entry(&entry) {
+                return Err(V2ApplyError::Validation(
+                    "autonomous merge sidecar differs from its finality-authenticated reference"
+                        .to_owned(),
+                ));
+            }
+            let execution_batch = entry.execution_batch.as_ref().ok_or_else(|| {
+                V2ApplyError::Validation(
+                    "autonomous merge reference has no exact execution batch".to_owned(),
+                )
+            })?;
+            if Some(execution_batch.batch_hash) != reference.execution_batch_hash
+                || execution_batch.lanes.is_empty()
+            {
+                return Err(V2ApplyError::Validation(
+                    "autonomous merge execution batch identity or lane set is invalid".to_owned(),
+                ));
+            }
+            let chain_hash = Hash::new(self.chain_id.as_str().as_bytes());
+            for lane in &execution_batch.lanes {
+                let authenticated_bundle = Kura::decode_autonomous_lane_merge_bundle(
+                    &lane.source_bundle,
+                    chain_hash,
+                    lane.autonomous_epoch,
+                )
+                .map_err(|reason| V2ApplyError::Validation(reason.to_owned()))?;
+                let authenticated_bundle_hash = authenticated_bundle
+                    .bundle_hash()
+                    .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
+                let payload = authenticated_bundle.executable_payload();
+                let reservation_keys = payload
+                    .reservation_keys
+                    .iter()
+                    .map(norito::encode_canonical)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
+                let routing_plans = payload
+                    .routing_plans
+                    .iter()
+                    .map(norito::encode_canonical)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
+                if authenticated_bundle_hash != lane.source_bundle_hash
+                    || authenticated_bundle.certified.proposal != lane.proposal
+                    || payload.origin_proposal != lane.origin_proposal
+                    || authenticated_bundle.certified.prepare_qc != lane.prepare_qc
+                    || authenticated_bundle.certified.commit_qc != lane.commit_qc
+                    || payload.chain_id_hash != lane.autonomous_chain_id_hash
+                    || payload.epoch != lane.autonomous_epoch
+                    || payload.payload_hash != lane.autonomous_payload_hash
+                    || payload.entrypoint_hashes != lane.entrypoint_hashes
+                    || payload.entrypoints != lane.entrypoints
+                    || reservation_keys != lane.reservation_keys
+                    || routing_plans != lane.routing_plans
+                    || payload.native_amx_receipts != lane.native_amx_receipts
+                {
+                    return Err(V2ApplyError::Validation(
+                        "autonomous merge lane differs from its authenticated source bundle"
+                            .to_owned(),
+                    ));
+                }
+
+                let descriptor = &authenticated_bundle.certified.proposal.descriptor;
+                let validator_count =
+                    u8::try_from(descriptor.validator_set.len()).map_err(|_| {
+                        V2ApplyError::Validation(
+                            "autonomous carrier committee exceeds the refinement width".to_owned(),
+                        )
+                    })?;
+                if validator_count == 0 || validator_count > 128 {
+                    return Err(V2ApplyError::Validation(
+                        "autonomous carrier committee is outside the 1..=128 refinement width"
+                            .to_owned(),
+                    ));
+                }
+                let validator_mask = if validator_count == 128 {
+                    u128::MAX
+                } else {
+                    (1_u128 << validator_count) - 1
+                };
+                let producer_index = descriptor
+                    .validator_set
+                    .iter()
+                    .position(|peer| peer == &payload.producer)
+                    .ok_or_else(|| {
+                        V2ApplyError::Validation(
+                            "autonomous carrier producer is absent from its committee".to_owned(),
+                        )
+                    })?;
+                let producer = 1_u128
+                    .checked_shl(u32::try_from(producer_index).map_err(|_| {
+                        V2ApplyError::Validation(
+                            "autonomous carrier producer index exceeds the refinement width"
+                                .to_owned(),
+                        )
+                    })?)
+                    .ok_or_else(|| {
+                        V2ApplyError::Validation(
+                            "autonomous carrier producer index exceeds the refinement width"
+                                .to_owned(),
+                        )
+                    })?;
+                let bitmap_mask = |bitmap: &[u8]| -> Result<u128, V2ApplyError> {
+                    if bitmap.len() != descriptor.validator_set.len().div_ceil(8) {
+                        return Err(V2ApplyError::Validation(
+                            "autonomous carrier certificate bitmap has a noncanonical length"
+                                .to_owned(),
+                        ));
+                    }
+                    let mut mask = 0_u128;
+                    for (byte_index, byte) in bitmap.iter().copied().enumerate() {
+                        for bit_index in 0..8_usize {
+                            if byte & (1_u8 << bit_index) == 0 {
+                                continue;
+                            }
+                            let index = byte_index
+                                .checked_mul(8)
+                                .and_then(|base| base.checked_add(bit_index))
+                                .ok_or_else(|| {
+                                    V2ApplyError::Validation(
+                                        "autonomous carrier bitmap index overflows".to_owned(),
+                                    )
+                                })?;
+                            if index >= descriptor.validator_set.len() {
+                                return Err(V2ApplyError::Validation(
+                                    "autonomous carrier certificate selects a padding bit"
+                                        .to_owned(),
+                                ));
+                            }
+                            mask |= 1_u128
+                                .checked_shl(u32::try_from(index).map_err(|_| {
+                                    V2ApplyError::Validation(
+                                        "autonomous carrier signer exceeds the refinement width"
+                                            .to_owned(),
+                                    )
+                                })?)
+                                .ok_or_else(|| {
+                                    V2ApplyError::Validation(
+                                        "autonomous carrier signer exceeds the refinement width"
+                                            .to_owned(),
+                                    )
+                                })?;
+                        }
+                    }
+                    Ok(mask)
+                };
+                let availability_qc = authenticated_bundle
+                    .certified
+                    .prepare_qc
+                    .payload_availability_qc
+                    .as_ref()
+                    .ok_or_else(|| {
+                        V2ApplyError::Validation(
+                            "autonomous carrier prepare QC lacks READY evidence".to_owned(),
+                        )
+                    })?;
+                if availability_qc.validator_set != descriptor.validator_set {
+                    return Err(V2ApplyError::Validation(
+                        "autonomous carrier READY committee differs from its lane committee"
+                            .to_owned(),
+                    ));
+                }
+                let ready_signers = bitmap_mask(&availability_qc.signers_bitmap)?;
+                let commit_signers =
+                    bitmap_mask(&authenticated_bundle.certified.commit_qc.signers_bitmap)?;
+                let lane_commit_candidates = ready_signers & commit_signers;
+                if lane_commit_candidates == 0 {
+                    return Err(V2ApplyError::Validation(
+                        "autonomous carrier READY and Commit QCs have no common signer".to_owned(),
+                    ));
+                }
+                let actor = 1_u128
+                    .checked_shl(lane_commit_candidates.trailing_zeros())
+                    .ok_or_else(|| {
+                        V2ApplyError::Validation(
+                            "autonomous carrier signer exceeds the refinement width".to_owned(),
+                        )
+                    })?;
+                let reservation_group = lane_queue_reservation_group_binding_from_ordered_keys(
+                    payload.reservation_keys.iter(),
+                )
+                .map_err(|reason| {
+                    V2ApplyError::Validation(format!(
+                        "autonomous carrier reservation group is invalid: {reason}"
+                    ))
+                })?;
+                let selected_count = reservation_group.reservation_count;
+                if !(1..=u64::try_from(iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS)
+                    .unwrap_or(u64::MAX))
+                    .contains(&selected_count)
+                {
+                    return Err(V2ApplyError::Validation(
+                        "autonomous carrier reservation count is outside the first-release bound"
+                            .to_owned(),
+                    ));
+                }
+                let binding_a =
+                    canonical_lane_queue_reservation_group_identity_projection(reservation_group);
+                let payload_owners = ready_signers | producer;
+                let before = ProductionInFlightFirstReleaseStateProjection {
+                    validator_count,
+                    producer,
+                    producer_selected_owner: producer,
+                    replicated_carrier_owners: validator_mask & !producer,
+                    payload_binding_a: payload_owners,
+                    binding_a,
+                    queue: ProductionInFlightFirstReleaseQueueProjection {
+                        plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+                        selected_count,
+                        reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+                    },
+                    carrier: ProductionInFlightFirstReleaseCarrierProjection {
+                        kura_active: payload_owners,
+                        execution_input_durable: ready_signers,
+                        ready_qc_durable: true,
+                    },
+                    session: ProductionInFlightFirstReleaseSessionProjection {
+                        bodies: payload_owners,
+                        ready_authorized: ready_signers,
+                        crashed: 0,
+                        producer_alive: true,
+                    },
+                    history: ProductionInFlightFirstReleaseHistoryProjection {
+                        ever_queue_plan_v4: true,
+                        ever_reservation_v5: true,
+                        ever_execution_input_durable: ready_signers,
+                        ever_ready_authorized: ready_signers,
+                        ready_signed: ready_signers,
+                        ever_ready_qc_durable: true,
+                        ..ProductionInFlightFirstReleaseHistoryProjection::default()
+                    },
+                    decision: ProductionInFlightFirstReleaseDecisionProjection {
+                        lane_commit_scope: binding_a,
+                        release_scope: CanonicalIdentityProjection::zero(),
+                        lane_commit_owner: actor,
+                        release_owner: 0,
+                        wsv_committed: false,
+                        application_count: 0,
+                        applied_by: 0,
+                    },
+                    release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+                };
+                let mut after = before;
+                after.decision.wsv_committed = true;
+                after.decision.application_count = 1;
+                after.decision.applied_by = actor;
+                let projection = ProductionInFlightFirstReleaseTransitionProjection {
+                    action: IN_FLIGHT_FIRST_RELEASE_ACTION_APPLY_CARRIER,
+                    actor,
+                    target: 0,
+                    before,
+                    after,
+                };
+                let checked = check_production_in_flight_first_release_transition(projection)
+                    .ok_or_else(|| {
+                        V2ApplyError::Validation(
+                            "autonomous carrier failed the composed first-release transition gate"
+                                .to_owned(),
+                        )
+                    })?;
+                checked_carrier_applications.push((checked, projection));
+            }
+        }
+
         let committed_block = if state_height < height.get() {
             self.validate_and_apply(
                 context,
@@ -3364,6 +3664,14 @@ impl V2ApplyService {
                 task.validated_receipt().execution_commitment(),
                 &artifact,
             )?;
+            for (checked, projection) in checked_carrier_applications {
+                if checked.into_projection() != projection {
+                    return Err(V2ApplyError::committed_recovery_required(
+                        "canonical WSV carrier refinement authorization",
+                        &"checked ApplyCarrier projection changed across State commit",
+                    ));
+                }
+            }
             self.kura
                 .get_block(height)
                 .ok_or(V2ApplyError::StateAheadOfKura)?

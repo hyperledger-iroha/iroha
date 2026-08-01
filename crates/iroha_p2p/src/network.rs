@@ -10926,7 +10926,11 @@ mod handle_update_tests {
 
     fn test_consensus_caps(marker: u8) -> crate::ConsensusHandshakeCaps {
         crate::ConsensusHandshakeCaps {
-            mode_tag: format!("test-{marker}"),
+            mode: if marker & 1 == 0 {
+                crate::ConsensusMode::Permissioned
+            } else {
+                crate::ConsensusMode::Npos
+            },
             proto_version: u32::from(marker),
             consensus_fingerprint: [marker; 32],
             config: crate::ConsensusConfigCaps {
@@ -16781,7 +16785,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         let reconnect =
             consensus_caps.take_reconnect_request(&mut self.consensus_reconnect_generation);
         iroha_logger::info!(
-            mode_tag=?consensus_caps.caps.mode_tag,
+            mode_tag = consensus_caps.caps.mode.tag(),
             drop_existing = reconnect,
             "Updating consensus handshake capabilities at runtime"
         );
@@ -17829,7 +17833,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
     fn is_permissioned_consensus(&self) -> bool {
         self.consensus_caps
             .as_ref()
-            .map_or(true, |caps| caps.mode_tag.contains("permissioned"))
+            .is_none_or(|caps| matches!(caps.mode, crate::ConsensusMode::Permissioned))
     }
 
     fn reply_source_capacity(&self) -> usize {
@@ -23260,7 +23264,7 @@ mod tests {
         };
         replace_test_authenticated_source_geometry(&mut network, 1, None);
         network.consensus_caps = Some(crate::ConsensusHandshakeCaps {
-            mode_tag: "public".to_owned(),
+            mode: crate::ConsensusMode::Npos,
             proto_version: 1,
             consensus_fingerprint: [0; 32],
             config: crate::ConsensusConfigCaps {
@@ -23487,7 +23491,7 @@ mod tests {
         };
         replace_test_authenticated_source_geometry(&mut network, 1, Some(HashSet::new()));
         network.consensus_caps = Some(crate::ConsensusHandshakeCaps {
-            mode_tag: "public".to_owned(),
+            mode: crate::ConsensusMode::Npos,
             proto_version: 1,
             consensus_fingerprint: [0; 32],
             config: crate::ConsensusConfigCaps {
@@ -31100,7 +31104,7 @@ pub mod message {
     }
 
     /// Update consensus handshake capabilities and optionally reconnect peers.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Copy, Debug)]
     pub struct UpdateConsensusCaps {
         /// New consensus handshake capabilities to advertise and require.
         pub caps: crate::ConsensusHandshakeCaps,

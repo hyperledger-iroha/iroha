@@ -137,7 +137,5 @@ export function makeNativeTest(baseTest, options = {}) {
             maybeFn,
           )
       : undefined;
-  wrapper.skip = baseTest.skip?.bind(baseTest);
-  wrapper.todo = baseTest.todo?.bind(baseTest);
   return wrapper;
 }

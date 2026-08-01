@@ -45,6 +45,11 @@ const INHERITED_CARGO_LOCK_PATH = process.env[NATIVE_BUILD_CARGO_LOCK_ENV];
 
 delete process.env[NATIVE_BUILD_CARGO_LOCK_ENV];
 
+// Symlink, hardlink, executable-mode, and FIFO checks exercise POSIX-only
+// primitives. The release workflow runs this file on Linux and macOS and runs
+// the portable provenance contract on Windows without reporting false skips.
+const unixOnlyTest = process.platform === "win32" ? () => undefined : test;
+
 test.after(() => {
   if (INHERITED_CARGO_LOCK_PATH === undefined) {
     delete process.env[NATIVE_BUILD_CARGO_LOCK_ENV];
@@ -401,9 +406,8 @@ test("selected Cargo lock is snapshotted, fingerprinted, and monitored", () => {
   });
 });
 
-test(
+unixOnlyTest(
   "selected Cargo lock rejects relative and symbolic-link paths",
-  { skip: process.platform === "win32" },
   () => {
     withSourceRepository((repoRoot) => {
       assert.throws(
@@ -461,9 +465,8 @@ test("source seal binds exact stage-0 index bytes even when the dirty worktree i
   });
 });
 
-test(
+unixOnlyTest(
   "private source snapshot remains sealed across original A-to-B-to-A changes",
-  { skip: process.platform === "win32" },
   () => {
     withSourceRepository((repoRoot) => {
       const trackedPath = path.join(repoRoot, "tracked.txt");
@@ -499,9 +502,8 @@ test(
   },
 );
 
-test(
+unixOnlyTest(
   "private source snapshot rejects symlinks that resolve outside its sealed root",
-  { skip: process.platform === "win32" },
   () => {
     withSourceRepository((repoRoot) => {
       symlinkSync(os.tmpdir(), path.join(repoRoot, "external-link"));
@@ -517,9 +519,8 @@ test(
   },
 );
 
-test(
+unixOnlyTest(
   "private source snapshot permits a lexically contained dangling symlink",
-  { skip: process.platform === "win32" },
   () => {
     withSourceRepository((repoRoot) => {
       symlinkSync(
@@ -545,9 +546,8 @@ test(
   },
 );
 
-test(
+unixOnlyTest(
   "private source snapshot follows an existing symlink before applying later dot-dot components",
-  { skip: process.platform === "win32" },
   () => {
     withSourceRepository((repoRoot) => {
       symlinkSync(os.tmpdir(), path.join(repoRoot, "external-hop"));
@@ -596,9 +596,8 @@ test("private source snapshot verification rejects extra transient filesystem en
   });
 });
 
-test(
+unixOnlyTest(
   "private source snapshot rejects a target with symbolic-link components",
-  { skip: process.platform === "win32" },
   () => {
     withSourceRepository((repoRoot) => {
       const externalTarget = mkdtempSync(
@@ -698,9 +697,8 @@ test("source seal rejects Git repository, index, and config redirection", () => 
   }
 });
 
-test(
+unixOnlyTest(
   "source seal rejects unsafe source filesystem types",
-  { skip: process.platform === "win32" },
   () => {
     withSourceRepository((repoRoot) => {
       const fifoPath = path.join(repoRoot, "tracked.txt");
@@ -785,9 +783,8 @@ test("invalidating provenance fails closed across a byte-identical rebuild", () 
   });
 });
 
-test(
+unixOnlyTest(
   "provenance publication rejects a hostile hardlink without touching its victim",
-  { skip: process.platform === "win32" },
   () => {
     withNativeFixture(({ directory, nativePath }) => {
       const victimPath = path.join(directory, "victim.txt");
@@ -813,9 +810,8 @@ test(
   },
 );
 
-test(
+unixOnlyTest(
   "provenance invalidation rejects a hostile hardlink without touching its victim",
-  { skip: process.platform === "win32" },
   () => {
     withNativeFixture(({ directory, nativePath }) => {
       const victimPath = path.join(directory, "victim.txt");
@@ -833,9 +829,8 @@ test(
   },
 );
 
-test(
+unixOnlyTest(
   "stable native and provenance reads reject symbolic links and hardlinks",
-  { skip: process.platform === "win32" },
   () => {
     withNativeFixture(({ directory, nativePath }) => {
       const linkedNative = path.join(directory, "linked-native.so");

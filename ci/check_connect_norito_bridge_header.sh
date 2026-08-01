@@ -130,11 +130,16 @@ KAGEMUSHA_CANDIDATE_LAB_EXPORTS = {
 FORBIDDEN_FIRST_RELEASE_EXPORTS = {
     "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
     "connect_norito_kagemusha_request_authorization_create_v2",
+    "iroha_privacy_capabilities_v1",
+    "iroha_privacy_validate_capabilities_v1",
+    "iroha_privacy_proof_request_v1",
+    "iroha_privacy_build_proof_v1",
+    "iroha_privacy_verify_proof_v1",
 }
 
 required_privacy_ffi = (
-    "iroha_privacy_capabilities_v1",
-    "iroha_privacy_validate_capabilities_v1",
+    "iroha_privacy_compiled_profile_catalog_v1",
+    "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
     "iroha_privacy_free_buffer",
@@ -325,8 +330,8 @@ if undeclared_privacy_exports:
     )
 
 expected_privacy_signatures = {
-    "iroha_privacy_capabilities_v1": 2,
-    "iroha_privacy_validate_capabilities_v1": 2,
+    "iroha_privacy_compiled_profile_catalog_v1": 2,
+    "iroha_privacy_validate_compiled_profile_catalog_v1": 2,
     "iroha_privacy_exact12_fixture_bundle_v1": 2,
     "iroha_privacy_validate_exact12_fixture_bundle_v1": 2,
     "iroha_privacy_free_buffer": 1,
@@ -698,18 +703,18 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-missing-privacy-header-symbol)
       replace_once "${tmp_header}" \
-        "iroha_privacy_capabilities_v1" \
-        "removed_iroha_privacy_capabilities_v1"
+        "iroha_privacy_compiled_profile_catalog_v1" \
+        "removed_iroha_privacy_compiled_profile_catalog_v1"
       ;;
     --self-test-bad-privacy-signature)
       replace_regex_once "${tmp_header}" \
-        '(iroha_privacy_capabilities_v1\s*\([^;]*?)unsigned long\* out_len' \
+        '(iroha_privacy_compiled_profile_catalog_v1\s*\([^;]*?)unsigned long\* out_len' \
         '\g<1>unsigned long out_len'
       ;;
     --self-test-missing-privacy-rust-symbol)
       replace_once "${tmp_rust}" \
-        "iroha_privacy_capabilities_v1" \
-        "removed_iroha_privacy_capabilities_v1"
+        "iroha_privacy_compiled_profile_catalog_v1" \
+        "removed_iroha_privacy_compiled_profile_catalog_v1"
       ;;
     --self-test-missing-sorafs-reference-header-symbol)
       replace_once "${tmp_header}" \

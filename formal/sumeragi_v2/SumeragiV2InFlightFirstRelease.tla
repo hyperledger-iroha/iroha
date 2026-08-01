@@ -6,10 +6,12 @@ Finite safety kernel for the first-release, in-flight lane carrier path.
 
 The accepted schema V2 carried by the Rust `LaneExecutablePayloadV1`
 container is represented by `payloadBinding`. A validator is mapped to
-`BindingA` only where authenticated custody of the selected
-`QueuePlanAdmissionBindingV2` preimage is established. Init establishes that
-custody for the selected producer; it deliberately does not assert knowledge
-by every validator.
+`BindingA` only where authenticated custody of the selected FIFO-ordered
+conjunction of exact `QueuePlanAdmissionBindingV2` preimages is established.
+The production projection is the canonical reservation-group hash covering
+every complete key in that order. Init establishes that custody for the
+selected producer; it deliberately does not assert knowledge by every
+validator.
 
 QueuePlan journal V4 has individual Put records, not a batch-Put frame.
 `SelectQueuePlanV4Conjunction` therefore observes that every exact claim in

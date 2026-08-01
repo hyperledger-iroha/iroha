@@ -15,12 +15,6 @@ use thiserror::Error;
 use super::air::{BooleanGateAirRowV1, ZkX509AirErrorV1};
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 
-/// Manifest descriptor for the implemented local SHA-256 circuit.
-///
-/// Global word-copy and cross-segment call binding are supplied by the
-/// manifest-bound SHA word AIR and SHA call-bus STARK respectively.
-pub(crate) const ZK_X509_SHA256_LOCAL_AIR_DESCRIPTOR_V1: &[u8] = b"sha256-local-air-v1:canonical-padding:private-message-length:word-input-bits-le:sha256-bytes-be:boolean-and-xor-full-adder:gates-per-block=55552:fixed-canonical-topology:acyclic-single-assignment-wire-addresses:mod2^32-carry-discard:output-digest-reconstruction:global-wire-copy-and-cross-segment-binding=complete-via-sha256-word-air+sha-call-bus-stark";
-
 const SHA256_INITIAL_STATE_V1: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,

@@ -89,51 +89,55 @@ IndexedHistoricalTransport(initialContext) ==
        asyncServeAdmissions <- IndexedScheduler(initialContext, 14),
        asyncServeReservations <- IndexedScheduler(initialContext, 15),
        asyncServeTombstones <- IndexedScheduler(initialContext, 16),
-       asyncOutstandingWork <- IndexedScheduler(initialContext, 17),
-       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 18),
-       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 19),
-       asyncNextCompletionSource <- IndexedScheduler(initialContext, 20),
-       asyncIoControlAvailable <- IndexedScheduler(initialContext, 21),
-       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 22),
-       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 23),
-       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 24),
-       asyncDeferredHandoffs <- IndexedScheduler(initialContext, 25),
-       asyncNextDeferredClass <- IndexedScheduler(initialContext, 26),
-       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 27),
-       asyncCausalQueues <- IndexedScheduler(initialContext, 28),
-       asyncOutstandingTags <- IndexedScheduler(initialContext, 29),
-       asyncNodeDeadlines <- IndexedScheduler(initialContext, 30),
-       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 31),
-       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 32),
-       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 33),
-       asyncSentItems <- IndexedScheduler(initialContext, 34),
-       asyncRetainedControl <- IndexedScheduler(initialContext, 35),
-       asyncActiveRequests <- IndexedScheduler(initialContext, 36),
-       asyncCertifiedResponseClaim <- IndexedScheduler(initialContext, 37),
-       asyncTransport <- IndexedScheduler(initialContext, 38),
-       asyncIngressLanes <- IndexedScheduler(initialContext, 39),
-       asyncIngressReady <- IndexedScheduler(initialContext, 40),
-       asyncLeaderWireLifecycles <- IndexedScheduler(initialContext, 41),
-       asyncHeldChunks <- IndexedScheduler(initialContext, 42),
-       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 43),
-       asyncControlServiceState <- IndexedScheduler(initialContext, 44),
-       asyncServiceActivationState <- IndexedScheduler(initialContext, 45),
+       asyncServeAttempts <- IndexedScheduler(initialContext, 17),
+       asyncOutstandingWork <- IndexedScheduler(initialContext, 18),
+       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 19),
+       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 20),
+       asyncNextCompletionSource <- IndexedScheduler(initialContext, 21),
+       asyncIoControlAvailable <- IndexedScheduler(initialContext, 22),
+       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 23),
+       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 24),
+       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 25),
+       asyncDeferredHandoffs <- IndexedScheduler(initialContext, 26),
+       asyncNextDeferredClass <- IndexedScheduler(initialContext, 27),
+       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 28),
+       asyncCausalQueues <- IndexedScheduler(initialContext, 29),
+       asyncOutstandingTags <- IndexedScheduler(initialContext, 30),
+       asyncNodeDeadlines <- IndexedScheduler(initialContext, 31),
+       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 32),
+       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 33),
+       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 34),
+       asyncSentItems <- IndexedScheduler(initialContext, 35),
+       asyncRetainedControl <- IndexedScheduler(initialContext, 36),
+       asyncActiveRequests <- IndexedScheduler(initialContext, 37),
+       asyncCertifiedResponseClaim <- IndexedScheduler(initialContext, 38),
+       asyncTransport <- IndexedScheduler(initialContext, 39),
+       asyncIngressLanes <- IndexedScheduler(initialContext, 40),
+       asyncIngressReady <- IndexedScheduler(initialContext, 41),
+       asyncLeaderWireLifecycles <- IndexedScheduler(initialContext, 42),
+       asyncHeldChunks <- IndexedScheduler(initialContext, 43),
+       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 44),
+       asyncControlServiceState <- IndexedScheduler(initialContext, 45),
+       asyncServiceActivationState <- IndexedScheduler(initialContext, 46),
        asyncRecoveryPhase <- IndexedRecovery(initialContext, 1),
        asyncRecoveryNode <- IndexedRecovery(initialContext, 2),
        asyncRecoveryGeneration <- IndexedRecovery(initialContext, 3),
        asyncRecoveryReplayQueue <- IndexedRecovery(initialContext, 4),
        asyncHistoricalLockRestartAuthorities <-
          IndexedRecovery(initialContext, 5),
+       asyncProducerKnownObligations <- IndexedProducer(initialContext, 1),
+       asyncProducerConsumedEpisodes <- IndexedProducer(initialContext, 2),
+       asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
          IndexedFixedCorridorDeadlines(initialContext)
 
 (***************************************************************************
 Exact projection.
 
-These are the same duplicated GST, 49 Core, 45 scheduler, five recovery, and
-fixed-corridor receipt substitutions as `IndexedAsync` and
-`IndexedDecisionWitness`.  The extensional equality is what permits the
-product bracket to feed the transport instance without defining a second
+These are the same duplicated GST, 49 Core, 46 scheduler, five recovery,
+three producer-journal, and fixed-corridor receipt substitutions as
+`IndexedAsync` and `IndexedDecisionWitness`.  The extensional equality permits
+the product bracket to feed the transport instance without defining a second
 state machine.
 ***************************************************************************)
 
@@ -147,9 +151,11 @@ BY Isa
        IndexedHistoricalTransport!AsyncAllVars,
        IndexedHistoricalTransport!AsyncSchedulerVars,
        IndexedHistoricalTransport!AsyncRecoveryVars,
+       IndexedHistoricalTransport!AsyncProducerVars,
        IndexedHistoricalTransport!vars,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
-       IndexedRecovery, IndexedFixedCorridorDeadlines
+       IndexedRecovery, IndexedProducer,
+       IndexedFixedCorridorDeadlines
 
 THEOREM IndexedInitProjectsEveryHistoricalTransportInit ==
   \A initialContext \in AdmissibleContextRecords:
@@ -205,8 +211,10 @@ PROOF
            DEF IndexedHistoricalTransport!AsyncAllVars,
                IndexedHistoricalTransport!AsyncSchedulerVars,
                IndexedHistoricalTransport!AsyncRecoveryVars,
+               IndexedHistoricalTransport!AsyncProducerVars,
                IndexedHistoricalTransport!vars,
-               IndexedCore, IndexedScheduler, IndexedRecovery
+               IndexedCore, IndexedScheduler, IndexedRecovery,
+               IndexedProducer, IndexedFixedCorridorDeadlines
       <3> QED BY <3>2
     <2> QED BY <1>1, <2>1, <2>2
   <1> QED BY <1>1
@@ -4307,27 +4315,23 @@ IndexedHistoricalRunnerEpisodeGoal(
     [] OTHER -> FALSE
 
 IndexedHistoricalRunnerEpisodeRank(initialContext, kind, candidate) ==
-  LET cutoffOrdinal ==
-        IndexedHistoricalTransport(initialContext)!
-          AsyncCandidateLifecycleOrdinal(candidate)
-  IN <<IndexedHistoricalTransport(initialContext)!
-          AsyncCausalEpisodeStructuralRank(
-            candidate.node, cutoffOrdinal),
+  <<IndexedHistoricalTransport(initialContext)!
+       AsyncProtectedCandidateIngressEpisodeRank(candidate),
        IndexedHistoricalRunnerEpisodeTailRank(
          initialContext, kind, candidate)>>
 
 IndexedHistoricalRunnerEpisodeRankCarrier(initialContext, kind) ==
   IndexedHistoricalTransport(initialContext)!
-    AsyncCausalEpisodeStructuralRankCarrier
+    AsyncProtectedCandidateIngressEpisodeRankCarrier
     \X IndexedHistoricalRunnerEpisodeTailCarrier(initialContext, kind)
 
 IndexedHistoricalRunnerEpisodeRankOrdering(initialContext, kind) ==
   LexPairOrdering(
     IndexedHistoricalTransport(initialContext)!
-      AsyncCausalEpisodeStructuralRankOrdering,
+      AsyncProtectedCandidateIngressEpisodeRankOrdering,
     IndexedHistoricalRunnerEpisodeTailOrdering(initialContext, kind),
     IndexedHistoricalTransport(initialContext)!
-      AsyncCausalEpisodeStructuralRankCarrier,
+      AsyncProtectedCandidateIngressEpisodeRankCarrier,
     IndexedHistoricalRunnerEpisodeTailCarrier(initialContext, kind))
 
 IndexedHistoricalRunnerEpisodeFairOwnerKinds ==
@@ -4335,12 +4339,8 @@ IndexedHistoricalRunnerEpisodeFairOwnerKinds ==
 
 IndexedHistoricalRunnerEpisodeIoOwnerRequired(
     initialContext, candidate) ==
-  LET cutoffOrdinal ==
-        IndexedHistoricalTransport(initialContext)!
-          AsyncCandidateLifecycleOrdinal(candidate)
-  IN IndexedHistoricalTransport(initialContext)!
-       AsyncCausalEpisodeIoOwnerRequired(
-         candidate.node, cutoffOrdinal)
+  IndexedHistoricalTransport(initialContext)!
+    AsyncProtectedCandidateIoOwnerRequired(candidate)
 
 IndexedHistoricalRunnerEpisodeFairOwner(initialContext, candidate) ==
   IF IndexedHistoricalRunnerEpisodeIoOwnerRequired(
@@ -4431,11 +4431,11 @@ PROOF
                    initialContext, kind))
     <2>1. IsWellFoundedOn(
             IndexedHistoricalTransport(initialContext)!
-              AsyncCausalEpisodeStructuralRankOrdering,
+              AsyncProtectedCandidateIngressEpisodeRankOrdering,
             IndexedHistoricalTransport(initialContext)!
-              AsyncCausalEpisodeStructuralRankCarrier)
+              AsyncProtectedCandidateIngressEpisodeRankCarrier)
       BY IndexedHistoricalTransport(initialContext)!
-           AsyncCausalEpisodeStructuralRankOrderingIsWellFounded
+           AsyncProtectedCandidateIngressEpisodeRankOrderingIsWellFounded
     <2>2. IsWellFoundedOn(
             IndexedHistoricalRunnerEpisodeTailOrdering(
               initialContext, kind),
@@ -4489,7 +4489,7 @@ THEOREM IndexedHistoricalRunnerEpisodeResidualFacts ==
                     initialContext, candidate)
                     \in IndexedHistoricalRunnerEpisodeFairOwnerKinds
 BY IndexedHistoricalTransport(initialContext)!
-     AsyncCausalEpisodeStructuralRankIsFinite,
+     AsyncProtectedCandidateIngressEpisodeRankIsFinite,
    IndexedHistoricalTransport(initialContext)!ReadyRunAuxRankInCarrier,
    IndexedHistoricalTransport(initialContext)!Stage4CapacityRankInCarrier,
    IndexedHistoricalTransport(initialContext)!
@@ -4559,7 +4559,7 @@ THEOREM IndexedHistoricalRunnerEpisodeStepIsGoalDescentOrFrame ==
                          initialContext, kind, candidate)
 BY IndexedBracketStepProjectsEveryHistoricalTransportStep,
    IndexedHistoricalTransport(initialContext)!
-     AsyncCausalEpisodeStructuralStepIsDescentOrFrame,
+     AsyncProtectedCandidateIngressEpisodeStepIsDescentOrFrame,
    IndexedHistoricalTransport(initialContext)!
      AsyncCausalEpisodeIngressOwnerDepartureStrictlyDescends,
    IndexedHistoricalTransport(initialContext)!
@@ -4629,9 +4629,9 @@ BY IndexedHistoricalRunnerEpisodeResidualFacts,
        IndexedHistoricalRunnerEpisodeProductAction,
        IndexedHistoricalRunnerEpisodeFairOwner,
        IndexedHistoricalRunnerEpisodeIoOwnerRequired,
-       IndexedHistoricalTransport!AsyncCausalEpisodeIoOwnerRequired,
+       IndexedHistoricalTransport!AsyncProtectedCandidateIoOwnerRequired,
        IndexedHistoricalTransport!
-         AsyncCausalEpisodeServeIngressIdentities,
+         AsyncCandidateProducerContinuationFrozenServeIngressIdentities,
        IndexedHistoricalTransport!CanResumeExactServeCapacity,
        IndexedHistoricalTransport!AsyncServeJobQueued,
        IndexedHistoricalTransport!AsyncServeLiveReservationOwned,
@@ -4671,11 +4671,11 @@ THEOREM IndexedHistoricalRunnerEpisodeSelectedActionConsumesCell ==
                        initialContext, kind)
 BY IndexedHistoricalRunnerEpisodeStepIsGoalDescentOrFrame,
    IndexedHistoricalTransport(initialContext)!
-     AsyncCausalEpisodeStructuralStepIsDescentOrFrame,
+     AsyncProtectedCandidateIngressEpisodeStepIsDescentOrFrame,
    IndexedHistoricalTransport(initialContext)!
      AsyncCausalEpisodeIngressOwnerDepartureStrictlyDescends,
    IndexedHistoricalTransport(initialContext)!
-     AsyncCausalEpisodeSelectedServeOwnerGeometryIsComplete,
+     AsyncProtectedCandidateSelectedServeOwnerGeometryIsComplete,
    IndexedHistoricalTransport(initialContext)!ServiceIoWorkerDropsQueueDepth,
    IndexedHistoricalTransport(initialContext)!
      HistoricalTemporalStage3SameRunnerAuxOutcome,
@@ -4699,7 +4699,7 @@ BY IndexedHistoricalRunnerEpisodeStepIsGoalDescentOrFrame,
        IndexedHistoricalRunnerEpisodeProductAction,
        IndexedHistoricalRunnerEpisodeFairOwner,
        IndexedHistoricalRunnerEpisodeIoOwnerRequired,
-       IndexedHistoricalTransport!AsyncCausalEpisodeIoOwnerRequired,
+       IndexedHistoricalTransport!AsyncProtectedCandidateIoOwnerRequired,
        IndexedRunHistoricalRecoveryStep,
        IndexedHistoricalRecoveryIoWorkerStep,
        IndexedHistoricalTransport!ServiceIoWorkerWork,
@@ -4730,9 +4730,11 @@ BY IndexedBracketStepProjectsEveryHistoricalTransportStep,
    IndexedHistoricalTransport(initialContext)!
      AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
    IndexedHistoricalTransport(initialContext)!
+     AsyncProtectedCandidateTargetPhysicalCutPersists,
+   IndexedHistoricalTransport(initialContext)!
      AsyncCausalEpisodeFrozenOriginsCannotReplenish,
    IndexedHistoricalTransport(initialContext)!
-     AsyncCausalEpisodeServeCutCannotReplenish,
+     CandidateProducerContinuationFrozenServeCutCannotReplenish,
    IndexedHistoricalTransport(initialContext)!
      AsyncServeQueuedIdentityDepartureInstallsTombstone,
    IndexedHistoricalTransport(initialContext)!
@@ -4743,15 +4745,35 @@ BY IndexedBracketStepProjectsEveryHistoricalTransportStep,
        IndexedHistoricalRunnerEpisodeRank,
        IndexedHistoricalRunnerEpisodeFairOwner,
        IndexedHistoricalRunnerEpisodeIoOwnerRequired,
-       IndexedHistoricalTransport!AsyncCausalEpisodeIoOwnerRequired,
+       IndexedHistoricalTransport!AsyncProtectedCandidateIoOwnerRequired,
        IndexedHistoricalTransport!
-         AsyncCausalEpisodeStructuralRank,
+         AsyncProtectedCandidateIngressEpisodeRank,
        IndexedHistoricalTransport!
-         AsyncCausalEpisodeServeWorkBudget,
+         AsyncProtectedCandidateIngressEpisodeTailRank,
        IndexedHistoricalTransport!
-         AsyncCausalEpisodeServeWorkTokens,
+         AsyncCausalEpisodeFrozenIngressBarrierStageBudget,
        IndexedHistoricalTransport!
-         AsyncCausalEpisodeServeIngressIdentities,
+         AsyncFrozenLeaderWireBarrierStageBudget,
+       IndexedHistoricalTransport!
+         AsyncFrozenLeaderWireBarrierStageTokens,
+       IndexedHistoricalTransport!
+         AsyncCandidateProducerContinuationFrozenPrefixRank,
+       IndexedHistoricalTransport!
+         AsyncCandidateProducerContinuationFrozenProducerBudget,
+       IndexedHistoricalTransport!
+         AsyncCandidateProducerContinuationFrozenProducerTokens,
+       IndexedHistoricalTransport!
+         AsyncCandidateProducerContinuationFrozenCandidateTokens,
+       IndexedHistoricalTransport!
+         AsyncCandidateProducerContinuationFrozenCandidateOwners,
+       IndexedHistoricalTransport!
+         AsyncCandidateProducerContinuationFrozenStatusTokens,
+       IndexedHistoricalTransport!
+         AsyncCandidateProducerContinuationFrozenServeWorkBudget,
+       IndexedHistoricalTransport!
+         AsyncCandidateProducerContinuationFrozenServeWorkTokens,
+       IndexedHistoricalTransport!
+         AsyncCandidateProducerContinuationFrozenServeIngressIdentities,
        IndexedChainVars
 
 THEOREM IndexedHistoricalRunnerEpisodeOwnerUsesIndexedFairness ==
@@ -8926,8 +8948,10 @@ IndexedHistoricalSendingRetransmitLocalStep(initialContext, node) ==
 
 (***************************************************************************
 The Runtime prefix must use the gated runner split, not the unrestricted
-`SerializedRuntimeStepIsEnabled` claim.  With no Serve ticket, Local/Ingress
-may finish and ordinary serialized Runtime is the only unrestricted arm.
+`SerializedRuntimeStepIsEnabled` claim.  With no shared ingress barrier,
+Local/Ingress may finish and ordinary serialized Runtime is the only
+unrestricted arm.  The retained `NoServeTicket` operator name is historical;
+its predicate now excludes Serve, leader-wire, and ordinary ingress owners.
 A strictly older Runtime or Local lifecycle may take exactly its predecessor
 interleave while retaining the ticket.  Every other ticket-bearing
 Runtime/Local state takes the target-only turn, and Ingress consumes the
@@ -8937,15 +8961,15 @@ their temporal closure is kept in each emission Runtime-prefix residual below.
 
 IndexedHistoricalRetransmitNoServeTicketRunnerPrefix(
     initialContext, node) ==
-  /\ IndexedHistoricalTransport(initialContext)!
-       AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+  /\ ~IndexedHistoricalTransport(initialContext)!
+        AsyncIngressSchedulerBarrierActive(node)
   /\ IndexedHistoricalTransport(initialContext)!
        asyncRunnerPhase[node] \in {"Local", "Ingress", "Runtime"}
 
 IndexedHistoricalRetransmitOlderRuntimePredecessorPrefix(
     initialContext, node) ==
   /\ IndexedHistoricalTransport(initialContext)!
-       AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+       AsyncIngressSchedulerBarrierActive(node)
   /\ IndexedHistoricalTransport(initialContext)!
        asyncRunnerPhase[node] = "Runtime"
   /\ IndexedHistoricalTransport(initialContext)!
@@ -8954,7 +8978,7 @@ IndexedHistoricalRetransmitOlderRuntimePredecessorPrefix(
 IndexedHistoricalRetransmitOlderLocalPredecessorPrefix(
     initialContext, node) ==
   /\ IndexedHistoricalTransport(initialContext)!
-       AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+       AsyncIngressSchedulerBarrierActive(node)
   /\ IndexedHistoricalTransport(initialContext)!
        asyncRunnerPhase[node] = "Local"
   /\ IndexedHistoricalTransport(initialContext)!
@@ -8963,7 +8987,7 @@ IndexedHistoricalRetransmitOlderLocalPredecessorPrefix(
 IndexedHistoricalRetransmitServeTargetCorridorPrefix(
     initialContext, node) ==
   /\ IndexedHistoricalTransport(initialContext)!
-       AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+       AsyncIngressSchedulerBarrierActive(node)
   /\ \/ IndexedHistoricalTransport(initialContext)!
           asyncRunnerPhase[node] = "Ingress"
      \/ /\ IndexedHistoricalTransport(initialContext)!
@@ -10687,11 +10711,11 @@ Current-voter arm of route-neutral Candidate service.
 
 The fixed-clock minimum is route neutral: its physical Candidate can belong
 to an ordinary current voter even when the clock whose tail is being reduced
-belongs to a historical target.  The selected causal-episode owner is frozen
-by the Candidate admission ordinal.  It is either the ordinary Runner or the
-ordinary I/O worker, so the two exact local product fairness transfers below
-cover it without an action union and without waiting for every Responsive
-peer to join the instance.
+belongs to a historical target.  The selected causal-episode owner is chosen
+from the Candidate's immutable logical cut and physically frozen Serve
+prefix.  It is either the ordinary Runner or the ordinary I/O worker, so the
+two exact local product fairness transfers below cover it without an action
+union and without waiting for every Responsive peer to join the instance.
 
 The service-rank theorem deliberately cites the final finite runner-episode
 rank.  Its structural component pays for the immutable causal predecessor
@@ -10707,13 +10731,10 @@ IndexedCurrentVoterCausalEpisodeAt(
        ResponsiveProtectedCandidateOwned(candidate)
   /\ ownerKind =
        IndexedHistoricalTransport(initialContext)!
-         AsyncCausalEpisodeFairOwner(
-           candidate.node,
-           IndexedHistoricalTransport(initialContext)!
-             AsyncCandidateLifecycleOrdinal(candidate))
+         AsyncProtectedCandidateFairOwner(candidate)
   /\ ownerKind \in
        IndexedHistoricalTransport(initialContext)!
-         AsyncCausalEpisodeFairOwnerKinds
+         AsyncProtectedCandidateFairOwnerKinds
 
 THEOREM IndexedChainSpecProvidesCurrentVoterCausalEpisodeOwnerFairness ==
   \A initialContext \in AdmissibleContextRecords,
@@ -10724,13 +10745,13 @@ THEOREM IndexedChainSpecProvidesCurrentVoterCausalEpisodeOwnerFairness ==
     /\ IndexedCurrentVoterCausalEpisodeAt(
          initialContext, candidate, ownerKind)
     => WF_(IndexedHistoricalTransport(initialContext)!AsyncAllVars)(
-         IndexedHistoricalTransport(initialContext)!
-           AsyncCausalEpisodeFairAction(candidate.node, ownerKind))
+       IndexedHistoricalTransport(initialContext)!
+           AsyncProtectedCandidateFairAction(candidate.node, ownerKind))
 BY IndexedChainSpecProvidesHistoricalRunNodeFairness,
    IndexedChainSpecProvidesHistoricalOwnerServiceFairness, Isa
    DEF IndexedCurrentVoterCausalEpisodeAt,
-       IndexedHistoricalTransport!AsyncCausalEpisodeFairOwnerKinds,
-       IndexedHistoricalTransport!AsyncCausalEpisodeFairAction,
+       IndexedHistoricalTransport!AsyncProtectedCandidateFairOwnerKinds,
+       IndexedHistoricalTransport!AsyncProtectedCandidateFairAction,
        IndexedHistoricalTransport!ResponsiveProtectedCandidateOwned,
        IndexedHistoricalTransport!AsyncCurrentResponsiveVoters,
        IndexedHistoricalTransport!AsyncVotersAt
@@ -10762,7 +10783,7 @@ PROOF
        IndexedBracketStepProjectsEveryHistoricalTransportStep,
        IndexedChainSpecProvidesCurrentVoterCausalEpisodeOwnerFairness,
        IndexedHistoricalTransport(initialContext)!
-         AsyncCausalEpisodeSelectedOwnerIsConcreteAndEnabled,
+         AsyncProtectedCandidateSelectedOwnerIsConcreteAndEnabled,
        IndexedHistoricalTransport(initialContext)!
          AsyncReadyRunnerEpisodeStepIsGoalDescentOrFrame,
        IndexedHistoricalTransport(initialContext)!
@@ -10786,8 +10807,9 @@ PROOF
            IndexedHistoricalTransport!AsyncCapacityRunnerEpisodeRankGoal,
            IndexedHistoricalTransport!AsyncReadyRunnerEpisodeResidual,
            IndexedHistoricalTransport!AsyncCapacityRunnerEpisodeResidual,
-           IndexedHistoricalTransport!AsyncCausalEpisodeFairOwner,
-           IndexedHistoricalTransport!AsyncCausalEpisodeSelectedFairAction
+           IndexedHistoricalTransport!AsyncProtectedCandidateFairOwner,
+           IndexedHistoricalTransport!
+             AsyncProtectedCandidateSelectedFairAction
   <1> QED BY <1>1
        DEF IndexedCurrentVoterReadyRunnerEpisodeRankStepProperties,
            IndexedCurrentVoterCapacityRunnerEpisodeRankStepProperties

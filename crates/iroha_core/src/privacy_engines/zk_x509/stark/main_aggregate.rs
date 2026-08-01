@@ -6,9 +6,11 @@
 // This is a private continuation of the parent module's fixed protocol
 // vocabulary; it does not define an independent extension surface.
 use super::*;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use rayon::prelude::*;
 
 #[derive(Clone, Copy)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) enum MainTraceColumnKindV1 {
     Base,
     Aux,
@@ -21,10 +23,12 @@ pub(super) enum MainTraceColumnKindV1 {
 /// matrix are neither retained nor reconstructed after commitment. This keeps
 /// the phase transition binding while avoiding terabyte-scale encrypted
 /// scratch for the full MAIN profile.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct MainTracePolynomialSetV1 {
     groups: [aggregate::MaskedTracePolynomialSetV1; FULL_PROFILE_TRACE_GROUPS_V1],
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTracePolynomialSetV1 {
     pub(super) fn from_ordered_v1(
         layout: &AggregateProofLayoutV1,
@@ -74,6 +78,7 @@ impl MainTracePolynomialSetV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn registered_main_group_column_v1(
     layout: &AggregateProofLayoutV1,
     group_index: usize,
@@ -114,6 +119,7 @@ fn registered_main_group_column_v1(
     matched.ok_or(ZkX509StarkErrorV1::ProfileMismatch)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn commit_main_trace_group_v1<R: TryRngCore>(
     layout: &AggregateProofLayoutV1,
     group_index: usize,
@@ -195,6 +201,7 @@ fn commit_main_trace_group_v1<R: TryRngCore>(
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_trace_group_root_v1(
     kind: MainTraceColumnKindV1,
     commitment: &aggregate::StreamingRowCommitmentResultV1,
@@ -231,6 +238,7 @@ fn map_credential_pre_aux_error_v1(
 /// credential phase. It exposes only a consuming transition accepting the
 /// opaque outer credential binding; raw challenge families and auxiliary
 /// commitment APIs are intentionally absent.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509MainAwaitingCredentialBindingV1<'a> {
     layout: AggregateProofLayoutV1,
     statement: &'a IrohaZkX509StarkP256StatementV1,
@@ -247,6 +255,7 @@ pub(crate) struct ZkX509MainAwaitingCredentialBindingV1<'a> {
     pre_aux: ZkX509CredentialMainPreAuxV1,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509MainAwaitingCredentialBindingV1<'_> {
     fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
         self.layout.validate_exact_full_profile_registration_v1()?;
@@ -278,6 +287,7 @@ impl ZkX509MainAwaitingCredentialBindingV1<'_> {
 /// and per-registration composition coefficients are retained together. A
 /// future composition/DEEP/FRI continuation cannot resample challenges or
 /// return to either earlier phase.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509MainCompositionPhaseV1<'a> {
     layout: AggregateProofLayoutV1,
     statement: &'a IrohaZkX509StarkP256StatementV1,
@@ -296,6 +306,7 @@ pub(crate) struct ZkX509MainCompositionPhaseV1<'a> {
     binding: ZkX509CredentialPreAuxBindingV1,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509MainCompositionPhaseV1<'_> {
     fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
         self.layout.validate_exact_full_profile_registration_v1()?;
@@ -393,6 +404,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn record_main_group_commitment_v1(
     group_index: usize,
     kind: MainTraceColumnKindV1,
@@ -435,6 +447,7 @@ pub(super) fn record_main_group_commitment_v1(
 /// This is phase one only. The returned state cannot commit auxiliary columns
 /// until the credential layer combines its fixed six roots with the compact-CA
 /// root and supplies the resulting opaque 272-challenge X5B1 binding.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     statement: &'a IrohaZkX509StarkP256StatementV1,
     assembly: &'a ZkX509MainTraceAssemblyV1,
@@ -593,6 +606,7 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     Ok((phase, pre_aux))
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
     /// Consume phase one, bind all challenge-dependent children with one X5B1
     /// capability, commit exactly six auxiliary groups, absorb terminal
@@ -763,6 +777,7 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509MainCompositionPhaseV1<'_> {
     /// Consume the X5B1-bound phase and construct the canonical X5M1 proof.
     ///
@@ -1156,11 +1171,13 @@ impl ZkX509MainCompositionPhaseV1<'_> {
 ///
 /// The layout is cloned only after every dimension and closed provider
 /// discriminator is validated, preventing later caller mutation.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct MainTraceProviderSetV1<'a> {
     layout: AggregateProofLayoutV1,
     groups: Vec<MainTraceGroupProviderV1<'a>>,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainTraceProviderSetV1<'a> {
     pub(super) fn new_v1(
         layout: &AggregateProofLayoutV1,
@@ -1244,6 +1261,7 @@ impl<'a> MainTraceProviderSetV1<'a> {
 /// The variants are verifier-derived and exhaustive. No dynamic callback can
 /// supply fixed rows or a quotient value, and every challenge-dependent source
 /// borrows the already-bound X5B1 phase.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 enum MainProverConstraintProviderV1<'phase, 'assembly> {
     Log5(MainP256Log5ProverConstraintSourceV1<'phase>),
     P256Scalar(MainP256ScalarProverConstraintSourceV1<'phase>),
@@ -1253,6 +1271,7 @@ enum MainProverConstraintProviderV1<'phase, 'assembly> {
     Log19(MainLog19ProverConstraintSourceV1<'assembly, 'phase>),
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainProverConstraintProviderV1<'_, '_> {
     fn native_trace_log2_v1(&self) -> u8 {
         match self {
@@ -1350,11 +1369,13 @@ impl MainProverConstraintProviderV1<'_, '_> {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct ZeroizingMainFixedPolynomialSetV1 {
     registration: RegisteredSegmentLayoutV1,
     columns: Vec<Vec<F>>,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZeroizingMainFixedPolynomialSetV1 {
     fn drop(&mut self) {
         for column in &mut self.columns {
@@ -1363,6 +1384,7 @@ impl Drop for ZeroizingMainFixedPolynomialSetV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn stream_main_fixed_polynomial_sets_v1(
     provider: &MainProverConstraintProviderV1<'_, '_>,
     mut consume: impl FnMut(&ZeroizingMainFixedPolynomialSetV1) -> Result<(), ZkX509StarkErrorV1>,
@@ -1414,6 +1436,7 @@ fn stream_main_fixed_polynomial_sets_v1(
     consume(&completed)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn canonical_main_registration_index_v1(
     layout: &AggregateProofLayoutV1,
     registration: RegisteredSegmentLayoutV1,
@@ -1440,6 +1463,7 @@ fn canonical_main_registration_index_v1(
         .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_registration_trace_columns_on_coset_v1(
     layout: &AggregateProofLayoutV1,
     polynomials: &MainTracePolynomialSetV1,
@@ -1498,6 +1522,7 @@ fn main_registration_trace_columns_on_coset_v1(
     Ok(columns)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_fixed_columns_on_coset_v1(
     fixed: &ZeroizingMainFixedPolynomialSetV1,
     evaluation_log2: u8,
@@ -1549,6 +1574,7 @@ fn main_fixed_columns_on_coset_v1(
     Ok(columns)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainQuotientRowScratchV1 {
     base_current: ZeroizingMainTraceColumnV1,
     base_next: ZeroizingMainTraceColumnV1,
@@ -1558,6 +1584,7 @@ struct MainQuotientRowScratchV1 {
     fixed_next: ZeroizingMainTraceColumnV1,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainQuotientRowScratchV1 {
     fn new_v1(registration: RegisteredSegmentLayoutV1) -> Self {
         Self {
@@ -1624,6 +1651,7 @@ impl MainQuotientRowScratchV1 {
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_registration_composition_coefficient_chunks_v1(
     layout: &AggregateProofLayoutV1,
     provider: &MainProverConstraintProviderV1<'_, '_>,
@@ -1744,6 +1772,7 @@ fn main_registration_composition_coefficient_chunks_v1(
     Ok(coefficient_chunks)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn add_main_composition_coefficient_chunks_v1(
     accumulator: &mut [Vec<Vec<E>>],
     contribution: &[Vec<Vec<E>>],
@@ -1799,6 +1828,7 @@ pub(super) fn add_main_composition_coefficient_chunks_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn evaluate_main_composition_coefficient_chunks_v1(
     coefficient_chunks: &[Vec<Vec<E>>],
     shared_layout: &aggregate::AggregateProofLayoutV1,
@@ -1849,6 +1879,7 @@ fn evaluate_main_composition_coefficient_chunks_v1(
         .collect()
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_composition_material_from_polynomials_v1(
     layout: &AggregateProofLayoutV1,
     base_polynomials: &MainTracePolynomialSetV1,
@@ -1937,6 +1968,7 @@ fn main_composition_material_from_polynomials_v1(
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_fri_bases_from_polynomials_v1(
     layout: &AggregateProofLayoutV1,
     base_polynomials: &MainTracePolynomialSetV1,
@@ -2357,6 +2389,7 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for MainOpenedRowEvaluatorV1<'_, '
     }
 }
 
+#[cfg(test)]
 impl aggregate::AggregateOpenedRowEvaluatorV1 for DerOpenedRowEvaluatorV1<'_> {
     fn evaluate_opened_row_v1(
         &mut self,
@@ -2444,6 +2477,7 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for DerOpenedRowEvaluatorV1<'_> {
     }
 }
 
+#[cfg(test)]
 impl aggregate::AggregateOpenedRowEvaluatorV1 for IoOpenedRowEvaluatorV1<'_> {
     fn evaluate_opened_row_v1(
         &mut self,
@@ -2512,6 +2546,7 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for IoOpenedRowEvaluatorV1<'_> {
     }
 }
 
+#[cfg(test)]
 pub(super) struct ProjectionOpenedRowEvaluatorV1<'a> {
     pub(super) aggregate_layout: &'a AggregateProofLayoutV1,
     pub(super) layout: SegmentLayoutV1,
@@ -2522,6 +2557,7 @@ pub(super) struct ProjectionOpenedRowEvaluatorV1<'a> {
     pub(super) lde_root: F,
 }
 
+#[cfg(test)]
 pub(super) struct P256OpenedRowEvaluatorV1<'a> {
     pub(super) material: &'a P256OpenedMaterialV1,
     pub(super) challenges: P256AggregateChallengesV1,
@@ -2935,6 +2971,7 @@ pub(super) fn p256_opened_residues_v1(
     Ok(core::mem::take(&mut residues))
 }
 
+#[cfg(test)]
 impl aggregate::AggregateOpenedRowEvaluatorV1 for P256OpenedRowEvaluatorV1<'_> {
     fn evaluate_opened_row_v1(
         &mut self,
@@ -3045,6 +3082,7 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for P256OpenedRowEvaluatorV1<'_> {
     }
 }
 
+#[cfg(test)]
 impl aggregate::AggregateOpenedRowEvaluatorV1 for ProjectionOpenedRowEvaluatorV1<'_> {
     fn evaluate_opened_row_v1(
         &mut self,

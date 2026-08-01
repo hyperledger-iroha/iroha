@@ -21,6 +21,7 @@ on:
       - "ci/check_kagemusha_candidate_android_lab.sh"
       - "ci/check_kagemusha_candidate_android_lab_compile.sh"
       - "ci/check_kagemusha_jvm_native_bridge.sh"
+      - "ci/check_android_transport_guard.sh"
       - "scripts/deploy_localnet.sh"
       - "scripts/tests/deploy_localnet_test.py"
       - "scripts/package_mobile_sdk_artifacts.sh"
@@ -350,16 +351,22 @@ jobs:
         working-directory: java/iroha_android
         env:
           ANDROID_HARNESS_MAINS: org.hyperledger.iroha.android.sorafs.SorafsReferenceValidatorsTests
-        run: >-
-          ./gradlew
-          --no-daemon
-          --no-configuration-cache
-          --project-cache-dir "$MOBILE_SDK_ANDROID_PROJECT_CACHE_DIR/java-sorafs"
-          -Djava.io.tmpdir="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/java-sorafs"
-          -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon-java-sorafs"
-          :core:test
-          --tests org.hyperledger.iroha.android.GradleHarnessTests
-          --console=plain
+        run: |
+          ./gradlew \
+            --no-daemon \
+            --no-configuration-cache \
+            --project-cache-dir "$MOBILE_SDK_ANDROID_PROJECT_CACHE_DIR/java-sorafs" \
+            -Djava.io.tmpdir="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/java-sorafs" \
+            -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon-java-sorafs" \
+            -PenableCycloneDx=false \
+            :core:test \
+            --tests org.hyperledger.iroha.android.GradleHarnessTests \
+            :android:assembleRelease \
+            --console=plain
+      - name: Reject JVM transports in the Java Android release AAR
+        env:
+          ANDROID_TRANSPORT_GUARD_AAR: ${{ runner.temp }}/iroha-mobile-android-artifacts/gradle-build/iroha-android/android/outputs/aar/android-release.aar
+        run: bash ci/check_android_transport_guard.sh
       - name: Validate Android mobile SDK artifact
         run: bash scripts/check_mobile_sdk_artifacts.sh --android-only --require-built-android
       - name: Package Android mobile SDK artifact

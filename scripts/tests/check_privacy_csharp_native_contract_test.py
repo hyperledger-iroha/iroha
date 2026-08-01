@@ -31,7 +31,7 @@ def workflow_job(source: str, name: str) -> str:
 
 
 class PrivacyCsharpNativeContractTests(unittest.TestCase):
-    """Guard C# exact-12 tests against native capability skips."""
+    """Guard C# privacy tests against native capability skips."""
 
     def test_exact12_test_requires_native_bridge_unconditionally(self) -> None:
         source = read(
@@ -50,6 +50,20 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
             "            \"ABI-21 connect_norito_bridge with exact-12 fixture "
             "symbols is required.\");",
             preflight,
+        )
+
+        catalog_method = (
+            "CompiledProfileCatalogRoundTripsAndRejectsAdversarialBytes()"
+        )
+        catalog_start = source.index(catalog_method)
+        catalog_native_call = source.index("var catalog =", catalog_start)
+        catalog_preflight = source[catalog_start:catalog_native_call]
+        self.assertIn(
+            "Assert.True(\n"
+            "            PrivacyNative.IsAvailable(),\n"
+            "            \"ABI-21 connect_norito_bridge with compiled-profile "
+            "catalog symbols is required.\");",
+            catalog_preflight,
         )
         self.assertNotIn("WhenAvailable", source)
         self.assertNotIn("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE", source)
@@ -72,8 +86,8 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
                 "connect_norito_bridge_abi_version",
                 "connect_norito_free",
                 "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
-                "iroha_privacy_capabilities_v1",
-                "iroha_privacy_validate_capabilities_v1",
+                "iroha_privacy_compiled_profile_catalog_v1",
+                "iroha_privacy_validate_compiled_profile_catalog_v1",
                 "iroha_privacy_exact12_fixture_bundle_v1",
                 "iroha_privacy_validate_exact12_fixture_bundle_v1",
                 "iroha_privacy_free_buffer",

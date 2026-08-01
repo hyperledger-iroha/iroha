@@ -2123,7 +2123,87 @@ pub(crate) struct AutonomousLaneReservationSlotPlan {
     pub(crate) proposal_identity_hash: Hash,
 }
 
+/// Move-only authority for the QueuePlan-conjunction and reservation-fsync
+/// production trace steps of one canonical autonomous slot.
+///
+/// Production code can obtain this value only from a fully assembled slot
+/// plan. Keeping the committee geometry beside the exact queue scope prevents
+/// Queue from accepting an unbound validator count or proposer bit merely to
+/// manufacture a formal projection.
+#[allow(missing_copy_implementations)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct AutonomousLaneReservationSelectionAuthorization {
+    scope: LaneQueueReservationScopeV1,
+    validator_count: u8,
+    producer: u128,
+}
+
+impl AutonomousLaneReservationSelectionAuthorization {
+    /// Return the exact queue scope frozen by the canonical slot plan.
+    #[must_use]
+    pub(crate) const fn scope(&self) -> LaneQueueReservationScopeV1 {
+        self.scope
+    }
+
+    /// Return the canonical committee width represented by the producer bit.
+    #[must_use]
+    pub(crate) const fn validator_count(&self) -> u8 {
+        self.validator_count
+    }
+
+    /// Return the one-hot index of the deterministic producer.
+    #[must_use]
+    pub(crate) const fn producer(&self) -> u128 {
+        self.producer
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn single_validator_for_test(scope: LaneQueueReservationScopeV1) -> Self {
+        Self {
+            scope,
+            validator_count: 1,
+            producer: 1,
+        }
+    }
+}
+
 impl AutonomousLaneReservationSlotPlan {
+    /// Derive the exact committee geometry consumed by Queue's first-release
+    /// selection/refinement gate.
+    ///
+    /// # Errors
+    /// Returns [`AutonomousLaneReservationSlotPlanError::InvalidQuorum`] if a
+    /// caller somehow presents a slot whose canonical committee/author
+    /// invariants no longer hold.
+    pub(crate) fn selection_authorization(
+        &self,
+    ) -> Result<
+        AutonomousLaneReservationSelectionAuthorization,
+        AutonomousLaneReservationSlotPlanError,
+    > {
+        let validator_count = u8::try_from(self.validator_set.len())
+            .map_err(|_| AutonomousLaneReservationSlotPlanError::InvalidQuorum)?;
+        if validator_count == 0 || validator_count > 128 {
+            return Err(AutonomousLaneReservationSlotPlanError::InvalidQuorum);
+        }
+        let producer_index = self
+            .validator_set
+            .iter()
+            .position(|peer| peer == &self.author)
+            .ok_or(AutonomousLaneReservationSlotPlanError::InvalidQuorum)?;
+        let producer = 1_u128
+            .checked_shl(
+                u32::try_from(producer_index)
+                    .map_err(|_| AutonomousLaneReservationSlotPlanError::InvalidQuorum)?,
+            )
+            .ok_or(AutonomousLaneReservationSlotPlanError::InvalidQuorum)?;
+        Ok(AutonomousLaneReservationSelectionAuthorization {
+            scope: self.reservation_scope(),
+            validator_count,
+            producer,
+        })
+    }
+
     /// Convert the plan into the exact scope accepted by the durable queue.
     #[must_use]
     pub(crate) fn reservation_scope(&self) -> LaneQueueReservationScopeV1 {
@@ -3989,6 +4069,12 @@ mod tests {
         let mut expected_validators = vec![test_peer(4), test_peer(1), test_peer(3), test_peer(2)];
         expected_validators.sort();
         assert_eq!(plan, repeated);
+        let selection_authorization = plan
+            .selection_authorization()
+            .expect("canonical slot yields queue selection authority");
+        assert_eq!(selection_authorization.scope(), plan.reservation_scope());
+        assert_eq!(selection_authorization.validator_count(), 4);
+        assert_eq!(selection_authorization.producer(), 1_u128 << 3);
         assert_eq!(plan.previous_lane_block_height, 3);
         assert_eq!(
             plan.previous_lane_block_descriptor_hash,

@@ -194,6 +194,7 @@ test("published recipe documentation exactly matches the portable allowlist", ()
 test("package smoke rejects every non-portable or missing required recipe", () => {
   const requiredPaths = [
     "package.json",
+    "browser.d.ts",
     "ivm-artifact.d.ts",
     "kotodama-compiler.d.ts",
     "privacy-capabilities.d.ts",
@@ -374,8 +375,10 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
   const indexOfSubpath = (subpath) => Object.keys(packageJson.exports).indexOf(subpath);
   const noritoIndex = indexOfSubpath("./norito");
   const cryptoIndex = indexOfSubpath("./crypto");
+  const browserIndex = indexOfSubpath("./browser");
   assert.notEqual(noritoIndex, -1);
   assert.notEqual(cryptoIndex, -1);
+  assert.notEqual(browserIndex, -1);
   const { tempRoot } = createPackedLayout({ includeNodeTypes: true });
   try {
     const imports = Object.keys(packageJson.exports).map((subpath, index) => {
@@ -408,8 +411,12 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "const toriiConstructor: typeof ToriiClient = Torii.ToriiClient;",
         `const encodeInstruction: typeof export${noritoIndex}.noritoEncodeInstruction = Norito.noritoEncodeInstruction;`,
         `const validateFrame: typeof export${noritoIndex}.validateNoritoFrame = Norito.validateNoritoFrame;`,
+        `const exact12Decoder: typeof export${noritoIndex}.noritoDecodePrivacyExact12FixtureBundleBase64V1 = Norito.noritoDecodePrivacyExact12FixtureBundleBase64V1;`,
+        "// @ts-expect-error fixture-only Exact12 codecs are not retained by the broad browser facade.",
+        `void export${browserIndex}.noritoDecodePrivacyExact12FixtureBundleBase64V1;`,
         `const generateKeyPair: typeof export${cryptoIndex}.generateKeyPair = Crypto.generateKeyPair;`,
         "const privacySnapshot: PrivacyCapabilitySnapshotV1 = parsePrivacyCapabilitySnapshotV1({});",
+        "const privacyCommittedHeight: bigint = privacySnapshot.committed_height;",
         "const privacyNodeResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(new ToriiClient('https://torii.example'));",
         "const privacyBrowserResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(new ToriiBrowserClient('https://torii.example'));",
         "declare const repoAgreement: ToriiRepoAgreement;",
@@ -457,7 +464,7 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "// @ts-expect-error Norito does not expose crypto helpers.",
         "void Norito.generateKeyPair;",
         `void [${bindings.join(", ")}];`,
-        "void algorithm; void cancelAssetLock; void toriiConstructor; void encodeInstruction; void validateFrame; void generateKeyPair; void privacySnapshot; void privacyNodeResult; void privacyBrowserResult; void repoLifecycle; void verifierBackend; void retiredVerifierBackend; void caseShiftedVerifierBackend; void paddedVerifierBackend; void confusableVerifierBackend; void quantityFrame; void quantityEnvelope; void quantityJson; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
+        "void algorithm; void cancelAssetLock; void toriiConstructor; void encodeInstruction; void validateFrame; void exact12Decoder; void generateKeyPair; void privacySnapshot; void privacyNodeResult; void privacyBrowserResult; void repoLifecycle; void verifierBackend; void retiredVerifierBackend; void caseShiftedVerifierBackend; void paddedVerifierBackend; void confusableVerifierBackend; void quantityFrame; void quantityEnvelope; void quantityJson; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
       ].join("\n"),
       "utf8",
     );

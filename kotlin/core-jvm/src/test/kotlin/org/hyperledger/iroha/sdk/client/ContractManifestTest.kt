@@ -59,12 +59,12 @@ class ContractManifestTest {
 
         val lowercase = fullResponse()
             .replaceFirst("\"id\":\"settle\"", "\"id\":\"amount\"")
-            .replaceFirst("\"namespace\":null", "\"namespace\":\"amount\"")
+            .replaceFirst("\"namespace\":null", "\"namespace\":\"RemoteLedger\"")
         val trigger = ContractJsonParser.parseManifestRecord(
             lowercase.toByteArray(StandardCharsets.UTF_8),
         ).manifest.entrypoints!!.single().triggers.single()
         assertEquals("amount", trigger.id)
-        assertEquals("amount", trigger.callback.namespace)
+        assertEquals("RemoteLedger", trigger.callback.namespace)
     }
 
     @Test

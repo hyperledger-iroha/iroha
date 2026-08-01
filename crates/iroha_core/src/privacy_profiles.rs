@@ -25,31 +25,35 @@ use iroha_data_model::privacy::{
     MoneroFcmpPlusPlusStatementV1, ORCHARD_MAX_ACTIONS_V1 as ORCHARD_MODEL_MAX_ACTIONS_V1,
     OrchardActivationLimitsV1, OrchardHalo2ActionsStatementV1, PQ_MASP_MAX_INPUTS_V1,
     PQ_MASP_MAX_OUTPUTS_V1, PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
-    PRIVACY_FCMP_ENCRYPTED_OUTPUT_BYTES_V1, PRIVACY_FCMP_ENCRYPTED_OUTPUT_MAGIC_V1,
-    PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_MAGIC_V1,
-    PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PqMaspActivationLimitsV1, PqMaspStarkStatementV1,
-    PrivacyAssuranceV1, PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1,
-    PrivacyCapabilitySnapshotValidationErrorV1, PrivacyCompiledProfileResultV1,
-    PrivacyCompiledProfileSnapshotV1, PrivacyCompiledProfileUnavailableReasonV1,
-    PrivacyCompiledStatementSchemaErrorV1, PrivacyConsensusPolicyV1, PrivacyEngineIdV1,
-    PrivacyEngineManifestDigestV1, PrivacyFcmpPoolBootstrapV1,
-    PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyOrchardPoolBootstrapV1, PrivacyParameterDigestV1,
-    PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1, PrivacyPqMaspPoolBootstrapV1,
-    PrivacyProofSystemIdV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1,
-    PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyStatementSchemaDigestV1,
-    PrivacyVerifierDigestV1, TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1,
-    TAIRA_PRIVACY_MAX_NULLIFIERS_PER_ACTION_V1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
-    VEGA_ISSUER_GOVERNANCE_RECORD_VERSION_V1, VEGA_ISSUER_RECORD_DIGEST_DOMAIN_V1,
-    VEGA_ISSUER_RECORD_HASH_FRAME_DOMAIN_V1, VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1,
-    VEGA_MAX_ISSUER_RECORDS_V1, VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
-    VEGA_MDL_BIRTH_RANDOM_BYTES_V1, VEGA_MDL_FULL_DATE_TEXT_BYTES_V1,
-    VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1, VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1,
-    VEGA_MDL_MAX_PRESENTATION_YEAR_V1, VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1,
-    VEGA_MDL_MIN_PRESENTATION_YEAR_V1, VEGA_MDL_MSO_PAYLOAD_BYTES_V1,
-    VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1, VERANGE_HARD_MAX_AGGREGATION_COUNT_V1,
-    VeRangeActivationLimitsV1, VeRangeTransparentRangeStatementV1,
-    VegaExistingCredentialStatementV1, ZK_AMS_MAX_BATCH_SIZE_V1, ZK_AMS_MAX_RING_SIZE_V1,
+    PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1, PRIVACY_FCMP_ENCRYPTED_OUTPUT_BYTES_V1,
+    PRIVACY_FCMP_ENCRYPTED_OUTPUT_MAGIC_V1, PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1,
+    PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_MAGIC_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
+    PqMaspActivationLimitsV1, PqMaspStarkStatementV1, PrivacyAssuranceV1, PrivacyCapabilityRowV1,
+    PrivacyCapabilitySnapshotV1, PrivacyCapabilitySnapshotValidationErrorV1,
+    PrivacyCompiledProfileCatalogArchiveValidationStatusV1, PrivacyCompiledProfileCatalogRowV1,
+    PrivacyCompiledProfileCatalogV1, PrivacyCompiledProfileCatalogValidationErrorV1,
+    PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
+    PrivacyCompiledProfileUnavailableReasonV1, PrivacyCompiledStatementSchemaErrorV1,
+    PrivacyConsensusPolicyV1, PrivacyEngineIdV1, PrivacyEngineManifestDigestV1,
+    PrivacyFcmpPoolBootstrapV1, PrivacyIvmPrivateNotePoolBootstrapV1,
+    PrivacyOrchardPoolBootstrapV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+    PrivacyPgcAccountBootstrapV1, PrivacyPqMaspPoolBootstrapV1, PrivacyProofSystemIdV1,
+    PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+    PrivacyProtocolLifecycleV1, PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
+    TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1, TAIRA_PRIVACY_MAX_NULLIFIERS_PER_ACTION_V1,
+    TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1, VEGA_ISSUER_GOVERNANCE_RECORD_VERSION_V1,
+    VEGA_ISSUER_RECORD_DIGEST_DOMAIN_V1, VEGA_ISSUER_RECORD_HASH_FRAME_DOMAIN_V1,
+    VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1, VEGA_MAX_ISSUER_RECORDS_V1,
+    VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1, VEGA_MDL_BIRTH_RANDOM_BYTES_V1,
+    VEGA_MDL_FULL_DATE_TEXT_BYTES_V1, VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1,
+    VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1, VEGA_MDL_MAX_PRESENTATION_YEAR_V1,
+    VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1, VEGA_MDL_MIN_PRESENTATION_YEAR_V1,
+    VEGA_MDL_MSO_PAYLOAD_BYTES_V1, VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1,
+    VERANGE_HARD_MAX_AGGREGATION_COUNT_V1, VeRangeActivationLimitsV1,
+    VeRangeTransparentRangeStatementV1, VegaExistingCredentialStatementV1,
+    ZK_AMS_MAX_BATCH_SIZE_V1, ZK_AMS_MAX_RING_SIZE_V1,
     ZK_AMS_RING_SIZES_V1 as ZK_AMS_MODEL_RING_SIZES_V1, ZkAmsActivationLimitsV1,
+    validate_privacy_compiled_profile_catalog_archive_v1,
 };
 use iroha_schema::{FloatMode, IntMode, IntoSchema, MetaMapEntry, Metadata};
 use iroha_zkp_halo2::vega::{
@@ -401,6 +405,62 @@ pub fn compiled_privacy_profile_snapshot_result_v1(
     }
 }
 
+/// Build the exact local compiled-profile catalog for this binary.
+///
+/// The result contains one row for every closed first-release protocol in
+/// canonical discriminant order. It intentionally contains no committed
+/// height, policy, activation, lifecycle, or readiness projection; those are
+/// authoritative only in a live Torii [`PrivacyCapabilitySnapshotV1`].
+///
+/// # Errors
+///
+/// Returns a deterministic validation error if an internal compiled profile
+/// violates the closed catalog contract.
+pub fn compiled_privacy_profile_catalog_v1()
+-> Result<PrivacyCompiledProfileCatalogV1, PrivacyCompiledProfileCatalogValidationErrorV1> {
+    let catalog = PrivacyCompiledProfileCatalogV1 {
+        version: PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1,
+        protocols: PrivacyProtocolIdV1::ALL
+            .into_iter()
+            .map(|protocol_id| PrivacyCompiledProfileCatalogRowV1 {
+                protocol_id,
+                compiled_profile: compiled_privacy_profile_snapshot_result_v1(protocol_id),
+            })
+            .collect(),
+    };
+    catalog.validate()?;
+    Ok(catalog)
+}
+
+/// Validate an archive as the exact compiled-profile catalog of this binary.
+///
+/// The data-model validator first enforces canonical bounded decoding and the
+/// exact twelve-row shape. This second layer then requires byte-equivalent
+/// typed content to the catalog derived from the current binary, preventing a
+/// canonical but substituted profile digest from being accepted as local build
+/// metadata. Success still does not establish network activation or readiness.
+#[must_use]
+pub fn validate_local_privacy_compiled_profile_catalog_archive_v1(
+    archive: &[u8],
+) -> PrivacyCompiledProfileCatalogArchiveValidationStatusV1 {
+    use PrivacyCompiledProfileCatalogArchiveValidationStatusV1 as Status;
+
+    let status = validate_privacy_compiled_profile_catalog_archive_v1(archive);
+    if !status.is_valid() {
+        return status;
+    }
+    let Ok(actual) = norito::decode_from_bytes::<PrivacyCompiledProfileCatalogV1>(archive) else {
+        return Status::MalformedArchive;
+    };
+    let Ok(expected) = compiled_privacy_profile_catalog_v1() else {
+        return Status::InvalidCatalog;
+    };
+    if actual != expected {
+        return Status::InvalidCatalog;
+    }
+    Status::Valid
+}
+
 /// Build and validate an authoritative committed privacy capability snapshot.
 ///
 /// `activation_for` must read from the same immutable committed world view as
@@ -476,7 +536,7 @@ fn compiled_zk_x509_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
 {
     let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
     match require_activation_readiness_v1(zk_x509_activation_readiness_v1()) {
-        Ok(()) => compiled_zk_x509_profile_material_v1(),
+        Ok(()) => zk_x509_release_candidate_profile_material_v1(),
         Err(ZkX509ProfileErrorV1::EngineIncomplete) => {
             Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
         }
@@ -484,14 +544,16 @@ fn compiled_zk_x509_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
     }
 }
 
-/// Derive the exact release-candidate profile without exposing it to
-/// governance as an activatable consensus engine.
+/// Derive the deterministic ZK-X509 release-candidate profile material.
 ///
-/// Release KATs and isolated resource measurements must bind the same profile
-/// that activation will expose, but those measurements necessarily precede
-/// the final activation flags. Callers remain responsible for enforcing the
-/// activation-readiness gate before admitting a governance record.
-pub(crate) fn compiled_zk_x509_profile_material_v1()
+/// This accessor exists only for unsigned/offline intent preparation, release
+/// KATs, and isolated resource measurements that must bind the exact profile
+/// candidate before activation. Success does not imply compiled readiness,
+/// activation, verifier availability, or permission to sign or submit a proof.
+/// Production proof paths must use [`compiled_privacy_profile_v1`], which keeps
+/// returning `EngineUnavailable` until every activation-readiness capture is
+/// canonically admitted.
+pub fn zk_x509_release_candidate_profile_material_v1()
 -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
     validate_zk_x509_profile_v1()
@@ -3111,7 +3173,7 @@ mod tests {
     }
 
     fn zk_x509_activation() -> PrivacyProtocolActivationRecordV1 {
-        compiled_zk_x509_profile_material_v1()
+        zk_x509_release_candidate_profile_material_v1()
             .expect("release-pinned zk-X.509 candidate profile derives")
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
@@ -3187,6 +3249,73 @@ mod tests {
     }
 
     #[test]
+    fn local_compiled_profile_catalog_is_exact12_and_contains_no_governance_state() {
+        let catalog = compiled_privacy_profile_catalog_v1().expect("compiled profile catalog");
+        assert_eq!(catalog.version, PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1);
+        assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        assert!(
+            catalog
+                .protocols
+                .iter()
+                .map(|row| row.protocol_id)
+                .eq(PrivacyProtocolIdV1::ALL)
+        );
+
+        let json = norito::json::to_json(&catalog).expect("catalog JSON");
+        for forbidden in [
+            "committed_height",
+            "consensus_policy",
+            "activation",
+            "lifecycle",
+        ] {
+            assert!(
+                !json.contains(forbidden),
+                "local catalog must not expose governance field {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn local_compiled_profile_catalog_archive_rejects_canonical_substitution() {
+        use PrivacyCompiledProfileCatalogArchiveValidationStatusV1 as Status;
+
+        let catalog = compiled_privacy_profile_catalog_v1().expect("compiled profile catalog");
+        let archive = norito::encode_canonical(&catalog).expect("canonical catalog");
+        assert_eq!(
+            validate_local_privacy_compiled_profile_catalog_archive_v1(&archive),
+            Status::Valid
+        );
+
+        let mut substituted = catalog;
+        let profile = substituted
+            .protocols
+            .iter_mut()
+            .find_map(|row| match &mut row.compiled_profile {
+                PrivacyCompiledProfileResultV1::Available(profile) => Some(profile),
+                PrivacyCompiledProfileResultV1::Unavailable(_) => None,
+            })
+            .expect("at least one compiled profile");
+        let mut digest = *profile.parameter_digest.as_bytes();
+        digest[0] ^= 0x80;
+        profile.parameter_digest = PrivacyParameterDigestV1::new(digest);
+        profile
+            .validate()
+            .expect("substituted profile remains structural");
+        let substituted =
+            norito::encode_canonical(&substituted).expect("canonical substituted catalog");
+        assert_eq!(
+            validate_privacy_compiled_profile_catalog_archive_v1(&substituted),
+            Status::Valid,
+            "the data-model validator establishes only canonical catalog structure"
+        );
+        assert_eq!(
+            validate_local_privacy_compiled_profile_catalog_archive_v1(&substituted),
+            Status::InvalidCatalog,
+            "the local validator must reject a canonical profile substitution"
+        );
+    }
+
+    #[test]
     fn only_governance_released_engines_have_compiled_profiles() {
         let available = PrivacyProtocolIdV1::ALL
             .into_iter()
@@ -3210,7 +3339,7 @@ mod tests {
             expected.push(PrivacyProtocolIdV1::IrohaZkX509StarkP256V0);
         }
         assert!(
-            compiled_zk_x509_profile_material_v1().is_ok(),
+            zk_x509_release_candidate_profile_material_v1().is_ok(),
             "X.509 candidate material must derive independently of governance release"
         );
         assert_eq!(available, expected);
@@ -4244,7 +4373,7 @@ mod tests {
     fn print_all_compiled_profile_tuples() {
         for protocol_id in PrivacyProtocolIdV1::ALL {
             let profile = if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
-                compiled_zk_x509_profile_material_v1()
+                zk_x509_release_candidate_profile_material_v1()
             } else {
                 compiled_privacy_profile_v1(protocol_id)
             }
@@ -4657,8 +4786,8 @@ mod tests {
 
     #[test]
     fn zk_x509_compiled_activation_is_complete_and_immutable() {
-        let candidate =
-            compiled_zk_x509_profile_material_v1().expect("release candidate profile material");
+        let candidate = zk_x509_release_candidate_profile_material_v1()
+            .expect("release candidate profile material");
         assert_eq!(
             (
                 hex::encode(candidate.parameter_id.as_bytes()),

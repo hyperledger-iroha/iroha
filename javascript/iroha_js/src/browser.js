@@ -16,6 +16,12 @@ export {
   buildMintAssetInstruction,
   buildSetAssetTransferAvailabilityInstruction,
   buildTransferAssetInstruction,
+  buildShieldInstruction,
+  buildZkTransferInstruction,
+  buildUnshieldInstruction,
+  buildCreateElectionInstruction,
+  buildSubmitBallotInstruction,
+  buildFinalizeElectionInstruction,
   ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1,
   SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1,
   buildIssueReplicationOrderInstruction,
@@ -36,12 +42,6 @@ export {
   IVM_ARTIFACT_MAX_BYTES,
   IVM_PROGRAM_HEADER_LENGTH,
 } from "./ivmArtifact.js";
-
-export {
-  IVM_ARTIFACT_ADMISSION_MAX_INPUT_BYTES,
-  instantiateIvmArtifactAdmissionWasm,
-  verifyIvmContractArtifactAdmission,
-} from "./ivmArtifactAdmissionWasm.js";
 
 export {
   BrowserTransactionCodecError,

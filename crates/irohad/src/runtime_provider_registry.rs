@@ -18,8 +18,8 @@ use crate::IrohaRuntimeDeps;
 
 mod binding_collection;
 mod dependency_scope;
-mod stream_token_signer;
 mod stream_token_gateway;
+mod stream_token_signer;
 
 use binding_collection::{
     append_required_governance_request_auth_binding, append_required_governance_service_binding,
@@ -361,11 +361,10 @@ impl IrohaRuntimeProviderBindingV1 {
         if public_key == [0; 32] || iroha_crypto::ed25519_parse_public_key(&public_key).is_err() {
             return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
         }
-        let qualification =
-            iroha_torii::sorafs::StreamTokenRuntimeSignerQualificationV1::new(
-                revision,
-                policy_digest,
-            );
+        let qualification = iroha_torii::sorafs::StreamTokenRuntimeSignerQualificationV1::new(
+            revision,
+            policy_digest,
+        );
         qualification
             .validate()
             .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
@@ -3866,10 +3865,14 @@ mod tests {
         publish_intent: Option<sorafs_node::GovernanceDagSealedStateRecord>,
         producer_checkpoint: Option<sorafs_node::GovernanceDagSealedStateRecord>,
         producer_publish_intent: Option<sorafs_node::GovernanceDagSealedStateRecord>,
+        ipfs_request_replay: Option<sorafs_node::GovernanceDagSealedStateRecord>,
+        signed_head_request_replay: Option<sorafs_node::GovernanceDagSealedStateRecord>,
         checkpoint_generation_floor: u64,
         publish_intent_generation_floor: u64,
         producer_checkpoint_generation_floor: u64,
         producer_publish_intent_generation_floor: u64,
+        ipfs_request_replay_generation_floor: u64,
+        signed_head_request_replay_generation_floor: u64,
     }
 
     impl GovernanceCheckpointStoreState {
@@ -3885,6 +3888,12 @@ mod tests {
                 }
                 sorafs_node::GovernanceDagSealedStateSlot::ProducerPublishIntent => {
                     &self.producer_publish_intent
+                }
+                sorafs_node::GovernanceDagSealedStateSlot::IpfsRequestReplay => {
+                    &self.ipfs_request_replay
+                }
+                sorafs_node::GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
+                    &self.signed_head_request_replay
                 }
             }
         }
@@ -3904,6 +3913,12 @@ mod tests {
                 sorafs_node::GovernanceDagSealedStateSlot::ProducerPublishIntent => {
                     &mut self.producer_publish_intent
                 }
+                sorafs_node::GovernanceDagSealedStateSlot::IpfsRequestReplay => {
+                    &mut self.ipfs_request_replay
+                }
+                sorafs_node::GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
+                    &mut self.signed_head_request_replay
+                }
             }
         }
 
@@ -3920,6 +3935,12 @@ mod tests {
                 }
                 sorafs_node::GovernanceDagSealedStateSlot::ProducerPublishIntent => {
                     self.producer_publish_intent_generation_floor
+                }
+                sorafs_node::GovernanceDagSealedStateSlot::IpfsRequestReplay => {
+                    self.ipfs_request_replay_generation_floor
+                }
+                sorafs_node::GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
+                    self.signed_head_request_replay_generation_floor
                 }
             }
         }
@@ -3941,6 +3962,12 @@ mod tests {
                 }
                 sorafs_node::GovernanceDagSealedStateSlot::ProducerPublishIntent => {
                     self.producer_publish_intent_generation_floor = generation;
+                }
+                sorafs_node::GovernanceDagSealedStateSlot::IpfsRequestReplay => {
+                    self.ipfs_request_replay_generation_floor = generation;
+                }
+                sorafs_node::GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
+                    self.signed_head_request_replay_generation_floor = generation;
                 }
             }
         }
@@ -3993,7 +4020,9 @@ mod tests {
             let floor = state.generation_floor(slot);
             let generation_is_valid = match slot {
                 sorafs_node::GovernanceDagSealedStateSlot::Checkpoint
-                | sorafs_node::GovernanceDagSealedStateSlot::ProducerCheckpoint => {
+                | sorafs_node::GovernanceDagSealedStateSlot::ProducerCheckpoint
+                | sorafs_node::GovernanceDagSealedStateSlot::IpfsRequestReplay
+                | sorafs_node::GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
                     next.generation > floor
                 }
                 sorafs_node::GovernanceDagSealedStateSlot::PublishIntent
@@ -4024,6 +4053,8 @@ mod tests {
                 slot,
                 sorafs_node::GovernanceDagSealedStateSlot::Checkpoint
                     | sorafs_node::GovernanceDagSealedStateSlot::ProducerCheckpoint
+                    | sorafs_node::GovernanceDagSealedStateSlot::IpfsRequestReplay
+                    | sorafs_node::GovernanceDagSealedStateSlot::SignedHeadRequestReplay
             ) {
                 return Err("governance checkpoint record is not transient".to_owned());
             }

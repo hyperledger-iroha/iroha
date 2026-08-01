@@ -38,17 +38,53 @@ test("JavaScript, Python, and the Rust data model pin one canonical protocol ord
   }
 });
 
-test("native SDK capability archives use the typed snapshot instead of free-form rows", () => {
+test("native SDK archives expose local compiled profiles without synthesizing readiness", () => {
   for (const path of [
     "crates/connect_norito_bridge/src/lib.rs",
     "crates/iroha_js_host/src/lib.rs",
     "python/iroha_python/iroha_python_rs/src/lib.rs",
   ]) {
     const rust = source(path);
-    assert.match(rust, /PrivacyCapabilitySnapshotV1/);
+    assert.match(rust, /PrivacyCompiledProfileCatalogV1/);
     assert.match(rust, /PrivacyProtocolIdV1::ALL/);
+    assert.match(rust, /compiled_privacy_profile_catalog_v1/);
+    assert.match(
+      rust,
+      /validate_local_privacy_compiled_profile_catalog_archive_v1/,
+    );
+    assert.doesNotMatch(rust, /PrivacyConsensusPolicyV1::taira_default\(\)/);
+    assert.doesNotMatch(rust, /fn privacy_capabilities\s*\(/);
+    assert.doesNotMatch(rust, /pub fn privacy_capabilities_v1\s*\(/);
+    assert.doesNotMatch(rust, /name = "privacy_capabilities_v1"/);
+    assert.doesNotMatch(rust, /iroha_privacy_capabilities_v1/);
     assert.doesNotMatch(rust, /struct PrivacyAlgorithmEntry/);
     assert.doesNotMatch(rust, /struct PrivacyCapabilitiesV1/);
+  }
+});
+
+test("only a fresh committed Torii view supplies authoritative privacy readiness", () => {
+  const runtime = source("crates/iroha_torii/src/runtime.rs");
+  const state = source("crates/iroha_core/src/state.rs");
+  assert.match(
+    runtime,
+    /handle_privacy_capabilities[\s\S]*PrivacyCapabilitySnapshotV1[\s\S]*state\s*\.view\(\)\s*\.privacy_capability_snapshot_v1\(\)/,
+  );
+  assert.match(
+    state,
+    /privacy_capability_snapshot_v1[\s\S]*committed_height[\s\S]*world\.privacy_consensus_policy\(\)[\s\S]*world\s*\.privacy_activations\(\)/,
+  );
+
+  const javascriptParser = source(
+    "javascript/iroha_js/src/privacyCapabilities.js",
+  );
+  assert.match(javascriptParser, /PrivacyCapabilitySnapshotV1/);
+  assert.match(javascriptParser, /privacyCapabilityTransportV1/);
+  for (const client of [
+    source("javascript/iroha_js/src/toriiClient.js"),
+    source("javascript/iroha_js/src/toriiBrowserClient.js"),
+    source("python/iroha_python/src/iroha_python/client.py"),
+  ]) {
+    assert.match(client, /\/v1\/privacy\/capabilities/);
   }
 });
 

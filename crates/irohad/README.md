@@ -134,10 +134,11 @@ qualification:
   any subsystem receives it. Missing, unexpected, role-confused, substituted,
   stale, test-marked, or drifting providers fail resolution.
 
-- Stream-token signing checks the configured production handle and Ed25519
-  public key and verifies every returned signature. Its configuration and
-  provider trait do not yet expose an adapter revision or policy digest, so
-  independent stale/revoked-provider detection remains a V1 production blocker.
+- Stream-token signing checks the configured production handle, Ed25519 public
+  key, non-zero adapter revision, and public-policy digest.
+  Both startup qualification probes are individually identity-fenced, and every signing
+  operation rechecks the exact qualification and handle/key binding before and
+  after the external call before verifying the returned signature.
 
 - Provider-ingest source and resolver adapters check independently configured
   production handles, non-zero revisions and public-policy digests, the fixed
@@ -155,10 +156,12 @@ The stock Governance DAG binary likewise has no built-in credential loader;
 deployment launchers inject a
 `GovernanceDagServiceRuntimeProviderRegistryV1` through the library entrypoint.
 
-The stream-token identity gap above remains a production blocker. Closing the
-moderation strict-ingress preflight likewise does not provide the real external
-moderation signer, settlement, publication, notification, archive, or
-multi-replica deployment evidence required for production readiness.
+The stream-token source-side identity gap is closed. Production readiness still
+requires a genuine deployment-owned signer matching that exact public binding
+and multi-replica rotation/revocation/failover evidence. Likewise, moderation
+strict-ingress preflight does not provide the real external moderation signer,
+settlement, publication, notification, archive, or multi-replica deployment
+evidence required for production readiness.
 
 ## Configuration
 

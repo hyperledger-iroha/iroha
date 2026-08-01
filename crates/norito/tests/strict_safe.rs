@@ -28,11 +28,12 @@ fn decode_string_invalid_utf8_yields_error() {
     let ok = String::from("A");
     let mut bytes = to_bytes(&ok).expect("encode string");
     // Flip the single payload byte to 0xFF (invalid UTF-8).
-    // Length header encoding may be compact or fixed; use a validated payload view
-    // which also sets decode flags, then parse the first length header.
+    // Length header encoding may be compact or fixed; use the flags carried by
+    // the validated payload view when parsing the first length header.
     let view = core::from_bytes_view(&bytes).expect("view");
     let payload = view.as_bytes();
-    let (len, lhdr) = core::read_len_dyn_slice(payload).expect("length header");
+    let (len, lhdr) =
+        core::read_len_from_slice_with_flags(payload, view.flags()).expect("length header");
     let hdr_len = Header::SIZE;
     assert!(len >= 1);
     // leave length as 1, corrupt the first content byte following the length header

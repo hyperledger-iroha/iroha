@@ -18,17 +18,8 @@ def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
             "halo2/ipa",
             "halo2/pasta/kaigi-roster-v1",
             "halo2/pasta/kaigi-usage-v1",
-            "halo2/pasta/ivm-overlay-bind",
             "halo2/pasta/ivm-execution-v1",
             "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-            (
-                "halo2/pasta/kagemusha-recursive-spend-step-eq-"
-                "two-parent-operation-protocol-v2"
-            ),
-            (
-                "halo2/pasta/kagemusha-recursive-spend-step-ep-"
-                "two-parent-operation-protocol-v2"
-            ),
             "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -38,7 +29,7 @@ def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
             "stark/fri/sha256_goldilocks.v1",
         }
     )
-    assert len(expected) == 15
+    assert len(expected) == 12
     assert _VERIFIER_BACKEND_REGISTRY_LABELS_V1 == expected
     for backend in expected:
         expected_tag = "halo2-ipa-pasta" if backend.startswith("halo2/") else "stark"

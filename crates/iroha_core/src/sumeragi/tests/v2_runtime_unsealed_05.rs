@@ -173,6 +173,128 @@
             validation: 1,
             local_proposal: 0,
         };
+        let body_available_only = RetiredBodyPipelineCompletions {
+            body_available: 1,
+            body_stored: 0,
+            validation: 0,
+            local_proposal: 0,
+        };
+
+        let dormant_manifest = runtime_manifest(&context, 0xA0);
+        let dormant_lifecycle_key = Hash::new(b"bulk-retired dormant body lifecycle");
+        let dormant_lifecycle_ordinal = runtime
+            .ingress
+            .lifecycle_ordinals
+            .reserve_one()
+            .expect("mint the restart-restored body lifecycle");
+        let dormant_command = AdapterCommand::BodyAvailable {
+            manifest: dormant_manifest.clone(),
+        };
+        let dormant_owner = RuntimeCandidateCausalOrigin::restore_producer_lifecycle(
+            owner_tag,
+            CommandClass::Completion,
+            &dormant_command,
+            None,
+            dormant_lifecycle_key,
+            dormant_lifecycle_ordinal,
+        )
+        .expect("restore the exact dormant body owner");
+        let dormant = RuntimeDormantLocalFifoReservation::completion(
+            dormant_lifecycle_key,
+            dormant_lifecycle_ordinal,
+            8,
+        );
+        let capacity_before_dormant = runtime.remaining_completion_capacity();
+        runtime
+            .ingress
+            .install_dormant_local_fifo_reservations(vec![dormant])
+            .expect("install one dormant body-pipeline slot");
+        let dormant_reservation = runtime
+            .ingress
+            .reserve_canonical_body_available_internal(
+                owner_tag,
+                dormant_manifest.clone(),
+                Some(&dormant_owner),
+                Some(8),
+            )
+            .expect("reserve an unpublished token backed by the dormant slot");
+        assert_eq!(
+            runtime.remaining_completion_capacity(),
+            capacity_before_dormant - 1,
+            "the token aliases rather than duplicates its dormant capacity charge",
+        );
+        assert_eq!(
+            runtime.ingress.body_pipeline_completion_counts(
+                owner_tag,
+                dormant_manifest.round,
+                dormant_manifest.subject,
+            ),
+            body_available_only,
+            "the unpublished reservation is exactly one BodyAvailable owner",
+        );
+        let dormant_mismatch = runtime_manifest(&context, 0xAF);
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    dormant_mismatch.round,
+                    dormant_mismatch.subject,
+                )
+                .expect("mismatched bulk retirement is an atomic no-op"),
+            RetiredBodyPipelineCompletions::default(),
+        );
+        assert_eq!(
+            runtime.ingress.reserved_body_available.as_ref(),
+            Some(&dormant_reservation),
+        );
+        assert!(
+            runtime
+                .ingress
+                .dormant_local_fifo_reservations
+                .contains(&dormant)
+        );
+        assert_eq!(
+            runtime.remaining_completion_capacity(),
+            capacity_before_dormant - 1,
+            "mismatched bulk retirement preserves the aliased capacity charge",
+        );
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    dormant_manifest.round,
+                    dormant_manifest.subject,
+                )
+                .expect("retire the unpublished dormant-backed body token"),
+            body_available_only,
+        );
+        assert!(runtime.ingress.reserved_body_available.is_none());
+        assert!(
+            !runtime
+                .ingress
+                .dormant_local_fifo_reservations
+                .contains(&dormant)
+        );
+        assert_eq!(
+            runtime.remaining_completion_capacity(),
+            capacity_before_dormant,
+            "bulk retirement releases the token and its one aliased capacity owner",
+        );
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    dormant_manifest.round,
+                    dormant_manifest.subject,
+                )
+                .expect("a repeated exact retirement cannot recreate the drained stage"),
+            RetiredBodyPipelineCompletions::default(),
+        );
+        assert_eq!(
+            runtime.remaining_completion_capacity(),
+            capacity_before_dormant,
+            "repeated retirement cannot reacquire or release capacity",
+        );
 
         let ingress_manifest = runtime_manifest(&context, 0xA1);
         let (durable, validated) = receipts(&ingress_manifest);
@@ -365,6 +487,128 @@
             runtime.step(Instant::now()),
             Err(RuntimeError::FailClosed)
         ));
+
+        let duplicate_directory =
+            TempDir::new().expect("temporary duplicate dormant-body retirement directory");
+        let (mut duplicate_runtime, duplicate_context, _keys) =
+            authenticated_network_runtime(&duplicate_directory, RuntimeQueueConfig::new(4, 1, 1));
+        let duplicate_tag = duplicate_runtime.round_tag();
+        let duplicate_manifest = runtime_manifest(&duplicate_context, 0xD1);
+        let duplicate_lifecycle_key = Hash::new(b"duplicate bulk-retired dormant body lifecycle");
+        let duplicate_lifecycle_ordinal = duplicate_runtime
+            .ingress
+            .lifecycle_ordinals
+            .reserve_one()
+            .expect("mint the duplicate fixture's dormant lifecycle");
+        let duplicate_command = AdapterCommand::BodyAvailable {
+            manifest: duplicate_manifest.clone(),
+        };
+        let duplicate_owner = RuntimeCandidateCausalOrigin::restore_producer_lifecycle(
+            duplicate_tag,
+            CommandClass::Completion,
+            &duplicate_command,
+            None,
+            duplicate_lifecycle_key,
+            duplicate_lifecycle_ordinal,
+        )
+        .expect("restore the duplicate fixture's dormant body owner");
+        let duplicate_dormant = RuntimeDormantLocalFifoReservation::completion(
+            duplicate_lifecycle_key,
+            duplicate_lifecycle_ordinal,
+            8,
+        );
+        duplicate_runtime
+            .ingress
+            .install_dormant_local_fifo_reservations(vec![duplicate_dormant])
+            .expect("install duplicate fixture dormant ownership");
+        let duplicate_reservation = duplicate_runtime
+            .ingress
+            .reserve_canonical_body_available_internal(
+                duplicate_tag,
+                duplicate_manifest.clone(),
+                Some(&duplicate_owner),
+                Some(8),
+            )
+            .expect("reserve duplicate fixture unpublished ownership");
+        stage_completion_for_queue_test(&mut duplicate_runtime, duplicate_tag, duplicate_command);
+        let duplicate_capacity_before_rejection = duplicate_runtime.remaining_completion_capacity();
+        assert_eq!(
+            duplicate_runtime.ingress.body_pipeline_completion_counts(
+                duplicate_tag,
+                duplicate_manifest.round,
+                duplicate_manifest.subject,
+            ),
+            RetiredBodyPipelineCompletions {
+                body_available: 2,
+                body_stored: 0,
+                validation: 0,
+                local_proposal: 0,
+            },
+        );
+        let duplicate_mismatch = runtime_manifest(&duplicate_context, 0xDF);
+        assert_eq!(
+            duplicate_runtime
+                .retire_body_pipeline_completions(
+                    duplicate_tag,
+                    duplicate_mismatch.round,
+                    duplicate_mismatch.subject,
+                )
+                .expect("mismatched duplicate retirement is an atomic no-op"),
+            RetiredBodyPipelineCompletions::default(),
+        );
+        assert_eq!(
+            duplicate_runtime
+                .retire_body_pipeline_completions(
+                    duplicate_tag,
+                    duplicate_manifest.round,
+                    duplicate_manifest.subject,
+                )
+                .expect_err("duplicate unpublished and queued owners must fail closed"),
+            "Sumeragi v2 body pipeline has duplicate exact serialized completion stages",
+        );
+        assert!(duplicate_runtime.fail_closed);
+        assert_eq!(
+            duplicate_runtime.ingress.reserved_body_available.as_ref(),
+            Some(&duplicate_reservation),
+            "duplicate preflight cannot consume the unpublished token",
+        );
+        assert!(
+            duplicate_runtime
+                .ingress
+                .dormant_local_fifo_reservations
+                .contains(&duplicate_dormant)
+        );
+        assert_eq!(duplicate_runtime.queued_commands(), 1);
+        assert_eq!(
+            duplicate_runtime.remaining_completion_capacity(),
+            duplicate_capacity_before_rejection,
+            "duplicate preflight must preserve the complete capacity charge",
+        );
+    }
+
+    #[test]
+    fn pre_dequeue_probe_validates_unfrozen_leader_wire_identity() {
+        let directory = TempDir::new().expect("temporary pre-dequeue probe directory");
+        let (runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(3, 1, 1));
+        let fixture = leader_wire_proposal_fixture(
+            &directory,
+            &context,
+            &keys,
+            0xC0,
+            runtime.ingress.lifecycle_ordinals.clone(),
+        );
+        let projected = RuntimeIngressOwnershipEvidence::from_fair_ingress(
+            &fixture.message,
+            fixture.ownership.clone(),
+        )
+        .expect("checked dequeue publishes exact runtime ownership");
+        assert!(projected.validate_frozen_physical());
+        assert!(
+            projected
+                .leader_wire_runtime_receipt()
+                .is_ok_and(|receipt| receipt.is_some())
+        );
     }
 
     #[test]
@@ -436,53 +680,8 @@
             0xC2,
             runtime.ingress.lifecycle_ordinals.clone(),
         );
-        let wire::ConsensusMessageV2Payload::Proposal(proposal) = &fixture.message.payload else {
-            unreachable!("leader-wire fixture carries Proposal")
-        };
-        let ingress_ownership = RuntimeIngressOwnershipEvidence::from_fair_ingress(
-            &fixture.message,
-            fixture.ownership.clone(),
-        )
-        .expect("project exact leader-wire ownership into runtime");
-        let tagged = TaggedCommand::with_ingress_ownership(
-            runtime.round_tag(),
-            CommandClass::Normal,
-            AdapterCommand::Authenticated(AuthenticatedConsensusMessage::for_test(
-                fixture.message.clone(),
-            )),
-            Instant::now(),
-            ingress_ownership.clone(),
-        );
-        let lifecycle_ordinal = tagged
-            .lifecycle_ordinal
-            .expect("leader-wire command carries its scheduler ordinal");
-        let lifecycle_owner =
-            RuntimeLifecycleOwner::new(tagged.causal_origin.clone(), lifecycle_ordinal)
-                .expect("construct exact deferred lifecycle owner");
-        let owner_tag = runtime.round_tag();
-        runtime
-            .driver
-            .defer_authenticated_proposal_for_test(owner_tag, proposal)
-            .expect("stage Busy-deferred proposal");
-        let (_, deferred_ordinal) = runtime
-            .driver
-            .deferred_authenticated_message_owner(&fixture.message)
-            .expect("deferred proposal exposes its adapter ordinal");
-        assert!(
-            runtime
-                .deferred_ingress_ownership
-                .insert(deferred_ordinal, ingress_ownership.clone())
-                .is_none()
-        );
-        assert!(
-            runtime
-                .deferred_lifecycle_ownership
-                .insert(deferred_ordinal, lifecycle_owner)
-                .is_none()
-        );
-        runtime
-            .register_leader_wire_runtime_receipt(&ingress_ownership)
-            .expect("register deferred leader-wire receipt");
+        let (proposal, _deferred_ordinal) =
+            bind_authenticated_deferred_proposal_for_test(&mut runtime, &fixture);
         let ordinal = fixture.receipt.owner().admission_ordinal();
         assert_eq!(
             runtime.leader_wire_runtime_receipts.get(&ordinal),
@@ -519,6 +718,223 @@
             .expect("arm runtime after consuming lock terminal");
         assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
         assert!(!runtime.fail_closed);
+
+        // A BodyAvailable continuation can own an older causal lifecycle than
+        // a proposal which crossed into Busy while the shared reducer fence
+        // was closed. Once the fence opens, servicing that completion removes
+        // the conflicting Busy proposal inside the adapter dispatch. The
+        // runtime must terminalize the removed proposal's durable leader-wire
+        // receipt after classifying the selected completion owner.
+        let dispatch_directory =
+            TempDir::new().expect("temporary dispatch-side leader-wire retirement directory");
+        let (mut dispatch_runtime, dispatch_context, dispatch_keys) =
+            authenticated_network_runtime(&dispatch_directory, RuntimeQueueConfig::new(8, 1, 1));
+        let dispatch_tag = dispatch_runtime.round_tag();
+        let body_parent = dispatch_runtime
+            .mint_fresh_lifecycle_owner(
+                dispatch_tag,
+                CommandClass::Progress,
+                RuntimeFreshRootKind::StartupRecovery,
+                b"older-body-available-continuation",
+            )
+            .expect("reserve the older body continuation lifecycle");
+        let body_ownership =
+            RuntimeEffectOwnership::fresh(body_parent, RuntimeFreshRootKind::StartupRecovery);
+        let dispatch_fixture = leader_wire_proposal_fixture(
+            &dispatch_directory,
+            &dispatch_context,
+            &dispatch_keys,
+            0xCB,
+            dispatch_runtime.ingress.lifecycle_ordinals.clone(),
+        );
+        let (busy_proposal, busy_ordinal) =
+            bind_authenticated_deferred_proposal_for_test(&mut dispatch_runtime, &dispatch_fixture);
+        assert!(
+            body_ownership.owner().lifecycle_ordinal()
+                < dispatch_fixture.receipt.owner().admission_ordinal(),
+            "the reconstructed body retains the frozen predecessor lifecycle"
+        );
+        let canonical_body = b"canonical body superseding Busy proposal".to_vec();
+        let canonical_manifest = wire::PayloadManifest::derive(
+            &dispatch_context,
+            busy_proposal.round,
+            busy_proposal.subject,
+            u64::try_from(canonical_body.len()).expect("small canonical body length fits u64"),
+            &[canonical_body],
+        )
+        .expect("derive a structurally valid conflicting canonical manifest");
+        assert_ne!(canonical_manifest, busy_proposal.manifest);
+        let reservation = dispatch_runtime
+            .reserve_body_available_with_owner(dispatch_tag, canonical_manifest, &body_ownership)
+            .expect("reserve the older causal BodyAvailable owner");
+        dispatch_runtime
+            .commit_body_available(reservation)
+            .expect("publish the exact BodyAvailable completion");
+        assert_eq!(dispatch_runtime.queued_commands(), 1);
+        assert!(
+            dispatch_runtime
+                .eligible_deferred_admission_ordinals()
+                .expect("compare the two exact lifecycle owners")
+                .is_empty(),
+            "the later Busy proposal cannot overtake the older body continuation"
+        );
+        assert!(
+            dispatch_runtime
+                .deferred_lifecycle_ownership
+                .contains_key(&busy_ordinal)
+        );
+
+        let dispatch_now = Instant::now();
+        dispatch_runtime
+            .arm_live_clocks(dispatch_now)
+            .expect("arm runtime for dispatch-side retirement");
+        let body_step = dispatch_runtime
+            .step(dispatch_now)
+            .expect("the older BodyAvailable owner receives the FIFO turn");
+        let body_scheduling = dispatch_runtime
+            .take_last_scheduler_ownership()
+            .expect("BodyAvailable dispatch retains exact scheduler ownership");
+        assert_eq!(body_scheduling.selected, RuntimeSelectedOwnerKind::Fifo);
+        let RuntimeStep::Advanced(body_effects) = body_step else {
+            panic!("BodyAvailable dispatch unexpectedly idled")
+        };
+        dispatch_runtime
+            .take_effect_ownership(body_effects.len())
+            .expect("consume BodyAvailable effect ownership");
+        assert_eq!(dispatch_runtime.queued_commands(), 0);
+        assert!(
+            dispatch_runtime
+                .driver
+                .authenticated_deferred_admission_ordinals()
+                .is_empty()
+        );
+        assert!(dispatch_runtime.deferred_ingress_ownership.is_empty());
+        assert!(dispatch_runtime.deferred_lifecycle_ownership.is_empty());
+        let dispatch_receipt_ordinal = dispatch_fixture.receipt.owner().admission_ordinal();
+        assert!(
+            !dispatch_runtime
+                .leader_wire_runtime_receipts
+                .contains_key(&dispatch_receipt_ordinal)
+        );
+        let dispatch_terminals = dispatch_runtime.take_leader_wire_runtime_terminals();
+        let [LeaderWireRuntimeTerminal::Volatile(receipt)] = dispatch_terminals.as_slice() else {
+            panic!("BodyAvailable cleanup must retire the orphaned Busy proposal receipt")
+        };
+        assert_volatile_leader_wire_release(&dispatch_fixture, receipt);
+        assert!(!dispatch_runtime.fail_closed);
+
+        // Materializing the same older completion can prune a conflicting
+        // proposal which is still in FIFO rather than Busy. Its durable
+        // receipt is allowed to remain Runtime only while the exact finite
+        // BodyAvailable predecessor is physically queued; servicing that
+        // predecessor must publish the volatile terminal in the same turn.
+        let queued_directory =
+            TempDir::new().expect("temporary queued leader-wire retirement directory");
+        let (mut queued_runtime, queued_context, queued_keys) =
+            authenticated_network_runtime(&queued_directory, RuntimeQueueConfig::new(8, 1, 1));
+        let queued_tag = queued_runtime.round_tag();
+        let queued_body_parent = queued_runtime
+            .mint_fresh_lifecycle_owner(
+                queued_tag,
+                CommandClass::Progress,
+                RuntimeFreshRootKind::StartupRecovery,
+                b"older-queued-body-available-continuation",
+            )
+            .expect("reserve the older queued body lifecycle");
+        let queued_body_ownership = RuntimeEffectOwnership::fresh(
+            queued_body_parent,
+            RuntimeFreshRootKind::StartupRecovery,
+        );
+        let queued_fixture = leader_wire_proposal_fixture(
+            &queued_directory,
+            &queued_context,
+            &queued_keys,
+            0xCC,
+            queued_runtime.ingress.lifecycle_ordinals.clone(),
+        );
+        let wire::ConsensusMessageV2Payload::Proposal(queued_proposal) =
+            &queued_fixture.message.payload
+        else {
+            unreachable!("queued leader-wire fixture carries Proposal")
+        };
+        queued_runtime
+            .enqueue_network_with_ingress_ownership(
+                queued_fixture.message.clone(),
+                queued_fixture.ownership.clone(),
+            )
+            .expect("enqueue the conflicting leader-wire proposal");
+        let queued_receipt_ordinal = queued_fixture.receipt.owner().admission_ordinal();
+        assert!(
+            queued_body_ownership.owner().lifecycle_ordinal() < queued_receipt_ordinal,
+            "the body completion retains the older causal lifecycle"
+        );
+        let queued_canonical_body = b"canonical body superseding queued proposal".to_vec();
+        let queued_canonical_manifest = wire::PayloadManifest::derive(
+            &queued_context,
+            queued_proposal.round,
+            queued_proposal.subject,
+            u64::try_from(queued_canonical_body.len())
+                .expect("small queued canonical body length fits u64"),
+            &[queued_canonical_body],
+        )
+        .expect("derive a conflicting canonical manifest for the queued proposal");
+        assert_ne!(queued_canonical_manifest, queued_proposal.manifest);
+        let queued_reservation = queued_runtime
+            .reserve_body_available_with_owner(
+                queued_tag,
+                queued_canonical_manifest,
+                &queued_body_ownership,
+            )
+            .expect("reserve the queued-prune BodyAvailable owner");
+        queued_runtime
+            .commit_body_available(queued_reservation)
+            .expect("atomically replace the conflicting FIFO proposal");
+        assert_eq!(queued_runtime.queued_commands(), 1);
+        assert!(
+            queued_runtime
+                .ingress
+                .commands
+                .iter()
+                .all(|queued| matches!(&queued.command, AdapterCommand::BodyAvailable { .. }))
+        );
+        assert_eq!(
+            queued_runtime
+                .leader_wire_runtime_receipts
+                .get(&queued_receipt_ordinal),
+            Some(&queued_fixture.receipt),
+            "the finite queued completion temporarily owns retirement of the pruned receipt"
+        );
+        assert!(queued_runtime.pending_leader_wire_terminals.is_empty());
+
+        let queued_now = Instant::now();
+        queued_runtime
+            .arm_live_clocks(queued_now)
+            .expect("arm runtime for queued-prune retirement");
+        let queued_body_step = queued_runtime
+            .step(queued_now)
+            .expect("service the exact queued BodyAvailable predecessor");
+        let queued_scheduling = queued_runtime
+            .take_last_scheduler_ownership()
+            .expect("queued BodyAvailable dispatch retains scheduler ownership");
+        assert_eq!(queued_scheduling.selected, RuntimeSelectedOwnerKind::Fifo);
+        let RuntimeStep::Advanced(queued_body_effects) = queued_body_step else {
+            panic!("queued BodyAvailable dispatch unexpectedly idled")
+        };
+        queued_runtime
+            .take_effect_ownership(queued_body_effects.len())
+            .expect("consume queued BodyAvailable effect ownership");
+        assert_eq!(queued_runtime.queued_commands(), 0);
+        assert!(
+            !queued_runtime
+                .leader_wire_runtime_receipts
+                .contains_key(&queued_receipt_ordinal)
+        );
+        let queued_terminals = queued_runtime.take_leader_wire_runtime_terminals();
+        let [LeaderWireRuntimeTerminal::Volatile(receipt)] = queued_terminals.as_slice() else {
+            panic!("queued proposal pruning must emit one volatile leader-wire terminal")
+        };
+        assert_volatile_leader_wire_release(&queued_fixture, receipt);
+        assert!(!queued_runtime.fail_closed);
     }
 
     #[test]

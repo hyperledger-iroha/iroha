@@ -54,7 +54,9 @@ const Y4_MESSAGE_START_V1: usize = 4;
 const BETA_MESSAGE_INDEX_V1: usize = 8;
 const G_MESSAGE_START_V1: usize = 9;
 const LINEARIZATION_MESSAGE_INDEX_V1: usize = 11;
+#[cfg(test)]
 const PROVER_PRECOMPUTED_QUADRATIC_EVALUATIONS_V1: usize = 2;
+#[cfg(test)]
 const PROVER_QUADRATIC_EVALUATIONS_PER_MASK_RETRY_V1: usize = 3;
 const VERIFIER_QUADRATIC_EVALUATIONS_V1: usize = 3;
 
@@ -176,6 +178,7 @@ impl ProofRejectionBudgetV1 {
         true
     }
 
+    #[cfg(test)]
     const fn remaining(&self) -> u32 {
         self.remaining
     }

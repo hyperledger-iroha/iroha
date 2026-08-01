@@ -423,7 +423,9 @@ private enum SorafsBridgeBootstrap {
     }
 
     private static func unzipArchive(at zipURL: URL, into directory: URL) throws {
-        throw XCTSkip("unzip-based bridge materialization requires macOS Process support")
+        throw ParityHarnessError.unzipFailed(
+            "unzip-based bridge materialization is unavailable outside macOS"
+        )
     }
     #endif
 }

@@ -110,11 +110,15 @@ query, and privacy primitives.
 
 ## Native Privacy Bridge
 
-The first-release native surface is capability-only:
-`is_privacy_native_available()` and `privacy_capabilities_v1()`. The latter
-returns the canonical Norito `PrivacyCapabilitySnapshotV1` archive. The Torii
-client method with the same name strictly parses the JSON snapshot. There is no
-generic request/build/verify dispatcher and no legacy algorithm alias.
+The first-release native surface exposes local build metadata only:
+`is_privacy_native_available()` and
+`privacy_compiled_profile_catalog_v1()`. The latter returns this binary's
+canonical Norito `PrivacyCompiledProfileCatalogV1` archive and contains no
+committed height, governance activation, or readiness state. The distinct
+`Client.privacy_capabilities_v1()` method fetches and strictly parses a fresh
+authoritative JSON `PrivacyCapabilitySnapshotV1` from live Torii. There is no
+local `privacy_capabilities_v1()` alias, generic request/build/verify
+dispatcher, or legacy algorithm alias.
 
 `PRIVACY_PROTOCOL_IDS_V1` contains exactly twelve identities in wire order:
 `zk-ace-pq-authorization-v0`, `anonymous-pgc-k-out-of-n-v1`,
@@ -290,8 +294,8 @@ client.shield_asset_and_wait(
 
 prepared_proof = {
     "backend": "halo2/ipa",
-    "proof_bytes": b"...",
-    "verifying_key_ref": "halo2/ipa:vk_transfer",
+    "proof": {"backend": "halo2/ipa", "bytes": b"..."},
+    "vk_ref": {"backend": "halo2/ipa", "name": "vk_transfer"},
 }
 
 client.zk_transfer_prepared_and_wait(

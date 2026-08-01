@@ -180,14 +180,14 @@ pub struct PorVerdictOutcome {
 }
 
 /// One step of durable PoR-to-reputation reconciliation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PorReputationReconcileOutcomeV1 {
     /// No unacknowledged terminal remains.
     Idle,
     /// The exact terminal was durably admitted and its node cursor advanced.
     Reconciled {
         /// Retained work admitted by the reputation runtime.
-        work: PorReputationTerminalWorkV1,
+        work: Box<PorReputationTerminalWorkV1>,
         /// Durable native-outbox admission result.
         admission: reputation::runtime::ReputationJournalEnqueueOutcomeV1,
         /// Durable node acknowledgement result.
@@ -14706,7 +14706,7 @@ impl NodeHandle {
         let acknowledgement =
             self.acknowledge_por_reputation_terminal(work.sequence, work.work_digest)?;
         Ok(PorReputationReconcileOutcomeV1::Reconciled {
-            work,
+            work: Box::new(work),
             admission: admitted,
             acknowledgement,
         })
@@ -16114,7 +16114,7 @@ mod tests {
                 Some(PorFinalizedReplayArchiveLookupV1::Absent(absence))
                     if absence.challenge_id() == challenge_id =>
                 {
-                    Ok(PorFinalizedReplayArchiveLookupV1::Absent(*absence))
+                    Ok(PorFinalizedReplayArchiveLookupV1::Absent(absence.clone()))
                 }
                 _ => Err(PorFinalizedReplayArchiveExternalErrorV1::Rejected),
             }
@@ -16330,13 +16330,13 @@ mod tests {
 
         let mut live_ahead = StartupPorReplayArchive::exact(binding);
         live_ahead.current_head = Some(current_head);
-        live_ahead.lookup_result = Some(PorFinalizedReplayArchiveLookupV1::Found(
+        live_ahead.lookup_result = Some(PorFinalizedReplayArchiveLookupV1::Found(Box::new(
             PorFinalizedReplayArchiveReadbackV1 {
                 record,
                 receipt: current_head,
                 successor_receipts: Vec::new(),
             },
-        ));
+        )));
         let reopened = NodeHandle::try_new_with_policies_and_runtime_deps(
             config.clone(),
             RepairConfig::default(),
@@ -27650,15 +27650,15 @@ mod tests {
 
     #[derive(Debug)]
     struct TestGovernanceDagCheckpointStoreState {
-        records: [Option<GovernanceDagSealedStateRecord>; 4],
-        generation_floors: [u64; 4],
+        records: [Option<GovernanceDagSealedStateRecord>; 6],
+        generation_floors: [u64; 6],
     }
 
     impl Default for TestGovernanceDagCheckpointStoreState {
         fn default() -> Self {
             Self {
                 records: std::array::from_fn(|_| None),
-                generation_floors: [0; 4],
+                generation_floors: [0; 6],
             }
         }
     }
@@ -27683,6 +27683,8 @@ mod tests {
                 GovernanceDagSealedStateSlot::PublishIntent => 1,
                 GovernanceDagSealedStateSlot::ProducerCheckpoint => 2,
                 GovernanceDagSealedStateSlot::ProducerPublishIntent => 3,
+                GovernanceDagSealedStateSlot::IpfsRequestReplay => 4,
+                GovernanceDagSealedStateSlot::SignedHeadRequestReplay => 5,
             }
         }
     }

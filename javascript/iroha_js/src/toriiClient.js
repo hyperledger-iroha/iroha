@@ -69,6 +69,7 @@ import {
   KotodamaQuantity,
   NumericV1,
   NumericV1Error,
+  parseStrictLosslessIntegerJson,
 } from "./numericV1.js";
 import { SM2_DEFAULT_DISTINGUISHED_ID, verifyEd25519, verifySm2 } from "./crypto.js";
 import {
@@ -163,7 +164,6 @@ const SORAFS_BILLING_STATEMENT_MAX_BYTES = 22 * 1024 * 1024;
 const BOUNDED_JSON_MAX_STREAM_CHUNKS = 64 * 1024;
 const JSON_CLONE_MAX_DEPTH = 128;
 const JSON_CLONE_MAX_NODES = 100_000;
-const SUMERAGI_TYPED_JSON_MAX_NODES = 2_000_000;
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 const typedArrayBufferGetter = Object.getOwnPropertyDescriptor(
   typedArrayPrototype,
@@ -678,231 +678,6 @@ function copyArrayBufferBytes(buffer, byteOffset, byteLength) {
 
 function isExactJsonMediaType(value) {
   return typeof value === "string" && EXACT_JSON_MEDIA_TYPE_PATTERN.test(value);
-}
-
-/**
- * Parse the integer-only JSON profile emitted by typed Torii endpoints.
- *
- * Native `JSON.parse` rounds integer tokens beyond `Number.MAX_SAFE_INTEGER`.
- * This parser preserves those tokens as `bigint`, rejects duplicate object
- * keys, and accepts no non-canonical numeric spelling. Sumeragi JSON has no
- * floating-point fields; decimal protocol values are encoded as strings.
- */
-function parseLosslessIntegerJson(text, context) {
-  if (typeof text !== "string") {
-    throw new TypeError(`${context} JSON source must be a string`);
-  }
-  let index = 0;
-  let nodes = 0;
-
-  const fail = (message, ErrorType = TypeError) => {
-    throw new ErrorType(`${context} contains invalid JSON at character ${index}: ${message}`);
-  };
-  const consumeNode = (depth) => {
-    nodes += 1;
-    if (nodes > SUMERAGI_TYPED_JSON_MAX_NODES) {
-      fail(
-        `value exceeds the ${SUMERAGI_TYPED_JSON_MAX_NODES}-node limit`,
-        RangeError,
-      );
-    }
-    if (depth > JSON_CLONE_MAX_DEPTH) {
-      fail(`value exceeds the ${JSON_CLONE_MAX_DEPTH}-level nesting limit`, RangeError);
-    }
-  };
-  const skipWhitespace = () => {
-    while (
-      index < text.length &&
-      (
-        text[index] === " " ||
-        text[index] === "\t" ||
-        text[index] === "\n" ||
-        text[index] === "\r"
-      )
-    ) {
-      index += 1;
-    }
-  };
-  const parseString = () => {
-    if (text[index] !== "\"") fail("expected a string");
-    index += 1;
-    let result = "";
-    while (index < text.length) {
-      const character = text[index];
-      if (character === "\"") {
-        index += 1;
-        return result;
-      }
-      if (character === "\\") {
-        index += 1;
-        if (index >= text.length) fail("unterminated string escape");
-        const escaped = text[index];
-        index += 1;
-        switch (escaped) {
-          case "\"":
-          case "\\":
-          case "/":
-            result += escaped;
-            break;
-          case "b":
-            result += "\b";
-            break;
-          case "f":
-            result += "\f";
-            break;
-          case "n":
-            result += "\n";
-            break;
-          case "r":
-            result += "\r";
-            break;
-          case "t":
-            result += "\t";
-            break;
-          case "u": {
-            const hex = text.slice(index, index + 4);
-            if (!/^[0-9A-Fa-f]{4}$/u.test(hex)) {
-              fail("invalid Unicode escape");
-            }
-            result += String.fromCharCode(Number.parseInt(hex, 16));
-            index += 4;
-            break;
-          }
-          default:
-            fail("invalid string escape");
-        }
-        continue;
-      }
-      if (text.charCodeAt(index) <= 0x1f) {
-        fail("unescaped control character in string");
-      }
-      result += character;
-      index += 1;
-    }
-    fail("unterminated string");
-  };
-  const parseInteger = () => {
-    const start = index;
-    if (text[index] === "-") {
-      index += 1;
-    }
-    if (index >= text.length) fail("incomplete number");
-    if (text[index] === "0") {
-      index += 1;
-      if (index < text.length && /[0-9]/u.test(text[index])) {
-        fail("integer tokens must not contain leading zeroes");
-      }
-    } else if (/[1-9]/u.test(text[index])) {
-      do {
-        index += 1;
-      } while (index < text.length && /[0-9]/u.test(text[index]));
-    } else {
-      fail("invalid integer token");
-    }
-    if (index < text.length && /[.eE]/u.test(text[index])) {
-      fail("numeric tokens must be canonical integers");
-    }
-    const token = text.slice(start, index);
-    let integer;
-    try {
-      integer = BigInt(token);
-    } catch {
-      fail("invalid integer token");
-    }
-    if (
-      integer >= BigInt(Number.MIN_SAFE_INTEGER) &&
-      integer <= BigInt(Number.MAX_SAFE_INTEGER)
-    ) {
-      return token === "-0" ? -0 : Number(integer);
-    }
-    return integer;
-  };
-  const parseValue = (depth) => {
-    consumeNode(depth);
-    skipWhitespace();
-    if (index >= text.length) fail("unexpected end of input");
-    switch (text[index]) {
-      case "{": {
-        index += 1;
-        const record = Object.create(null);
-        const keys = new Set();
-        skipWhitespace();
-        if (text[index] === "}") {
-          index += 1;
-          return record;
-        }
-        while (true) {
-          skipWhitespace();
-          const key = parseString();
-          if (keys.has(key)) {
-            fail(`duplicate object key ${JSON.stringify(key)}`);
-          }
-          keys.add(key);
-          skipWhitespace();
-          if (text[index] !== ":") fail("expected ':' after object key");
-          index += 1;
-          const value = parseValue(depth + 1);
-          Object.defineProperty(record, key, {
-            value,
-            enumerable: true,
-            writable: true,
-            configurable: true,
-          });
-          skipWhitespace();
-          if (text[index] === "}") {
-            index += 1;
-            return record;
-          }
-          if (text[index] !== ",") fail("expected ',' or '}' in object");
-          index += 1;
-        }
-      }
-      case "[": {
-        index += 1;
-        const values = [];
-        skipWhitespace();
-        if (text[index] === "]") {
-          index += 1;
-          return values;
-        }
-        while (true) {
-          values.push(parseValue(depth + 1));
-          skipWhitespace();
-          if (text[index] === "]") {
-            index += 1;
-            return values;
-          }
-          if (text[index] !== ",") fail("expected ',' or ']' in array");
-          index += 1;
-        }
-      }
-      case "\"":
-        return parseString();
-      case "t":
-        if (text.slice(index, index + 4) !== "true") fail("invalid literal");
-        index += 4;
-        return true;
-      case "f":
-        if (text.slice(index, index + 5) !== "false") fail("invalid literal");
-        index += 5;
-        return false;
-      case "n":
-        if (text.slice(index, index + 4) !== "null") fail("invalid literal");
-        index += 4;
-        return null;
-      default:
-        if (text[index] === "-" || /[0-9]/u.test(text[index])) {
-          return parseInteger();
-        }
-        fail("unexpected token");
-    }
-  };
-
-  skipWhitespace();
-  const parsed = parseValue(0);
-  skipWhitespace();
-  if (index !== text.length) fail("trailing input");
-  return parsed;
 }
 
 const KAIGI_CALL_EVENT_KIND_VALUES = new Set(["roster_updated", "ended"]);
@@ -11696,7 +11471,7 @@ export class ToriiClient {
       throw new TypeError(`${context} must be valid UTF-8`, { cause: error });
     }
     try {
-      const parsed = parseLosslessIntegerJson(text, context);
+      const parsed = parseStrictLosslessIntegerJson(text, context);
       if (signalIsAborted(signal)) {
         cancelReadableBodyBestEffort(body, `${context} was aborted`);
         throw bodyReadAbortError(signal, context);
@@ -31065,7 +30840,7 @@ function parseSorafsReputationSseU64(raw, context) {
   ) {
     throw new TypeError(`${context} must be a positive canonical u64`);
   }
-  const parsed = parseLosslessIntegerJson(raw, context);
+  const parsed = parseStrictLosslessIntegerJson(raw, context);
   return parseSorafsReputationU64(parsed, context, { minimum: 1n });
 }
 
@@ -31085,7 +30860,7 @@ async function* validateSorafsReputationSseStream(events, requestedSince) {
         throw new TypeError(`${context}.data must be exact compact JSON`);
       }
       const data = parseSorafsReputationEvent(
-        parseLosslessIntegerJson(event.raw, `${context}.data`),
+        parseStrictLosslessIntegerJson(event.raw, `${context}.data`),
         `${context}.data`,
       );
       const eventId = parseSorafsReputationSseU64(

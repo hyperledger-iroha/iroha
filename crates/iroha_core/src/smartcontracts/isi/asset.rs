@@ -274,6 +274,7 @@ pub mod isi {
         /// This validates the complete post-credit balance before mutation and assigns that
         /// precomputed value. It does not emit an `Added` event; callers remain responsible for
         /// balance-change event emission.
+        #[cfg(test)]
         pub(crate) fn deposit_numeric_asset_exact(
             &mut self,
             id: &AssetId,

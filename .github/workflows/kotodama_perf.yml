@@ -22,6 +22,7 @@ on:
       - "crates/iroha_torii/src/**"
       - "crates/iroha_cli/src/**"
       - "crates/iroha_js_host/src/**"
+      - "javascript/iroha_js/**"
       - "crates/irohad/src/soracloud_runtime.rs"
       - "scripts/check_kotodama_perf.py"
       - "scripts/check_kotodama_docs.py"
@@ -67,8 +68,28 @@ jobs:
           cache-dependency-path: javascript/iroha_js/package-lock.json
       - name: Install JavaScript SDK dependencies
         run: npm ci --ignore-scripts --prefix javascript/iroha_js
-      - name: Build the Rust native binding and run the complete JavaScript suite
+      - name: Build the Rust native binding and run the zero-skip hermetic JavaScript suite
         run: npm test --prefix javascript/iroha_js
+
+  javascript-provenance-platforms:
+    name: JavaScript native provenance (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: javascript/iroha_js/package-lock.json
+      - name: Install JavaScript SDK dependencies
+        run: npm ci --ignore-scripts --prefix javascript/iroha_js
+      - name: Enforce platform-selected provenance tests with zero skips
+        run: npm run test:native-provenance --prefix javascript/iroha_js
 
   representative-regression:
     # Benchmark the base and candidate on the same controlled Iroha runner.

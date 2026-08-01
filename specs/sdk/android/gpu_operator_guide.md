@@ -46,14 +46,21 @@ same pattern and clone their outputs for safety.
 ## CUDA smoke test on real devices
 
 Run the manual smoke harness on a CUDA-capable device once the native bridge is
-present. The harness only executes when `IROHA_CUDA_SELFTEST=1` is set to avoid
-failing in CI or emulator environments:
+present. The ordinary JVM suite does not select this hardware-only class. The
+nightly CUDA lane and operator invocation select it explicitly, and the harness
+fails if the flag, bridge, driver, backend, or any CUDA result is unavailable:
 
 ```bash
-cd java/iroha_android
-IROHA_CUDA_SELFTEST=1 \
-JAVA_TOOL_OPTIONS="-Diroha.cuda.enableNative=true" \
-./run_tests.sh --tests org.hyperledger.iroha.android.gpu.CudaAcceleratorsNativeSmokeTests
+cargo build --locked -p connect_norito_bridge --features cuda
+java_out="$(mktemp -d)"
+javac --release 8 -Xlint:all,-options -Werror -d "$java_out" \
+  java/iroha_android/src/main/java/org/hyperledger/iroha/android/gpu/CudaAccelerators.java \
+  java/iroha_android/src/test/java/org/hyperledger/iroha/android/gpu/CudaAcceleratorsNativeSmokeTests.java
+java -ea \
+  -Diroha.cuda.enableNative=true \
+  -Djava.library.path="$PWD/target/debug" \
+  -cp "$java_out" \
+  org.hyperledger.iroha.android.gpu.CudaAcceleratorsNativeSmokeTests
 ```
 
 Expected outcome:

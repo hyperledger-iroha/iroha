@@ -1068,6 +1068,16 @@ def test_repository_wires_exact_abi21_release_contract() -> None:
     assert "resolve_trusted_python312()" in jni_lane
     assert "MOBILE_SDK_PYTHON_BINARY" in jni_lane
     assert "sys.version_info[:2] != (3, 12)" in jni_lane
+    assert 'if [[ -n "${NORITO_MOBILE_JAVA_HOME:-}" ]]; then' in jni_lane
+    assert 'JAVA_HOME_DIR="$NORITO_MOBILE_JAVA_HOME"' in jni_lane
+    assert (
+        jni_lane.index('if [[ -n "${NORITO_MOBILE_JAVA_HOME:-}" ]]; then')
+        < jni_lane.index("/usr/libexec/java_home -v 21")
+    )
+    assert (
+        "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must provide an "
+        "absolute regular JDK directory"
+    ) in jni_lane
     assert '"$PYTHON_BINARY" -I -S' in jni_lane
     assert '--set "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION=1"' in jni_lane
     assert "--sdk c-jni" in jni_lane

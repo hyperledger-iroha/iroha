@@ -41,12 +41,15 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::p256_external_binding_air::{
+    P256ExternalBindingFixedAccessV1, P256ExternalBindingTraceV1,
+};
 use super::{
     p256_ecdsa_air::P256EcdsaRoleV1,
     p256_external_binding_air::{
         P256_EXTERNAL_BINDINGS_PER_ROW_V1, P256ExternalBindingCrossExternalSourceV1,
-        P256ExternalBindingCrossSourceV1, P256ExternalBindingErrorV1,
-        P256ExternalBindingFixedAccessV1, P256ExternalBindingRowV1, P256ExternalBindingTraceV1,
+        P256ExternalBindingCrossSourceV1, P256ExternalBindingErrorV1, P256ExternalBindingRowV1,
         compile_zk_x509_p256_external_cross_sources_v1, p256_external_binding_active_equalities_v1,
         p256_external_binding_dynamic_sources_v1, p256_external_binding_rows_v1,
     },
@@ -679,6 +682,7 @@ pub(crate) fn compile_zk_x509_p256_cross_trace_sink_fixed_v1(
 /// row sequence in a second pass. No million-row auxiliary or fixed `Vec` is
 /// retained.
 #[derive(Debug)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256CrossTraceSinkStreamV1<'a> {
     binding: &'a P256ExternalBindingTraceV1,
     fixed: Arc<P256CrossTraceSinkFixedV1>,
@@ -689,6 +693,7 @@ pub(crate) struct P256CrossTraceSinkStreamV1<'a> {
 }
 
 /// Prepare the binder sink stream from the binder's committed base copies.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_p256_cross_trace_sink_v1(
     binding: &P256ExternalBindingTraceV1,
     challenges: P256CrossTraceChallengesV1,
@@ -709,6 +714,7 @@ pub(crate) fn build_zk_x509_p256_cross_trace_sink_v1(
     })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compute_sink_terminal_v1(
     fixed: &P256CrossTraceSinkFixedV1,
     binding: &P256ExternalBindingTraceV1,
@@ -739,6 +745,7 @@ fn compute_sink_terminal_v1(
     Ok(running)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256CrossTraceSinkStreamV1<'a> {
     /// Restart deterministic row replay without recompiling the schedule or
     /// recomputing the terminal.
@@ -859,6 +866,7 @@ fn sink_source_values_v1(
     })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn sink_binding_row_v1(
     binding: &P256ExternalBindingTraceV1,
     row: usize,
@@ -874,6 +882,7 @@ fn sink_binding_row_v1(
         })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_binding_fixed_schedule_v1(
     binding: &P256ExternalBindingTraceV1,
 ) -> Result<(), P256CrossTraceBusErrorV1> {

@@ -794,7 +794,7 @@ class KagemushaRecursiveSpendProverTest {
         val appendBuilder = KagemushaRecursiveSpendProver::class.java.declaredMethods.single {
             it.name == "buildAppendRequestV4" && java.lang.reflect.Modifier.isPublic(it.modifiers)
         }
-        assertEquals(java.util.List::class.java, appendBuilder.parameterTypes[0])
+        assertEquals(List::class.java, appendBuilder.parameterTypes[0])
         val branchMethods = KagemushaRecursiveSpendProver.BranchProjection::class.java.declaredMethods
             .map { it.name }
             .toSet()

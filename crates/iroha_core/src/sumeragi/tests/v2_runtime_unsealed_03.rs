@@ -387,6 +387,26 @@
         let next_before_older = lifecycle_ordinals
             .next_ordinal_for_test()
             .expect("inspect shared source before older carrier transfer");
+        let mut unfrozen_older = older.clone();
+        unfrozen_older.runtime_physical_cut = None;
+        assert!(unfrozen_older.validate_exact());
+        let unfrozen_projection =
+            RuntimeIngressOwnershipEvidence::from_fair_ingress(&message, unfrozen_older)
+                .expect("pre-dequeue aggregate identity remains exact");
+        assert!(!unfrozen_projection.validate_frozen_physical());
+        let retained_projection = runtime.ingress.commands[0]
+            .ingress_ownership
+            .as_ref()
+            .expect("newer aggregate retains checked ingress ownership");
+        let mut mixed_preview = retained_projection.clone();
+        mixed_preview
+            .merge_downstream(unfrozen_projection)
+            .expect("capacity probe can preview a frozen/unfrozen aggregate merge");
+        assert!(mixed_preview.validate_exact());
+        assert!(
+            !mixed_preview.validate_frozen_physical(),
+            "only checked dequeue may promote the preview to mutable runtime ownership"
+        );
         runtime
             .enqueue_network_with_ingress_ownership(message, older)
             .expect("older frozen aggregate carrier joins the queued envelope");
@@ -738,6 +758,15 @@
             runtime.deferred_lifecycle_ownership[&deferred_ordinal].lifecycle_ordinal(),
             newer_ordinal
         );
+        let frozen_physical_cut =
+            runtime.deferred_lifecycle_ownership[&deferred_ordinal].physical_cut;
+        let frozen_source_physical_ordinal =
+            runtime.deferred_lifecycle_ownership[&deferred_ordinal].source_physical_ordinal;
+        let frozen_runtime_seal = runtime.deferred_lifecycle_ownership[&deferred_ordinal]
+            .runtime_seal
+            .clone();
+        assert_ne!(frozen_physical_cut, 0);
+        assert!(frozen_source_physical_ordinal.is_some());
 
         let older = fair_runtime_ownership_at_lifecycle(
             fair_network_ownership(&message, PeerId::new(keys[1].public_key().clone())),
@@ -762,6 +791,18 @@
             .expect("Busy-deferred aggregate retains its rebased lifecycle owner");
         assert_eq!(rebased_owner.lifecycle_ordinal(), older_ordinal);
         assert_eq!(
+            rebased_owner.physical_cut, frozen_physical_cut,
+            "logical owner replacement cannot refresh the continuation's physical cut"
+        );
+        assert_eq!(
+            rebased_owner.source_physical_ordinal, frozen_source_physical_ordinal,
+            "logical owner replacement cannot replace the source occurrence"
+        );
+        assert_eq!(
+            rebased_owner.runtime_seal, frozen_runtime_seal,
+            "logical owner replacement cannot replace the admitted occurrence capability"
+        );
+        assert_eq!(
             rebased_owner.causal_origin().root_lifecycle_ordinal,
             Some(older_ordinal)
         );
@@ -784,43 +825,35 @@
             mutation.earliest_lifecycle_ordinal(),
             Ok(Some(mutation_ordinal))
         );
-        let mut identity_mutated_owner = healthy_owner.clone();
-        identity_mutated_owner.causal_origin.root_ingress_identity =
-            Some(Hash::new(b"mutated Busy-deferred ingress identity"));
-        identity_mutated_owner.causal_origin.lifecycle_key =
-            runtime_candidate_causal_origin_lifecycle_key(&identity_mutated_owner.causal_origin);
-        identity_mutated_owner.causal_origin.projection_hash =
-            runtime_candidate_causal_origin_projection_hash(&identity_mutated_owner.causal_origin);
-        identity_mutated_owner.projection_hash =
-            runtime_lifecycle_owner_projection_hash(&identity_mutated_owner);
-        assert!(identity_mutated_owner.validate_exact());
-        assert_ne!(
-            identity_mutated_owner.causal_origin().root_ingress_identity,
-            healthy_owner.causal_origin().root_ingress_identity
+        let mut identity_mutated_lifecycle_owner = healthy_owner.owner.clone();
+        identity_mutated_lifecycle_owner
+            .causal_origin
+            .root_ingress_identity = Some(Hash::new(b"mutated Busy-deferred ingress identity"));
+        identity_mutated_lifecycle_owner.causal_origin.lifecycle_key =
+            runtime_candidate_causal_origin_lifecycle_key(
+                &identity_mutated_lifecycle_owner.causal_origin,
+            );
+        identity_mutated_lifecycle_owner
+            .causal_origin
+            .projection_hash = runtime_candidate_causal_origin_projection_hash(
+            &identity_mutated_lifecycle_owner.causal_origin,
         );
-        runtime
-            .deferred_lifecycle_ownership
-            .insert(deferred_ordinal, identity_mutated_owner);
-        let ingress_before_rejection = runtime.deferred_ingress_ownership.clone();
-        let lifecycle_before_rejection = runtime.deferred_lifecycle_ownership.clone();
-        assert_eq!(
-            runtime
-                .reconcile_deferred_ingress_ownership(Some((deferred_ordinal, mutation.clone(),))),
-            Err(RuntimeIngressMergeError::IndependentOccurrence),
-            "a valid earlier carrier cannot rebase through a mutated causal ingress identity"
+        identity_mutated_lifecycle_owner.projection_hash =
+            runtime_lifecycle_owner_projection_hash(&identity_mutated_lifecycle_owner);
+        assert!(
+            matches!(
+                RuntimeDeferredLifecycleOwnership::new(
+                    identity_mutated_lifecycle_owner,
+                    healthy_owner.deferred_admission_ordinal,
+                    healthy_owner.current_ingress,
+                    healthy_owner.source_physical_ordinal,
+                    healthy_owner.physical_cut,
+                    healthy_owner.runtime_seal.clone(),
+                ),
+                Err(EnqueueError::FailClosed)
+            ),
+            "the adapter-private seal rejects a coherently rehashed causal identity substitution"
         );
-        assert_eq!(
-            runtime.deferred_ingress_ownership, ingress_before_rejection,
-            "identity rejection must not partially install the earlier carrier"
-        );
-        assert_eq!(
-            runtime.deferred_lifecycle_ownership, lifecycle_before_rejection,
-            "identity rejection must not partially rewrite the deferred lifecycle owner"
-        );
-
-        runtime
-            .deferred_lifecycle_ownership
-            .insert(deferred_ordinal, healthy_owner);
         runtime
             .reconcile_deferred_ingress_ownership(Some((deferred_ordinal, mutation)))
             .expect("the same earlier carrier rebases after restoring the exact identity");
@@ -832,6 +865,15 @@
         );
         let final_owner = &runtime.deferred_lifecycle_ownership[&deferred_ordinal];
         assert_eq!(final_owner.lifecycle_ordinal(), mutation_ordinal);
+        assert_eq!(final_owner.physical_cut, frozen_physical_cut);
+        assert_eq!(
+            final_owner.source_physical_ordinal,
+            frozen_source_physical_ordinal
+        );
+        assert_eq!(
+            final_owner.runtime_seal, frozen_runtime_seal,
+            "repeated aggregate rebasing retains the first admitted occurrence capability"
+        );
         assert_eq!(
             final_owner.causal_origin().root_lifecycle_ordinal,
             Some(mutation_ordinal)

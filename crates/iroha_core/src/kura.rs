@@ -116,11 +116,30 @@ use crate::{
     queue::{
         LaneQueueReservationGroupBindingV1, LaneQueueReservationGroupIdentityV1,
         LaneQueueReservationKeyV2, LaneQueueReservationReconciliationGroupV1, RoutingPlan,
+        canonical_lane_queue_reservation_group_identity_projection,
         lane_queue_reservation_group_binding_from_ordered_keys,
     },
     sumeragi::{
         lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal,
-        message::KuraReplicaAdvertV1, output_guard::ConsensusOutputGuard,
+        message::KuraReplicaAdvertV1,
+        output_guard::ConsensusOutputGuard,
+        v2_core::{
+            IN_FLIGHT_FIRST_RELEASE_ACTION_AUTHORIZE_READY,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_SIGN_READY,
+            IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED, IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            ProductionInFlightFirstReleaseCarrierProjection,
+            ProductionInFlightFirstReleaseDecisionProjection,
+            ProductionInFlightFirstReleaseHistoryProjection,
+            ProductionInFlightFirstReleaseQueueProjection,
+            ProductionInFlightFirstReleaseReleaseProjection,
+            ProductionInFlightFirstReleaseSessionProjection,
+            ProductionInFlightFirstReleaseStateProjection,
+            ProductionInFlightFirstReleaseTransitionProjection,
+            check_production_in_flight_first_release_transition,
+        },
     },
 };
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;

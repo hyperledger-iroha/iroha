@@ -8316,44 +8316,18 @@ where
             })
         }
         "norito-rpc-fixtures" => {
-            let mut fixtures_json: Option<PathBuf> = None;
-            let mut exporter_manifest: Option<PathBuf> = None;
-            let mut output_dir: Option<PathBuf> = None;
-            let mut selection_manifest: Option<PathBuf> = None;
-            let mut include_all = false;
-            let mut check_encoded = true;
+            let mut output_root: Option<PathBuf> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
-                    "--fixtures" => {
+                    "--output-root" if output_root.is_none() => {
                         let Some(path) = pending.next() else {
-                            return Err("expected path after --fixtures".into());
+                            return Err("expected path after --output-root".into());
                         };
-                        fixtures_json = Some(normalize_path(Path::new(&path))?);
+                        output_root = Some(normalize_norito_rpc_output_root(&path)?);
                     }
-                    "--exporter" | "--exporter-manifest" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --exporter".into());
-                        };
-                        exporter_manifest = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "-o" | "--out" | "--output" | "--out-dir" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --out-dir".into());
-                        };
-                        output_dir = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--selection" | "--selection-manifest" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --selection".into());
-                        };
-                        selection_manifest = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--all" => {
-                        include_all = true;
-                    }
-                    "--skip-encoded-check" => {
-                        check_encoded = false;
+                    "--output-root" => {
+                        return Err("--output-root was supplied more than once".into());
                     }
                     flag => {
                         return Err(format!("unknown flag for norito-rpc-fixtures: {flag}").into());
@@ -8361,14 +8335,7 @@ where
                 }
             }
             Ok(CommandKind::NoritoRpcFixtures {
-                options: NoritoRpcFixtureOptions::new(
-                    fixtures_json,
-                    exporter_manifest,
-                    output_dir,
-                    selection_manifest,
-                    include_all,
-                    check_encoded,
-                ),
+                options: NoritoRpcFixtureOptions::new(output_root),
             })
         }
         "norito-rpc-verify" => {
@@ -14778,6 +14745,27 @@ pub(crate) fn normalize_path(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
     }
 }
 
+fn normalize_norito_rpc_output_root(value: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let requested = Path::new(value);
+    if value.is_empty()
+        || value.starts_with('-')
+        || requested == Path::new(".")
+        || requested.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+    {
+        return Err("--output-root requires an unambiguous directory path".into());
+    }
+    let normalized = normalize_path(requested)?;
+    if normalized.parent().is_none() {
+        return Err("--output-root must not be the filesystem root".into());
+    }
+    Ok(normalized)
+}
+
 fn openapi_paths_alias(left: &Path, right: &Path) -> bool {
     openapi_path_identity(left) == openapi_path_identity(right)
 }
@@ -15319,9 +15307,7 @@ fn print_usage() {
     eprintln!(
         "    Print the SNNet-17B constant-rate presets (core/home) and optional tick→bandwidth tables so relay operators and SDK tooling can apply consistent lane budgets."
     );
-    eprintln!(
-        "  cargo xtask norito-rpc-fixtures [--fixtures <path>] [--exporter <Cargo.toml>] [--out-dir <dir>] [--selection <path>] [--all] [--skip-encoded-check]"
-    );
+    eprintln!("  cargo xtask norito-rpc-fixtures [--output-root <dir>]");
     eprintln!(
         "    Regenerate the canonical Norito-RPC fixtures/manifest under fixtures/norito_rpc/"
     );
@@ -15525,6 +15511,60 @@ mod tests {
     use norito::json::Value;
 
     use super::*;
+
+    #[test]
+    fn norito_rpc_fixtures_accepts_only_the_canonical_output_root_option() {
+        let args = [
+            "xtask",
+            "norito-rpc-fixtures",
+            "--output-root",
+            "artifacts/norito-stage",
+        ];
+        assert!(matches!(
+            parse_command(args.into_iter().map(String::from)).expect("canonical option parses"),
+            CommandKind::NoritoRpcFixtures { .. }
+        ));
+
+        for retired in [
+            "--fixtures",
+            "--exporter",
+            "--exporter-manifest",
+            "-o",
+            "--out",
+            "--output",
+            "--out-dir",
+            "--selection",
+            "--selection-manifest",
+            "--all",
+            "--skip-encoded-check",
+        ] {
+            let args = ["xtask", "norito-rpc-fixtures", retired];
+            let error = match parse_command(args.into_iter().map(String::from)) {
+                Ok(_) => panic!("retired option {retired} must be rejected"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains("unknown flag"),
+                "unexpected error for {retired}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn norito_rpc_fixtures_rejects_ambiguous_output_roots() {
+        for invalid in ["", ".", "..", "../stage", "stage/../escape", "/", "--all"] {
+            let args = ["xtask", "norito-rpc-fixtures", "--output-root", invalid];
+            let error = match parse_command(args.into_iter().map(String::from)) {
+                Ok(_) => panic!("ambiguous output root {invalid:?} must be rejected"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains("output-root"),
+                "unexpected error for {invalid:?}: {error}"
+            );
+        }
+    }
+
     #[test]
     fn vote_tally_default_path_points_into_fixtures() {
         let default = default_vote_tally_path();

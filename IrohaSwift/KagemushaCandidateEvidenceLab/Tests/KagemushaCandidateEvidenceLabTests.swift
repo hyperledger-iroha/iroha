@@ -691,7 +691,7 @@ private func commonReceipt(
 final class KagemushaCandidateEvidenceLabTests: XCTestCase {
     func testProofPhase() throws {
         #if targetEnvironment(simulator)
-        throw XCTSkip("simulator is explicitly unsupported")
+        throw LabFailure.invalid("physical iPhone evidence cannot run in a simulator")
         #else
         let input = try inputDirectory()
         let output = try outputDirectory()
@@ -761,7 +761,7 @@ final class KagemushaCandidateEvidenceLabTests: XCTestCase {
 
     func testRestartPhase() throws {
         #if targetEnvironment(simulator)
-        throw XCTSkip("simulator is explicitly unsupported")
+        throw LabFailure.invalid("physical iPhone evidence cannot run in a simulator")
         #else
         let input = try inputDirectory()
         let output = try outputDirectory()

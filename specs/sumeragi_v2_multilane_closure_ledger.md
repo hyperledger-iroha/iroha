@@ -123,10 +123,19 @@ invariants together.
 
 **Implementation:** Current first-release layouts are source-bound, as is the
 reservation-journal primitive seam. The fixed-width composed transition relation is implemented
-and source-bound. One narrow pre-Kura autonomous
-reservation-batch direct-release path consumes its checked `DirectReleased`
-projection under the Queue transition and FIFO locks immediately before the
-durable release append; complete production trace extraction is not implemented.
+and source-bound. The autonomous FIFO selector consumes checked
+`SelectQueuePlanV4Conjunction` and `FsyncReservationV5` projections derived
+from the canonical slot authority and complete ordered reservation-group
+identity. The one-shot READY signer rederives that shared identity and exact
+producer/signer committee bits, then consumes a checked `SignReady` projection
+immediately before signature construction. A separate pre-Kura
+reservation-batch direct-release path consumes
+its checked `DirectReleased` projection under the Queue transition and FIFO
+locks immediately before the durable release append. Existing bounded
+consumers also check durable execution input/READY QC/lane Commit at merge
+source admission, canonical `ApplyCarrier` before the WSV commit sink, and the
+three ordered post-carrier Queue cleanup prefixes. Complete production trace
+extraction is not implemented.
 **Closure:** Open.
 **Evidence:** Current schema-5 structural/source binding, local checked
 reservation-journal transition evidence, and Rust/Verus composed relation.
@@ -167,11 +176,19 @@ ordinary-FIFO ordered/direct release. Snapshot recovery maps to an abstract
 stutter, and direct release is an explicit named action. The retired lane-wide
 removal operation is absent from the schema-bound V5 journal, and its old
 bootstrap claim and operation bytes fail closed without compatibility replay.
-The sole pre-Kura autonomous reservation-batch direct-release
-linearization point now extracts and consumes this composed projection after
-locked V4/V5, FIFO, group, and committee revalidation. Other production
-linearization points do not yet extract and consume it, so the end-to-end
-refinement remains open.
+The deterministic autonomous selection linearization point now derives its
+move-only authority from the canonical slot committee/author, revalidates the
+exact QueuePlan registry and FIFO selection, derives the complete ordered
+reservation-group identity, and consumes checked QueuePlan-selection and V5
+fsync projections at the journal append. The READY signature boundary consumes
+its Kura-minted move-only authority only after checking the exact proposal,
+availability body, height context, committee geometry, and reservation group.
+The durable merge-source, canonical WSV commit, and post-carrier Queue cleanup
+consumers check their named projections against that same group identity. The
+pre-Kura reservation-batch direct-release linearization point separately
+consumes its composed projection after locked V4/V5, FIFO, group, and committee
+revalidation. Other production linearization points do not yet extract and
+consume the relation, so the end-to-end refinement remains open.
 
 This row is deliberately **not** a production-refinement claim. When run, TLC
 can exhaust the stated finite model and Apalache can typecheck/bound its
@@ -621,7 +638,7 @@ output backpressure, successful durable-handoff urgent wake-up, predecessor
 drop, successor retry, frozen exact recipients, and final Kura revalidation.
 Fresh same-day isolated Rust 1.93.1 locked/offline slices passed the 18 exact
 Kura replica tests and four exact configuration tests. Those focused runs and
-source anchors are not the complete 338-test `G-UNIT` receipt, and no
+source anchors are not the complete 397-test `G-UNIT` receipt, and no
 multi-peer body-pruning corridor was run, so this row's evidence remains Open.
 
 **Formal obligation and mutation.** `ML-MUT-KURA-01` now owns the source-bound
@@ -700,7 +717,7 @@ not a mutation runner or deductive proof.
 **Evidence:** Open.
 
 **Production map.** `LaneQueueReservationKeyV2`,
-`LaneQueueReservationStore`, `Queue::reserve_transactions_for_lane`,
+`LaneQueueReservationStore`, `Queue::reserve_transactions_for_lane_bounded`,
 `Queue::retain_lane_reservation`, `Queue::release_lane_reservation`,
 `Queue::commit_lane_reservation`,
 `Queue::reconcile_orphaned_lane_reservations`, and
@@ -712,13 +729,14 @@ selection and calls `Queue::reserve_transactions_for_lane_bounded` before
 payload publication; losing and retired work use the exact release path.
 
 **Closure condition.** The deterministic lane leader selects a non-empty FIFO
-batch and fsyncs one exact `LaneQueueReservationKeyV2` record before ownership
-leaves the ordinary queue. Selection binds active route/incarnation and
+batch and fsyncs one exact ordered V5 batch of `LaneQueueReservationKeyV2`
+records before ownership leaves the ordinary queue. Selection binds active route/incarnation and
 canonical enqueue order, and requires the admission binding to be an exact
 immutable WSV registry match. No transaction can be visible to both owners or
 to neither owner at any crash point.
 
-**Focused and adversarial tests.** Cover empty and bounded batches, FIFO order,
+**Focused and adversarial tests.** Cover empty and bounded batches, the 4,097
+entry rejection before FIFO or journal mutation, canonical slot authority, FIFO order,
 duplicate transactions, two lanes racing for one transaction, stale
 incarnation, reservation-key duplication, fsync/write/rename failure, crash
 before and after ownership transfer, restart reconciliation, and bounded prune
@@ -932,7 +950,7 @@ regression (`1/1`), the startup-replay binding regressions (`2/2`), the bounded
 historical namespace/accounting suite (`6/6`), first-merge crash-window repair
 (`1/1`), Native post-WSV retention (`1/1`), and authenticated geometry refresh
 (`1/1`) under isolated Rust 1.93.1 locked/offline execution. These 12 focused
-tests are mapped row evidence, not the complete 338-test `G-UNIT` receipt, so
+tests are mapped row evidence, not the complete 397-test `G-UNIT` receipt, so
 this row's evidence remains Open.
 
 **Formal obligation and mutation.** Invariant `MLRestartOwnershipPartition`
@@ -1387,12 +1405,12 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The focused source inventory is now internally consistent. The nine arrays in
-`scripts/run_sumeragi_v2_release_gates.sh` contain exactly 338 unique required
-tests: 135 core, 140 queue-journal, 13 configuration, eight data-model, 39
+`scripts/run_sumeragi_v2_release_gates.sh` contain exactly 397 unique required
+tests: 194 core, 140 queue-journal, 13 configuration, eight data-model, 39
 Torii, one Torii-shared, and two integration. The runner and
 `ci/check_sumeragi_v2_multilane_release_inventory.sh` both require that exact
-338-row shape, including the current authenticated replica-advert focus cases.
-The static checker passes exact `338/338` and also source-binds the synchronized
+397-row shape, including the current authenticated replica-advert focus cases.
+The static checker passes exact `397/397` and also source-binds the synchronized
 52-control grouped corpus. On 2026-07-31, pinned Rust 1.93.1 locked/offline
 execution from isolated source `/tmp/iroha-kura-final3.dvOYAN` and isolated
 target `/tmp/iroha-kura-target2.Llklru` passed 12 current-source focused tests:
@@ -1403,7 +1421,7 @@ isolated checkpoint also passed `cargo check -p iroha_core --lib`; the
 post-reader-refactor reruns covered startup binding and B/A/B recovery. Earlier
 same-day isolated slices passed the 18 Kura replica tests and four
 configuration tests. These are focused partial results, not a fresh archived
-execution of all 338 required tests, so `G-UNIT` stays Open.
+execution of all 397 required tests, so `G-UNIT` stays Open.
 
 ### G-FORMAL — source-bound models and expected mutations
 
@@ -1607,10 +1625,10 @@ diagnostics must be added here or mapped to a ledger row before release.
   implementation gaps are resolved and source-bound. Their focused Rust,
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
-- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain open even though the exact 338-row
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain open even though the exact 397-row
   inventory, 52-control corpus, partial direct SDK subsets, and structural
   formal checker now pass. Focused Rust subsets now pass, but no complete
-  338-test execution, complete SDK harness, or formal-engine result was
+  397-test execution, complete SDK harness, or formal-engine result was
   produced by this refresh, and no static source list or focused slice is a
   release execution receipt.
 

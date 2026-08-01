@@ -1295,9 +1295,9 @@ impl PorFinalizedReplayArchiveAbsenceProofV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PorFinalizedReplayArchiveLookupV1 {
     /// The exact record and contiguous inclusion path were returned.
-    Found(PorFinalizedReplayArchiveReadbackV1),
+    Found(Box<PorFinalizedReplayArchiveReadbackV1>),
     /// Absence was signed against the exact requested checkpoint head.
-    Absent(PorFinalizedReplayArchiveAbsenceProofV1),
+    Absent(Box<PorFinalizedReplayArchiveAbsenceProofV1>),
 }
 
 /// Payload-free external replay-archive failure.
@@ -3497,6 +3497,7 @@ mod tests {
                     expected_checkpoint_head,
                     self.signing_key.sign(&digest).to_bytes(),
                 )
+                .map(Box::new)
                 .map(PorFinalizedReplayArchiveLookupV1::Absent)
                 .map_err(|_| PorFinalizedReplayArchiveExternalErrorV1::Rejected);
             };
@@ -3521,7 +3522,7 @@ mod tests {
             readback
                 .validate_at_checkpoint(self.binding, expected_checkpoint_head, proof_bounds)
                 .map_err(|_| PorFinalizedReplayArchiveExternalErrorV1::Rejected)?;
-            Ok(PorFinalizedReplayArchiveLookupV1::Found(readback))
+            Ok(PorFinalizedReplayArchiveLookupV1::Found(Box::new(readback)))
         }
     }
 

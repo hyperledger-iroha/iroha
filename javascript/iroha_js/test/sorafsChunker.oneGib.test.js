@@ -8,13 +8,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
 
-const RUN_HEAVY = process.env.SORAFS_HEAVY === "1";
-
 test(
   "SoraFS 1GiB digest parity via CLI",
-  {
-    skip: !RUN_HEAVY,
-  },
   () => {
     const result = spawnSync(
       "cargo",

@@ -8468,6 +8468,7 @@ impl Iroha {
             |key| iroha_crypto::KeyPair::from(key.0.clone()),
         );
 
+        let genesis_trust_anchor = ConfiguredGenesisTrustAnchor::from(&config.genesis);
         let stored_genesis_block =
             read_stored_genesis_block(kura.as_ref(), block_count, provisional_imported_prefix)?;
         let stored_genesis_hash = stored_genesis_block.as_ref().map(|block| block.0.hash());
@@ -8486,6 +8487,14 @@ impl Iroha {
                 "Sumeragi v2 requires signed genesis metadata unless an imported snapshot prefix is awaiting signed-lineage authentication",
             ));
         }
+        if !provisional_imported_prefix {
+            let genesis_to_verify = effective_genesis.ok_or_else(|| {
+                Report::new(StartError::InitKura).attach(
+                    "signed genesis is unavailable for configured trust-anchor verification",
+                )
+            })?;
+            genesis_trust_anchor.verify(genesis_to_verify)?;
+        }
         let signed_genesis_context = if provisional_imported_prefix {
             None
         } else {
@@ -8495,32 +8504,7 @@ impl Iroha {
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?
         };
 
-        let effective_genesis_public_key = if let Some(stored_genesis) =
-            stored_genesis_block.as_ref()
-        {
-            let stored_key = genesis_public_key_from_genesis_block(stored_genesis)?;
-            if stored_key != config.genesis.public_key {
-                iroha_logger::warn!(
-                    configured = %config.genesis.public_key,
-                    stored = %stored_key,
-                    "genesis.public_key does not match stored genesis; using stored key for restart"
-                );
-            }
-            if let (Some(config_hash), Some(stored_hash)) = (
-                config.genesis.expected_hash.as_ref(),
-                stored_genesis_hash.as_ref(),
-            ) && config_hash != stored_hash
-            {
-                iroha_logger::warn!(
-                    configured = ?config_hash,
-                    stored = ?stored_hash,
-                    "genesis.expected_hash does not match stored genesis; ignoring for restart"
-                );
-            }
-            stored_key
-        } else {
-            config.genesis.public_key.clone()
-        };
+        let effective_genesis_public_key = genesis_trust_anchor.public_key().clone();
 
         let mut loaded_state_from_snapshot = false;
         let snapshot_result = if snapshot_mode_allows_restore(config.snapshot.mode) {
@@ -9142,7 +9126,7 @@ impl Iroha {
             )));
         }
         iroha_logger::info!(
-            mode=%consensus_caps.mode_tag,
+            mode=%consensus_caps.mode.tag(),
             proto=%consensus_caps.proto_version,
             fingerprint=%format!("0x{}", hex::encode(consensus_caps.consensus_fingerprint)),
             "Consensus handshake caps"
@@ -9419,7 +9403,7 @@ impl Iroha {
                 )
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
                 if fresh_caps.consensus_fingerprint != consensus_caps.consensus_fingerprint
-                    || fresh_caps.mode_tag != consensus_caps.mode_tag
+                    || fresh_caps.mode != consensus_caps.mode
                     || fresh_caps.proto_version != consensus_caps.proto_version
                 {
                     return Err(Report::new(StartError::InitKura).attach(
@@ -11397,6 +11381,67 @@ async fn config_updates_relay(
     Ok(())
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ConfiguredGenesisTrustAnchor {
+    public_key: PublicKey,
+    expected_hash: Option<HashOf<BlockHeader>>,
+}
+
+impl From<&iroha_config::parameters::actual::Genesis> for ConfiguredGenesisTrustAnchor {
+    fn from(config: &iroha_config::parameters::actual::Genesis) -> Self {
+        Self {
+            public_key: config.public_key.clone(),
+            expected_hash: config.expected_hash,
+        }
+    }
+}
+
+impl ConfiguredGenesisTrustAnchor {
+    fn public_key(&self) -> &PublicKey {
+        &self.public_key
+    }
+
+    fn verify(&self, block: &GenesisBlock) -> ReportResult<(), StartError> {
+        let embedded_key = genesis_public_key_from_genesis_block(block)?;
+        if embedded_key != self.public_key {
+            return Err(Report::new(StartError::InitKura).attach(format!(
+                "genesis authority `{embedded_key}` does not match configured genesis.public_key `{}`",
+                self.public_key
+            )));
+        }
+
+        let block_hash = block.0.hash();
+        if let Some(expected_hash) = self.expected_hash
+            && block_hash != expected_hash
+        {
+            return Err(Report::new(StartError::InitKura).attach(format!(
+                "genesis hash {block_hash} does not match configured genesis.expected_hash {expected_hash}"
+            )));
+        }
+
+        let mut signatures = block.0.signatures();
+        let signature = signatures.next().ok_or_else(|| {
+            Report::new(StartError::InitKura)
+                .attach("genesis block has no configured-authority signature")
+        })?;
+        if signature.index() != 0 || signatures.next().is_some() {
+            return Err(Report::new(StartError::InitKura)
+                .attach("genesis block must have exactly one signature at index 0"));
+        }
+        signature
+            .signature()
+            .verify_hash(&self.public_key, block_hash)
+            .map_err(|error| {
+                Report::new(StartError::InitKura).attach(format!(
+                    "genesis block signature does not verify against configured genesis.public_key `{}`: {error}",
+                    self.public_key
+                ))
+            })?;
+
+        Ok(())
+    }
+}
+
 fn read_stored_genesis_block(
     kura: &Kura,
     block_count: iroha_core::kura::BlockCount,
@@ -11446,8 +11491,19 @@ fn genesis_domain(public_key: PublicKey) -> Domain {
 #[cfg(test)]
 mod genesis_key_tests {
     use super::*;
+    use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_genesis::GenesisBuilder;
     use std::path::PathBuf;
+
+    fn signed_genesis(keypair: &KeyPair) -> GenesisBlock {
+        GenesisBuilder::new_without_executor(
+            ChainId::from("configured-genesis-trust-anchor-test"),
+            PathBuf::from("."),
+        )
+        .build_raw()
+        .build_and_sign(keypair)
+        .expect("build signed genesis")
+    }
 
     #[test]
     fn derives_genesis_pubkey_from_block_authority() {
@@ -11469,6 +11525,60 @@ mod genesis_key_tests {
         let domain = genesis_domain(keypair.public_key().clone());
 
         assert_eq!(domain.owned_by(), &expected_owner);
+    }
+
+    #[test]
+    fn configured_genesis_trust_anchor_accepts_matching_block() {
+        let keypair = KeyPair::random();
+        let genesis = signed_genesis(&keypair);
+        let anchor = ConfiguredGenesisTrustAnchor {
+            public_key: keypair.public_key().clone(),
+            expected_hash: Some(genesis.0.hash()),
+        };
+
+        anchor
+            .verify(&genesis)
+            .expect("matching configured genesis trust anchor should verify");
+    }
+
+    #[test]
+    fn configured_genesis_trust_anchor_rejects_wrong_public_key() {
+        let signer = KeyPair::random();
+        let genesis = signed_genesis(&signer);
+        let anchor = ConfiguredGenesisTrustAnchor {
+            public_key: KeyPair::random().public_key().clone(),
+            expected_hash: Some(genesis.0.hash()),
+        };
+
+        let error = anchor
+            .verify(&genesis)
+            .expect_err("configured public-key mismatch must reject genesis");
+        assert!(matches!(error.current_context(), StartError::InitKura));
+        assert!(
+            format!("{error:?}").contains("does not match configured genesis.public_key"),
+            "unexpected mismatch diagnostic: {error:?}"
+        );
+    }
+
+    #[test]
+    fn configured_genesis_trust_anchor_rejects_wrong_expected_hash() {
+        let keypair = KeyPair::random();
+        let genesis = signed_genesis(&keypair);
+        let wrong_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32]));
+        assert_ne!(genesis.0.hash(), wrong_hash);
+        let anchor = ConfiguredGenesisTrustAnchor {
+            public_key: keypair.public_key().clone(),
+            expected_hash: Some(wrong_hash),
+        };
+
+        let error = anchor
+            .verify(&genesis)
+            .expect_err("configured genesis hash mismatch must reject genesis");
+        assert!(matches!(error.current_context(), StartError::InitKura));
+        assert!(
+            format!("{error:?}").contains("does not match configured genesis.expected_hash"),
+            "unexpected mismatch diagnostic: {error:?}"
+        );
     }
 }
 
@@ -15550,7 +15660,7 @@ fn consensus_caps_from_genesis(
         mode_tag.clone(),
         expected_domain.to_owned(),
         iroha_p2p::ConsensusHandshakeCaps {
-            mode_tag,
+            mode: expected_mode,
             proto_version: iroha_core::sumeragi::consensus::PROTO_VERSION,
             consensus_fingerprint: computed_fingerprint,
             config: config_caps,
@@ -19588,20 +19698,22 @@ mod tests {
                     }
                 })
                 .expect("handshake meta should be present in genesis");
-            let mode_tag = match handshake_meta.mode {
-                iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => {
-                    iroha_core::sumeragi::consensus::PERMISSIONED_TAG.to_string()
-                }
-                iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => {
-                    iroha_core::sumeragi::consensus::NPOS_TAG.to_string()
-                }
+            let (mode, mode_tag) = match handshake_meta.mode {
+                iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => (
+                    iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+                    iroha_core::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+                ),
+                iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => (
+                    iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+                    iroha_core::sumeragi::consensus::NPOS_TAG.to_string(),
+                ),
             };
             let proto = handshake_meta.wire_protocol_version;
             let consensus_fingerprint = handshake_meta.consensus_fingerprint.into_bytes();
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let consensus_caps = iroha_p2p::ConsensusHandshakeCaps {
-                mode_tag: mode_tag.clone(),
+                mode,
                 proto_version: proto,
                 consensus_fingerprint,
                 config: config_caps,

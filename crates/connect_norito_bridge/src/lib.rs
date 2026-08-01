@@ -22,11 +22,14 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose as b64gp};
 use blake3::hash as blake3_hash;
-use iroha_core::privacy_profiles::committed_privacy_capability_snapshot_v1;
+use iroha_core::privacy_profiles::{
+    compiled_privacy_profile_catalog_v1, validate_local_privacy_compiled_profile_catalog_archive_v1,
+};
 use iroha_crypto::{
     Algorithm, EcdsaSecp256k1Sha256, Error as CryptoError, Hash, KeyGenOption, KeyPair, PrivateKey,
     PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
     kex::KeyExchangeScheme,
+    privacy::LaneCommitmentId,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
 };
 use iroha_data_model::{
@@ -55,17 +58,19 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     name::Name,
-    nexus::DataSpaceId,
+    nexus::{DataSpaceId, LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LanePrivacyProof},
     offline::{KagemushaConfidentialMerklePathV2, KagemushaNoteMembershipWitnessV2},
     privacy::{
-        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1,
-        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1, PrivacyCapabilityArchiveValidationStatusV1,
-        PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1,
+        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
+        PrivacyCompiledProfileCatalogArchiveValidationStatusV1, PrivacyCompiledProfileCatalogV1,
         PrivacyExact12FixtureBundleValidationStatusV1, PrivacyProtocolIdV1,
-        privacy_exact12_fixture_bundle_bytes_v1, validate_privacy_capability_archive_v1,
-        validate_privacy_exact12_fixture_bundle_v1,
+        privacy_exact12_fixture_bundle_bytes_v1, validate_privacy_exact12_fixture_bundle_v1,
     },
-    proof::{ProofAttachment, ProofBox, VerifyingKeyId},
+    proof::{
+        ProofAttachment, ProofBox, VerifyingKeyId, proof_box_max_proof_bytes_v1,
+        verifying_key_id_field_is_portable,
+    },
     ram_lfe::RamLfeReceiptAttestation,
     ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId},
     rwa::RwaId,
@@ -1518,8 +1523,10 @@ fn bridge_result_to_code(result: BridgeResult<()>) -> c_int {
 const PRIVACY_BUFFER_HEADER_MAGIC: u64 = 0x4952_5041_484f_5249;
 const PRIVACY_BUFFER_HEADER_BYTES: usize = std::mem::size_of::<PrivacyBufferHeader>();
 const PRIVACY_NATIVE_OUTPUT_MAX_BYTES_V1: usize =
-    if PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {
-        PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1
+    if PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1
+        > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1
+    {
+        PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1
     } else {
         PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1
     };
@@ -1530,22 +1537,17 @@ struct PrivacyBufferHeader {
     len: usize,
 }
 
-fn privacy_capabilities() -> PrivacyCapabilitySnapshotV1 {
-    let snapshot = committed_privacy_capability_snapshot_v1(
-        0,
-        PrivacyConsensusPolicyV1::taira_default(),
-        |_| None,
-    )
-    .expect("the compiled first-release privacy capability snapshot must be valid");
-    debug_assert_eq!(snapshot.protocols.len(), PrivacyProtocolIdV1::ALL.len());
+fn privacy_compiled_profile_catalog() -> Result<PrivacyCompiledProfileCatalogV1, c_int> {
+    let catalog = compiled_privacy_profile_catalog_v1().map_err(|_| ERR_CONNECT_ENCODE)?;
+    debug_assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::ALL.len());
     debug_assert!(
-        snapshot
+        catalog
             .protocols
             .iter()
             .map(|row| row.protocol_id)
             .eq(PrivacyProtocolIdV1::ALL)
     );
-    snapshot
+    Ok(catalog)
 }
 
 fn clear_privacy_output(out_ptr: *mut *mut c_uchar, out_len: *mut c_ulong) {
@@ -1632,22 +1634,24 @@ unsafe fn clear_privacy_allocated_buffer(ptr_: *mut c_uchar) -> *mut c_uchar {
     header.cast::<c_uchar>()
 }
 
-fn write_privacy_payload(
+fn write_privacy_compiled_profile_catalog(
     out_ptr: *mut *mut c_uchar,
     out_len: *mut c_ulong,
-    payload: &PrivacyCapabilitySnapshotV1,
 ) -> c_int {
     clear_privacy_output(out_ptr, out_len);
     if out_ptr.is_null() || out_len.is_null() {
         return ERR_NULL_PTR;
     }
-    let bytes = match norito::encode_canonical(payload) {
+    let Ok(catalog) = privacy_compiled_profile_catalog() else {
+        return ERR_CONNECT_ENCODE;
+    };
+    let bytes = match norito::encode_canonical(&catalog) {
         Ok(bytes) => bytes,
         Err(_) => return ERR_CONNECT_ENCODE,
     };
     let mut bytes = bytes;
-    let result = if bytes.len() > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1
-        || !validate_privacy_capability_archive_v1(&bytes).is_valid()
+    let result = if bytes.len() > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1
+        || !validate_local_privacy_compiled_profile_catalog_archive_v1(&bytes).is_valid()
     {
         ERR_CONNECT_ENCODE
     } else {
@@ -1660,47 +1664,54 @@ fn write_privacy_payload(
     result
 }
 
+/// Return this binary's canonical local compiled-profile catalog.
+///
+/// The catalog contains no committed height, consensus policy, activation, or
+/// readiness state. A client must fetch an authoritative capability snapshot
+/// from live Torii before treating any protocol as ready for proof submission.
+/// The output must be released with [`iroha_privacy_free_buffer`].
+///
+/// # Safety
+///
+/// `out_ptr` and `out_len` must be valid writable pointers for this call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn iroha_privacy_capabilities_v1(
+pub unsafe extern "C" fn iroha_privacy_compiled_profile_catalog_v1(
     out_ptr: *mut *mut c_uchar,
     out_len: *mut c_ulong,
 ) -> c_int {
-    clear_privacy_output(out_ptr, out_len);
-    if out_ptr.is_null() || out_len.is_null() {
-        return ERR_NULL_PTR;
-    }
-    write_privacy_payload(out_ptr, out_len, &privacy_capabilities())
+    write_privacy_compiled_profile_catalog(out_ptr, out_len)
 }
 
-/// Validate one untrusted canonical typed privacy capability snapshot.
+/// Validate one archive as this binary's exact local compiled-profile catalog.
 ///
 /// The return value is a stable
-/// [`PrivacyCapabilityArchiveValidationStatusV1`] discriminant. Only zero
-/// means the archive is accepted.
+/// [`PrivacyCompiledProfileCatalogArchiveValidationStatusV1`] discriminant.
+/// Only zero means the archive matches this binary. Success says nothing about
+/// committed governance state or network readiness.
 ///
 /// # Safety
 ///
 /// For a non-zero `archive_len`, `archive_ptr` must reference at least that
 /// many readable bytes for the duration of this call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn iroha_privacy_validate_capabilities_v1(
+pub unsafe extern "C" fn iroha_privacy_validate_compiled_profile_catalog_v1(
     archive_ptr: *const c_uchar,
     archive_len: c_ulong,
 ) -> c_int {
     if archive_ptr.is_null() {
-        return PrivacyCapabilityArchiveValidationStatusV1::NullPointer.code();
+        return PrivacyCompiledProfileCatalogArchiveValidationStatusV1::NullPointer.code();
     }
     let Ok(archive_len) = usize::try_from(archive_len) else {
-        return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
+        return PrivacyCompiledProfileCatalogArchiveValidationStatusV1::ArchiveTooLarge.code();
     };
-    if archive_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
-        return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
+    if archive_len > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1 {
+        return PrivacyCompiledProfileCatalogArchiveValidationStatusV1::ArchiveTooLarge.code();
     }
     let archive = unsafe { slice::from_raw_parts(archive_ptr, archive_len) };
-    validate_privacy_capability_archive_v1(archive).code()
+    validate_local_privacy_compiled_profile_catalog_archive_v1(archive).code()
 }
 
-/// Return the complete Rust-derived exact-12 statement/envelope KAT bundle.
+/// Return the complete Rust-derived exact-12 transaction-layer KAT bundle.
 ///
 /// The output is canonical Norito and must be released with
 /// [`iroha_privacy_free_buffer`].
@@ -1734,7 +1745,7 @@ pub unsafe extern "C" fn iroha_privacy_exact12_fixture_bundle_v1(
     result
 }
 
-/// Validate one untrusted canonical exact-12 statement/envelope KAT bundle.
+/// Validate one untrusted canonical exact-12 transaction-layer KAT bundle.
 ///
 /// # Safety
 ///
@@ -2790,10 +2801,106 @@ fn decode_exact_lower_hex_array<const N: usize>(hex_str: &str) -> BridgeResult<[
     Ok(out)
 }
 
-fn decode_base64_bytes(value: &str) -> BridgeResult<Vec<u8>> {
-    b64gp::STANDARD
+fn decode_canonical_bounded_base64(value: &str, max_decoded: usize) -> BridgeResult<Vec<u8>> {
+    let max_encoded = max_decoded
+        .checked_add(2)
+        .and_then(|value| value.checked_div(3))
+        .and_then(|value| value.checked_mul(4))
+        .ok_or(BridgeError::ProofAttachment)?;
+    if value.len() > max_encoded {
+        return Err(BridgeError::ProofAttachment);
+    }
+    let bytes = b64gp::STANDARD
         .decode(value.as_bytes())
-        .map_err(|_| BridgeError::ProofAttachment)
+        .map_err(|_| BridgeError::ProofAttachment)?;
+    if bytes.len() > max_decoded || b64gp::STANDARD.encode(&bytes) != value {
+        return Err(BridgeError::ProofAttachment);
+    }
+    Ok(bytes)
+}
+
+fn json_object_has_exact_fields(object: &JsonMap, expected: &[&str]) -> bool {
+    object.len() == expected.len() && expected.iter().all(|field| object.contains_key(*field))
+}
+
+fn parse_exact_json_byte_array<const N: usize>(value: &JsonValue) -> BridgeResult<[u8; N]> {
+    let values = value.as_array().ok_or(BridgeError::ProofAttachment)?;
+    if values.len() != N {
+        return Err(BridgeError::ProofAttachment);
+    }
+    let mut bytes = [0_u8; N];
+    for (index, value) in values.iter().enumerate() {
+        bytes[index] = value
+            .as_u64()
+            .and_then(|value| u8::try_from(value).ok())
+            .ok_or(BridgeError::ProofAttachment)?;
+    }
+    Ok(bytes)
+}
+
+fn parse_lane_privacy_proof_value(value: &JsonValue) -> BridgeResult<LanePrivacyProof> {
+    let object = value.as_object().ok_or(BridgeError::ProofAttachment)?;
+    if !json_object_has_exact_fields(object, &["commitment_id", "witness"]) {
+        return Err(BridgeError::ProofAttachment);
+    }
+    let commitment_id = object
+        .get("commitment_id")
+        .and_then(JsonValue::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
+        .ok_or(BridgeError::ProofAttachment)?;
+
+    let witness = object
+        .get("witness")
+        .and_then(JsonValue::as_object)
+        .ok_or(BridgeError::ProofAttachment)?;
+    if !json_object_has_exact_fields(witness, &["kind", "payload"])
+        || witness.get("kind").and_then(JsonValue::as_str) != Some("merkle")
+    {
+        return Err(BridgeError::ProofAttachment);
+    }
+    let payload = witness
+        .get("payload")
+        .and_then(JsonValue::as_object)
+        .ok_or(BridgeError::ProofAttachment)?;
+    if !json_object_has_exact_fields(payload, &["leaf", "proof"]) {
+        return Err(BridgeError::ProofAttachment);
+    }
+    let leaf = parse_exact_json_byte_array::<32>(
+        payload.get("leaf").ok_or(BridgeError::ProofAttachment)?,
+    )?;
+    let proof = payload
+        .get("proof")
+        .and_then(JsonValue::as_object)
+        .ok_or(BridgeError::ProofAttachment)?;
+    if !json_object_has_exact_fields(proof, &["leaf_index", "audit_path"]) {
+        return Err(BridgeError::ProofAttachment);
+    }
+    let leaf_index = proof
+        .get("leaf_index")
+        .and_then(JsonValue::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or(BridgeError::ProofAttachment)?;
+    let path = proof
+        .get("audit_path")
+        .and_then(JsonValue::as_array)
+        .ok_or(BridgeError::ProofAttachment)?;
+    if path.is_empty() || path.len() > LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 {
+        return Err(BridgeError::ProofAttachment);
+    }
+    if path.len() < u32::BITS as usize && u64::from(leaf_index) >= 1_u64 << path.len() {
+        return Err(BridgeError::ProofAttachment);
+    }
+    let audit_path = path
+        .iter()
+        .map(|sibling| parse_exact_json_byte_array::<32>(sibling).map(Some))
+        .collect::<BridgeResult<Vec<_>>>()?;
+    LanePrivacyProof::merkle_from_raw_path(
+        LaneCommitmentId::new(commitment_id),
+        leaf,
+        leaf_index,
+        audit_path,
+    )
+    .map_err(|_| BridgeError::ProofAttachment)
 }
 
 fn parse_proof_attachment_from_json_bytes(
@@ -2820,8 +2927,8 @@ fn parse_proof_attachment_value(value: &JsonValue) -> BridgeResult<ProofAttachme
     let object = value.as_object().ok_or(BridgeError::ProofAttachment)?;
     for field in object.keys() {
         match field.as_str() {
-            "backend" | "proof_backend" | "proof_b64" | "vk_ref" | "vk_commitment_hex"
-            | "envelope_hash_hex" => {}
+            "backend" | "proof_b64" | "vk_ref" | "vk_commitment_hex" | "envelope_hash_hex"
+            | "lane_privacy" => {}
             "vk_inline" | "vkInline" | "verifyingKeyInline" | "verifying_key_inline" => {
                 return Err(BridgeError::ProofAttachment);
             }
@@ -2832,29 +2939,19 @@ fn parse_proof_attachment_value(value: &JsonValue) -> BridgeResult<ProofAttachme
         .get("backend")
         .and_then(JsonValue::as_str)
         .ok_or(BridgeError::ProofAttachment)?;
-    let backend_str = backend_str.trim();
-    if backend_str.is_empty() {
+    if !verifying_key_id_field_is_portable(backend_str) {
         return Err(BridgeError::ProofAttachment);
     }
-    let backend = backend_str
-        .parse::<String>()
-        .map_err(|_| BridgeError::ProofAttachment)?;
+    let backend = backend_str.to_owned();
+    let maximum_proof_bytes =
+        proof_box_max_proof_bytes_v1(backend_str).ok_or(BridgeError::ProofAttachment)?;
     let proof_bytes = value
         .get("proof_b64")
         .and_then(JsonValue::as_str)
-        .map(decode_base64_bytes)
+        .map(|value| decode_canonical_bounded_base64(value, maximum_proof_bytes))
         .transpose()?
         .ok_or(BridgeError::ProofAttachment)?;
-    let proof_backend = value
-        .get("proof_backend")
-        .and_then(JsonValue::as_str)
-        .unwrap_or(backend_str)
-        .parse::<String>()
-        .map_err(|_| BridgeError::ProofAttachment)?;
-    if proof_backend != backend {
-        return Err(BridgeError::ProofAttachment);
-    }
-    let proof = ProofBox::new(proof_backend, proof_bytes);
+    let proof = ProofBox::new(backend.clone(), proof_bytes);
 
     let attachment = if let Some(vk_ref) = value.get("vk_ref").and_then(JsonValue::as_object) {
         for field in vk_ref.keys() {
@@ -2866,11 +2963,8 @@ fn parse_proof_attachment_value(value: &JsonValue) -> BridgeResult<ProofAttachme
         let vk_backend = vk_ref
             .get("backend")
             .and_then(JsonValue::as_str)
-            .ok_or(BridgeError::ProofAttachment)?
-            .trim()
-            .parse::<String>()
-            .map_err(|_| BridgeError::ProofAttachment)?;
-        if vk_backend.is_empty() {
+            .ok_or(BridgeError::ProofAttachment)?;
+        if !verifying_key_id_field_is_portable(vk_backend) {
             return Err(BridgeError::ProofAttachment);
         }
         if vk_backend != backend {
@@ -2880,8 +2974,7 @@ fn parse_proof_attachment_value(value: &JsonValue) -> BridgeResult<ProofAttachme
             .get("name")
             .and_then(JsonValue::as_str)
             .ok_or(BridgeError::ProofAttachment)?;
-        let name = name.trim();
-        if name.is_empty() {
+        if !verifying_key_id_field_is_portable(name) {
             return Err(BridgeError::ProofAttachment);
         }
         let id = VerifyingKeyId::new(vk_backend, name);
@@ -2899,6 +2992,9 @@ fn parse_proof_attachment_value(value: &JsonValue) -> BridgeResult<ProofAttachme
         .and_then(JsonValue::as_str)
         .ok_or(BridgeError::ProofAttachment)?;
     attachment.envelope_hash = Some(decode_exact_lower_hex_array(envelope_hex)?);
+    if let Some(lane_privacy) = value.get("lane_privacy") {
+        attachment.lane_privacy = Some(parse_lane_privacy_proof_value(lane_privacy)?);
+    }
     if attachment.structural_error().is_some() {
         return Err(BridgeError::ProofAttachment);
     }
@@ -27939,6 +28035,33 @@ mod accel_tests {
         )
     }
 
+    fn json_byte_array(bytes: &[u8]) -> String {
+        format!(
+            "[{}]",
+            bytes
+                .iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    }
+
+    fn lane_privacy_json(leaf_index: u64, audit_path: &[Option<Vec<u8>>]) -> String {
+        let leaf = json_byte_array(&[0xAA; 32]);
+        let path = audit_path
+            .iter()
+            .map(|sibling| {
+                sibling
+                    .as_deref()
+                    .map_or_else(|| "null".to_owned(), json_byte_array)
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            r#"{{"commitment_id":7,"witness":{{"kind":"merkle","payload":{{"leaf":{leaf},"proof":{{"leaf_index":{leaf_index},"audit_path":[{path}]}}}}}}}}"#
+        )
+    }
+
     fn chain_guard() -> std::sync::MutexGuard<'static, ()> {
         super::test_support::chain_discriminant_guard()
     }
@@ -29828,6 +29951,67 @@ mod accel_tests {
     }
 
     #[test]
+    fn proof_attachment_json_accepts_typed_lane_privacy_and_marks_raw_siblings() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        let lane = lane_privacy_json(1, &[Some(vec![0x22; 32]), Some(vec![0x44; 32])]);
+        let mut json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
+        json.insert_str(json.len() - 1, &format!(r#", "lane_privacy":{lane}"#));
+        let value: JsonValue = norito::json::from_str(&json).expect("json");
+        let attachment = parse_proof_attachment_value(&value).expect("typed lane privacy");
+        let lane = attachment.lane_privacy.expect("lane privacy attachment");
+        let iroha_data_model::nexus::LanePrivacyWitness::Merkle(witness) = lane.witness;
+        assert_eq!(witness.proof.leaf_index(), 1);
+        assert_eq!(witness.proof.audit_path().len(), 2);
+        for sibling in witness.proof.audit_path() {
+            let sibling = sibling.as_ref().expect("complete lane path");
+            assert_eq!(sibling.as_ref()[31] & 1, 1);
+        }
+    }
+
+    #[test]
+    fn lane_privacy_json_rejects_incomplete_impossible_and_oversized_paths() {
+        let sibling = Some(vec![0x22; 32]);
+        let too_deep = vec![sibling.clone(); LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 + 1];
+        let cases = [
+            lane_privacy_json(0, &[]),
+            lane_privacy_json(0, &[None]),
+            lane_privacy_json(2, std::slice::from_ref(&sibling)),
+            lane_privacy_json(0, &[Some(vec![0x22; 31])]),
+            lane_privacy_json(0, &too_deep),
+            lane_privacy_json(0, std::slice::from_ref(&sibling)).replacen(
+                r#""proof":{"#,
+                r#""shadow":0,"proof":{"#,
+                1,
+            ),
+            lane_privacy_json(0, std::slice::from_ref(&sibling)).replacen(
+                r#""merkle""#,
+                r#""snark""#,
+                1,
+            ),
+        ];
+        for json in cases {
+            let value: JsonValue = norito::json::from_str(&json).expect("adversarial json");
+            let error = parse_lane_privacy_proof_value(&value)
+                .expect_err("malformed lane privacy path must reject");
+            assert!(matches!(error, BridgeError::ProofAttachment));
+        }
+    }
+
+    #[test]
+    fn proof_attachment_base64_is_canonical_and_bounded_before_use() {
+        assert_eq!(
+            decode_canonical_bounded_base64("AA==", 1).expect("canonical one byte"),
+            vec![0]
+        );
+        for (value, maximum) in [("AAAA", 2), ("AB==", 1), ("AA==\n", 1)] {
+            assert!(
+                decode_canonical_bounded_base64(value, maximum).is_err(),
+                "base64 {value:?} with maximum {maximum} must reject"
+            );
+        }
+    }
+
+    #[test]
     fn proof_attachment_json_rejects_missing_envelope_hash() {
         let value: JsonValue = norito::json::from_str(
             r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
@@ -29887,13 +30071,13 @@ mod accel_tests {
     }
 
     #[test]
-    fn proof_attachment_json_rejects_proof_backend_mismatch() {
+    fn proof_attachment_json_rejects_retired_proof_backend_field() {
         let value: JsonValue = norito::json::from_str(
             r#"{"backend":"halo2/ipa","proof_backend":"stark/fri","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
         )
         .expect("json");
         let err = parse_proof_attachment_value(&value)
-            .expect_err("proof backend mismatch should be rejected by bridge parser");
+            .expect_err("retired proof_backend field should be rejected by bridge parser");
         assert!(matches!(err, BridgeError::ProofAttachment));
     }
 
@@ -39001,16 +39185,16 @@ fn java_native_kagemusha_project_operation_status_v4(
     target_os = "windows"
 ))]
 fn java_privacy_public_archive(
-    payload: &PrivacyCapabilitySnapshotV1,
+    payload: &PrivacyCompiledProfileCatalogV1,
     context: &str,
 ) -> Result<Vec<u8>, String> {
     let mut archive = norito::encode_canonical(payload)
         .map_err(|err| format!("failed to encode {context}: {err}"))?;
-    if archive.len() > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
+    if archive.len() > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1 {
         archive.fill(0);
         return Err(format!("{context} archive exceeds maximum length"));
     }
-    let status = validate_privacy_capability_archive_v1(&archive);
+    let status = validate_local_privacy_compiled_profile_catalog_archive_v1(&archive);
     if !status.is_valid() {
         archive.fill(0);
         return Err(format!(
@@ -39027,8 +39211,10 @@ fn java_privacy_public_archive(
     target_os = "macos",
     target_os = "windows"
 ))]
-fn java_privacy_capabilities_archive() -> Result<Vec<u8>, String> {
-    java_privacy_public_archive(&privacy_capabilities(), "privacy capabilities")
+fn java_privacy_compiled_profile_catalog_archive() -> Result<Vec<u8>, String> {
+    let catalog = privacy_compiled_profile_catalog()
+        .map_err(|_| "failed to derive local compiled-profile catalog".to_owned())?;
+    java_privacy_public_archive(&catalog, "privacy compiled-profile catalog")
 }
 
 #[cfg(any(
@@ -39077,28 +39263,31 @@ fn java_privacy_validate_exact12_fixture_bundle_bytes(archive: Option<&[u8]>) ->
     target_os = "macos",
     target_os = "windows"
 ))]
-fn java_native_privacy_validate_capabilities(
+fn java_native_privacy_validate_compiled_profile_catalog(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
     if archive.is_null() {
-        return PrivacyCapabilityArchiveValidationStatusV1::NullPointer.code();
+        return PrivacyCompiledProfileCatalogArchiveValidationStatusV1::NullPointer.code();
     }
     let archive_len = match env.get_array_length(&archive) {
         Ok(value) => match usize::try_from(value) {
             Ok(value) => value,
             Err(_) => {
-                return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
+                return PrivacyCompiledProfileCatalogArchiveValidationStatusV1::ArchiveTooLarge
+                    .code();
             }
         },
-        Err(_) => return PrivacyCapabilityArchiveValidationStatusV1::MalformedArchive.code(),
+        Err(_) => {
+            return PrivacyCompiledProfileCatalogArchiveValidationStatusV1::MalformedArchive.code();
+        }
     };
-    if archive_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
-        return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
+    if archive_len > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1 {
+        return PrivacyCompiledProfileCatalogArchiveValidationStatusV1::ArchiveTooLarge.code();
     }
     match env.convert_byte_array(&archive) {
-        Ok(bytes) => validate_privacy_capability_archive_v1(&bytes).code(),
-        Err(_) => PrivacyCapabilityArchiveValidationStatusV1::MalformedArchive.code(),
+        Ok(bytes) => validate_local_privacy_compiled_profile_catalog_archive_v1(&bytes).code(),
+        Err(_) => PrivacyCompiledProfileCatalogArchiveValidationStatusV1::MalformedArchive.code(),
     }
 }
 
@@ -39108,9 +39297,9 @@ fn java_native_privacy_validate_capabilities(
     target_os = "macos",
     target_os = "windows"
 ))]
-fn java_native_privacy_capabilities(env: &mut jni::JNIEnv<'_>) -> jni::sys::jbyteArray {
+fn java_native_privacy_compiled_profile_catalog(env: &mut jni::JNIEnv<'_>) -> jni::sys::jbyteArray {
     let result = (|| -> Result<jni::sys::jbyteArray, String> {
-        let mut archive = java_privacy_capabilities_archive()?;
+        let mut archive = java_privacy_compiled_profile_catalog_archive()?;
         let array_result = env
             .byte_array_from_slice(&archive)
             .map_err(|err| err.to_string());
@@ -39714,11 +39903,11 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeCapabilities(
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeCompiledProfileCatalog(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jbyteArray {
-    java_native_privacy_capabilities(&mut env)
+    java_native_privacy_compiled_profile_catalog(&mut env)
 }
 
 #[cfg(any(
@@ -39729,12 +39918,12 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateCapabilities(
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateCompiledProfileCatalog(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
-    java_native_privacy_validate_capabilities(&mut env, archive)
+    java_native_privacy_validate_compiled_profile_catalog(&mut env, archive)
 }
 
 /// Return the canonical exact-12 privacy fixture bundle to the Kotlin/JVM SDK.
@@ -39793,11 +39982,11 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeCapabilities(
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeCompiledProfileCatalog(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jbyteArray {
-    java_native_privacy_capabilities(&mut env)
+    java_native_privacy_compiled_profile_catalog(&mut env)
 }
 
 #[cfg(any(
@@ -39808,12 +39997,12 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateCapabilities(
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateCompiledProfileCatalog(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
-    java_native_privacy_validate_capabilities(&mut env, archive)
+    java_native_privacy_validate_compiled_profile_catalog(&mut env, archive)
 }
 
 /// Return the canonical exact-12 privacy fixture bundle to the Java Android SDK.
@@ -46915,12 +47104,14 @@ mod tests {
     }
 
     #[test]
-    fn privacy_capability_snapshot_is_the_exact_closed_registry() {
-        let snapshot = privacy_capabilities();
-        snapshot.validate().expect("canonical capability snapshot");
-        assert_eq!(snapshot.protocols.len(), PrivacyProtocolIdV1::COUNT);
+    fn privacy_compiled_profile_catalog_is_the_exact_closed_local_registry() {
+        let catalog = privacy_compiled_profile_catalog().expect("compiled-profile catalog");
+        catalog
+            .validate()
+            .expect("canonical compiled-profile catalog");
+        assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::COUNT);
         assert!(
-            snapshot
+            catalog
                 .protocols
                 .iter()
                 .map(|row| row.protocol_id)
@@ -46928,49 +47119,102 @@ mod tests {
         );
     }
 
-    fn take_privacy_snapshot_output(
+    fn take_privacy_compiled_profile_catalog_output(
         out_ptr: *mut c_uchar,
         out_len: c_ulong,
-    ) -> PrivacyCapabilitySnapshotV1 {
+    ) -> PrivacyCompiledProfileCatalogV1 {
         assert!(!out_ptr.is_null());
         let bytes = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
         iroha_privacy_free_buffer(out_ptr);
-        norito::decode_from_bytes(&bytes).expect("decode canonical privacy snapshot")
+        norito::decode_from_bytes(&bytes).expect("decode canonical compiled-profile catalog")
     }
 
     #[test]
-    fn privacy_capability_ffi_archive_round_trips_the_typed_snapshot() {
+    fn privacy_compiled_profile_catalog_ffi_round_trips_and_rejects_adversaries() {
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
-        let status = unsafe { iroha_privacy_capabilities_v1(&mut out_ptr, &mut out_len) };
+        let status =
+            unsafe { iroha_privacy_compiled_profile_catalog_v1(&mut out_ptr, &mut out_len) };
         assert_eq!(status, 0);
         assert_eq!(
-            unsafe { iroha_privacy_validate_capabilities_v1(out_ptr, out_len) },
-            PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
+            unsafe { iroha_privacy_validate_compiled_profile_catalog_v1(out_ptr, out_len) },
+            PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid.code()
         );
         assert_eq!(
-            unsafe { iroha_privacy_validate_capabilities_v1(ptr::null(), out_len) },
-            PrivacyCapabilityArchiveValidationStatusV1::NullPointer.code()
+            unsafe { iroha_privacy_validate_compiled_profile_catalog_v1(ptr::null(), out_len) },
+            PrivacyCompiledProfileCatalogArchiveValidationStatusV1::NullPointer.code()
         );
         assert_eq!(
-            unsafe { iroha_privacy_validate_capabilities_v1(out_ptr, 0) },
-            PrivacyCapabilityArchiveValidationStatusV1::Empty.code()
+            unsafe { iroha_privacy_validate_compiled_profile_catalog_v1(out_ptr, 0) },
+            PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Empty.code()
         );
         let archive = unsafe { slice::from_raw_parts(out_ptr, out_len as usize) };
         let mut one_byte_fake = norito::encode_canonical(&0_u8).expect("encode one-byte fake");
         one_byte_fake[6..22].copy_from_slice(&archive[6..22]);
         assert_ne!(
             unsafe {
-                iroha_privacy_validate_capabilities_v1(
+                iroha_privacy_validate_compiled_profile_catalog_v1(
                     one_byte_fake.as_ptr(),
                     c_ulong::try_from(one_byte_fake.len()).expect("one-byte fake length"),
                 )
             },
-            PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
+            PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid.code()
         );
-        let snapshot = take_privacy_snapshot_output(out_ptr, out_len);
-        snapshot.validate().expect("FFI capability snapshot");
-        assert_eq!(snapshot.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        for truncated in [
+            &archive[..archive.len() - 1],
+            &archive[1..],
+            &archive[..archive.len() / 2],
+        ] {
+            assert_ne!(
+                unsafe {
+                    iroha_privacy_validate_compiled_profile_catalog_v1(
+                        truncated.as_ptr(),
+                        c_ulong::try_from(truncated.len()).expect("truncated length"),
+                    )
+                },
+                PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid.code()
+            );
+        }
+        let mut trailing = archive.to_vec();
+        trailing.push(0);
+        assert_ne!(
+            unsafe {
+                iroha_privacy_validate_compiled_profile_catalog_v1(
+                    trailing.as_ptr(),
+                    c_ulong::try_from(trailing.len()).expect("trailing length"),
+                )
+            },
+            PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid.code()
+        );
+        let catalog = take_privacy_compiled_profile_catalog_output(out_ptr, out_len);
+        catalog.validate().expect("FFI compiled-profile catalog");
+        assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::COUNT);
+
+        let mut substituted = catalog;
+        let profile = substituted
+            .protocols
+            .iter_mut()
+            .find_map(|row| match &mut row.compiled_profile {
+                iroha_data_model::privacy::PrivacyCompiledProfileResultV1::Available(profile) => {
+                    Some(profile)
+                }
+                iroha_data_model::privacy::PrivacyCompiledProfileResultV1::Unavailable(_) => None,
+            })
+            .expect("at least one available profile");
+        let mut digest = *profile.verifier_digest.as_bytes();
+        digest[0] ^= 0x80;
+        profile.verifier_digest = iroha_data_model::privacy::PrivacyVerifierDigestV1::new(digest);
+        let substituted =
+            norito::encode_canonical(&substituted).expect("canonical substituted catalog");
+        assert_eq!(
+            unsafe {
+                iroha_privacy_validate_compiled_profile_catalog_v1(
+                    substituted.as_ptr(),
+                    c_ulong::try_from(substituted.len()).expect("substituted length"),
+                )
+            },
+            PrivacyCompiledProfileCatalogArchiveValidationStatusV1::InvalidCatalog.code()
+        );
     }
 
     #[test]
@@ -47066,10 +47310,12 @@ mod tests {
             );
         }
 
-        let capability_archive =
-            norito::encode_canonical(&privacy_capabilities()).expect("capability archive");
+        let catalog_archive = norito::encode_canonical(
+            &privacy_compiled_profile_catalog().expect("compiled-profile catalog"),
+        )
+        .expect("catalog archive");
         assert_ne!(
-            java_privacy_validate_exact12_fixture_bundle_bytes(Some(&capability_archive)),
+            java_privacy_validate_exact12_fixture_bundle_bytes(Some(&catalog_archive)),
             PrivacyExact12FixtureBundleValidationStatusV1::Valid.code()
         );
     }

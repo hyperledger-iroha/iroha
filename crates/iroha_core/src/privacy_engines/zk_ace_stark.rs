@@ -47,19 +47,19 @@ use rand::{TryCryptoRng, TryRngCore};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
+#[cfg(test)]
+use super::transparent_stark::goldilocks_fft_v1;
 use super::{
     prover_randomness::{HealthCheckedTryCryptoRngV1, TryCryptoProverRandomnessErrorV1},
     transparent_stark::{
-        ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F,
-        GoldilocksFp4V1 as E, ReplayableTraceMaskV1, TransparentStarkErrorV1,
-        append_goldilocks_fp4_v1, append_u16_v1 as append_u16, append_u32_v1 as append_u32,
-        append_u64_v1 as append_u64, checked_transparent_stark_work_security_v1,
-        ensure_fri_terminal_degree_fp4_v1, fri_fold_pair_fp4_v1,
-        fri_fold_pair_with_inverse_x_fp4_v1, goldilocks_batch_invert_v1,
-        goldilocks_evaluate_coset_v1, goldilocks_fft_v1, goldilocks_fp4_evaluate_coset_v1,
-        goldilocks_fp4_ifft_v1, goldilocks_ifft_v1, goldilocks_primitive_root_v1,
-        masked_trace_lde_column_with_mask_v1, random_goldilocks_fp4_v1, sample_trace_mask_v1,
-        transparent_stark_zk_mask_geometry_v1,
+        ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
+        ReplayableTraceMaskV1, TransparentStarkErrorV1, append_goldilocks_fp4_v1,
+        append_u16_v1 as append_u16, append_u32_v1 as append_u32, append_u64_v1 as append_u64,
+        checked_transparent_stark_work_security_v1, ensure_fri_terminal_degree_fp4_v1,
+        fri_fold_pair_fp4_v1, fri_fold_pair_with_inverse_x_fp4_v1, goldilocks_batch_invert_v1,
+        goldilocks_evaluate_coset_v1, goldilocks_fp4_evaluate_coset_v1, goldilocks_fp4_ifft_v1,
+        goldilocks_ifft_v1, goldilocks_primitive_root_v1, masked_trace_lde_column_with_mask_v1,
+        random_goldilocks_fp4_v1, sample_trace_mask_v1, transparent_stark_zk_mask_geometry_v1,
     },
     zk_ace::ZkAcePrivacyWitnessV1,
 };
@@ -194,7 +194,8 @@ pub(crate) fn proof_test_guard() -> std::sync::MutexGuard<'static, ()> {
         .expect("ZK-ACE proof test mutex must not be poisoned")
 }
 
-const FIELD_MODULUS: u64 = GOLDILOCKS_MODULUS_V1;
+#[cfg(test)]
+const FIELD_MODULUS: u64 = crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
 const FIELD_GENERATOR: u64 = GOLDILOCKS_GENERATOR_V1;
 
 // Symbolic degree ledger for every constraint family emitted by
@@ -1055,6 +1056,7 @@ fn primitive_root(log_size: u8) -> Result<F, ZkAceStarkError> {
     })
 }
 
+#[cfg(test)]
 fn fft(values: &mut [F], root: F) -> Result<(), ZkAceStarkError> {
     goldilocks_fft_v1(values, root).map_err(|_| {
         ZkAceStarkError::InternalInvariant("FFT requires an exact power-of-two Goldilocks domain")
@@ -1743,9 +1745,11 @@ const LOCAL_CONSTRAINT_COUNT: usize = 12 + LIMB_BITS + 1 + 1 + 8 + 3 * (LIMB_BIT
 const TRANSITION_CONSTRAINT_COUNT: usize = 3 + PRIVATE_LIMBS;
 const CONSTRAINT_COUNT: usize = LOCAL_CONSTRAINT_COUNT + TRANSITION_CONSTRAINT_COUNT;
 /// Number of distinct quartic-extension challenges in one proof transcript.
+#[cfg(test)]
 const DISTINCT_FIELD_CHALLENGE_COUNT: usize =
     1 + SECURITY_LANES * (CONSTRAINT_COUNT + TRACE_WIDTH + 1 + FRI_ROUNDS);
 /// Absolute SHA-256 call budget for all field-challenge rejection samplers.
+#[cfg(test)]
 const MAX_FIELD_CHALLENGE_HASH_CALLS: usize =
     DISTINCT_FIELD_CHALLENGE_COUNT * MAX_FIELD_CHALLENGE_DERIVATION_ATTEMPTS;
 

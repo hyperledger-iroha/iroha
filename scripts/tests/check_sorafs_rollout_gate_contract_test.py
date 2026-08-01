@@ -15445,6 +15445,22 @@ def test_provider_ingest_persists_and_reconciles_governed_signer_policy() -> Non
     assert "What remains is a persisted governed signer-policy" not in closure
 
 
+def test_irohad_runtime_provider_docs_record_stream_token_qualification() -> None:
+    readme = read(REPO_ROOT / "crates" / "irohad" / "README.md")
+    normalized = " ".join(readme.split())
+
+    assert "adapter revision or policy digest" not in normalized
+    assert "stream-token identity gap above remains" not in normalized
+    for marker in (
+        "non-zero adapter revision",
+        "public-policy digest",
+        "Both startup qualification probes are individually identity-fenced",
+        "before and after the external call",
+        "genuine deployment-owned signer matching that exact public binding",
+    ):
+        assert marker in normalized
+
+
 def test_sorafs_node_storage_docs_track_current_readback_routes() -> None:
     required_routes = (
         "/v1/sorafs/storage/manifest/{manifest_id}",
@@ -15588,29 +15604,76 @@ def test_pop_credentials_docs_do_not_publish_unshipped_operator_commands() -> No
     assert violations == {}
 
 
-def test_pop_credentials_runtime_services_stay_open_in_docs() -> None:
+def test_pop_credentials_docs_match_stock_broker_and_open_deployment_backend() -> None:
     source = read(SORAFS_POP_CREDENTIALS_PLAN)
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "SFM-4b1 now has canonical PoP credential payloads, a production cryptographic membership-proof backend, a consensus-owned issuer/registry foundation, a durable issuer/wallet service, and the canonical authenticated Torii V1 API, but it is not yet deployable from the standard `irohad` binary.",
+        "SFM-4b1 now has canonical PoP credential payloads, a production cryptographic membership-proof backend, a consensus-owned issuer/registry foundation, a durable issuer/wallet service, and the canonical authenticated Torii V1 API, plus the standard-`irohad` runtime-broker injection path and public broker server launcher.",
         "`crates/sorafs_node/src/pop_credentials.rs` now owns encrypted enrollment, dual-control approval, HSM-backed issuance, durable registry outbox/dead-letter and finalized reconciliation, encrypted wallet custody, witness synchronization, local proof generation, and exactly-once nullifier consumption.",
         "`crates/iroha_torii/src/sorafs/pop_api.rs` exposes the exact 14-route V1 family for enrollment, approval, issuance, revocation, registry, wallet, proof generation, and verification.",
-        "The remaining local release blocker is `V1-BLOCK-POP-RUNTIME-01`: the standard `irohad` entrypoint does not yet construct and inject a concrete governed production provider registry, and the repository has no deployable shared external-runtime or sidecar adapter implementing that registry.",
-        "This checker is a rollout gate; it does not replace the missing standard-`irohad` external-runtime adapter, HSM/KMS integration, or deployed verifier evidence.",
-        "Enrollment portal | Captures encrypted candidate enrollment and governed approvals. | The authenticated submit/status/approval API and durable encrypted workflow are shipped; operator UI, WebAuthn enrollment ceremony, and the deployable external authenticator adapter remain open.",
-        "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, HSM interface, strict policy binding, issuance/revocation APIs, and retry-safe outbox are shipped; standard-`irohad` HSM/KMS/provider wiring and deployment evidence remain open.",
-        "Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned state, typed queries, authenticated submit/reconcile/projection APIs, cursor rollback rejection, and durable reconciliation are shipped; standard-daemon transaction/reader adapters and multi-peer evidence remain open.",
-        "Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted KMS-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, and local proof APIs are shipped; a deployable KMS/witness adapter and operator client remain open.",
-        "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `sorafs-validate pop`, and SDK/bridge reference gate are shipped; the external runtime adapter and reviewed deployment evidence remain open.",
-        "`V1-BLOCK-POP-RUNTIME-01` blocks local completion and promotion.",
-        "Until those checks pass, operators must leave `sorafs.storage.pop_credentials.enabled = false`; the intentional enabled-without-runtime startup failure must not be bypassed.",
-        "Resolve `V1-BLOCK-POP-RUNTIME-01` with the shared deployable external-runtime adapter described above; do not add a software-key, file-key, environment, or process-clock fallback.",
-        "Publish operator and juror command documentation only after the still-open CLI and shared external-runtime adapter exist.",
+        "The remaining release blocker is `V1-BLOCK-POP-RUNTIME-01`, but it is no longer a missing standard-daemon injection or shared sidecar transport.",
+        "Stock `irohad` projects the exact public PoP binding into its fixed local broker client, and `RuntimeProviderBrokerDeploymentV1` is the public sidecar launcher.",
+        "The missing deployment package must implement `RuntimeProviderBrokerBackendRegistryV1`, attach a genuine PoP registry to `RuntimeProviderBrokerBackendsV1`, and resolve:",
+        "This checker is a rollout gate; it does not replace the deployment-owned broker executable, genuine HSM/KMS and authentication backends, or deployed verifier evidence.",
+        "Enrollment portal | Captures encrypted candidate enrollment and governed approvals. | The authenticated submit/status/approval API, durable encrypted workflow, and broker authentication operation are shipped; operator UI, WebAuthn enrollment ceremony, and a genuine deployment-owned authenticator backend remain open.",
+        "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, HSM interface, strict policy binding, issuance/revocation APIs, retry-safe outbox, and standard-daemon broker wiring are shipped; a genuine HSM/KMS backend and deployment evidence remain open.",
+        "Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned state, typed queries, authenticated submit/reconcile/projection APIs, cursor rollback rejection, durable reconciliation, and broker transaction/read operations are shipped; a deployment-owned committed-state backend and multi-peer evidence remain open.",
+        "Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted KMS-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, local proof APIs, and broker wallet operations are shipped; a genuine deployment-owned KMS/witness backend and operator client remain open.",
+        "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `sorafs-validate pop`, SDK/bridge reference gate, and standard broker adapter are shipped; a genuine runtime backend and reviewed deployment evidence remain open.",
+        "`V1-BLOCK-POP-RUNTIME-01` blocks production completion and promotion, not the standard-daemon source integration.",
+        "Operators without that qualified deployment backend must leave `sorafs.storage.pop_credentials.enabled = false`; the intentional enabled-without-runtime startup failure must not be bypassed.",
+        "Resolve `V1-BLOCK-POP-RUNTIME-01` by packaging and supervising the genuine deployment-owned backend through the shipped broker launcher; do not add a software-key, file-key, environment, or process-clock fallback.",
+        "Publish operator and juror command documentation only after the still-open CLI and genuine deployment-owned broker backend exist.",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
     assert missing == []
+    for stale_claim in (
+        "but it is not yet deployable from the standard `irohad` binary",
+        "the standard `irohad` entrypoint does not yet construct and inject",
+        "no deployable shared external-runtime or sidecar adapter",
+        "no production caller currently supplies",
+        "missing standard-`irohad` external-runtime adapter",
+    ):
+        assert stale_claim not in normalized
+
+    daemon = read(REPO_ROOT / "crates" / "irohad" / "src" / "main.rs")
+    broker = read(REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_broker.rs")
+    launcher = read(
+        REPO_ROOT
+        / "crates"
+        / "irohad"
+        / "src"
+        / "runtime_provider_broker"
+        / "launcher.rs"
+    )
+    for marker in (
+        "StockRuntimeProviderBrokerRegistryV1::new",
+        "sorafs_pop_runtime::build",
+        "runtime_provider_registry::resolve_runtime_deps",
+    ):
+        assert marker in daemon
+    for marker in (
+        "OPERATION_POP_RUNTIME_RESOLVE_V1",
+        "OPERATION_POP_ISSUER_SIGN_V1",
+        "OPERATION_POP_AUTHENTICATE_V1",
+        "OPERATION_POP_REGISTRY_SUBMIT_V1",
+        "OPERATION_POP_REGISTRY_NEXT_V1",
+        "OPERATION_POP_ISSUANCE_DRAFT_V1",
+        "OPERATION_POP_WALLET_WRAP_DEK_V1",
+        "OPERATION_POP_WALLET_UNWRAP_DEK_V1",
+        "OPERATION_POP_WALLET_WITNESS_V1",
+        "OPERATION_POP_FINALIZED_TIME_V1",
+        "PopCredentialProviderRegistry",
+    ):
+        assert marker in broker
+    for marker in (
+        "RuntimeProviderBrokerBackendRegistryV1",
+        "RuntimeProviderBrokerDeploymentV1",
+        "serve_runtime_provider_broker_with_lifecycle_v1",
+    ):
+        assert marker in launcher
 
 
 def test_pop_credentials_docs_keep_rollout_contract_markers() -> None:
@@ -21722,6 +21785,8 @@ def test_governance_dag_ipfs_ipns_service_is_documented_as_shipped() -> None:
         "authenticated HTTP compare-and-swap or IPNS resolve/publish/",
         "A service-specific authenticated checkpoint and write-ahead publish intent",
         "bounded public mirror, head, block, node, checkpoint, health, and Prometheus surface",
+        "The standard outbound path already consumes verified nonces through separate sealed IPFS and signed-head slots",
+        "receiver-side sealed cross-replica replay adapter",
     )
     normalized_source = re.sub(r"\s+", " ", source)
     assert [phrase for phrase in required_shipped if phrase not in normalized_source] == []
@@ -21738,6 +21803,9 @@ def test_governance_dag_ipfs_ipns_service_is_documented_as_shipped() -> None:
         "async fn publish_ipns_head(",
         "GovernanceDagSealedCheckpointStore",
         "GovernanceDagSealedStateSlot::PublishIntent",
+        "GovernanceDagSealedStateSlot::IpfsRequestReplay",
+        "GovernanceDagSealedStateSlot::SignedHeadRequestReplay",
+        "consume_sealed_request_auth_nonce",
         "run_governance_dag_service",
         '"/v1/sorafs/governance/dag/checkpoint"',
         "sorafs_governance_dag_ipfs_pin_lag_seconds",
@@ -25526,6 +25594,209 @@ def test_transparency_deployed_services_stay_open_in_docs() -> None:
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
     assert missing == []
+
+
+def test_transparency_stock_broker_wiring_is_complete_and_deployment_backends_stay_open() -> None:
+    registry = re.sub(
+        r"\s+",
+        "",
+        read(REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_registry.rs"),
+    )
+    binding_collection = re.sub(
+        r"\s+",
+        "",
+        read(
+            REPO_ROOT
+            / "crates"
+            / "irohad"
+            / "src"
+            / "runtime_provider_registry"
+            / "binding_collection.rs"
+        ),
+    )
+    dependency_scope = re.sub(
+        r"\s+",
+        "",
+        read(
+            REPO_ROOT
+            / "crates"
+            / "irohad"
+            / "src"
+            / "runtime_provider_registry"
+            / "dependency_scope.rs"
+        ),
+    )
+    broker = re.sub(
+        r"\s+",
+        "",
+        read(REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_broker.rs"),
+    )
+    broker_api = re.sub(
+        r"\s+",
+        "",
+        read(
+            REPO_ROOT
+            / "crates"
+            / "irohad"
+            / "src"
+            / "runtime_provider_broker"
+            / "api.rs"
+        ),
+    )
+    broker_operations = re.sub(
+        r"\s+",
+        "",
+        read(
+            REPO_ROOT
+            / "crates"
+            / "irohad"
+            / "src"
+            / "runtime_provider_broker"
+            / "protocol_primitives.rs"
+        ),
+    )
+    daemon = re.sub(r"\s+", "", read(IROHAD_MAIN_RS))
+
+    slots = (
+        ("PrivacyCyclePrfProvider", 2, "privacy_cycle_prf_provider"),
+        ("PrivacyReleaseAnchor", 3, "privacy_release_anchor"),
+        ("TransparencyLeaderLease", 4, "transparency_leader_lease_provider"),
+        (
+            "FencedPrivacyPublisher",
+            5,
+            "sorafs_fenced_transparency_publisher",
+        ),
+        (
+            "FencedPrivacyHeadReader",
+            6,
+            "sorafs_fenced_transparency_head_reader",
+        ),
+        ("GovernanceDagSigner", 7, "sorafs_governance_dag_signer"),
+        (
+            "GovernanceDagIpfsAuthenticator",
+            8,
+            "sorafs_governance_dag_ipfs_authenticator",
+        ),
+        (
+            "GovernanceDagHeadAuthenticator",
+            9,
+            "sorafs_governance_dag_head_authenticator",
+        ),
+        (
+            "GovernanceDagCheckpointStore",
+            10,
+            "sorafs_governance_dag_checkpoint_store",
+        ),
+    )
+    for slot, wire_id, dependency in slots:
+        assert f"{slot}={wire_id}," in registry
+        assert f"IrohaRuntimeProviderSlotV1::{slot}" in binding_collection
+        assert f"IrohaRuntimeProviderSlotV1::{slot}" in broker_api
+        direct_presence = f"Slot::{slot}=>deps.{dependency}.is_some()"
+        braced_presence = f"Slot::{slot}=>{{deps.{dependency}.is_some()}}"
+        assert direct_presence in dependency_scope or braced_presence in dependency_scope
+        assert f"dependency_is_unrequested(bindings,Slot::{slot}," in dependency_scope
+
+    for marker in (
+        "storage.privacy_aggregates.cycle_prf_provider.as_ref()",
+        "storage.privacy_aggregates.release_anchor_provider.as_ref()",
+        "storage.privacy_aggregates.leader_lease_provider.as_ref()",
+        "storage.privacy_aggregates.fenced_privacy_publisher.as_ref()",
+        "storage.governance_dag_signer_handle.as_deref()",
+        "governance_service.ipfs_authenticator_handle.as_deref()",
+        "governance_service.head_authenticator_handle.as_deref()",
+        "governance_service.checkpoint_store_handle.as_deref()",
+    ):
+        assert marker in binding_collection
+
+    operations = (
+        ("OPERATION_PRIVACY_CYCLE_PRF_DERIVE_V1", 74),
+        ("OPERATION_PRIVACY_RELEASE_ANCHOR_FINALIZED_HEAD_V1", 75),
+        ("OPERATION_PRIVACY_RELEASE_ANCHOR_COMPARE_AND_SET_V1", 76),
+        ("OPERATION_TRANSPARENCY_LEADER_LEASE_ACQUIRE_V1", 77),
+        ("OPERATION_TRANSPARENCY_LEADER_LEASE_RENEW_V1", 78),
+        ("OPERATION_TRANSPARENCY_LEADER_LEASE_RELEASE_V1", 79),
+        ("OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1", 80),
+        ("OPERATION_FENCED_PRIVACY_READ_HEAD_WITH_ANCESTRY_V1", 81),
+    )
+    for operation, wire_id in operations:
+        assert f"const{operation}:u16={wire_id};" in broker_operations
+        assert operation in broker
+
+    for marker in (
+        "structPrivacyCyclePrfBrokerProvider",
+        "structPrivacyReleaseAnchorBroker",
+        "structTransparencyLeaderLeaseBroker",
+        "structFencedPrivacyPublisherBroker",
+        "structFencedPrivacyHeadReaderBroker",
+        "structGovernanceDagBrokerSigner",
+        "structGovernanceDagBrokerRequestAuthenticator",
+        "structGovernanceDagBrokerCheckpointStore",
+        "fnprivacy_cycle_prf_operation_is_canonical_bounded_and_read_only()",
+        "fnprivacy_release_anchor_operations_are_canonical_and_read_back_cas()",
+        "fntransparency_leader_lease_operations_are_canonical_fenced_and_bounded()",
+        "fnfenced_privacy_publisher_operation_is_canonical_bounded_and_read_back()",
+        "fnfenced_privacy_head_reader_operation_is_canonical_bounded_and_exact()",
+        "fngovernance_request_auth_round_trips_over_the_stock_broker()",
+        "fngovernance_checkpoint_broker_enforces_monotonic_cas_and_transient_delete()",
+    ):
+        assert marker in broker
+
+    for builder in (
+        "with_privacy_cycle_prf_provider",
+        "with_privacy_release_anchor",
+        "with_transparency_leader_lease_provider",
+        "with_fenced_privacy_publisher",
+        "with_fenced_privacy_head_reader",
+        "with_governance_dag_signer",
+        "with_governance_dag_ipfs_authenticator",
+        "with_governance_dag_head_authenticator",
+        "with_governance_dag_checkpoint_store",
+    ):
+        assert f"pubfn{builder}(" in broker_api
+    for marker in (
+        "fntransparency_leader_lease_catalog_and_resolution_are_exactly_scoped()",
+        "fnfenced_privacy_catalog_projects_two_exact_roles_from_one_binding()",
+        "fnfenced_privacy_resolution_requires_the_complete_role_pair()",
+        "fnfenced_privacy_resolution_rejects_substituted_stale_and_test_marked_roles()",
+        "fngovernance_service_resolution_rejects_missing_and_unrequested_adapters()",
+    ):
+        assert marker in registry
+    for marker in (
+        "StockRuntimeProviderBrokerRegistryV1::new",
+        "runtime_provider_registry::resolve_runtime_deps",
+        ".with_privacy_cycle_prf_provider(Arc::clone(provider))",
+        ".with_privacy_release_anchor(Arc::clone(anchor))",
+        ".with_transparency_leader_lease_provider(Arc::clone(provider))",
+        ".with_fenced_transparency_publisher(Arc::clone(publisher))",
+        ".with_fenced_transparency_head_reader(Arc::clone(reader))",
+        ".with_governance_dag_signer(Arc::clone(signer))",
+        ".with_governance_dag_checkpoint_store(Arc::clone(checkpoint_store))",
+        "fnstandard_launcher_resolves_and_forwards_deployment_runtime_dependencies()",
+        "fnstandard_launcher_forwards_both_fenced_privacy_roles_to_the_node()",
+        "fnstandard_launcher_qualifies_and_supervises_governance_dag_service_adapters()",
+    ):
+        assert marker in daemon
+
+    closure = re.sub(
+        r"\s+", " ", read(REPO_ROOT / "specs" / "sorafs" / "v1_closure_ledger.md")
+    )
+    roadmap = re.sub(r"\s+", " ", read(REPO_ROOT / "roadmap.md"))
+    status = re.sub(r"\s+", " ", read(REPO_ROOT / "status.md"))
+    assert (
+        "The stock daemon registry and broker cover transparency slots 2–6 and the directly required Governance DAG slots 7–10"
+        in closure
+    )
+    assert (
+        "The local stock registry/broker client/server transport for transparency slots 2–10 is complete"
+        in roadmap
+    )
+    assert "SoraFS transparency stock-broker source closure" in status
+    for stale_claim in (
+        "but every transparency slot still fails closed",
+        "Extend and package it with independently administered threshold-PRF",
+    ):
+        assert stale_claim not in closure
 
 
 def test_transparency_docs_keep_rollout_contract_markers() -> None:

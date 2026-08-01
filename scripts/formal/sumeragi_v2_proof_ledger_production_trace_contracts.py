@@ -614,10 +614,7 @@ def _production_trace_extraction_source_snapshot(
             )
         )
 
-    verus_relative = (
-        "crates/iroha_sumeragi_core/src/verus_proofs/"
-        "application_release_proofs.rs"
-    )
+    verus_relative = "crates/iroha_sumeragi_core/src/verus_proofs.rs"
     verus_items: list[dict[str, Any]] = []
     for symbol in (
         "production_in_flight_first_release_transition_refines_named_next",
@@ -664,7 +661,42 @@ def _production_trace_extraction_source_snapshot(
                     "does not retain its exact checked-transition implication"
                 )
 
+    shared_identity_relative = "crates/iroha_core/src/queue.rs"
+    shared_identity_symbol = (
+        "canonical_lane_queue_reservation_group_identity_projection"
+    )
+    shared_identity_item = _production_trace_unique_function(
+        root_dir=root_dir,
+        relative=shared_identity_relative,
+        symbol=shared_identity_symbol,
+        impl_name=None,
+        errors=errors,
+    )
+    shared_identity_entry = None
+    if shared_identity_item is not None:
+        shared_identity_tokens = rust_code_tokens(shared_identity_item.source)
+        for required_token in (
+            "reservation_group_hash",
+            "IDENTITY_DOMAIN_PAYLOAD",
+            "IDENTITY_KIND_CANONICAL_PAYLOAD",
+        ):
+            if _token_sequence_count(
+                shared_identity_tokens, rust_code_tokens(required_token)
+            ) != 1:
+                errors.append(
+                    "production trace-extraction shared carrier identity must "
+                    f"contain exactly one {required_token} token"
+                )
+        shared_identity_entry = _production_trace_rust_item_entry(
+            path=shared_identity_relative,
+            kind="fn",
+            symbol=shared_identity_symbol,
+            item=shared_identity_item,
+        )
+
     production_items: list[dict[str, Any]] = []
+    if shared_identity_entry is not None:
+        production_items.append(shared_identity_entry)
     source_bindings: list[dict[str, Any]] = []
     model_by_symbol = {entry["symbol"]: entry for entry in model_symbols}
     core_by_symbol = {entry["symbol"]: entry for entry in core_items}
@@ -731,6 +763,42 @@ def _production_trace_extraction_source_snapshot(
             path=binding["path"], kind="method", symbol=qualified, item=item
         )
         production_items.append(entry)
+        authorization_source_entry = None
+        authorization_source = binding.get("authorization_source")
+        if authorization_source is not None:
+            source_item = _production_trace_unique_function(
+                root_dir=root_dir,
+                relative=authorization_source["path"],
+                symbol=authorization_source["symbol"],
+                impl_name=authorization_source["impl"],
+                errors=errors,
+            )
+            if source_item is None:
+                continue
+            source_tokens = rust_code_tokens(source_item.source)
+            missing_source_tokens = [
+                token
+                for token in authorization_source["required_tokens"]
+                if _token_sequence_count(source_tokens, rust_code_tokens(token)) == 0
+            ]
+            if missing_source_tokens:
+                errors.append(
+                    "production trace-extraction theorem missing canonical authorization "
+                    f"source tokens {missing_source_tokens!r} at "
+                    f"{authorization_source['path']}!{authorization_source['impl']}::"
+                    f"{authorization_source['symbol']}"
+                )
+                continue
+            authorization_source_entry = _production_trace_rust_item_entry(
+                path=authorization_source["path"],
+                kind="method",
+                symbol=(
+                    f"{authorization_source['impl']}::"
+                    f"{authorization_source['symbol']}"
+                ),
+                item=source_item,
+            )
+            production_items.append(authorization_source_entry)
         commit_sink_entry = None
         commit_sink = binding.get("commit_sink")
         if commit_sink is not None:
@@ -784,7 +852,9 @@ def _production_trace_extraction_source_snapshot(
                     for action in binding["model_actions"]
                 ],
                 "production_symbol": entry,
+                "authorization_source": authorization_source_entry,
                 "canonical_commit_sink": commit_sink_entry,
+                "carrier_identity_projection": shared_identity_entry,
                 "refinement_kernel": core_by_symbol.get(
                     "check_production_in_flight_first_release_transition"
                 ),
@@ -799,7 +869,7 @@ def _production_trace_extraction_source_snapshot(
         multilane_checker = _load_multilane_model_checker()
         # The strict formal launcher has already run the complete multilane
         # structural checker. Recompute its exact source manifest here and
-        # independently recheck the four theorem seams above; replaying the
+        # independently recheck the theorem seams above; replaying the
         # entire unrelated closure inventory would make certificate validation
         # needlessly unbounded.
         multilane_manifest = multilane_checker.source_manifest_sha256(root_dir)
@@ -983,5 +1053,3 @@ def _production_trace_extraction_evidence_errors(
             f"current theorem certificate at {mismatch}"
         ]
     return []
-
-

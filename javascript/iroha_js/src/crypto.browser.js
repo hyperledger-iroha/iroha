@@ -29,8 +29,8 @@ export const SM2_SIGNATURE_LENGTH = 64;
 export const SM2_DEFAULT_DISTINGUISHED_ID = "1234567812345678";
 export const PRIVACY_FFI_VERSION_V1 = 1;
 export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 21;
-export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024;
-export const PRIVACY_CAPABILITY_VALIDATION_STATUS_V1 = Object.freeze({
+export const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES = 256 * 1024;
+export const PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1 = Object.freeze({
   VALID: 0,
   NULL_POINTER: 1,
   EMPTY: 2,
@@ -39,7 +39,7 @@ export const PRIVACY_CAPABILITY_VALIDATION_STATUS_V1 = Object.freeze({
   SCHEMA_MISMATCH: 5,
   NON_CANONICAL: 6,
   MALFORMED_ARCHIVE: 7,
-  INVALID_SNAPSHOT: 8,
+  INVALID_CATALOG: 8,
 });
 export const PRIVACY_FFI_STATUS_ERROR = 1;
 export const PRIVACY_FFI_ERROR_NULL_POINTER = 1;
@@ -401,8 +401,8 @@ export function isPrivacyNativeAvailable() {
   return false;
 }
 
-export function privacyCapabilitiesV1() {
-  return unsupported("privacyCapabilitiesV1");
+export function privacyCompiledProfileCatalogV1() {
+  return unsupported("privacyCompiledProfileCatalogV1");
 }
 
 export function sm2FixtureFromSeed() {

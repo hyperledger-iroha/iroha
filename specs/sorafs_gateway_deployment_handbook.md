@@ -18,7 +18,7 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 |-------------|-------|
 | Torii build ≥ `2026-02-18` | Must include stream-token enforcement and the `sorafs.gateway` config surface. |
 | GAR admission artefacts | Gateway admission envelope + manifest signed via governance tooling. |
-| Stream token runtime signer | Non-exportable Ed25519 key in the approved HSM/KMS, a runtime-injected signer adapter, and a reviewed non-secret handle/public-key binding. Distribute the public key through authenticated provider inventory and rotate as described in §5.4. |
+| Stream token runtime signer | Non-exportable Ed25519 key in the approved HSM/KMS, a runtime-injected signer adapter, and a reviewed non-secret handle/public-key/revision/public-policy-digest binding. Distribute the public key through authenticated provider inventory and rotate as described in §5.4. |
 | Observability stack | Prometheus + Grafana dashboards (`grafana_sorafs_gateway_*`) shipped in `specs/`. |
 | Smoke tooling | Latest `sorafs-fetch` CLI (`cargo run -p sorafs_fetch -- --help`) with the gateway options described below. |
 

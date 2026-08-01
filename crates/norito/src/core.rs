@@ -11630,6 +11630,141 @@ mod tests {
         assert_eq!(decoded, v);
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct PayloadContextFingerprint {
+        base: usize,
+        len: usize,
+        schema: Option<[u8; 16]>,
+        max_access: usize,
+        flags: u8,
+        flags_hint: u8,
+        flags_active: bool,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct DecodeStateFingerprint {
+        flags: u8,
+        flags_hint: u8,
+        flags_active: bool,
+        payload: Option<PayloadContextFingerprint>,
+    }
+
+    fn decode_state_fingerprint() -> DecodeStateFingerprint {
+        DecodeStateFingerprint {
+            flags: get_decode_flags(),
+            flags_hint: decode_flags_hint(),
+            flags_active: decode_flags_active(),
+            payload: payload_ctx_state().map(|state| PayloadContextFingerprint {
+                base: state.base,
+                len: state.len,
+                schema: state.schema,
+                max_access: state.max_access,
+                flags: state.flags,
+                flags_hint: state.flags_hint,
+                flags_active: state.flags_active,
+            }),
+        }
+    }
+
+    #[test]
+    fn archive_view_is_pure_and_scopes_custom_decode_state() {
+        reset_decode_state();
+        let outer_frame =
+            frame_bare_with_header_flags::<u8>(&[0x31], 0).expect("frame outer scalar payload");
+        let inner_flags = header_flags::COMPACT_LEN;
+        let inner_frame = frame_bare_with_header_flags::<u8>(&[0x42], inner_flags)
+            .expect("frame inner scalar payload");
+        let ambient_payload = [0xA1, 0xA2, 0xA3];
+        let ambient_schema = [0x5A; 16];
+        let ambient_flags = default_encode_flags();
+        let ambient_guard = PayloadCtxGuard::enter_with_schema_flags_hint(
+            &ambient_payload,
+            ambient_schema,
+            ambient_flags,
+            ambient_flags,
+        );
+        let ambient_state = decode_state_fingerprint();
+
+        let outer = from_bytes_view(&outer_frame)
+            .expect("view construction must ignore mismatched ambient layout state");
+        assert_eq!(decode_state_fingerprint(), ambient_state);
+        let inner = from_bytes_view(&inner_frame).expect("construct nested view");
+        assert_eq!(decode_state_fingerprint(), ambient_state);
+
+        let decoded = outer
+            .decode_exact_with::<u8, _>(|payload| {
+                let state = payload_ctx_state().expect("view decode payload context");
+                assert_eq!(state.schema, Some(outer.schema()));
+                assert_eq!(state.flags, outer.flags());
+                assert_eq!(state.flags_hint, outer.flags_hint());
+                Ok((payload[0], payload.len()))
+            })
+            .expect("decode outer view");
+        assert_eq!(decoded, 0x31);
+        assert_eq!(decode_state_fingerprint(), ambient_state);
+
+        let error = outer
+            .decode_exact_with::<u8, _>(|_| Err(Error::Message("expected failure".to_owned())))
+            .expect_err("custom decoder error must propagate");
+        assert!(matches!(error, Error::Message(_)));
+        assert_eq!(decode_state_fingerprint(), ambient_state);
+
+        let panic = std::panic::catch_unwind(|| {
+            let _ = outer.decode_exact_with::<u8, _>(|_| panic!("expected decoder panic"));
+        });
+        assert!(panic.is_err());
+        assert_eq!(decode_state_fingerprint(), ambient_state);
+
+        let nested = outer
+            .decode_exact_with::<u8, _>(|outer_payload| {
+                let outer_state = decode_state_fingerprint();
+                let inner_value = inner.decode_exact_with::<u8, _>(|inner_payload| {
+                    let state = payload_ctx_state().expect("nested view payload context");
+                    assert_eq!(state.schema, Some(inner.schema()));
+                    assert_eq!(state.flags, inner_flags);
+                    Ok((inner_payload[0], inner_payload.len()))
+                })?;
+                assert_eq!(decode_state_fingerprint(), outer_state);
+                Ok((outer_payload[0] ^ inner_value, outer_payload.len()))
+            })
+            .expect("decode nested views");
+        assert_eq!(nested, 0x31 ^ 0x42);
+        assert_eq!(decode_state_fingerprint(), ambient_state);
+
+        let mut corrupted = outer_frame.clone();
+        *corrupted.last_mut().expect("payload byte") ^= 0xFF;
+        assert!(matches!(
+            from_bytes_view(&corrupted),
+            Err(Error::ChecksumMismatch)
+        ));
+        assert_eq!(decode_state_fingerprint(), ambient_state);
+
+        drop(ambient_guard);
+        reset_decode_state();
+    }
+
+    #[test]
+    fn archive_view_construction_does_not_influence_encoding() {
+        reset_decode_state();
+        let value = vec!["alpha".to_owned(), "beta".to_owned()];
+        let canonical = to_bytes(&value).expect("encode canonical baseline");
+        let alternate = {
+            let _flags = DecodeFlagsGuard::enter(0);
+            to_bytes(&value).expect("encode alternate layout")
+        };
+        assert_ne!(canonical, alternate, "fixture must distinguish layouts");
+
+        let frame =
+            frame_bare_with_header_flags::<u8>(&[7], 0).expect("frame non-default-layout scalar");
+        let _view = from_bytes_view(&frame).expect("construct pure archive view");
+        assert!(!decode_flags_active());
+        assert!(payload_ctx_state().is_none());
+        assert_eq!(
+            to_bytes(&value).expect("encode after view construction"),
+            canonical
+        );
+    }
+
     #[derive(Debug)]
     struct DecodeBudgetProbe;
 

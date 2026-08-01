@@ -55,7 +55,7 @@ fn inventory() -> Vec<Artifact<'static>> {
         assert!(
             matches!(
                 fields[0],
-                "kotodama-standard" | "kotodama-zk" | "predecoder" | "synthetic" | "default"
+                "kotodama-standard" | "kotodama-zk" | "predecoder" | "default"
             ),
             "unknown artifact owner {:?} on row {}",
             fields[0],
@@ -187,18 +187,6 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
                     "predecoder inventory tag names the wrong file"
                 );
                 generated.clone()
-            }
-            "synthetic" => {
-                let tag: u8 = artifact.source_or_tag.parse().expect("synthetic tag is u8");
-                let name = ivm::prebuilt_fixtures::SYNTHETIC_EXECUTOR_FIXTURES
-                    .get(usize::from(tag))
-                    .expect("known synthetic tag");
-                assert_eq!(
-                    relative.file_stem().and_then(|value| value.to_str()),
-                    Some(*name),
-                    "synthetic inventory tag names the wrong file"
-                );
-                ivm::prebuilt_fixtures::build_synthetic_executor_program(tag)
             }
             "default" => {
                 assert_eq!(artifact.source_or_tag, "v1");

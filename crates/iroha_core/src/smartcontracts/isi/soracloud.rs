@@ -9750,9 +9750,8 @@ fn registered_soracloud_bfv_parameters(
 fn decode_soracloud_fhe_envelope(
     payload: &[u8],
 ) -> Result<BfvIdentifierCiphertext, InstructionExecutionError> {
-    let archived = norito::from_bytes::<BfvIdentifierCiphertext>(payload)
-        .map_err(|err| invalid_parameter(format!("invalid FHE ciphertext envelope: {err}")))?;
-    Ok(norito::core::NoritoDeserialize::deserialize(archived))
+    norito::decode_canonical::<BfvIdentifierCiphertext>(payload)
+        .map_err(|err| invalid_parameter(format!("invalid FHE ciphertext envelope: {err}")))
 }
 
 fn encode_soracloud_fhe_output_payload(

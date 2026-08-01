@@ -20,26 +20,29 @@
 use p256::{ProjectivePoint, Scalar, elliptic_curve::sec1::ToEncodedPoint as _};
 use thiserror::Error;
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::p256_trace::{P256EcdsaTraceMaterialV1, P256ReductionSourceV1};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
-    p256_air::{
-        P256_BASE_MODULUS_BE_V1, P256_SCALAR_MODULUS_BE_V1, ZkX509P256ArithmeticKindV1,
-        ZkX509P256ModulusV1,
+    p256_air::ZkX509P256ArithmeticKindV1,
+    p256_reduction_air::p256_low_s_limb_cell_v1,
+    p256_value_bus::{P256EqualityBindingV1, P256InitialValueKindV1, P256ValueBusBaseSourceV1},
+    p256_window_air::{
+        P256_WINDOW_ROWS_V1, P256WindowExternalAddressV1, p256_window_external_address_v1,
+        p256_window_external_limb_v1,
     },
+};
+use super::{
+    p256_air::{P256_BASE_MODULUS_BE_V1, P256_SCALAR_MODULUS_BE_V1, ZkX509P256ModulusV1},
     p256_ecdsa_air::{P256EcdsaRoleV1, P256EcdsaWitnessV1},
     p256_group_air::{P256_CURVE_B_BE_V1, P256_TWO_SCALAR_ARITHMETIC_OPERATIONS_V1},
-    p256_reduction_air::{
-        P256_REDUCTION_ROWS_V1, p256_low_s_limb_cell_v1, p256_reduction_limb_cells_v1,
-    },
-    p256_trace::{P256EcdsaTraceMaterialV1, P256ReductionSourceV1},
+    p256_reduction_air::{P256_REDUCTION_ROWS_V1, p256_reduction_limb_cells_v1},
     p256_value_bus::{
-        P256_VALUE_BUS_LIMBS_V1, P256EqualityBindingV1, P256InitialValueKindV1,
-        P256ValueBusBaseEndpointTraceV1, P256ValueBusBaseSourceV1, P256ValueBusErrorV1,
+        P256_VALUE_BUS_LIMBS_V1, P256ValueBusBaseEndpointTraceV1, P256ValueBusErrorV1,
         P256ValueIdV1, P256ValueKindV1, p256_value_bus_base_writer_limb_cell_v1,
     },
     p256_window_air::{
-        P256_WINDOW_EXTERNAL_LIMBS_PER_ROW_V1, P256_WINDOW_ROWS_V1, P256WindowCoordinateV1,
-        P256WindowExternalAddressV1, P256WindowScalarV1, p256_window_external_address_v1,
-        p256_window_external_limb_v1,
+        P256_WINDOW_EXTERNAL_LIMBS_PER_ROW_V1, P256WindowCoordinateV1, P256WindowScalarV1,
     },
 };
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
@@ -369,6 +372,7 @@ pub(crate) struct P256ExternalBindingRowV1 {
 }
 
 /// Complete deterministic binding trace and its two ownership manifests.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct P256ExternalBindingTraceV1 {
     /// Verifier-fixed ECDSA role.
@@ -383,6 +387,7 @@ pub(crate) struct P256ExternalBindingTraceV1 {
     pub(crate) inverse_auxiliaries: P256InverseAuxiliaryManifestV1,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256ExternalBindingTraceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -393,6 +398,7 @@ impl core::fmt::Debug for P256ExternalBindingTraceV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ExternalBindingTraceV1 {
     /// Recursively overwrite every private source and copied witness cell.
     ///
@@ -419,6 +425,7 @@ impl P256ExternalBindingTraceV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ExternalBindingTraceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
@@ -468,6 +475,7 @@ pub(crate) enum P256ExternalBindingErrorV1 {
 /// `real` is always the exact RFC/SHA source tuple.  For an inactive slot its
 /// Qx, Qy, r, and s words must be zero while its digest is SHA-256(empty).
 /// `selected` is the tuple compiled by the ordinary, ungated P-256 chip.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct P256OptionalCertificateSelectionV1 {
     /// RFC-derived Boolean selector: zero for depth two, one for depth three.
@@ -478,12 +486,14 @@ pub(crate) struct P256OptionalCertificateSelectionV1 {
     pub(crate) selected: P256EcdsaWitnessV1,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256OptionalCertificateSelectionV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("P256OptionalCertificateSelectionV1 { <private material redacted> }")
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256OptionalCertificateSelectionV1 {
     /// Evaluate the complete low-degree selector relation.
     ///
@@ -545,6 +555,7 @@ impl P256OptionalCertificateSelectionV1 {
 }
 
 /// Select the exact tuple consumed by the fixed optional P-256 instance.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn select_zk_x509_optional_certificate_p256_witness_v1(
     active: u8,
     real: P256EcdsaWitnessV1,
@@ -854,6 +865,7 @@ pub(crate) fn compile_zk_x509_p256_external_cross_sources_v1(
 ///
 /// This narrow constructor remains private so production callers cannot
 /// substitute an arbitrary endpoint for the role-bound base material.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_external_binding_from_execution_endpoint_v1(
     material: &P256EcdsaTraceMaterialV1,
     value_bus: &P256ValueBusBaseEndpointTraceV1,
@@ -900,6 +912,7 @@ fn build_external_binding_from_execution_endpoint_v1(
 /// The role check happens before projecting the execution endpoint. This is
 /// the production constructor used by MAIN; it does not rebuild the value bus
 /// and cannot depend on any post-X5B1 product accumulator.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_p256_external_binding_trace_v1(
     material: &P256EcdsaTraceMaterialV1,
     value_bus: &P256ValueBusBaseSourceV1,
@@ -915,6 +928,7 @@ pub(crate) fn build_zk_x509_p256_external_binding_trace_v1(
     )
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ExternalBindingTraceV1 {
     /// Validate exact coverage, ownership, source copies, equality, and padding.
     pub(crate) fn validate_v1(
@@ -1010,6 +1024,7 @@ impl P256ExternalBindingTraceV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_byte_io_witness_v1(
     material: &P256EcdsaTraceMaterialV1,
     manifest: P256UnresolvedByteIoManifestV1,
@@ -1137,6 +1152,7 @@ impl ExpectedBindingV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn expected_slots_v1(
     material: &P256EcdsaTraceMaterialV1,
     value_bus: &P256ValueBusBaseEndpointTraceV1,
@@ -1145,6 +1161,7 @@ fn expected_slots_v1(
     expected_slots_with_topology_v1(material, value_bus, &topology)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn expected_slots_with_topology_v1(
     material: &P256EcdsaTraceMaterialV1,
     value_bus: &P256ValueBusBaseEndpointTraceV1,
@@ -1351,6 +1368,7 @@ fn expected_slots_with_topology_v1(
     Ok(expected)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_material_topology_v1(
     material: &P256EcdsaTraceMaterialV1,
 ) -> Result<ExpectedTopologyV1, P256ExternalBindingErrorV1> {
@@ -1567,6 +1585,7 @@ fn validate_material_topology_v1(
     })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_input_ownership_v1(
     material: &P256EcdsaTraceMaterialV1,
     expected: &[ExpectedInitialV1],
@@ -1656,6 +1675,7 @@ fn validate_input_ownership_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_inverse_relation_v1(
     material: &P256EcdsaTraceMaterialV1,
     operation_index: usize,

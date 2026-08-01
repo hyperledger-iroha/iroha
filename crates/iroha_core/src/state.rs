@@ -2031,18 +2031,22 @@ pub(crate) fn committed_transaction_hashes_for_entrypoints(
         .collect()
 }
 
-/// Decode the exact queue reservations finalized by a certified merge entry.
+/// Decode the exact queue-reservation groups finalized by a certified merge entry.
 ///
-/// Returned pairs are in canonical lane/entrypoint order. Canonical decoding,
-/// transaction binding, and cross-lane uniqueness are rechecked so queue
-/// finalization never falls back to coordinates or a hash-only approximation.
-pub(crate) fn certified_merge_queue_reservations(
+/// The outer vector retains canonical lane order and every inner vector retains
+/// exact entrypoint/FIFO order. Canonical decoding, transaction binding, and
+/// cross-lane uniqueness are rechecked before any caller can begin Queue
+/// cleanup, so a malformed later group cannot partially consume an earlier
+/// group.
+pub(crate) fn certified_merge_queue_reservation_groups(
     entry: &MergeLedgerEntry,
 ) -> Result<
-    Vec<(
-        HashOf<SignedTransaction>,
-        crate::queue::LaneQueueReservationKeyV2,
-    )>,
+    Vec<
+        Vec<(
+            HashOf<SignedTransaction>,
+            crate::queue::LaneQueueReservationKeyV2,
+        )>,
+    >,
     MergeLedgerCommitError,
 > {
     let Some(batch) = entry.execution_batch.as_ref() else {
@@ -2050,7 +2054,7 @@ pub(crate) fn certified_merge_queue_reservations(
     };
     let mut seen_transactions = BTreeSet::new();
     let mut seen_reservations = BTreeSet::new();
-    let mut reservations = Vec::new();
+    let mut groups = Vec::with_capacity(batch.lanes.len());
     for execution in &batch.lanes {
         let transaction_hashes =
             committed_transaction_hashes_for_entrypoints(&execution.entrypoints);
@@ -2059,6 +2063,7 @@ pub(crate) fn certified_merge_queue_reservations(
                 "merge queue reservation vector is not aligned with entrypoints".to_owned(),
             ));
         }
+        let mut reservations = Vec::with_capacity(execution.reservation_keys.len());
         for (transaction_hash, encoded) in transaction_hashes
             .into_iter()
             .zip(&execution.reservation_keys)
@@ -2075,8 +2080,33 @@ pub(crate) fn certified_merge_queue_reservations(
             }
             reservations.push((transaction_hash, reservation));
         }
+        crate::queue::lane_queue_reservation_group_binding_from_ordered_keys(
+            reservations.iter().map(|(_, key)| key),
+        )
+        .map_err(|reason| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                "merge queue reservation group is invalid: {reason}"
+            ))
+        })?;
+        groups.push(reservations);
     }
-    Ok(reservations)
+    Ok(groups)
+}
+
+/// Decode exact queue reservations in canonical lane/entrypoint order.
+pub(crate) fn certified_merge_queue_reservations(
+    entry: &MergeLedgerEntry,
+) -> Result<
+    Vec<(
+        HashOf<SignedTransaction>,
+        crate::queue::LaneQueueReservationKeyV2,
+    )>,
+    MergeLedgerCommitError,
+> {
+    Ok(certified_merge_queue_reservation_groups(entry)?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 /// Errors surfaced when committing merge-ledger entries into state.
@@ -67191,7 +67221,7 @@ mod tests {
     use iroha_crypto::sm::Sm2PublicKey;
     use iroha_crypto::{
         Algorithm, Hash, HashOf, KeyPair, PolicyCommitment, PublicKey, RamLfeBackend,
-        RamLfeVerificationMode, Signature,
+        RamLfeVerificationMode, Signature, bls_normal_pop_prove,
     };
     use iroha_data_model::account::AccountDetails;
     use iroha_data_model::isi::verifying_keys;
@@ -67203,6 +67233,11 @@ mod tests {
             consensus::{
                 CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
                 LaneSettlementReceipt, NexusFeeReceipt, NexusFeeScheduleInputs,
+            },
+            consensus_v2::{
+                BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+                ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+                QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
             },
         },
         consensus::{ConsensusKeyRecord, ConsensusKeyStatus, VALIDATOR_SET_HASH_VERSION_V1},
@@ -68049,6 +68084,125 @@ seiyaku SequentialNfts {
             result_hashes: vec![Hash::prehashed([seed.wrapping_add(3); 32])],
         };
         (key, marker)
+    }
+
+    #[test]
+    fn world_transaction_apply_commits_sorafs_da_and_direct_lane_overlays() {
+        let world = World::default();
+        let mut block = world.block();
+
+        let provider_id = ProviderId::new([0x91; 32]);
+        let provider_owner = AccountId::new(checked_keypair().public_key().clone());
+        let provider_authority = ProviderIngestCompletionAuthorityV1::new(
+            provider_owner.clone(),
+            iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
+                policy_id: [0x92; 32],
+                revision: 1,
+                predecessor_digest: None,
+                policy_digest: [0x93; 32],
+            },
+        );
+        let mut pricing = PricingScheduleRecord::launch_default();
+        pricing.notes = Some("WorldTransaction apply regression".to_owned());
+        let credit = ProviderCreditRecord::new(
+            provider_id,
+            Quantity::zero(),
+            Quantity::zero(),
+            Quantity::zero(),
+            Quantity::zero(),
+            5,
+            7,
+            Metadata::default(),
+        );
+
+        let lane_id = LaneId::SINGLE;
+        let epoch = 11;
+        let sequence = 13;
+        let ticket = StorageTicketId::new([0x94; 32]);
+        let manifest = ManifestDigest::new([0x95; 32]);
+        let alias = "world-transaction-apply-regression".to_owned();
+        let mut intent = DaPinIntent::new(lane_id, epoch, sequence, ticket, manifest);
+        intent.alias = Some(alias.clone());
+        let intent_with_location = DaPinIntentWithLocation {
+            intent: intent.clone(),
+            location: DaCommitmentLocation {
+                block_height: 17,
+                index_in_bundle: 19,
+            },
+        };
+        let (marker_key, marker) = sample_direct_lane_application_marker(
+            lane_id,
+            lane_id,
+            DataSpaceId::UNIVERSAL,
+            23,
+            0x96,
+        );
+
+        {
+            let mut transaction =
+                block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+            *transaction.sorafs_pricing.get_mut() = pricing.clone();
+            transaction
+                .provider_credit_ledger
+                .insert(provider_id, credit.clone());
+            transaction
+                .provider_owners
+                .insert(provider_id, provider_owner.clone());
+            transaction
+                .provider_ingest_completion_authorities
+                .insert(provider_id, provider_authority.clone());
+            transaction
+                .da_pin_intents_by_ticket
+                .insert(ticket, intent_with_location.clone());
+            transaction
+                .da_pin_intents_by_alias
+                .insert(alias.clone(), ticket);
+            transaction
+                .da_pin_intents_by_manifest
+                .insert(manifest, ticket);
+            transaction
+                .da_pin_intents_by_lane_epoch
+                .insert((lane_id, epoch, sequence), ticket);
+            transaction
+                .direct_lane_block_application_markers
+                .insert(marker_key, marker.clone());
+            transaction.apply();
+        }
+
+        assert_eq!(block.sorafs_pricing.get(), &pricing);
+        assert_eq!(
+            block.provider_credit_ledger.get(&provider_id),
+            Some(&credit)
+        );
+        assert_eq!(
+            block.provider_owners.get(&provider_id),
+            Some(&provider_owner)
+        );
+        assert_eq!(
+            block
+                .provider_ingest_completion_authorities
+                .get(&provider_id),
+            Some(&provider_authority)
+        );
+        assert_eq!(
+            block.da_pin_intents_by_ticket.get(&ticket),
+            Some(&intent_with_location)
+        );
+        assert_eq!(block.da_pin_intents_by_alias.get(&alias), Some(&ticket));
+        assert_eq!(
+            block.da_pin_intents_by_manifest.get(&manifest),
+            Some(&ticket)
+        );
+        assert_eq!(
+            block
+                .da_pin_intents_by_lane_epoch
+                .get(&(lane_id, epoch, sequence)),
+            Some(&ticket)
+        );
+        assert_eq!(
+            block.direct_lane_block_application_markers.get(&marker_key),
+            Some(&marker)
+        );
     }
 
     fn seed_direct_lane_application_marker(
@@ -122297,6 +122451,7 @@ seiyaku IdentitylessRawCallback {
             .kura
             .store_block_with_merge_entry(Arc::new(carrier.as_ref().clone()), entry)
             .expect("store canonical merge carrier");
+        persist_merge_carrier_finality_for_state_test(&state.kura, carrier.as_ref());
         carrier
     }
 
@@ -122457,6 +122612,143 @@ seiyaku IdentitylessRawCallback {
         autoscale_signed_block_with_committed_fragments(previous, creation_time_ms, 0)
     }
 
+    fn merge_carrier_finality_fixture_keypair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0xD3; 32], Algorithm::BlsNormal)
+            .expect("derive deterministic merge-carrier finality fixture key")
+    }
+
+    fn merge_carrier_finality_artifact(
+        block: &SignedBlock,
+        parent: Option<&V2FinalityArtifact>,
+    ) -> V2FinalityArtifact {
+        let keypair = merge_carrier_finality_fixture_keypair();
+        let roster = vec![ValidatorPower {
+            validator: PeerId::new(keypair.public_key().clone()),
+            power: 1,
+        }];
+        let height = block.header().height().get();
+        assert_eq!(
+            parent.map_or(1, |artifact| artifact.height.saturating_add(1)),
+            height,
+            "merge-carrier finality fixtures must form a contiguous chain"
+        );
+        let context = HeightContext {
+            chain_id: ChainId::from("state-merge-carrier-finality-test"),
+            protocol_version: PROTOCOL_VERSION,
+            height,
+            epoch: 0,
+            epoch_end_height: u64::MAX,
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Permissioned,
+            parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()),
+            snapshot_bootstrap: None,
+            quorum: DualQuorum::from_roster(&roster).expect("valid one-validator fixture quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"state merge finality nexus AMX context"),
+            execution_policy_hash: Hash::new(b"state merge finality execution policy"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::Plain,
+                chunk_size_bytes: 1024,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 4096,
+                max_chunk_count: 4,
+            },
+            leader_seed: [0xD3; 32],
+        };
+        let executed_block_wire = block.encode_wire().expect("canonical executed block wire");
+        let mut execution_commitment = ExecutionCommitment::new_without_merge_carrier(
+            Hash::new(b"state merge finality parent state"),
+            Hash::new(b"state merge finality post state"),
+            Hash::new(b"state merge finality ordinary writes"),
+            None,
+            0,
+            1,
+            Hash::new(&executed_block_wire),
+        )
+        .expect("canonical merge-carrier finality execution commitment");
+        execution_commitment.executed_block_wire_len =
+            u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64");
+        execution_commitment.merge_carrier = block
+            .execution_context()
+            .and_then(|bundle| bundle.merge_entry.as_ref())
+            .map(|reference| {
+                iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1::new(
+                    reference.entry_hash,
+                )
+            });
+        let subject = BlockSubject {
+            parent_block_hash: block.header().prev_block_hash(),
+            block_hash: block.hash(),
+            payload_hash: block
+                .canonical_proposal_wire_hash()
+                .expect("canonical proposal block wire"),
+        };
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height,
+            view: block.header().view_change_index(),
+        };
+        let mut commit_qc = QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signers: vec![0],
+            aggregate_signature: vec![1],
+        };
+        let preimage = commit_qc
+            .signer_preimage(&context, 0)
+            .expect("valid merge-carrier finality fixture signer");
+        let signature = Signature::try_new(keypair.private_key(), &preimage)
+            .expect("sign merge-carrier finality fixture vote")
+            .payload()
+            .to_vec();
+        commit_qc.aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&[signature.as_slice()])
+                .expect("aggregate merge-carrier finality fixture vote");
+        let validator_set_pops = vec![
+            bls_normal_pop_prove(keypair.private_key())
+                .expect("derive merge-carrier finality fixture PoP"),
+        ];
+        let artifact = V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
+        artifact
+            .verify()
+            .expect("merge-carrier finality fixture is cryptographically valid");
+        artifact
+    }
+
+    fn persist_merge_carrier_finality_for_state_test(kura: &Kura, block: &SignedBlock) {
+        let height = block.header().height().get();
+        let parent = height
+            .checked_sub(1)
+            .filter(|parent_height| *parent_height > 0)
+            .map(|parent_height| {
+                kura.v2_finality_artifact(parent_height)
+                    .expect("read merge-carrier parent finality")
+                    .unwrap_or_else(|| {
+                        let parent = kura
+                            .get_block(
+                                NonZeroUsize::new(
+                                    usize::try_from(parent_height)
+                                        .expect("fixture parent height fits usize"),
+                                )
+                                .expect("fixture parent height is non-zero"),
+                            )
+                            .expect("merge-carrier parent block is durable");
+                        persist_merge_carrier_finality_for_state_test(kura, parent.as_ref());
+                        kura.v2_finality_artifact(parent_height)
+                            .expect("reread merge-carrier parent finality")
+                            .expect("merge-carrier parent finality is now durable")
+                    })
+            });
+        let artifact = merge_carrier_finality_artifact(block, parent.as_ref());
+        let _ = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("persist exact merge-carrier finality fixture");
+    }
+
     fn certified_merge_carrier_after(
         previous: &SignedBlock,
         entry: &MergeLedgerEntry,
@@ -122504,6 +122796,7 @@ seiyaku IdentitylessRawCallback {
         carrier: &SignedBlock,
         entry: &MergeLedgerEntry,
     ) {
+        persist_merge_carrier_finality_for_state_test(&state.kura, carrier);
         let mut state_block = state
             .block_with_certified_merge_entry(carrier.header().clone(), entry)
             .expect("certified merge entry must stage on its exact carrier");
@@ -122901,10 +123194,11 @@ seiyaku IdentitylessRawCallback {
             .expect("non-genesis carrier has a parent");
         entry.merge_qc.view = carrier.header().view_change_index();
         let carrier = certified_merge_carrier_after(&parent, &entry);
-        kura.store_block(Arc::new(parent))
+        kura.store_block(Arc::new(parent.clone()))
             .expect("store invalid-history carrier parent");
-        kura.store_block_with_merge_entry(Arc::new(carrier), &entry)
+        kura.store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
             .expect("store exact invalid-history carrier fixture");
+        persist_merge_carrier_finality_for_state_test(&kura, &carrier);
         kura
     }
 
@@ -122967,6 +123261,7 @@ seiyaku IdentitylessRawCallback {
             .kura
             .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
             .expect("store exact Kura carrier");
+        persist_merge_carrier_finality_for_state_test(&state.kura, &carrier);
 
         let state_hash_before = state.lane_execution_state_hash();
         let cache_before = state.merge_ledger.snapshot();
@@ -124854,6 +125149,7 @@ seiyaku IdentitylessRawCallback {
             .kura
             .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
             .expect("persist exact merge carrier without State settlement");
+        persist_merge_carrier_finality_for_state_test(&state.kura, &carrier);
         state
             .recover_merge_ledger_from_kura()
             .expect("authenticate durable exact merge carrier during recovery");
@@ -125867,6 +126163,7 @@ seiyaku IdentitylessRawCallback {
 
         kura.store_block_with_merge_entry(Arc::clone(&carrier_one), &entry_one)
             .expect("store first durable carrier and sidecar");
+        persist_merge_carrier_finality_for_state_test(&kura, carrier_one.as_ref());
         state.push_block_hash_for_testing(carrier_one.hash());
         let (stored_one, first_event) = state
             .record_globally_committed_merge_entry(
@@ -125901,8 +126198,9 @@ seiyaku IdentitylessRawCallback {
         assert_eq!(state.merge_ledger().snapshot().len(), 1);
 
         let carrier_two_hash = carrier_two.hash();
-        kura.store_block_with_merge_entry(carrier_two, &entry_two)
+        kura.store_block_with_merge_entry(Arc::clone(&carrier_two), &entry_two)
             .expect("store second durable carrier and sidecar");
+        persist_merge_carrier_finality_for_state_test(&kura, carrier_two.as_ref());
         state.push_block_hash_for_testing(carrier_two_hash);
         let (stored_two, replay_event) = state
             .record_globally_committed_merge_entry(&entry_two, MergeLedgerPublicationMode::Replay)
@@ -126097,6 +126395,7 @@ seiyaku IdentitylessRawCallback {
         let invalid_carrier = certified_merge_carrier_after(&first_carrier, &invalid);
         kura.store_block_with_merge_entry(Arc::new(invalid_carrier.clone()), &invalid)
             .expect("store invalid entry in an exact global carrier");
+        persist_merge_carrier_finality_for_state_test(&kura, &invalid_carrier);
         let durable_entries_before = kura
             .merge_ledger_all_entries()
             .expect("durable entries before restart");

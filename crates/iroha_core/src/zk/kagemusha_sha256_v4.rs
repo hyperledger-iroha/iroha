@@ -87,9 +87,9 @@ enum KagemushaSha256ByteSourceV4<F: ScalarField> {
 ///
 /// Constants remain Table16 constants. Dynamic bytes can only be constructed
 /// from eight proven Boolean cells, one explicitly constrained Boolean cell,
-/// or the checked fallback in [`KagemushaSha256JobsV4::digest`]. Consequently
-/// [`KagemushaSha256JobsV4::digest_constrained`] does not repeat a Range8
-/// lookup for these values.
+/// or an explicit caller-side Range8 check. Consequently
+/// [`KagemushaSha256JobsV4::digest_constrained`] does not repeat a Range8 lookup
+/// for these values.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct KagemushaSha256ByteV4<F: ScalarField> {
     source: KagemushaSha256ByteSourceV4<F>,
@@ -250,6 +250,7 @@ where
 {
     /// Range-constrain every Base source byte, queue its exact SHA-256
     /// relation, and return eight Base placeholders for the digest words.
+    #[cfg(test)]
     pub(crate) fn digest(
         &mut self,
         ctx: &mut Context<F>,

@@ -91,32 +91,6 @@ public final class ToriiMockServer implements AutoCloseable {
     return new ToriiMockServer();
   }
 
-  /**
-   * Attempts to create a mock server and returns an {@link Optional} that is empty when binding a
-   * loopback port is not permitted in the current environment.
-   */
-  public static Optional<ToriiMockServer> tryCreate() {
-    try {
-      return Optional.of(new ToriiMockServer());
-    } catch (final IOException | SecurityException ex) {
-      return Optional.empty();
-    }
-  }
-
-  /**
-   * Returns {@code true} when the current environment allows binding localhost sockets required by
-   * the mock server.
-   */
-  public static boolean isSupported() {
-    try {
-      final HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-      server.stop(0);
-      return true;
-    } catch (final IOException ex) {
-      return false;
-    }
-  }
-
   /** Returns the base URI (scheme + host + port) clients should use. */
   public URI baseUri() {
     return baseUri;

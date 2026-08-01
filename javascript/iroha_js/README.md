@@ -76,8 +76,8 @@ binary, Cargo workspace, install hook, or implicit downloader. Consequently,
 `npm run build:native` is a source-checkout command, not a supported operation
 inside a clean registry installation. Registry consumers can use the portable
 browser exports (`/browser`, `/transaction-codec`, `/canonical-request`,
-`/ivm-artifact`, `/ivm-artifact-admission-wasm`,
-`/smart-contract-deployment`, `/connect-browser`, and `/nexus-app`) and the
+`/ivm-artifact`, `/smart-contract-deployment`, `/connect-browser`, and
+`/nexus-app`) and the
 Node Ed25519 fallback without a native host. Applications that need native-only
 APIs must
 provide a separately built and checksum-verified host through
@@ -175,11 +175,18 @@ boundaries.
 
 ## Native Privacy Bridge
 
-The first-release native surface is capability-only:
-`isPrivacyNativeAvailable()` and `privacyCapabilitiesV1()`. The latter returns
-the canonical Norito `PrivacyCapabilitySnapshotV1` archive. The generic
-request/build/verify dispatcher and its free-form algorithm aliases do not
-exist; proving is exposed only by protocol-specific typed APIs.
+The first-release native surface exposes local build metadata only:
+`isPrivacyNativeAvailable()` and `privacyCompiledProfileCatalogV1()`. The
+latter returns this binary's canonical Norito
+`PrivacyCompiledProfileCatalogV1` archive. It contains no committed height,
+consensus policy, activation, or readiness state. Fetch and validate a fresh
+`PrivacyCapabilitySnapshotV1` from live Torii with
+`getPrivacyCapabilitiesV1()` before proof submission. The generic
+request/build/verify dispatcher, the retired `privacyCapabilitiesV1()` local
+alias, and free-form algorithm aliases do not exist; proving is exposed only
+by protocol-specific typed APIs. The broad `./browser` facade does not expose
+the native catalog; browser callers use the `./privacy-capabilities` live Torii
+client/parser surface.
 
 Private Kaigi entrypoint builders require a caller-supplied `feeSpend` produced
 by a production confidential wallet or prover. The JavaScript SDK does not
@@ -492,40 +499,12 @@ access-claim, and other semantic admission checks. The service must therefore be
 a trusted canonical Rust compiler endpoint; the ledger remains the final
 authority on whether an artifact is deployable.
 
-Browser deployment also runs the canonical Rust semantic admission policy
-locally through the raw `ivm_artifact_admission` WebAssembly exports. Provision
-the verifier with a SHA-256 trust anchor from signed application or release
-metadata; do not derive the expected digest from the same mutable response:
-
-```js
-import {
-  instantiateIvmArtifactAdmissionWasm,
-} from "@iroha/iroha-js/ivm-artifact-admission-wasm";
-import {
-  deploySmartContractBrowser,
-} from "@iroha/iroha-js/smart-contract-deployment";
-
-const verifier = await instantiateIvmArtifactAdmissionWasm({
-  wasmBytes: await fetch(admissionWasmUrl),
-  expectedSha256Hex: signedRelease.admissionWasmSha256Hex,
-});
-
-await deploySmartContractBrowser({
-  artifactAdmissionVerifier: verifier,
-  artifactBytes: result.output.artifactBytes,
-  manifest: result.output.manifest,
-  compilerCodeHash: result.output.codeHashHex,
-  compilerAbiHash: result.output.abiHashHex,
-  // chain, local-signing, authenticated-state, and submission callbacks...
-});
-```
-
-Deployment fails before node capability/state reads, signing, or submission if
-the authenticated module is absent, the shared verifier rejects the artifact,
-or its derived code hash, ABI hash, offsets, entrypoint count, or canonical
-manifest disagrees with the compiler output. JavaScript framing validation is
-retained as an earlier diagnostic boundary, but cannot authorize deployment by
-itself.
+Browser deployment performs those bounded structural checks before node
+capability/state reads, signing, or submission. It does not expose a local
+semantic-verifier selector: V1 workspace builds target Rust `std`, and browser
+WebAssembly artifacts are not a supported release output. The authenticated
+compiler service supplies canonical Rust output, and committed ledger admission
+remains authoritative for semantic validation.
 The first release accepts only `provenance: null`; signed provenance remains
 disabled until its exact message and public-key algorithm can be verified.
 The native binding and service receive the same canonical JSON-shaped request,
@@ -3049,20 +3028,56 @@ const transferTx = buildZkTransferTransaction({
     proof: {
       backend: "halo2/ipa",
       proof: Buffer.from("proof-bytes", "base64"),
-      verifyingKeyRef: "halo2/ipa:vk_transfer",
+      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
     },
   },
   privateKey,
 });
 ```
 
-`ProofAttachmentInput` requires `verifyingKeyRef`; embedded key bytes are not
-accepted by generic proof attachments. It also supports optional
-`verifyingKeyCommitment` digests. Election
+`ProofAttachmentInput` requires the exact `{ backend, name }`
+`verifyingKeyRef` shape; string shorthands, aliases, and embedded key bytes are
+not accepted. Both id fields use the Rust portable registry grammar. Complete
+ProofBox size is capped at 64 MiB, including its fixed overhead and UTF-8
+backend label. Optional `verifyingKeyCommitment` and `envelopeHash` digests must
+be non-zero, and `envelopeHash` must equal the typed BLAKE2b-256 hash of the
+proof bytes. Lane Merkle inputs require a complete 1–255-level path; raw
+32-byte siblings are converted to canonical prehashed `HashOf` bytes before
+Norito encoding. Election
 builders (`buildCreateElectionTransaction`, `buildSubmitBallotTransaction`, and
 `buildFinalizeElectionTransaction`) share the same helpers so ballot ciphertexts
 and Halo2 proofs stay canonical across SDKs. See `index.d.ts` for the
 full set of confidential input shapes.
+
+### Native-independent Exact12 fixture codec
+
+`noritoDecodePrivacyExact12FixtureBundleBase64V1` reads the checked
+`fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64` archive without
+loading `iroha_js_host`. The input must be exact canonical standard base64: no
+whitespace, URL-safe alphabet, omitted padding, or alternate spelling is
+accepted. The raw-byte companion
+`noritoDecodePrivacyExact12FixtureBundleV1` enforces the 2 MiB archive bound,
+canonical schema/header/layout, version 1, all twelve protocol rows in frozen
+discriminant order, and the byte-complete statement, envelope, submission,
+intent, unsigned-payload, signed-transaction, and transaction-hash bindings.
+
+```js
+import {
+  noritoDecodePrivacyExact12FixtureBundleBase64V1,
+  noritoEncodePrivacyExact12FixtureBundleV1,
+} from "@iroha/iroha-js/norito";
+
+const bundle = noritoDecodePrivacyExact12FixtureBundleBase64V1(checkedBase64);
+const canonicalArchive = noritoEncodePrivacyExact12FixtureBundleV1(bundle);
+```
+
+Re-encoding a decoded checked bundle is byte-identical. Unknown fields,
+aliases, reordered or substituted protocol rows, malformed declared lengths,
+truncation, and trailing bytes fail closed.
+
+The codec is exported by the package root and the browser-safe `./norito` leaf.
+It is intentionally absent from the broad `./browser` facade so applications
+that do not inspect release fixtures do not retain the complete Exact12 codec.
 
 Verifying-key registry helpers mirror the Torii app API (`/v1/zk/vk/*`). Typed
 helpers normalise casing and payload layouts so tests and automation can inspect
@@ -3522,9 +3537,9 @@ console.log(`Connect enabled: ${features.connect?.enabled ?? false}`);
 - See `specs/sdk/js/quickstart.md` for an expanded walkthrough covering key management, transaction assembly, Torii configuration, and CI tips.
 
 - Cache both `npm` and `cargo` directories so native bindings rebuild quickly across matrix runs.
-- Run `npm run lint:test` before the dockerised integration job. The script enforces ESLint with zero warnings, builds the native addon, and runs the Node test suite so the JS-10 gate matches what the publish workflow executes.
+- Run `npm run lint:test` before the dockerised integration job. The script enforces ESLint with zero warnings, builds the native addon, and runs the zero-skip hermetic profile. Release CI separately provisions and runs the 1 GiB and live qualification profiles.
 - Test the declared minimum Node 18 runtime plus the maintained even-numbered Node release lines alongside the `rust-toolchain.toml` version to minimise drift across environments.
-- Use `node --test` for quick smoke runs when native artifacts are already built (for example after `npm run build:native` in a cached workspace); keep `npm run lint:test` in CI to cover the full pipeline.
+- Use `node scripts/run-test-profile.mjs unit` for quick hermetic runs when native artifacts are already built. Raw `node --test` intentionally selects the fail-closed live and 1 GiB lanes as well.
 - Layer any project-specific linting or formatting checks on top of `npm run lint:test` if your monorepo enforces stricter policies.
 - See `specs/examples/iroha_js_ci.md` for extended guidance and optional smoke-job templates.
 
@@ -3574,8 +3589,8 @@ jobs:
 ## Integration Smoke Tests
 
 `test/integrationTorii.test.js` exercises a live Torii node when the relevant
-environment variables are set. The suite is skipped by default so CI can run
-without provisioning infrastructure.
+environment variables are set. The hermetic `npm test` profile excludes this
+file; selecting the live suite without `IROHA_TORII_INTEGRATION_URL` fails.
 
 - `IROHA_TORII_INTEGRATION_URL` — Torii base URL (required to enable the test).
 - `IROHA_TORII_INTEGRATION_API_TOKEN` — optional API token for secured nodes.
@@ -3595,13 +3610,13 @@ without provisioning infrastructure.
 - `IROHA_TORII_INTEGRATION_ISO_PACS009` — optional JSON object merged into the default pacs.009 builder fields (same structure as the pacs.008 overrides; handy for replaying RTGS transfers with custom identifiers).
 - `IROHA_TORII_INTEGRATION_ISO_ALIAS` — optional ISO alias (for example, `GB82 WEST 1234 5698 7654 32`) used by the alias-resolution integration test. Set alongside `IROHA_TORII_INTEGRATION_ISO_ENABLED=1` when the ISO runtime is active.
 - `IROHA_TORII_INTEGRATION_ISO_ALIAS_INDEX` — optional deterministic index (integer) for exercising `resolveAliasByIndex`. Provide this when the target node exposes indexed alias metadata so the integration suite can cover both alias endpoints.
-- `IROHA_TORII_INTEGRATION_SORAFS_ENABLED` — set to `1` to run the optional SoraFS registry/storage smoke test (lists manifests/aliases/replication orders and fetches the storage state). Leave unset/`0` when SoraFS endpoints are disabled on the target node.
-- `IROHA_TORII_INTEGRATION_SORAFS_POR_WEEK` — optional ISO week label such as `2026-W05`. When set alongside `IROHA_TORII_INTEGRATION_SORAFS_ENABLED=1`, the suite fetches the PoR weekly report for that week to exercise the Norito export path.
+- `IROHA_TORII_INTEGRATION_SORAFS_ENABLED` — set to `1` to run the SoraFS registry/storage, payload-range, and PoR tests. An enabled SoraFS lane fails unless the payload manifest, positive range length, and PoR week inputs are all supplied and the endpoints respond.
+- `IROHA_TORII_INTEGRATION_SORAFS_POR_WEEK` — ISO week label such as `2026-W05`, required when `IROHA_TORII_INTEGRATION_SORAFS_ENABLED=1`.
 - `IROHA_TORII_INTEGRATION_UAID` — optional UAID literal (`uaid:<hex>` or raw 64-hex digest, LSB=1). When provided, the integration suite exercises the UAID portfolio/bindings/manifests endpoints so cross-dataspace APIs stay covered.
 - `IROHA_TORII_INTEGRATION_UAID_DATASPACE` — optional dataspace id (non-negative integer) used to scope the UAID manifest request when `IROHA_TORII_INTEGRATION_UAID` is set. Leave unset to fetch manifests across every dataspace.
 - `IROHA_TORII_INTEGRATION_SNS_SUFFIX` — optional SNS suffix id (u16) used to fetch the suffix policy snapshot. Supply alongside `IROHA_TORII_INTEGRATION_URL` to exercise the SNS policy smoke test.
 - `IROHA_TORII_INTEGRATION_SNS_SELECTOR` — optional canonical name selector (for example `wonderland.sora`) used to fetch an SNS registration record.
-- `IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_ENABLED` — set to `1` (alongside `IROHA_TORII_INTEGRATION_MUTATE=1`) to run the Space Directory manifest publish/revoke smoke tests. Supply a manifest JSON path via `IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_MANIFEST` (absolute or relative to the repo root; for example `fixtures/space_directory/capability/retail_dapp_access.manifest.json`). Optional overrides: `IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_REVOKE_EPOCH=<epoch>` to force the revoke call to use a specific epoch when your fixture omits `expiry_epoch`.
+- `IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_ENABLED` — set to `1` (alongside `IROHA_TORII_INTEGRATION_MUTATE=1`) to run the Space Directory manifest publish/revoke smoke tests. Supply a manifest JSON path via `IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_MANIFEST` (absolute or relative to the repo root; for example `fixtures/space_directory/capability/retail_dapp_access.manifest.json`). `IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_REVOKE_EPOCH=<epoch>` overrides fixture epochs and is mandatory in qualification mode.
 - `IROHA_TORII_INTEGRATION_DA_ENABLED` — set to `1` (and enable `IROHA_TORII_INTEGRATION_MUTATE=1`) to exercise the data-availability ingest smoke test (`submitDaBlob` + manifest polling). Leave unset when the DA ingest pipeline is disabled on the target Torii deployment.
 - `IROHA_TORII_INTEGRATION_DA_TICKET` — optional hex-encoded storage ticket used to fetch an existing manifest bundle when DA endpoints are read-only or when you want to validate a production capture without submitting a new blob.
 - `IROHA_TORII_INTEGRATION_DA_GATEWAYS` — optional JSON array describing the gateway providers used by `fetchDaPayloadViaGateway` (for example `[{"name":"gw-a","providerIdHex":"…","gatewayPublicKeyHex":"…","baseUrl":"https://gw-a.example","streamTokenB64":"..."}]`). Supply this alongside `IROHA_TORII_INTEGRATION_DA_TICKET` to stream proofs through the multi-source orchestrator.
@@ -3632,7 +3647,7 @@ before starting it. Never commit the private file.
 
 `scripts/run_integration.mjs` performs the following steps:
 
-1. Runs `npm ci` (skip via `JS_TORII_SKIP_INSTALL=1`) and rebuilds the native binding.
+1. Runs `npm ci` and rebuilds the native binding.
 2. Starts `docker compose -f defaults/docker-compose.single.yml up -d irohad0`
    unless `--no-start` (or `JS_TORII_START=0`) is supplied.
 3. Waits up to 90 s for `http://127.0.0.1:8080/status` (override via
@@ -3649,6 +3664,7 @@ Flags/environment variables:
 - `IROHA_GENESIS_PUBLIC_KEY_FILE` and `IROHA_GENESIS_PRIVATE_KEY_FILE` supply
   the runtime-only genesis custody required by the default Compose manifest.
 - `--no-start` to reuse an existing node (the harness still waits for `/status`).
+- `--qualification` (or `JS_TORII_QUALIFICATION=1`) to require the complete live SoraFS, UAID/dataspace, Space Directory, DA ticket, and dual-gateway input set before any test starts. `npm run test:integration:qualification` is the equivalent package command.
 - Pass additional `node --test` arguments after `--`, for example:
 
   ```bash

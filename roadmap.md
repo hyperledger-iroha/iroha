@@ -28,6 +28,18 @@ crate/test validation, and a broad locked offline workspace compile attempt.
 Do not promote the private audit ledger to complete until those source-bound
 commands and the final reconciliation pass are recorded.
 
+## SoraFS V1 Governance DAG deployment closure
+
+The standard outbound request path now has sealed cross-replica nonce fencing;
+completed source details and focused results live in `status.md`. Remaining
+work is deployment-owned: install the exact inbound verifier in both Kubo/head
+ingress administrations with receiver-side sealed replay state, package and
+supervise genuine HSM/authentication/sealed-CAS broker backends, finish bounded
+authenticated DAG block-prefix retention, and qualify two instances through
+CAS failover, signer rotation, rollback, public-mirror, corruption, outage, and
+disaster-recovery rehearsals. None of those external proofs may be replaced by
+the in-tree test provider or the outbound replay result.
+
 ## Repository structure follow-ups
 
 - Continue extracting cohesive production modules from the exact source-budget
@@ -130,10 +142,10 @@ tests. The isolated `iroha_core` library check also passed before the final
 reader deduplication, with post-edit startup-binding and B/A/B regressions
 green. This focused evidence does not replace the complete release gates.
 
-The static release inventory now matches `806/806` production tests across 39
-modules and `338/338` focused `G-UNIT` entries. Its canonical 339-line TSV has
+The static release inventory now matches `813/813` production tests across 39
+modules and `397/397` focused `G-UNIT` entries. Its canonical 398-line TSV has
 SHA-256
-`9132298b180884e25cf22c9246ca7395331a0ed02cafa7bbb4c9678e0624e0b7`.
+`69306f32aa225e45c9f3374966884a4d0f47c7320eb8ea516f1b39543182bbf8`.
 Schema 5 machine-maps 30 conceptual multilane rows to 73 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending source check;
@@ -184,12 +196,12 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 806-test,
+  mutations before promotion, then finish the remaining 813-test,
   39-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
   obligations remain in the formal dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 338 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 397 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
@@ -6562,11 +6574,16 @@ excluded from the first release.
   runner stamps that context onto generated canary artifacts and now validates
   the schema-closed collection-plan envelope, reviewed deployment context,
   evidence contract, and command steps before dry-run output or live canaries.
-  The remaining aggregate work is reviewed external threshold-PRF and
-  finalized-anchor adapters, a separately administered leader lease, live HSM
-  Governance DAG anchoring, every finalized source producer, public
-  replicas/proofs/pagination/ETags and hardened explorer delivery, deployed
-  scheduler jobs, and captured rollout evidence using those wrappers and the
+  The local stock registry/broker client/server transport for transparency
+  slots 2–10 is complete: sanitized config projection, exact fixed-endpoint
+  handshake, bounded canonical operations, fail-closed scope and live
+  requalification, CAS readback, fencing, and standard-launcher injection.
+  Remaining work is the supervised deployment-owned broker executable with
+  genuine independently administered threshold-PRF, finalized-anchor,
+  sealed-CAS leader-lease, fused writer/authoritative-head-reader, and HSM
+  Governance DAG backends, plus every finalized source producer, public
+  replicas/proofs/pagination/ETags, hardened explorer delivery, deployed
+  scheduler jobs, and captured rollout evidence using those backends and the
   canary.
 - SoraFS economics/governance plan status is current for the remaining local
   production gaps: SFM-2 now has initial orderbook/streaming-settlement Norito

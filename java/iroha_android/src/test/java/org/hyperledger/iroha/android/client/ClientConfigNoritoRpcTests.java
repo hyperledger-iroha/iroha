@@ -15,11 +15,6 @@ public final class ClientConfigNoritoRpcTests {
   private ClientConfigNoritoRpcTests() {}
 
   public static void main(final String[] args) throws Exception {
-    if (!ToriiMockServer.isSupported()) {
-      System.out.println(
-          "[IrohaAndroid] Client config Norito RPC tests skipped (mock server cannot bind in this environment).");
-      return;
-    }
     configProducesNoritoRpcClientWithHeadersAndObservers();
     flowControllerCarriesOver();
     executorReuseSharesObservers();
@@ -36,13 +31,7 @@ public final class ClientConfigNoritoRpcTests {
             .addObserver(observer)
             .build();
 
-    final var maybeServer = ToriiMockServer.tryCreate();
-    if (maybeServer.isEmpty()) {
-      System.out.println(
-          "[IrohaAndroid] Client config Norito RPC tests skipped (mock server unavailable).");
-      return;
-    }
-    try (ToriiMockServer server = maybeServer.get()) {
+    try (ToriiMockServer server = ToriiMockServer.create()) {
       server.enqueueSubmitResponse(ToriiMockServer.MockResponse.empty(200));
       final ClientConfig adjusted =
           config.toBuilder().setBaseUri(server.baseUri()).build();
@@ -66,13 +55,7 @@ public final class ClientConfigNoritoRpcTests {
             .setNoritoRpcFlowController(flowController)
             .build();
 
-    final var maybeServer = ToriiMockServer.tryCreate();
-    if (maybeServer.isEmpty()) {
-      System.out.println(
-          "[IrohaAndroid] Client config Norito RPC flow-control test skipped (mock server unavailable).");
-      return;
-    }
-    try (ToriiMockServer server = maybeServer.get()) {
+    try (ToriiMockServer server = ToriiMockServer.create()) {
       server.enqueueSubmitResponse(ToriiMockServer.MockResponse.empty(200));
       final ClientConfig adjusted = config.toBuilder().setBaseUri(server.baseUri()).build();
       final NoritoRpcClient client =

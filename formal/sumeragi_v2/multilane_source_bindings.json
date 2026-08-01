@@ -1143,16 +1143,83 @@
         ]
       },
       {
+        "path": "crates/iroha_core/src/sumeragi/lane_planner.rs",
+        "kind": "struct",
+        "symbol": "AutonomousLaneReservationSelectionAuthorization",
+        "required_tokens": [
+          "scope: LaneQueueReservationScopeV1",
+          "validator_count: u8",
+          "producer: u128"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/lane_planner.rs",
+        "kind": "method",
+        "symbol": "AutonomousLaneReservationSlotPlan::selection_authorization",
+        "required_tokens": [
+          "u8::try_from(self.validator_set.len())",
+          ".position(|peer| peer == &self.author)",
+          ".checked_shl(",
+          "scope: self.reservation_scope()",
+          "validator_count",
+          "producer"
+        ]
+      },
+      {
         "path": "crates/iroha_core/src/queue.rs",
         "kind": "fn",
         "symbol": "reserve_transactions_for_lane_bounded",
         "required_tokens": [
+          "AutonomousLaneReservationSelectionAuthorization",
+          "MAX_MERGE_EXECUTION_ENTRYPOINTS",
           "durable_claim.global_admission_binding()",
           "QueuePlanAdmissionRegistryMatch::Exact",
           "version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION",
+          "canonical_lane_queue_reservation_group_identity_projection",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5",
+          "check_production_in_flight_first_release_transition",
+          "checked_reservation_fsync.into_projection()",
           "journal.put_batch(",
           "restore_popped_hash_locked",
           "live_by_hash"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+        "kind": "struct",
+        "symbol": "LaneReadyAuthorization",
+        "required_tokens": [
+          "durable_execution_input_hash: Hash",
+          "reservation_group: LaneQueueReservationGroupBindingV1",
+          "producer: PeerId",
+          "signer: PeerId",
+          "height_context_id: HeightContextId"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+        "kind": "method",
+        "symbol": "LaneReadyAuthorization::consume_signing_request",
+        "required_tokens": [
+          "self.matches_signing_request(",
+          "u8::try_from(descriptor.validator_set.len())",
+          ".position(|peer| peer == &self.producer)",
+          ".position(|peer| peer == signer)",
+          "canonical_lane_queue_reservation_group_identity_projection(",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_SIGN_READY",
+          "check_production_in_flight_first_release_transition(projection)",
+          ".is_some_and(|checked| checked.into_projection() == projection)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/lane_consensus.rs",
+        "kind": "method",
+        "symbol": "LanePayloadAvailabilityVoteV1::new_signed_with_authorization",
+        "required_tokens": [
+          "authorization.consume_signing_request(",
+          "Signature::try_new(private_key, &body.signature_preimage())",
+          "vote.validate_against_validator_set(&proposal.descriptor.validator_set)?"
         ]
       },
       {
@@ -1514,6 +1581,17 @@
           "QueuePlanAdmissionRegistryMatch::Exact",
           "journal.put_batch(",
           "live_by_hash"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/lane_consensus.rs",
+        "kind": "method",
+        "symbol": "LanePayloadAvailabilityVoteV1::new_signed_with_authorization",
+        "tokens": [
+          "authorization.consume_signing_request(",
+          "Signature::try_new(private_key, &body.signature_preimage())",
+          "let vote = Self {",
+          "vote.validate_against_validator_set(&proposal.descriptor.validator_set)?"
         ]
       },
       {

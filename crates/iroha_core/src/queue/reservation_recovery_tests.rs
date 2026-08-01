@@ -206,6 +206,14 @@ fn reservation_restart_restore_blocks_resync_until_explicit_release() {
             .expect("release after the caller's evidence-gated decision"),
         1
     );
+    assert!(
+        queue.lane_reservation_startup_reconciliation_pending(),
+        "restart release must remain quarantined until the State/Kura publication gate"
+    );
+    queue
+        .complete_lane_reservation_startup_reconciliation()
+        .expect("publish completed reservation restart reconciliation");
+    assert!(!queue.lane_reservation_startup_reconciliation_pending());
     queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut global);
     assert_eq!(global[0].as_ref().hash(), hash);
 }
@@ -308,7 +316,7 @@ fn state_committed_live_reservation_replays_quarantined_until_explicit_proof_com
     // Simulate the State/Kura reconciliation layer proving this exact carrier committed.
     assert_eq!(
         queue
-            .commit_lane_reservation(&key)
+            .commit_lane_reservation_for_test(&key)
             .expect("consume reservation after simulated external proof"),
         LaneQueueReservationOutcome::Finalized
     );
@@ -698,7 +706,7 @@ fn restart_commit_barrier_stays_quarantined_until_explicit_proof_commit() {
     // Simulate the caller proving the exact global carrier from State and Kura.
     assert_eq!(
         queue
-            .commit_lane_reservation(&key)
+            .commit_lane_reservation_for_test(&key)
             .expect("consume commit barrier after simulated external proof"),
         LaneQueueReservationOutcome::AlreadyFinalized
     );
@@ -911,7 +919,7 @@ fn high_volume_commit_barriers_require_explicit_proof_before_consumption() {
         for key in &keys {
             assert_eq!(
                 queue
-                    .commit_lane_reservation(key)
+                    .commit_lane_reservation_for_test(key)
                     .expect("consume one externally proven commit barrier"),
                 LaneQueueReservationOutcome::AlreadyFinalized
             );
@@ -1128,7 +1136,7 @@ fn restart_commit_barrier_rejects_mismatched_queue_hash_without_tombstone_or_for
     assert_eq!(queue.lane_reservation_commit_barriers(), vec![key]);
     assert_eq!(
         queue
-            .commit_lane_reservation(&key)
+            .commit_lane_reservation_for_test(&key)
             .expect("consume only after simulated external proof"),
         LaneQueueReservationOutcome::AlreadyFinalized
     );
@@ -1229,7 +1237,7 @@ fn restart_commit_barrier_rejects_retargeted_coordinator_without_tombstone_or_fo
     assert_eq!(queue.lane_reservation_commit_barriers(), vec![key]);
     assert_eq!(
         queue
-            .commit_lane_reservation(&key)
+            .commit_lane_reservation_for_test(&key)
             .expect("consume only after simulated external proof"),
         LaneQueueReservationOutcome::AlreadyFinalized
     );
@@ -1404,7 +1412,7 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
     // State membership and the durable Commit identity were both retained for this check.
     assert_eq!(
         queue
-            .commit_lane_reservation(&key)
+            .commit_lane_reservation_for_test(&key)
             .expect("forget tombstoned barrier after simulated external proof"),
         LaneQueueReservationOutcome::AlreadyFinalized
     );
@@ -1511,7 +1519,7 @@ fn commit_barrier_pressure_clears_only_after_explicit_proof_commit() {
 
     assert_eq!(
         queue
-            .commit_lane_reservation(&key)
+            .commit_lane_reservation_for_test(&key)
             .expect("consume barrier after simulated external proof"),
         LaneQueueReservationOutcome::AlreadyFinalized
     );
@@ -1863,7 +1871,9 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
         queue
             .reserve_transactions_for_lane_bounded(
                 &state,
-                coordinator_scope,
+                AutonomousLaneReservationSelectionAuthorization::single_validator_for_test(
+                    coordinator_scope,
+                ),
                 LaneQueueReservationSelectionLimits {
                     max_transactions: nonzero!(1_usize),
                     max_scan: nonzero!(1_usize),

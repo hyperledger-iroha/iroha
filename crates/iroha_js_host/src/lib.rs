@@ -58,16 +58,16 @@ use iroha::da::{
     DaProofConfig as IrohaDaProofConfig,
     generate_da_proof_summary as iroha_generate_da_proof_summary,
 };
-use iroha_core::privacy_profiles::committed_privacy_capability_snapshot_v1;
+use iroha_core::privacy_profiles::{
+    compiled_privacy_profile_catalog_v1, validate_local_privacy_compiled_profile_catalog_archive_v1,
+};
 use iroha_core::soracloud_runtime::{
     HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
     build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
 };
-use iroha_core::zk::{
-    confidential_v2::{
-        self, ConfidentialTransferInputV2, ConfidentialTransferOutputV2,
-        ConfidentialUnshieldInputV2, ConfidentialUnshieldOutputV3,
-    },
+use iroha_core::zk::confidential_v2::{
+    self, ConfidentialTransferInputV2, ConfidentialTransferOutputV2, ConfidentialUnshieldInputV2,
+    ConfidentialUnshieldOutputV3,
 };
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature,
@@ -150,9 +150,8 @@ use iroha_data_model::{
     peer::{Peer, PeerId},
     permission::Permission,
     privacy::{
-        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1,
-        PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1, PrivacyProtocolIdV1,
-        validate_privacy_capability_archive_v1,
+        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
+        PrivacyCompiledProfileCatalogV1, PrivacyProtocolIdV1,
     },
     proof::{ProofAttachment, ProofAttachmentList},
     role::{NewRole, Role, RoleId},
@@ -2351,19 +2350,14 @@ pub fn axt_compute_binding(descriptor_bytes: Buffer) -> napi::Result<Buffer> {
 
 #[allow(unsafe_code)]
 fn decode_instruction_aligned(bytes: &[u8]) -> Result<InstructionBox, norito_core::Error> {
-    if let Ok(instruction) = decode_from_bytes::<InstructionBox>(bytes) {
-        return Ok(instruction);
+    let primary_error = match norito::decode_canonical::<InstructionBox>(bytes) {
+        Ok(instruction) => return Ok(instruction),
+        Err(error) => error,
+    };
+    match norito::decode_canonical::<ProposeValidationFeePolicy>(bytes) {
+        Ok(instruction) => Ok(instruction.into()),
+        Err(_) => Err(primary_error),
     }
-    if let Ok(instruction) = decode_from_bytes::<ProposeValidationFeePolicy>(bytes) {
-        return Ok(instruction.into());
-    }
-    let view = norito_core::from_bytes_view(bytes)?;
-    let payload = view.as_bytes();
-    let (instruction, used) = <InstructionBox as DecodeFromSlice>::decode_from_slice(payload)?;
-    if used != payload.len() {
-        return Err(norito_core::Error::LengthMismatch);
-    }
-    Ok(instruction)
 }
 /// Derive the confidential key hierarchy from a 32-byte spend key.
 #[napi]
@@ -12048,41 +12042,41 @@ pub fn sign_transaction(bytes: Uint8Array, secret: Uint8Array) -> napi::Result<B
     Ok(Buffer::from(Encode::encode(&signed)))
 }
 
-fn privacy_capabilities() -> PrivacyCapabilitySnapshotV1 {
-    let snapshot = committed_privacy_capability_snapshot_v1(
-        0,
-        PrivacyConsensusPolicyV1::taira_default(),
-        |_| None,
-    )
-    .expect("the compiled first-release privacy capability snapshot must be valid");
-    debug_assert_eq!(snapshot.protocols.len(), PrivacyProtocolIdV1::ALL.len());
+fn privacy_compiled_profile_catalog() -> napi::Result<PrivacyCompiledProfileCatalogV1> {
+    let catalog = compiled_privacy_profile_catalog_v1().map_err(|error| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("build local privacy compiled-profile catalog: {error}"),
+        )
+    })?;
+    debug_assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::ALL.len());
     debug_assert!(
-        snapshot
+        catalog
             .protocols
             .iter()
             .map(|row| row.protocol_id)
             .eq(PrivacyProtocolIdV1::ALL)
     );
-    snapshot
+    Ok(catalog)
 }
 
-fn encode_privacy_archive(
-    value: &PrivacyCapabilitySnapshotV1,
+fn encode_privacy_compiled_profile_catalog_archive(
+    value: &PrivacyCompiledProfileCatalogV1,
     context: &str,
 ) -> napi::Result<Buffer> {
     let mut bytes = norito::encode_canonical(value).map_err(|err| {
         napi::Error::new(napi::Status::GenericFailure, format!("{context}: {err}"))
     })?;
-    if bytes.len() > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
+    if bytes.len() > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1 {
         bytes.fill(0);
         return Err(napi::Error::new(
             napi::Status::GenericFailure,
             format!(
-                "{context}: encoded privacy archive exceeds {PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1} bytes"
+                "{context}: encoded privacy compiled-profile catalog exceeds {PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1} bytes"
             ),
         ));
     }
-    let status = validate_privacy_capability_archive_v1(&bytes);
+    let status = validate_local_privacy_compiled_profile_catalog_archive_v1(&bytes);
     if !status.is_valid() {
         bytes.fill(0);
         return Err(napi::Error::new(
@@ -12097,15 +12091,23 @@ fn encode_privacy_archive(
 }
 
 #[napi]
-/// Return the canonical typed Norito V1 privacy capability snapshot.
-pub fn privacy_capabilities_v1() -> napi::Result<Buffer> {
-    encode_privacy_archive(&privacy_capabilities(), "encode privacy capabilities")
+/// Return this binary's canonical typed Norito V1 compiled-profile catalog.
+///
+/// This local catalog contains no committed height, governance activation, or
+/// readiness state. Those fields are authoritative only in a fresh
+/// `PrivacyCapabilitySnapshotV1` fetched from live Torii.
+pub fn privacy_compiled_profile_catalog_v1() -> napi::Result<Buffer> {
+    let catalog = privacy_compiled_profile_catalog()?;
+    encode_privacy_compiled_profile_catalog_archive(
+        &catalog,
+        "encode local privacy compiled-profile catalog",
+    )
 }
 
 #[napi]
-/// Validate an untrusted canonical typed Norito V1 privacy capability snapshot.
-pub fn privacy_validate_capabilities_v1(archive: Uint8Array) -> i32 {
-    validate_privacy_capability_archive_v1(archive.as_ref()).code()
+/// Validate bytes as this binary's exact local compiled-profile catalog.
+pub fn privacy_validate_compiled_profile_catalog_v1(archive: Uint8Array) -> i32 {
+    validate_local_privacy_compiled_profile_catalog_archive_v1(archive.as_ref()).code()
 }
 
 /// Result of signing a transaction via the native helper.
@@ -14571,12 +14573,14 @@ seiyaku Privacy {
     }
 
     #[test]
-    fn privacy_capability_snapshot_is_the_exact_closed_registry() {
-        let snapshot = privacy_capabilities();
-        snapshot.validate().expect("canonical capability snapshot");
-        assert_eq!(snapshot.protocols.len(), PrivacyProtocolIdV1::COUNT);
+    fn privacy_compiled_profile_catalog_is_the_exact_closed_local_registry() {
+        let catalog = privacy_compiled_profile_catalog().expect("compiled-profile catalog");
+        catalog
+            .validate()
+            .expect("canonical compiled-profile catalog");
+        assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::COUNT);
         assert!(
-            snapshot
+            catalog
                 .protocols
                 .iter()
                 .map(|row| row.protocol_id)
@@ -14585,24 +14589,37 @@ seiyaku Privacy {
     }
 
     #[test]
-    fn privacy_capability_napi_archive_round_trips_the_typed_snapshot() {
-        let bytes = privacy_capabilities_v1()
-            .expect("encode N-API privacy snapshot")
+    fn privacy_compiled_profile_catalog_napi_archive_round_trips() {
+        let bytes = privacy_compiled_profile_catalog_v1()
+            .expect("encode N-API compiled-profile catalog")
             .to_vec();
         assert_eq!(
-            privacy_validate_capabilities_v1(Uint8Array::from(bytes.clone())),
-            iroha_data_model::privacy::PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
+            privacy_validate_compiled_profile_catalog_v1(Uint8Array::from(bytes.clone())),
+            iroha_data_model::privacy::PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid
+                .code()
         );
-        let snapshot: PrivacyCapabilitySnapshotV1 =
-            norito::decode_from_bytes(&bytes).expect("decode N-API privacy snapshot");
-        snapshot.validate().expect("N-API capability snapshot");
-        assert_eq!(snapshot.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        let catalog: PrivacyCompiledProfileCatalogV1 =
+            norito::decode_from_bytes(&bytes).expect("decode N-API compiled-profile catalog");
+        catalog.validate().expect("N-API compiled-profile catalog");
+        assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        assert!(
+            norito::decode_from_bytes::<iroha_data_model::privacy::PrivacyCapabilitySnapshotV1>(
+                &bytes
+            )
+            .is_err(),
+            "a local compiled-profile catalog must not decode as network readiness"
+        );
+        assert!(
+            !iroha_data_model::privacy::validate_privacy_capability_archive_v1(&bytes).is_valid(),
+            "a local compiled-profile catalog must not pass snapshot admission"
+        );
 
         let mut one_byte_fake = norito::encode_canonical(&0_u8).expect("encode one-byte fake");
         one_byte_fake[6..22].copy_from_slice(&bytes[6..22]);
         assert_ne!(
-            privacy_validate_capabilities_v1(Uint8Array::from(one_byte_fake)),
-            iroha_data_model::privacy::PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
+            privacy_validate_compiled_profile_catalog_v1(Uint8Array::from(one_byte_fake)),
+            iroha_data_model::privacy::PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid
+                .code()
         );
     }
 

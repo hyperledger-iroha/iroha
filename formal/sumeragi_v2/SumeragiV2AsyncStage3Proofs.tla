@@ -679,10 +679,10 @@ Stage3AuxProgress(candidate, position, rank) ==
        Stage3AuxBlocked(candidate, position, lower)
 
 (***************************************************************************
-The exact Serve target-only Runtime-to-Ingress turn deliberately crosses the
+The shared physical-ingress target-only Runtime-to-Ingress turn deliberately crosses the
 zero point of `RuntimeReachRank`.  It is therefore a finite ingress episode,
 not an action-local `ReadyRunAuxRank` descent.  The original candidate and
-rank remain frozen while the immutable/coalesced Serve admission is drained;
+rank remain frozen while the immutable/coalesced ingress owner is drained;
 the separate property below is the exact closure seam consumed by the
 well-founded Stage-3 proof.
 ***************************************************************************)
@@ -692,7 +692,7 @@ Stage3ServeEpisodeResidual(candidate, position, rank) ==
   /\ AsyncProgressOwnershipInvariant
   /\ Stage3KernelPending(candidate, position)
   /\ ~Stage3AuxProgress(candidate, position, rank)
-  /\ \/ /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+  /\ \/ /\ AsyncIngressSchedulerBarrierActive(candidate.node)
         /\ asyncRunnerPhase[candidate.node] = "Ingress"
      \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
           candidate.node)

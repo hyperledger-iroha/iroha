@@ -2764,10 +2764,13 @@ impl V2LaneWorkAdapter {
                 max_gas: NonZeroU64::new(u64::try_from(gas_limit).unwrap_or(u64::MAX))
                     .expect("positive autonomous gas quota checked above"),
             };
+            let selection_authorization = slot
+                .selection_authorization()
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
             let reservations = queue
                 .reserve_transactions_for_lane_bounded(
                     self.state.as_ref(),
-                    slot.reservation_scope(),
+                    selection_authorization,
                     selection_limits,
                     &BTreeSet::new(),
                     LaneQueueReservationRoutingMode::AnyCoordinatorPlan,
@@ -25141,10 +25144,13 @@ pub(super) mod tests {
         assert_eq!(slot.quorum.validator_count, 4);
         assert_eq!(slot.quorum.min_quorum, 3);
         assert_eq!(slot.author, adapter.local_peer);
+        let selection_authorization = slot
+            .selection_authorization()
+            .expect("derive exact pre-Kura selection authority");
         let reservations = queue
             .reserve_transactions_for_lane_bounded(
                 adapter.state.as_ref(),
-                slot.reservation_scope(),
+                selection_authorization,
                 LaneQueueReservationSelectionLimits {
                     max_transactions: NonZeroUsize::new(2).expect("non-zero transaction limit"),
                     max_scan: NonZeroUsize::new(2).expect("non-zero scan limit"),

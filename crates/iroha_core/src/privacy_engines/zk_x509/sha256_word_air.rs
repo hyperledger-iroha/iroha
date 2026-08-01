@@ -16,9 +16,10 @@
 
 use thiserror::Error;
 
-use super::{
-    air::{U32RangeAirRowV1, ZkX509AirErrorV1},
-    io_air::{ZkX509IoChallengesV1, ZkX509IoEndpointV1, ZkX509IoSegmentRoleV1, ZkX509IoTraceV1},
+use super::air::{U32RangeAirRowV1, ZkX509AirErrorV1};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::io_air::{
+    ZkX509IoChallengesV1, ZkX509IoEndpointV1, ZkX509IoSegmentRoleV1, ZkX509IoTraceV1,
 };
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
@@ -615,6 +616,7 @@ impl ZkX509Sha256WordCircuitV1 {
 
     /// Bind this invocation's exact unpadded input and digest bytes to the
     /// global DER/accumulator byte-channel argument.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn validate_cross_segment_io_v1(
         &self,
         io_challenges: ZkX509IoChallengesV1,

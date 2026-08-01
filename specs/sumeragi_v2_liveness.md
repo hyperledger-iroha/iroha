@@ -1133,13 +1133,14 @@ authenticated semantic-only Coalesce defense.
 Subsequent source reconciliation and exact-ingress lifecycle, restart,
 provenance, and invalid-QC quarantine regressions bind one actor-global
 logical owner across its physical retries.
-The current source-bound inventory therefore contains 806 exact tests across
+Seven physical-cut, adapter-capability, aggregate-rebase, and ineligible-driver
+regressions bring the current source-bound inventory to 813 exact tests across
 39 modules and 82 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
-`0c1ee4be74b736dba126c0eeedd1f39ccaf6cbd6eed0e6374f158e3457f2eff5`.
-Nine of those legs execute the separate 338-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 339 TSV lines and has SHA-256
-`9132298b180884e25cf22c9246ca7395331a0ed02cafa7bbb4c9678e0624e0b7`.
+`708e0ed0221056b20b9d9f03f1ea8cd07225b0c84c39ad18dd25402e090fb30f`.
+Nine of those legs execute the separate 397-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 398 TSV lines and has SHA-256
+`69306f32aa225e45c9f3374966884a4d0f47c7320eb8ea516f1b39543182bbf8`.
 Together, the closures bind proposal-origin reducer/deferred identity,
 equivocation evidence, aggregate signatures, finality/header geometry, compact
 offline QCs, parent height-context identity, source-scoped sidecar limits,
@@ -1384,7 +1385,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 806-test inventory is a mechanically checked
+The current 813-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1569,9 +1570,9 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 806 exact production
+Before those longer scenarios, the PR gate inventories 813 exact production
 liveness tests and executes all 39 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 338-test
+profile additionally records nine G-UNIT legs executing a separate 397-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -1711,8 +1712,10 @@ corridor leg. Eight leader-wire retirement, terminal-consumption, and
 authenticated-Coalesce defense regressions produced the 782-test checkpoint
 without adding another module or leg. Subsequent source reconciliation and
 exact-ingress lifecycle, restart, provenance, and quarantine regressions bring
-the current inventory to 806 tests without adding another module or leg. The rollover
-slice covers
+the inventory to the 806-test checkpoint without adding another module or leg.
+Seven physical-cut, adapter-capability, aggregate-rebase, and ineligible-driver
+regressions bring the current inventory to 813 tests, again without adding a
+module or leg. The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
 untyped fail-closed boundaries. The route slice pins semantic deduplication,
@@ -1983,7 +1986,7 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 82 pre-network corridor legs and
-their exact 806-test production inventory, the separate 338-test G-UNIT
+their exact 813-test production inventory, the separate 397-test G-UNIT
 inventory, semantic test names/counts, commands, logs, source-bound localnet
 binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos
