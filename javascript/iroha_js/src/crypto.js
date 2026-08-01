@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { blake3 } from "@noble/hashes/blake3";
+import { sha256 } from "@noble/hashes/sha256";
 import {
   entropyToMnemonic,
   mnemonicToEntropy,
@@ -7,7 +8,6 @@ import {
 } from "@scure/bip39";
 import { wordlist as englishWordlist } from "@scure/bip39/wordlists/english.js";
 import {
-  createHash,
   createPrivateKey,
   createPublicKey,
   randomBytes,
@@ -366,7 +366,7 @@ export function deriveEd25519SeedFromRecoveryPhrase(phrase) {
   const entropy = recoveryPhraseToEntropy(phrase);
   return entropy.length === ED25519_SEED_LENGTH
     ? entropy
-    : createHash("sha256").update(entropy).digest();
+    : Buffer.from(sha256(entropy));
 }
 
 export function ed25519SeedToRecoveryPhrase(privateKey) {

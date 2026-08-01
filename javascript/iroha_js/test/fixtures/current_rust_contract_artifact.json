@@ -76,14 +76,14 @@
     "entrypoint_count": 2
   },
   "generation_provenance": {
-    "koto_sha256": "4482ebf4911b88da741333cdac9f403bc7b0d0d91a6cd385d8c86a0cbe4000a8",
-    "ivm_rlib_sha256": "02de071beae0599bb9b8c3da238907a8dd3e1514d345ed5cb9961114200248db",
+    "koto_sha256": "604fd3aa2b8c5c741d8b85a967ae8d33edde5c6cdf289edf180da13d56c8ac8f",
+    "ivm_rlib_sha256": "b2571a1f7ceeba79e9a3758ac1aeaa0c1771fd3c7cc80d751c6ae7166b786a31",
     "contract_source_git_blob": "9187a6b5eeda3306f9c8be4029168c473a49c42e",
     "artifact_generator_git_blob": "4e249f296cc6df1390b6279f52653813fd661311",
     "rust_verifier_rs_git_blob": "5b6d900bbd7f7613778e9a2a3ecc8433b56b78f4",
     "contract_artifact_rs_git_blob": "fe69f0f48b112aca0c7ae948d46cb530ed66e856",
     "ivm_syscalls_rs_git_blob": "71851f4967309cf19672b021a817b60f5b320dce",
-    "kotodama_compiler_rs_git_blob": "50e7cc1978362e19391e1ab6d86d8b9bdca98fe6",
-    "cargo_lock_git_blob": "3263e6b82112ac1e3241ac3db7e44306b4923b52"
+    "kotodama_compiler_rs_git_blob": "019e25b40323caa62b57e6258f86d2071554739b",
+    "cargo_lock_git_blob": "dc00a5c73d9336fa81f77a324659d172f28383e2"
   }
 }

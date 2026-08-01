@@ -8,6 +8,8 @@ namespace Hyperledger.Iroha.Transactions;
 
 public sealed class TransactionBuilder
 {
+    private const ulong DefaultTransactionTimeToLiveMilliseconds = 100_000;
+
     private static readonly HashSet<string> RetiredFeeMetadataKeys =
         new(["fee_sponsor", "gas_asset_id", "gas_limit"], StringComparer.Ordinal);
 
@@ -21,7 +23,7 @@ public sealed class TransactionBuilder
         string authorityAccountId,
         FeePaymentIntent feePayment)
     {
-        ChainId = RequireExactNonBlank(chainId, nameof(chainId));
+        ChainId = RequireCanonicalChainId(chainId, nameof(chainId));
         AuthorityAccountId = TransactionEncodingContext.CanonicalizeAccountId(
             authorityAccountId,
             nameof(authorityAccountId));
@@ -36,7 +38,8 @@ public sealed class TransactionBuilder
 
     public ulong? CreationTimeMilliseconds { get; private set; }
 
-    public ulong? TimeToLiveMilliseconds { get; private set; }
+    public ulong? TimeToLiveMilliseconds { get; private set; } =
+        DefaultTransactionTimeToLiveMilliseconds;
 
     public uint? Nonce { get; private set; }
 
@@ -304,9 +307,11 @@ public sealed class TransactionBuilder
 
     public TransactionBuilder SetTimeToLiveMilliseconds(ulong? timeToLiveMilliseconds)
     {
-        if (timeToLiveMilliseconds == 0)
+        if (timeToLiveMilliseconds is null or 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(timeToLiveMilliseconds), "Transaction TTL must be positive when provided.");
+            throw new ArgumentOutOfRangeException(
+                nameof(timeToLiveMilliseconds),
+                "Transaction TTL must be a positive signature-bound lifetime.");
         }
 
         TimeToLiveMilliseconds = timeToLiveMilliseconds;
@@ -541,5 +546,36 @@ public sealed class TransactionBuilder
         }
 
         return value;
+    }
+
+    private static string RequireCanonicalChainId(string? value, string paramName)
+    {
+        const int maxChainIdBytes = 128;
+        if (string.IsNullOrEmpty(value) || value.Length > maxChainIdBytes)
+        {
+            throw new ArgumentException(
+                $"Chain ID must contain 1..{maxChainIdBytes} ASCII bytes.",
+                paramName);
+        }
+        if (!IsAsciiLetterOrDigit(value[0]) || !IsAsciiLetterOrDigit(value[^1]))
+        {
+            throw new ArgumentException(
+                "Chain ID must begin and end with an ASCII alphanumeric character.",
+                paramName);
+        }
+        if (value.Any(character =>
+                !IsAsciiLetterOrDigit(character)
+                && character is not ('.' or '_' or ':' or '-')))
+        {
+            throw new ArgumentException("Chain ID contains a non-canonical character.", paramName);
+        }
+        return value;
+    }
+
+    private static bool IsAsciiLetterOrDigit(char value)
+    {
+        return value is (>= 'a' and <= 'z')
+            or (>= 'A' and <= 'Z')
+            or (>= '0' and <= '9');
     }
 }

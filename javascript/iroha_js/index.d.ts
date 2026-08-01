@@ -4807,6 +4807,24 @@ export interface ToriiLaneSettlementCommitment {
   native_amx_receipts: ReadonlyArray<Readonly<ToriiNativeAmxReceipt>>;
 }
 
+/**
+ * Internal fixture resealing hooks used by the native-AMX parity suite.
+ *
+ * @internal
+ */
+export const __sumeragiNativeAmxTestHelpers: Readonly<{
+  computeDescriptorHash(
+    descriptor: Readonly<ToriiNativeAmxParticipantLaneBlockDescriptor>,
+  ): string;
+  computeParticipantSettlementHash(
+    settlement: Readonly<ToriiLaneSettlementCommitment>,
+  ): string;
+  computeProposalHash(
+    descriptor: Readonly<ToriiNativeAmxParticipantLaneBlockDescriptor>,
+  ): string;
+  computeValidatorSetHash(validators: ReadonlyArray<string>): string;
+}>;
+
 export interface ToriiLaneFastpqProofMaterial {
   proof_digest: string;
   verified_at_height: ToriiU64 | null;
@@ -5389,13 +5407,6 @@ export function isStatusQueueStalled(
   status: ToriiStatusPayload | Record<string, unknown>,
   stallThresholdMs: number | string | bigint,
 ): boolean;
-
-export const __sumeragiNativeAmxTestHelpers: Readonly<{
-  computeDescriptorHash(value: unknown): string;
-  computeParticipantSettlementHash(value: unknown): string;
-  computeProposalHash(value: unknown): string;
-  computeValidatorSetHash(value: unknown): string;
-}>;
 
 export interface ToriiNetworkTimeNow {
   timestampMs: number;

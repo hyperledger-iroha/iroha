@@ -385,63 +385,20 @@ fn codec_variant_index(variant: &Variant) -> SynResult<Option<u32>> {
     Ok(result)
 }
 
-fn explicit_variant_discriminant(variant: &Variant) -> SynResult<Option<u32>> {
-    let Some((_, expression)) = &variant.discriminant else {
-        return Ok(None);
-    };
-    let syn::Expr::Lit(syn::ExprLit {
-        lit: syn::Lit::Int(literal),
-        ..
-    }) = expression
-    else {
-        return Err(syn::Error::new_spanned(
-            expression,
-            "Norito enum discriminants must be integer literals in 0..=u32::MAX",
-        ));
-    };
-    literal.base10_parse::<u32>().map(Some).map_err(|_| {
-        syn::Error::new_spanned(
-            expression,
-            "Norito enum discriminants must be integer literals in 0..=u32::MAX",
-        )
-    })
-}
-
 /// Resolve the canonical `u32` wire index for every enum variant.
 ///
-/// Rust discriminants participate in the usual implicit increment sequence.
-/// `#[codec(index = ...)]` may make an implicit Rust variant's wire index
-/// explicit, but it must agree when the Rust discriminant is also explicit.
+/// Rust discriminants are deliberately independent from the stable Norito wire
+/// contract. Variants use their declaration ordinal unless an explicit
+/// `#[codec(index = ...)]` overrides it.
 fn enum_variant_indices(data: &DataEnum) -> SynResult<Vec<u32>> {
-    let mut next_rust_discriminant = Some(0_u32);
     let mut assigned = std::collections::BTreeMap::<u32, &syn::Ident>::new();
     let mut indices = Vec::with_capacity(data.variants.len());
 
-    for variant in &data.variants {
-        let explicit = explicit_variant_discriminant(variant)?;
-        let rust_discriminant = match explicit {
-            Some(discriminant) => discriminant,
-            None => next_rust_discriminant.ok_or_else(|| {
-                syn::Error::new_spanned(
-                    &variant.ident,
-                    "implicit Norito enum discriminant exceeds u32::MAX",
-                )
-            })?,
-        };
-        next_rust_discriminant = rust_discriminant.checked_add(1);
-
-        let codec_index = codec_variant_index(variant)?;
-        if let (Some(explicit), Some(codec_index)) = (explicit, codec_index)
-            && explicit != codec_index
-        {
-            return Err(syn::Error::new_spanned(
-                variant,
-                format!(
-                    "`#[codec(index = {codec_index})]` must match explicit Rust discriminant {explicit}"
-                ),
-            ));
-        }
-        let index = codec_index.unwrap_or(rust_discriminant);
+    for (ordinal, variant) in data.variants.iter().enumerate() {
+        let ordinal = u32::try_from(ordinal).map_err(|_| {
+            syn::Error::new_spanned(&variant.ident, "Norito enum ordinal exceeds u32::MAX")
+        })?;
+        let index = codec_variant_index(variant)?.unwrap_or(ordinal);
         if let Some(first) = assigned.insert(index, &variant.ident) {
             return Err(syn::Error::new_spanned(
                 variant,
@@ -466,7 +423,7 @@ mod enum_variant_index_tests {
     }
 
     #[test]
-    fn explicit_discriminants_drive_implicit_successors() {
+    fn rust_discriminants_do_not_change_wire_ordinals() {
         let input = syn::parse_quote! {
             enum Phase {
                 Prepare = 4,
@@ -475,7 +432,7 @@ mod enum_variant_index_tests {
                 Recovery,
             }
         };
-        assert_eq!(indices(input).expect("valid indices"), [4, 5, 9, 10]);
+        assert_eq!(indices(input).expect("valid indices"), [0, 1, 2, 3]);
     }
 
     #[test]
@@ -507,32 +464,24 @@ mod enum_variant_index_tests {
     }
 
     #[test]
-    fn codec_index_must_match_explicit_discriminant() {
+    fn codec_index_is_independent_from_explicit_rust_discriminant() {
         let input = syn::parse_quote! {
             enum Phase {
                 #[codec(index = 2)]
                 Prepare = 1,
             }
         };
-        let error = indices(input).expect_err("mismatched explicit indices must fail");
-        assert_eq!(
-            error.to_string(),
-            "`#[codec(index = 2)]` must match explicit Rust discriminant 1"
-        );
+        assert_eq!(indices(input).expect("valid indices"), [2]);
     }
 
     #[test]
-    fn non_literal_discriminant_is_rejected() {
+    fn non_literal_rust_discriminant_does_not_change_wire_ordinal() {
         let input = syn::parse_quote! {
             enum Phase {
                 Prepare = 1 << 2,
             }
         };
-        let error = indices(input).expect_err("non-literal discriminant must fail");
-        assert_eq!(
-            error.to_string(),
-            "Norito enum discriminants must be integer literals in 0..=u32::MAX"
-        );
+        assert_eq!(indices(input).expect("valid indices"), [0]);
     }
 }
 

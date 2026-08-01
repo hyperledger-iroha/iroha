@@ -24,10 +24,10 @@ SELF_TESTS=(
   --self-test-bad-verification-time-signature
   --self-test-bad-acknowledgement-signature
   --self-test-bad-capability-rust-signature
-  --self-test-missing-swift-symbol
+  --self-test-swapped-swift-proof-protocol-symbols
   --self-test-bad-deallocator-signature
   --self-test-bad-secret-deallocator-signature
-  --self-test-missing-rust-symbol
+  --self-test-missing-candidate-lab-rust-symbol
   --self-test-missing-privacy-header-symbol
   --self-test-bad-privacy-signature
   --self-test-missing-privacy-rust-symbol
@@ -127,6 +127,25 @@ KAGEMUSHA_CANDIDATE_LAB_EXPORTS = {
     "connect_norito_kagemusha_recursive_spend_candidate_lab_apple_proof_phase_v1",
     "connect_norito_kagemusha_recursive_spend_candidate_lab_apple_restart_phase_v1",
 }
+KAGEMUSHA_PROOF_EXPORTS = {
+    "connect_norito_kagemusha_recursive_spend_init_v4",
+    "connect_norito_kagemusha_recursive_spend_append_v4",
+    "connect_norito_kagemusha_recursive_spend_verify_v4",
+    "connect_norito_kagemusha_recursive_spend_redeem_v4",
+}
+if len(KAGEMUSHA_EXPORTS) != 48:
+    raise SystemExit(
+        "production Kagemusha export inventory must contain exactly 48 symbols"
+    )
+if len(KAGEMUSHA_CANDIDATE_LAB_EXPORTS) != 14:
+    raise SystemExit(
+        "candidate-lab Kagemusha export inventory must contain exactly 14 symbols"
+    )
+if KAGEMUSHA_EXPORTS & KAGEMUSHA_CANDIDATE_LAB_EXPORTS:
+    raise SystemExit("production and candidate-lab Kagemusha exports must be disjoint")
+if not KAGEMUSHA_PROOF_EXPORTS < KAGEMUSHA_EXPORTS:
+    raise SystemExit("Kagemusha proof exports must be a strict production-export subset")
+KAGEMUSHA_PROTOCOL_EXPORTS = KAGEMUSHA_EXPORTS - KAGEMUSHA_PROOF_EXPORTS
 FORBIDDEN_FIRST_RELEASE_EXPORTS = {
     "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
     "connect_norito_kagemusha_request_authorization_create_v2",
@@ -488,12 +507,12 @@ swift_proof_exports = swift_array("requiredProofSymbols")
 swift_protocol_exports = swift_array("requiredProtocolSymbols")
 if swift_proof_exports & swift_protocol_exports:
     raise SystemExit("Swift proof and protocol symbol inventories must be disjoint")
-expected_protocol_count = len(KAGEMUSHA_EXPORTS) - 4
-if len(swift_proof_exports) != 4 or len(swift_protocol_exports) != expected_protocol_count:
+if len(swift_proof_exports) != 4 or len(swift_protocol_exports) != 44:
     raise SystemExit(
-        "Swift ABI-21 inventory must contain 4 proof and "
-        f"{expected_protocol_count} protocol symbols"
+        "Swift ABI-21 inventory must contain exactly 4 proof and 44 protocol symbols"
     )
+exact("Swift Kagemusha proof", KAGEMUSHA_PROOF_EXPORTS, swift_proof_exports)
+exact("Swift Kagemusha protocol", KAGEMUSHA_PROTOCOL_EXPORTS, swift_protocol_exports)
 swift_exports = swift_proof_exports | swift_protocol_exports
 forbidden_swift_exports = sorted(swift_exports & FORBIDDEN_FIRST_RELEASE_EXPORTS)
 if forbidden_swift_exports:
@@ -507,7 +526,10 @@ if re.search(r"requiredNativeSymbols\s*=\s*requiredProofSymbols\s*\+\s*requiredP
 
 print(
     "bridge header contract passed: ABI 21, "
-    f"{len(KAGEMUSHA_EXPORTS)} Kagemusha exports, "
+    f"{len(KAGEMUSHA_EXPORTS)} production Kagemusha exports, "
+    f"{len(KAGEMUSHA_CANDIDATE_LAB_EXPORTS)} candidate-lab exports, "
+    f"{len(KAGEMUSHA_PROOF_EXPORTS)} Swift proof exports, "
+    f"{len(KAGEMUSHA_PROTOCOL_EXPORTS)} Swift protocol exports, "
     f"{len(PRIVACY_EXPORTS)} privacy exports, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS exports, and "
     f"{len(DETACHED_EXPORTS)} detached-transaction exports"
@@ -681,10 +703,16 @@ if [[ "${MODE}" == --self-test-* ]]; then
         '(fn connect_norito_kagemusha_recursive_spend_capabilities_v4\s*\(\s*out_capabilities_ptr:\s*)\*mut \*mut c_uchar' \
         '\g<1>*mut c_uchar'
       ;;
-    --self-test-missing-swift-symbol)
+    --self-test-swapped-swift-proof-protocol-symbols)
       replace_once "${tmp_swift}" \
-        '"connect_norito_kagemusha_topup_shield_build_unsigned_v4"' \
-        '"removed_connect_norito_kagemusha_topup_shield_build_unsigned_v4"'
+        '"connect_norito_kagemusha_recursive_spend_init_v4",' \
+        '"__kagemusha_proof_protocol_swap__",'
+      replace_once "${tmp_swift}" \
+        '"connect_norito_kagemusha_topup_shield_build_unsigned_v4",' \
+        '"connect_norito_kagemusha_recursive_spend_init_v4",'
+      replace_once "${tmp_swift}" \
+        '"__kagemusha_proof_protocol_swap__",' \
+        '"connect_norito_kagemusha_topup_shield_build_unsigned_v4",'
       ;;
     --self-test-bad-deallocator-signature)
       replace_once "${tmp_header}" \
@@ -696,10 +724,10 @@ if [[ "${MODE}" == --self-test-* ]]; then
         "void connect_norito_kagemusha_secret_free_buffer(uint8_t* ptr);" \
         "void connect_norito_kagemusha_secret_free_buffer(const uint8_t* ptr);"
       ;;
-    --self-test-missing-rust-symbol)
+    --self-test-missing-candidate-lab-rust-symbol)
       replace_once "${tmp_rust}" \
-        "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4" \
-        "removed_connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4"
+        "connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_uninstall_v4" \
+        "removed_connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_uninstall_v4"
       ;;
     --self-test-missing-privacy-header-symbol)
       replace_once "${tmp_header}" \

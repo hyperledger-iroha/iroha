@@ -210,7 +210,7 @@ use napi::{
 use napi_derive::napi;
 use norito::{
     codec::{DecodeAll, Encode},
-    core::{self as norito_core},
+    core::{self as norito_core, DecodeFromSlice},
     decode_from_bytes,
     json::{self, JsonDeserialize, Map, Value},
 };
@@ -3288,6 +3288,51 @@ impl ValidateNapiValue for JsU64 {
     }
 }
 
+fn js_number_f64_to_u64(raw: f64) -> napi::Result<u64> {
+    if !raw.is_finite() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "expected finite number",
+        ));
+    }
+    if raw < 0.0 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "expected non-negative number",
+        ));
+    }
+    if raw.fract() != 0.0 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "expected integer-valued number",
+        ));
+    }
+    if raw > JS_MAX_SAFE_INTEGER_F64 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "number exceeds JavaScript safe integer range; use bigint",
+        ));
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Ok(raw as u64)
+}
+
+fn js_bigint_parts_to_u64(sign_bit: bool, value: u64, lossless: bool) -> napi::Result<u64> {
+    if sign_bit {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "bigint must be non-negative",
+        ));
+    }
+    if !lossless {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "bigint exceeds u64 range",
+        ));
+    }
+    Ok(value)
+}
+
 impl FromNapiValue for JsU64 {
     #[allow(unsafe_code)]
     unsafe fn from_napi_value(env: sys::napi_env, napi_val: sys::napi_value) -> napi::Result<Self> {
@@ -3298,54 +3343,12 @@ impl FromNapiValue for JsU64 {
                 unsafe {
                     napi::check_status!(sys::napi_get_value_double(env, napi_val, raw_ptr))?;
                 }
-                if !raw.is_finite() {
-                    return Err(napi::Error::new(
-                        napi::Status::InvalidArg,
-                        "expected finite number",
-                    ));
-                }
-                if raw < 0.0 {
-                    return Err(napi::Error::new(
-                        napi::Status::InvalidArg,
-                        "expected non-negative number",
-                    ));
-                }
-                if raw.fract() != 0.0 {
-                    return Err(napi::Error::new(
-                        napi::Status::InvalidArg,
-                        "expected integer-valued number",
-                    ));
-                }
-                if raw > JS_MAX_SAFE_INTEGER_F64 {
-                    return Err(napi::Error::new(
-                        napi::Status::InvalidArg,
-                        "number exceeds JavaScript safe integer range; use bigint",
-                    ));
-                }
-                let coerced = {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    {
-                        raw as u64
-                    }
-                };
-                Ok(Self(coerced))
+                js_number_f64_to_u64(raw).map(Self)
             }
             ValueType::BigInt => {
                 let bigint = unsafe { BigInt::from_napi_value(env, napi_val)? };
                 let (sign_bit, value, lossless) = bigint.get_u64();
-                if sign_bit {
-                    return Err(napi::Error::new(
-                        napi::Status::InvalidArg,
-                        "bigint must be non-negative",
-                    ));
-                }
-                if !lossless {
-                    return Err(napi::Error::new(
-                        napi::Status::InvalidArg,
-                        "bigint exceeds u64 range",
-                    ));
-                }
-                Ok(Self(value))
+                js_bigint_parts_to_u64(sign_bit, value, lossless).map(Self)
             }
             other => Err(napi::Error::new(
                 napi::Status::InvalidArg,
@@ -13643,6 +13646,52 @@ pub fn build_precommit_trigger_action(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn js_u64_number_boundary_accepts_only_exact_safe_non_negative_integers() {
+        for (value, expected) in [
+            (0.0, 0),
+            (-0.0, 0),
+            (1.0, 1),
+            (JS_MAX_SAFE_INTEGER_F64, JS_MAX_SAFE_INTEGER_U64),
+        ] {
+            assert_eq!(
+                js_number_f64_to_u64(value).expect("exact safe integer"),
+                expected
+            );
+        }
+
+        for value in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            -1.0,
+            0.5,
+            JS_MAX_SAFE_INTEGER_F64 + 1.0,
+        ] {
+            let error =
+                js_number_f64_to_u64(value).expect_err("lossy or invalid number must fail closed");
+            assert_eq!(error.status, napi::Status::InvalidArg);
+        }
+    }
+
+    #[test]
+    fn js_u64_bigint_boundary_rejects_negative_and_overflow_parts() {
+        assert_eq!(
+            js_bigint_parts_to_u64(false, u64::MAX, true).expect("lossless u64 bigint"),
+            u64::MAX
+        );
+
+        let negative =
+            js_bigint_parts_to_u64(true, 1, true).expect_err("negative bigint must fail closed");
+        assert_eq!(negative.status, napi::Status::InvalidArg);
+        assert!(negative.reason.contains("non-negative"));
+
+        let overflow = js_bigint_parts_to_u64(false, 0, false)
+            .expect_err("overflowing bigint must fail closed");
+        assert_eq!(overflow.status, napi::Status::InvalidArg);
+        assert!(overflow.reason.contains("exceeds u64"));
+    }
+
+    #[test]
     fn axt_touch_manifest_trims_drops_and_orders_unicode_paths() {
         let bmp_private_use = "\u{e000}/bmp-private-use";
         let astral = "\u{10000}/astral";
@@ -14921,12 +14970,17 @@ seiyaku Privacy {
     #[test]
     fn keypair_bindings_reject_non_cryptographic_seed_lengths() {
         let short = Uint8Array::from(b"human password".to_vec());
-        let err = ed25519_keypair(Some(short)).expect_err("short Ed25519 seed must fail");
+        let err = match ed25519_keypair(Some(short)) {
+            Ok(_) => panic!("short Ed25519 seed must fail"),
+            Err(err) => err,
+        };
         assert!(err.reason.contains("exactly 32 bytes"));
 
         let short = Uint8Array::from(b"human password".to_vec());
-        let err = crypto_keypair(Some("secp256k1".to_owned()), Some(short))
-            .expect_err("short generic seed must fail");
+        let err = match crypto_keypair(Some("secp256k1".to_owned()), Some(short)) {
+            Ok(_) => panic!("short generic seed must fail"),
+            Err(err) => err,
+        };
         assert!(err.reason.contains("exactly 32 bytes"));
     }
 

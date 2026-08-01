@@ -22,6 +22,7 @@ paths = {
     "native_builder": root / "scripts/build_kagemusha_candidate_android_native.sh",
     "validator": root / "scripts/check_android_device_lab_slot.py",
     "compile_check": root / "ci/check_kagemusha_candidate_android_lab_compile.sh",
+    "cargo_lock_gate": root / "ci/check_kagemusha_reviewed_cargo_lock.sh",
     "source_seal": root / "scripts/kagemusha_source_tree_seal.py",
     "packaging": root / "scripts/check_mobile_sdk_artifacts.sh",
     "rust": root / "crates/connect_norito_bridge/src/lib.rs",
@@ -29,6 +30,7 @@ paths = {
     "core_cargo": root / "crates/iroha_core/Cargo.toml",
     "header": root / "crates/connect_norito_bridge/include/connect_norito_bridge.h",
     "release_workflow": root / ".github/workflows/mobile_sdk_artifacts.yml",
+    "pr_workflow": root / ".github/workflows/pr_kagemusha_payload_bench.yml",
 }
 
 errors = []
@@ -167,7 +169,10 @@ continuity_signatures = {
         "ByteArray",
     ),
     "nativeBuildRedeemRequestV4": (
-        ["ByteArray"] * 5 + ["Int", "ByteArray", "Int"] + ["ByteArray"] * 4 + ["Long"],
+        ["ByteArray"] * 5
+        + ["Int", "ByteArray", "Int"]
+        + ["ByteArray"] * 4
+        + ["Long"],
         "ByteArray",
     ),
 }
@@ -436,6 +441,40 @@ if "build_kagemusha_candidate_android_native.sh" not in runner:
 if "norito_bridge_source_seal.py" in builder:
     errors.append("candidate Android build must not use the Apple-only bridge-closure source seal")
 
+cargo_lock_gate = text["cargo_lock_gate"]
+for needle in (
+    "fixtures/kagemusha/cargo-lock.reviewed.v1",
+    "EXPECTED_BYTES=315548",
+    'EXPECTED_SHA256="ff773ee12a07de45d0e9df9ed29620142d884f365adb5e83d372e15dbedcd409"',
+    "must be a singly linked regular file",
+    "changed during verification",
+    "os.link(temporary, destination, follow_symlinks=False)",
+    "artifact/root missing",
+    "copy-step removal",
+    "atomic publish collision",
+):
+    if needle not in cargo_lock_gate:
+        errors.append(f"reviewed Cargo.lock gate is missing {needle}")
+
+pr_workflow = text["pr_workflow"]
+if pr_workflow.count(
+    "ci/check_kagemusha_reviewed_cargo_lock.sh --materialize"
+) != 4:
+    errors.append(
+        "Kagemusha workflow must materialize the exact reviewed Cargo.lock "
+        "in all four Cargo-using jobs"
+    )
+if (
+    pr_workflow.count("cargo test --locked -p ") != 22
+    or "ci/check_kagemusha_reviewed_cargo_lock.sh --self-test" not in pr_workflow
+    or "cargo fetch --locked" not in pr_workflow
+    or '"fixtures/kagemusha/peer_transport_measurements_v1.json"' not in pr_workflow
+):
+    errors.append(
+        "Kagemusha workflow must use only the reviewed lock and run its "
+        "negative controls"
+    )
+
 validator = text["validator"]
 for needle in (
     "KAGEMUSHA_ANDROID_PRODUCTION_RAW_BUILD_COMMAND",
@@ -461,29 +500,45 @@ for needle in (
 
 compile_check = text["compile_check"]
 for needle in (
+    "KAGEMUSHA_CANDIDATE_COMPILE_WARM_GRADLE_CACHE",
+    "warm-gradle-artifacts",
+    "final-gradle-artifacts",
+    "MOBILE_SDK_ANDROID_ARTIFACT_DIR",
+    "-Pkotlin.compiler.execution.strategy=in-process",
+    'rm -rf -- "$EVIDENCE_ROOT/gradle" "$EVIDENCE_ROOT/warm-gradle-project-cache"',
     "-PkagemushaCandidateCompileOnly=true",
     ":kagemusha-candidate-evidence-lab:compileDebugKotlin",
     ":kagemusha-candidate-evidence-lab:compileDebugAndroidTestKotlin",
     "--offline",
     "--max-workers=2",
+    "--project-cache-dir",
     "GRADLE_RO_DEP_CACHE",
     "compile-gradle-read-only-cache",
     "chmod -R u+w",
 ):
     if needle not in compile_check:
         errors.append(f"actual AGP/Kotlin compile-only check is missing {needle}")
+if 'KAGEMUSHA_CANDIDATE_COMPILE_WARM_GRADLE_CACHE: "1"' not in pr_workflow:
+    errors.append(
+        "Kagemusha PR workflow must explicitly warm the disposable Gradle dependency cache"
+    )
 
 source_seal = text["source_seal"]
 for needle in (
-    "iroha.kagemusha.full-source-tree-sha256.v3",
+    "iroha.kagemusha.full-source-tree-sha256.v4",
     '"status",',
     '"--porcelain=v1",',
     '"-z",',
     '"--untracked-files=all",',
     "ALLOWED_INDEX_MODES",
     "ALLOWED_UNTRACKED_MODES",
+    "TRACKED_DIFF_ARGUMENTS",
     "head_before = _head(root)",
     "_index_entries(root)",
+    '"--reviewed-source-closure"',
+    '"--reviewed-source-closure-sha256"',
+    "reviewed source closure descriptor digest differs from its pin",
+    "_canonical_json_bytes(value) != payload",
 ):
     if needle not in source_seal:
         errors.append(f"canonical Kagemusha full-source-tree seal is missing {needle}")

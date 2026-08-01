@@ -33,6 +33,21 @@ internal sealed class OfflineNoritoWriter
 
     public void WriteLength(ulong value) => WriteUInt64LittleEndian(value);
 
+    public void WriteCompactLength(ulong value)
+    {
+        do
+        {
+            var byteValue = (byte)(value & 0x7f);
+            value >>= 7;
+            if (value != 0)
+            {
+                byteValue |= 0x80;
+            }
+            WriteByte(byteValue);
+        }
+        while (value != 0);
+    }
+
     public void WriteBytes(ReadOnlySpan<byte> bytes)
     {
         foreach (var value in bytes)

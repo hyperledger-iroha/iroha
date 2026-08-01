@@ -51,7 +51,9 @@ The receiver signs the unchanged `KagemushaRecipientPaymentRequestV2` leaf.
 V4 append binds that request to one or two ordered V4 parents, recipient and
 optional change outputs, output membership, exact conservation, operation id,
 and the release-bound recursive verifier pair. The V4 peer envelope contains
-only the recipient bundle and its secret-free membership witness.
+the recipient bundle, its secret-free membership witness, and the complete
+finalized top-up provenance needed to authenticate every origin without a
+network fetch.
 
 The receiver verifies the V4 proof pair, signed recipient leaf, finality
 origins, artifact generation, chain, asset, scale, amount, commitment, hop
@@ -59,6 +61,17 @@ limit, and branch disjointness before persisting the branch. The unchanged V2
 acknowledgement leaf is signed only after durable receipt. Duplicate delivery
 returns the same bytes, and the sender consumes reserved parents only after the
 acknowledgement verifies.
+
+Canonical QR/NFC sizing evidence is generated from real ABI-21/V4 Norito
+archives by `kagemusha_peer_transport_fixtures`. The checked-in
+`fixtures/kagemusha/peer_transport_measurements_v1.json` pins the generator and
+factory digest plus the full bytes, byte count, and SHA-256 of the retained V2
+request/acknowledgement leaves and five V4 payment profiles. A serializer or
+factory change must regenerate and explicitly review every archive pin. The
+tracked `fixtures/kagemusha/cargo-lock.reviewed.v1` additionally pins the
+complete Cargo dependency resolution; the ignored root lock must be its exact
+regular-file copy. The release gate compares a live regeneration and runs
+destructive archive, source, and dependency-lock mutations.
 
 ## V4 redemption
 
@@ -131,6 +144,7 @@ release's issuance window closes.
 The complete first-release route set is:
 
 - `GET /v1/offline/readiness`
+- `POST /v1/offline/receiver-lineage`
 - `POST /v1/offline/top-up`
 - `POST /v1/offline/redeem`
 - `GET /v1/offline/operations/{operation_id}`
@@ -157,6 +171,13 @@ lowercase 64-hex `Idempotency-Key` equals the signed operation id. Identical
 retries return the same operation; reuse with different bytes conflicts. The
 wallet retains pending state until the operation-status route reports final
 chain finality.
+
+The signed operation id is a global namespace across authorities and operation kinds.
+The nonce, payload-digest, and exact-request replay
+markers remain authority-scoped. Consequently, a cross-authority operation-id
+collision fails before mutation, while unrelated authority-scoped marker
+values do not collide. A rejected replay stages no marker and rolls back all
+balances, confidential-tree state, contract state, and receipts.
 
 ## Mobile production acceptance bundle
 

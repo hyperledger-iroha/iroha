@@ -3,6 +3,7 @@ name: Kotodama performance gate
 on:
   pull_request:
     paths:
+      - ".gitattributes"
       - ".github/workflows/kotodama_perf.yml"
       - "crates/ivm/benches/bench_kotodama.rs"
       - "crates/ivm/Cargo.toml"
@@ -15,6 +16,8 @@ on:
       - "crates/norito_derive/**"
       - "crates/kotodama_lang/Cargo.toml"
       - "crates/kotodama_lang/src/**"
+      - "crates/iroha_p2p/Cargo.toml"
+      - "crates/iroha_p2p/src/**"
       - "crates/iroha_core/src/**"
       - "crates/iroha_core/benches/kotodama_runtime_cache.rs"
       - "crates/iroha_core/benches/queries.rs"
@@ -25,7 +28,9 @@ on:
       - "crates/irohad/src/soracloud_runtime.rs"
       - "scripts/check_kotodama_perf.py"
       - "scripts/check_kotodama_docs.py"
+      - "scripts/check_no_legacy_codec.sh"
       - "scripts/regenerate_kotodama_goldens.py"
+      - "scripts/tests/check_no_legacy_codec_test.py"
       - "scripts/ivm_artifacts.tsv"
       - "scripts/kotodama_v1_size_baseline.json"
       - "pytests/scripts/check_kotodama_perf_test.py"
@@ -36,6 +41,8 @@ on:
       - "demo/*.manifest.json"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "ci/check_kagemusha_reviewed_cargo_lock.sh"
+      - "fixtures/kagemusha/cargo-lock.reviewed.v1"
   workflow_dispatch:
 
 permissions:
@@ -51,6 +58,13 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - name: Install retired-codec guard test dependencies
+        run: python3 -m pip install --disable-pip-version-check pytest==8.4.2
+      - name: Unit-test the retired-codec guard
+        run: python3 -m pytest -q scripts/tests/check_no_legacy_codec_test.py
       - name: Reject retired codecs
         run: bash scripts/check_no_legacy_codec.sh
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
@@ -60,6 +74,10 @@ jobs:
         with:
           cache-on-failure: "true"
           shared-key: kotodama-js-native
+      - name: Materialize the exact reviewed Cargo dependency lock
+        run: ci/check_kagemusha_reviewed_cargo_lock.sh --materialize
+      - name: Prefetch the locked Rust dependency graph for the offline native build
+        run: cargo fetch --locked
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
@@ -68,7 +86,12 @@ jobs:
       - name: Install JavaScript SDK dependencies
         run: npm ci --ignore-scripts --prefix javascript/iroha_js
       - name: Build the Rust native binding and run the complete JavaScript suite
-        run: npm test --prefix javascript/iroha_js
+        # setup-rust-toolchain injects `RUSTFLAGS=-D warnings`. The JavaScript
+        # host intentionally enables iroha-core's test surface, whose
+        # feature-reduced library graph contains test-only dead code. Keep the
+        # release build profile exact, but do not turn those upstream lints
+        # into compilation errors for this SDK integration suite.
+        run: env -u CARGO_PROFILE_DEV_DEBUG -u RUSTFLAGS npm test --prefix javascript/iroha_js
 
   representative-regression:
     # Benchmark the base and candidate on the same controlled Iroha runner.

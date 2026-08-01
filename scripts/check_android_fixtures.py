@@ -121,7 +121,7 @@ def normalize_authority(value: str) -> str:
 
 @dataclass(frozen=True)
 class PayloadFixture:
-    encoded: str
+    payload_base64: str
     payload_hash: str
     signed_base64: str
     signed_hash: str
@@ -143,7 +143,7 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
 
     mapping: Dict[str, PayloadFixture] = {}
     seen_names: Set[str] = set()
-    seen_encoded_payloads: Set[bytes] = set()
+    seen_payloads: Set[bytes] = set()
     seen_payload_hashes: Set[str] = set()
     seen_signed_payloads: Set[bytes] = set()
     seen_signed_hashes: Set[str] = set()
@@ -151,30 +151,27 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
         if not isinstance(entry, dict):
             raise ValueError(f"fixture entry in {path} is not an object")
         name = entry.get("name")
-        encoded = entry.get("encoded")
+        payload_base64 = entry.get("payload_base64")
         if not isinstance(name, str):
             raise ValueError(f"fixture entry in {path} missing name string: {entry!r}")
         if name in seen_names:
             raise ValueError(f"duplicate fixture name {name!r} in {path}")
         seen_names.add(name)
-        if isinstance(encoded, str):
-            encoded_bytes = decode_base64(encoded, f"{name} encoded payload")
-            if encoded_bytes in seen_encoded_payloads:
+        if isinstance(payload_base64, str):
+            payload_bytes = decode_base64(payload_base64, f"{name} payload")
+            if payload_bytes in seen_payloads:
                 raise ValueError(f"duplicate fixture payload bytes for {name!r} in {path}")
-            seen_encoded_payloads.add(encoded_bytes)
-            payload_base64 = entry.get("payload_base64")
+            seen_payloads.add(payload_bytes)
             payload_hash = entry.get("payload_hash")
             signed_base64 = entry.get("signed_base64")
             signed_hash = entry.get("signed_hash")
-            if payload_base64 != encoded:
-                raise ValueError(f"fixture entry {name} in {path} payload_base64 differs from encoded")
             if not isinstance(payload_hash, str):
                 raise ValueError(f"fixture entry {name} in {path} missing payload_hash string")
             if not isinstance(signed_base64, str):
                 raise ValueError(f"fixture entry {name} in {path} missing signed_base64 string")
             if not isinstance(signed_hash, str):
                 raise ValueError(f"fixture entry {name} in {path} missing signed_hash string")
-            if payload_hash != iroha_hash(encoded_bytes):
+            if payload_hash != iroha_hash(payload_bytes):
                 raise ValueError(f"fixture entry {name} in {path} payload_hash mismatch")
             signed_bytes = decode_base64(signed_base64, f"{name} signed payload")
             if signed_hash != signed_transaction_entrypoint_hash(signed_bytes):
@@ -220,7 +217,7 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
             if not is_valid_transaction_nonce(nonce):
                 raise ValueError(f"fixture entry {name} in {path} has invalid nonce")
             mapping[name] = PayloadFixture(
-                encoded=encoded,
+                payload_base64=payload_base64,
                 payload_hash=payload_hash,
                 signed_base64=signed_base64,
                 signed_hash=signed_hash,
@@ -235,7 +232,7 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
         # Skip them because they do not participate in the canonical manifest.
         if "payload" in entry:
             continue
-        raise ValueError(f"fixture entry in {path} missing encoded string: {entry!r}")
+        raise ValueError(f"fixture entry in {path} missing payload_base64 string: {entry!r}")
     return mapping
 
 
@@ -356,7 +353,7 @@ def compare(
         if payload_entry is None:
             errors.append(f"fixtures JSON missing entry for {name}")
         else:
-            if payload_entry.encoded != payload_base64:
+            if payload_entry.payload_base64 != payload_base64:
                 errors.append(
                     f"payload JSON for {name} does not match manifest payload_base64"
                 )

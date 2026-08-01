@@ -41,6 +41,8 @@ public sealed class SignedTransactionEnvelope
                 nameof(noritoBytes));
         }
 
+        ValidateSignedTransactionFields(this.signedTransactionBytes, this.payloadBytes);
+
         var expectedTransactionHash = ComputeTransactionHash(this.payloadBytes);
         if (!this.transactionHash.AsSpan().SequenceEqual(expectedTransactionHash))
         {
@@ -48,8 +50,6 @@ public sealed class SignedTransactionEnvelope
                 "Transaction hash must match the signed transaction intent.",
                 nameof(transactionHash));
         }
-
-        ValidateSignedTransactionFields(this.signedTransactionBytes, this.payloadBytes);
     }
 
     public byte[] NoritoBytes => noritoBytes.ToArray();

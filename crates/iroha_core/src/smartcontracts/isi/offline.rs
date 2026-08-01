@@ -8025,6 +8025,7 @@ pub mod isi {
     #[cfg(test)]
     mod tests {
         use core::num::NonZeroU64;
+        use std::collections::{BTreeMap, BTreeSet};
 
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::{
@@ -8038,8 +8039,10 @@ pub mod isi {
                 error::{AssetTransferAdmissionError, InstructionExecutionError},
             },
             offline::{
+                KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
                 KagemushaAndroidKeyMintHardwareAssertionV1, KagemushaDevicePublicKeyV2,
                 KagemushaDeviceSignatureV2, KagemushaIosAppAttestHardwareAssertionV1,
+                KagemushaRecursiveSpendArtifactBindingV4,
             },
             permission::Permission,
             role::{Role, RoleId},
@@ -8216,6 +8219,247 @@ pub mod isi {
                     "unexpected collision rejection for {expected_label}: {error}"
                 );
             }
+        }
+
+        #[test]
+        fn kagemusha_v4_operation_marker_is_global_while_other_markers_are_authority_scoped() {
+            let asset = offline_test_asset(&ALICE_ID).definition().clone();
+            let first_key = online_assertion_signing_key(0x31);
+            let second_key = online_assertion_signing_key(0x32);
+            let first_registration = android_online_registration(
+                &ALICE_ID,
+                &asset,
+                &first_key,
+                POLICY_TEST_TIME_MS + 60_000,
+            );
+            let second_registration = android_online_registration(
+                &BOB_ID,
+                &asset,
+                &second_key,
+                POLICY_TEST_TIME_MS + 60_000,
+            );
+            let first = android_online_authorization(&first_registration, &first_key);
+            let mut second = android_online_authorization(&second_registration, &second_key);
+            second.operation_id = first.operation_id;
+            second.device_id = "android-online-device-b".to_owned();
+            second.nonce = [0x72; 32];
+            second.payload_digest = [0x73; 32];
+
+            let [first_operation, first_nonce, first_payload, first_request] =
+                kagemusha_v4_authorization_markers(&first).expect("first marker inventory");
+            let [
+                second_operation,
+                second_nonce,
+                second_payload,
+                second_request,
+            ] = kagemusha_v4_authorization_markers(&second).expect("second marker inventory");
+
+            assert_eq!(
+                first_operation, second_operation,
+                "operation replay identity must be global across authorities"
+            );
+            assert_ne!(
+                first_nonce, second_nonce,
+                "nonce replay identity must remain authority-scoped"
+            );
+            assert_ne!(
+                first_payload, second_payload,
+                "payload replay identity must remain authority-scoped"
+            );
+            assert_ne!(
+                first_request, second_request,
+                "exact-request replay identity must remain authority-scoped"
+            );
+        }
+
+        #[test]
+        fn kagemusha_v4_cross_authority_operation_conflict_preserves_all_state() {
+            let state = offline_test_state();
+            let mut block = state.block(offline_test_header());
+            let mut state_transaction = block.transaction();
+            let asset = offline_test_asset(&ALICE_ID).definition().clone();
+            let first_key = online_assertion_signing_key(0x33);
+            let second_key = online_assertion_signing_key(0x34);
+            let first_registration = android_online_registration(
+                &ALICE_ID,
+                &asset,
+                &first_key,
+                POLICY_TEST_TIME_MS + 60_000,
+            );
+            let second_registration = android_online_registration(
+                &BOB_ID,
+                &asset,
+                &second_key,
+                POLICY_TEST_TIME_MS + 60_000,
+            );
+            let first = android_online_authorization(&first_registration, &first_key);
+            let mut second = android_online_authorization(&second_registration, &second_key);
+            second.operation_id = first.operation_id;
+            second.device_id = "cross-authority-device-b".to_owned();
+            second.nonce = [0x82; 32];
+            second.payload_digest = [0x83; 32];
+
+            let first_markers =
+                kagemusha_v4_authorization_markers(&first).expect("first marker inventory");
+            let second_markers =
+                kagemusha_v4_authorization_markers(&second).expect("second marker inventory");
+            assert_eq!(first_markers[0], second_markers[0]);
+            assert!(
+                first_markers[1..]
+                    .iter()
+                    .zip(second_markers[1..].iter())
+                    .all(|(first, second)| first != second),
+                "the global operation marker must be the only cross-authority collision"
+            );
+            commit_kagemusha_v4_replay_markers(first_markers, &mut state_transaction);
+            let contract_sentinel: Name = "kagemusha_v4_replay_rollback_sentinel"
+                .parse()
+                .expect("contract-state sentinel key");
+            let contract_payload = b"kagemusha-v4-replay-rollback".to_vec();
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(contract_sentinel.clone(), contract_payload.clone());
+
+            let replay_before = state_transaction
+                .world
+                .kagemusha_replay_keys
+                .iter()
+                .map(|(key, ())| *key)
+                .collect::<BTreeSet<_>>();
+            let contract_before = state_transaction
+                .world
+                .smart_contract_state
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<BTreeMap<_, _>>();
+            let assets_before = state_transaction.world.assets.iter().count();
+            let definitions_before = state_transaction.world.asset_definitions.iter().count();
+            let zk_assets_before = state_transaction.world.zk_assets.iter().count();
+
+            let error = match kagemusha_v4_replay_status(&second, &state_transaction) {
+                Err(error) => error,
+                Ok(_) => panic!("a second authority must not claim a committed operation id"),
+            };
+            assert!(
+                error.to_string().contains("authorization_replay"),
+                "unexpected replay error: {error}"
+            );
+
+            let replay_after = state_transaction
+                .world
+                .kagemusha_replay_keys
+                .iter()
+                .map(|(key, ())| *key)
+                .collect::<BTreeSet<_>>();
+            let contract_after = state_transaction
+                .world
+                .smart_contract_state
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<BTreeMap<_, _>>();
+            assert_eq!(replay_after, replay_before);
+            assert_eq!(contract_after, contract_before);
+            assert_eq!(
+                contract_after.get(&contract_sentinel),
+                Some(&contract_payload)
+            );
+            assert_eq!(state_transaction.world.assets.iter().count(), assets_before);
+            assert_eq!(
+                state_transaction.world.asset_definitions.iter().count(),
+                definitions_before
+            );
+            assert_eq!(
+                state_transaction.world.zk_assets.iter().count(),
+                zk_assets_before
+            );
+            assert!(
+                second_markers[1..]
+                    .iter()
+                    .all(|marker| !replay_after.contains(marker)),
+                "rejected authority-scoped markers must never be staged"
+            );
+        }
+
+        #[test]
+        fn kagemusha_v4_unavailable_release_fails_closed_without_state_mutation() {
+            let state = offline_test_state();
+            let mut block = state.block(offline_test_header());
+            let mut state_transaction = block.transaction();
+            let contract_sentinel: Name = "kagemusha_v4_release_fail_closed_sentinel"
+                .parse()
+                .expect("contract-state sentinel key");
+            let contract_payload = b"kagemusha-v4-release-fail-closed".to_vec();
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(contract_sentinel.clone(), contract_payload.clone());
+            let replay_before = state_transaction
+                .world
+                .kagemusha_replay_keys
+                .iter()
+                .map(|(key, ())| *key)
+                .collect::<BTreeSet<_>>();
+            let contract_before = state_transaction
+                .world
+                .smart_contract_state
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<BTreeMap<_, _>>();
+            let assets_before = state_transaction.world.assets.iter().count();
+            let definitions_before = state_transaction.world.asset_definitions.iter().count();
+            let zk_assets_before = state_transaction.world.zk_assets.iter().count();
+            let binding = KagemushaRecursiveSpendArtifactBindingV4 {
+                version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+                generation: "missing-release-v4".to_owned(),
+                manifest_sha256: [0xA5; 32],
+            };
+            let chain_id = state_transaction.chain_id().clone();
+            let asset = offline_test_asset(&ALICE_ID).definition().clone();
+
+            let error = match resolve_kagemusha_v4_transaction_release(
+                &binding,
+                state_transaction.block_height(),
+                &chain_id,
+                &asset,
+                2,
+                &state_transaction,
+            ) {
+                Err(error) => error,
+                Ok(_) => panic!("an unavailable ABI-21 release must fail closed"),
+            };
+            assert!(
+                error.to_string().contains("recursive_release_mismatch"),
+                "unexpected unavailable-release error: {error}"
+            );
+
+            let replay_after = state_transaction
+                .world
+                .kagemusha_replay_keys
+                .iter()
+                .map(|(key, ())| *key)
+                .collect::<BTreeSet<_>>();
+            let contract_after = state_transaction
+                .world
+                .smart_contract_state
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<BTreeMap<_, _>>();
+            assert_eq!(replay_after, replay_before);
+            assert_eq!(contract_after, contract_before);
+            assert_eq!(
+                contract_after.get(&contract_sentinel),
+                Some(&contract_payload)
+            );
+            assert_eq!(state_transaction.world.assets.iter().count(), assets_before);
+            assert_eq!(
+                state_transaction.world.asset_definitions.iter().count(),
+                definitions_before
+            );
+            assert_eq!(
+                state_transaction.world.zk_assets.iter().count(),
+                zk_assets_before
+            );
         }
 
         #[test]

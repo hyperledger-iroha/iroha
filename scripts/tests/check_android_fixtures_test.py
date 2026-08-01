@@ -31,14 +31,13 @@ def _write_payloads(path: Path, entries: list[dict]) -> Path:
     enriched: list[dict] = []
     for original in entries:
         entry = dict(original)
-        encoded = entry.get("encoded")
+        payload_base64 = entry.get("payload_base64")
         name = entry.get("name")
-        if isinstance(encoded, str) and isinstance(name, str):
-            payload_bytes = base64.b64decode(encoded, validate=True)
+        if isinstance(payload_base64, str) and isinstance(name, str):
+            payload_bytes = base64.b64decode(payload_base64, validate=True)
             signed_bytes = _signed_transaction(
                 payload_bytes, f"{name}-signed".encode()
             )
-            entry.setdefault("payload_base64", encoded)
             entry.setdefault("payload_hash", MODULE.iroha_hash(payload_bytes))
             entry.setdefault("signed_base64", base64.b64encode(signed_bytes).decode())
             entry.setdefault(
@@ -121,7 +120,7 @@ def test_payload_loader_rejects_nonce_outside_nonzero_u32_range(
 ) -> None:
     entry = {
         "name": "invalid-nonce",
-        "encoded": base64.b64encode(b"payload").decode(),
+        "payload_base64": base64.b64encode(b"payload").decode(),
         "chain": "00000002",
         "authority": "sorau-example",
         "creation_time_ms": 1,
@@ -144,7 +143,7 @@ def test_payload_loader_rejects_non_positive_integer_ttl(
 ) -> None:
     entry = {
         "name": "invalid-ttl",
-        "encoded": base64.b64encode(b"payload").decode(),
+        "payload_base64": base64.b64encode(b"payload").decode(),
         "chain": "00000002",
         "authority": "sorau-example",
         "creation_time_ms": 1,
@@ -160,7 +159,7 @@ def test_payload_loader_rejects_non_positive_integer_ttl(
 def test_payload_loader_rejects_missing_ttl(tmp_path: Path) -> None:
     entry = {
         "name": "missing-ttl",
-        "encoded": base64.b64encode(b"payload").decode(),
+        "payload_base64": base64.b64encode(b"payload").decode(),
         "chain": "00000002",
         "authority": "sorau-example",
         "creation_time_ms": 1,
@@ -175,7 +174,7 @@ def test_payload_loader_rejects_missing_ttl(tmp_path: Path) -> None:
 def test_payload_loader_rejects_duplicate_fixture_names(tmp_path: Path) -> None:
     entry = {
         "name": "duplicate",
-        "encoded": base64.b64encode(b"payload").decode(),
+        "payload_base64": base64.b64encode(b"payload").decode(),
         "chain": "00000002",
         "authority": "sorau-example",
         "creation_time_ms": 1,
@@ -191,7 +190,7 @@ def test_payload_loader_rejects_duplicate_fixture_names(tmp_path: Path) -> None:
 def test_payload_loader_rejects_renamed_cloned_payloads(tmp_path: Path) -> None:
     first = {
         "name": "first",
-        "encoded": base64.b64encode(b"payload").decode(),
+        "payload_base64": base64.b64encode(b"payload").decode(),
         "chain": "00000002",
         "authority": "sorau-example",
         "creation_time_ms": 1,
@@ -333,7 +332,7 @@ def test_summary_includes_artifact_metadata(tmp_path: Path) -> None:
         [
             {
                 "name": "alpha",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": creation_time_ms,
                 "chain": chain,
                 "authority": authority,
@@ -422,7 +421,7 @@ def test_errors_propagate_into_summary(tmp_path: Path) -> None:
         [
             {
                 "name": "bravo",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": creation_time_ms,
                 "chain": chain,
                 "authority": authority,
@@ -484,7 +483,7 @@ def test_creation_time_mismatch_triggers_error(tmp_path: Path) -> None:
         [
             {
                 "name": "charlie",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_333,
                 "chain": chain,
                 "authority": authority,
@@ -537,7 +536,7 @@ def test_chain_mismatch_triggers_error(tmp_path: Path) -> None:
         [
             {
                 "name": "delta",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_444,
                 "chain": "00000004",
                 "authority": "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
@@ -590,7 +589,7 @@ def test_authority_mismatch_triggers_error(tmp_path: Path) -> None:
         [
             {
                 "name": "golf",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_777,
                 "chain": "00000008",
                 "authority": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
@@ -643,7 +642,7 @@ def test_time_to_live_mismatch_triggers_error(tmp_path: Path) -> None:
         [
             {
                 "name": "hotel",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_888,
                 "chain": "00000009",
                 "authority": "sorauﾛ1NcﾐuﾛﾀKﾓhﾈgｽXｦDTﾏｴtﾔﾐ8PJPfSﾕPuﾃ884ｳﾇヰ4ﾇJKTL36",
@@ -696,7 +695,7 @@ def test_nonce_mismatch_triggers_error(tmp_path: Path) -> None:
         [
             {
                 "name": "india",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_999,
                 "chain": "00000010",
                 "authority": "sorauﾛ1NfｺｷﾘcﾙｦEﾑgsKti4Zﾘ6HKｳZCﾅｸｼ16fvSｲymｶｻﾘﾎ29JNWE",
@@ -749,7 +748,7 @@ def test_missing_nonce_field_fails(tmp_path: Path) -> None:
         [
             {
                 "name": "echo",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_555,
                 "chain": "00000006",
                 "authority": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
@@ -801,7 +800,7 @@ def test_missing_time_to_live_field_fails(tmp_path: Path) -> None:
         [
             {
                 "name": "foxtrot",
-                "encoded": base64.b64encode(payload_bytes).decode(),
+                "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_666,
                 "chain": "00000007",
                 "authority": "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",

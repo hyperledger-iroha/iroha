@@ -10,7 +10,7 @@ SOURCE_SEAL="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
 ABI21_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi21_artifact.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
 PINNED_TOOLCHAIN="1.93.1"
-REQUIRED_NATIVE_ASSERTION="The release JNI gate requires a freshly built connect_norito_bridge ABI 21 library"
+REQUIRED_NATIVE_ASSERTION="A freshly built connect_norito_bridge ABI 21 artifact-streaming library is required"
 
 fail() {
   printf '[kagemusha-jvm-native] ERROR: %s\n' "$*" >&2
@@ -514,12 +514,17 @@ printf '[kagemusha-jvm-native] building fresh host ABI-21 bridge for %s\n' "$HOS
 source_seal verify --root "$ROOT_DIR" --platform android --snapshot "$SOURCE_SNAPSHOT"
 
 case "$HOST_TRIPLE" in
-  *-apple-*) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.dylib" ;;
-  *-windows-*) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/connect_norito_bridge.dll" ;;
-  *) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.so" ;;
+  *-apple-*) CARGO_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.dylib" ;;
+  *-windows-*) CARGO_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/connect_norito_bridge.dll" ;;
+  *) CARGO_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.so" ;;
 esac
-[[ -f "$NATIVE_LIBRARY" && ! -L "$NATIVE_LIBRARY" ]] \
-  || fail "fresh host bridge library is missing: $NATIVE_LIBRARY"
+[[ -f "$CARGO_NATIVE_LIBRARY" && ! -L "$CARGO_NATIVE_LIBRARY" ]] \
+  || fail "fresh host bridge library is missing: $CARGO_NATIVE_LIBRARY"
+NATIVE_LIBRARY_DIR="$BUILD_SESSION/staged-native"
+NATIVE_LIBRARY="$NATIVE_LIBRARY_DIR/${CARGO_NATIVE_LIBRARY##*/}"
+"$PYTHON_BINARY" -I -S "$ABI21_ARTIFACT_CHECKER" stage \
+  --artifact "$CARGO_NATIVE_LIBRARY" \
+  --destination "$NATIVE_LIBRARY"
 NATIVE_LIBRARY_DIR="${NATIVE_LIBRARY%/*}"
 NATIVE_EVIDENCE="$BUILD_SESSION/c-jni-native-abi21.json"
 "$PYTHON_BINARY" -I -S "$ABI21_ARTIFACT_CHECKER" record \

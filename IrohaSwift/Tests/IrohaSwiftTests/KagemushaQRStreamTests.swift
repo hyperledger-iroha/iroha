@@ -2,20 +2,41 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaQRStreamTests: XCTestCase {
-    func testMeasuredReleaseArchivesStayWithinTheStandardQRFrameBudget() {
-        let samples: [(String, Int, Int)] = [
-            ("receive-offer", 12_363, 63),
-            ("acknowledgement", 471, 4),
-            ("payment-v4-peer-hop-1", 11_887, 60),
+    func testMeasuredReleaseArchivesStayWithinTheStandardQRFrameBudget() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("../../../fixtures/kagemusha/peer_transport_measurements_v1.json")
+            .standardizedFileURL
+        let fixture = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL))
+                as? [String: Any]
+        )
+        let samples = try XCTUnwrap(fixture["records"] as? [[String: Any]])
+        let expectedFrames = [
+            "request": 5,
+            "acknowledgement": 4,
+            "payment-depth-1-hop-1": 80,
+            "payment-depth-8-hop-8": 80,
+            "payment-depth-16-hop-8": 81,
+            "payment-depth-32-hop-8": 83,
+            "payment-depth-64-hop-8": 86,
         ]
         let options = KagemushaQRStreamOptions.standard
-        for (label, archiveBytes, expectedFrames) in samples {
-            let dataFrames = (archiveBytes + options.chunkSize - 1) / options.chunkSize
+        for sample in samples {
+            let label = try XCTUnwrap(sample["label"] as? String)
+            let archiveHex = try XCTUnwrap(sample["archive_hex"] as? String)
+            let archive = try XCTUnwrap(Data(hexString: archiveHex))
+            XCTAssertEqual(sample["archive_bytes"] as? Int, archive.count, label)
+            let dataFrames = (archive.count + options.chunkSize - 1) / options.chunkSize
             let parityFrames = (dataFrames + options.parityGroup - 1)
                 / options.parityGroup
-            XCTAssertEqual(1 + dataFrames + parityFrames, expectedFrames, label)
+            XCTAssertEqual(
+                1 + dataFrames + parityFrames,
+                try XCTUnwrap(expectedFrames[label]),
+                label
+            )
             XCTAssertLessThanOrEqual(
-                archiveBytes,
+                archive.count,
                 KagemushaPeerTransportContract.maximumArchiveBytes,
                 label
             )

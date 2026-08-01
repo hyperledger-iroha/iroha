@@ -19,10 +19,10 @@ import org.hyperledger.iroha.android.testing.TestAccountIds;
 public final class SignedTransactionHasherTests {
 
   private static final Set<String> COMPACT_FIXTURE_KEYS =
-      Set.of(
-          "schema.version",
-          "source.fixture",
-          "versioned.bytes",
+        Set.of(
+            "schema.version",
+            "source.fixture",
+            "versioned.bytes",
           "versioned.sha256",
           "bare.bytes",
           "compact.length.hex",

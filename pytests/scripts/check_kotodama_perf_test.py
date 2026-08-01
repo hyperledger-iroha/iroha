@@ -815,6 +815,14 @@ class KotodamaPerfGateTests(unittest.TestCase):
         workflow = (
             ROOT / ".github" / "workflows" / "kotodama_perf.yml"
         ).read_text(encoding="utf-8")
+        sdk_job = workflow.split("  sdk-and-codec-guards:\n", 1)[1].split(
+            "\n  representative-regression:\n", 1
+        )[0]
+        self.assertIn(
+            "run: env -u CARGO_PROFILE_DEV_DEBUG -u RUSTFLAGS npm test ",
+            sdk_job,
+        )
+
         representative_job = workflow.split(
             "  representative-regression:\n", 1
         )[1]
@@ -988,7 +996,17 @@ class KotodamaPerfGateTests(unittest.TestCase):
             "--koto ../target-kotodama-perf/debug/koto", build_step
         )
         self.assertIn("bash scripts/check_no_legacy_codec.sh", workflow)
+        self.assertIn(
+            "python3 -m pytest -q scripts/tests/check_no_legacy_codec_test.py",
+            workflow,
+        )
+        self.assertIn('      - "scripts/check_no_legacy_codec.sh"', workflow)
+        self.assertIn(
+            '      - "scripts/tests/check_no_legacy_codec_test.py"', workflow
+        )
         self.assertIn("npm test --prefix javascript/iroha_js", workflow)
+        self.assertIn('      - "crates/iroha_p2p/Cargo.toml"', workflow)
+        self.assertIn('      - "crates/iroha_p2p/src/**"', workflow)
 
 
 if __name__ == "__main__":

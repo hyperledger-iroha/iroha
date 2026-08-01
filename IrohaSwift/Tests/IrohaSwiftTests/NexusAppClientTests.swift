@@ -5,7 +5,7 @@ import XCTest
 final class NexusAppClientTests: XCTestCase {
     private static let assetDefinitionID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
     private static let publicKey = Data(hexString: "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737")!
-    private static let walletSignature = Data(hexString: "d39065822f28108f70f8089f64357cc33a0072e45aa65f6b3e2696b93a3d9779d376ddf19c8e7dabce79a484275b681dea5213df060848d8fe098edeebcc3c07")!
+    private static let walletSignature = Data(hexString: "67abecdcc67437980b0fd9340faea844ffc13e4d8d51df7b625ccdfb955220e98296310591803a2e8b2ff04b7d5426615e369ba7933175a61dc29558ff078a0f")!
     private static let accountID = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"
     private static let destinationAccountID = "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L"
 
@@ -68,6 +68,64 @@ final class NexusAppClientTests: XCTestCase {
 
         XCTAssertEqual(draft.signable.payloadHashHex, expectedPayloadHash)
         XCTAssertEqual(draft.signable.payloadBytes, expectedPayloadBytes)
+    }
+
+    func testDefaultCodecCanonicalizesChainAndSignatureBoundTTL() throws {
+        let codec = SwiftNexusTransactionCodec()
+        let inputWithoutTTL = NexusTransferInput(
+            sourceAssetID: "\(Self.assetDefinitionID)#\(Self.accountID)",
+            quantity: "12.34",
+            destinationAccountID: Self.destinationAccountID,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            creationTimeMs: 1_700_000_000_000,
+            nonce: 7
+        )
+        let inputWithDefaultTTL = NexusTransferInput(
+            sourceAssetID: "\(Self.assetDefinitionID)#\(Self.accountID)",
+            quantity: "12.34",
+            destinationAccountID: Self.destinationAccountID,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            creationTimeMs: 1_700_000_000_000,
+            ttlMs: 100_000,
+            nonce: 7
+        )
+        let config = NexusAppConfig(chainId: "test-chain")
+        XCTAssertEqual(
+            try codec.buildTransferPayload(input: inputWithoutTTL,
+                                           config: config,
+                                           authority: Self.accountID),
+            try codec.buildTransferPayload(input: inputWithDefaultTTL,
+                                           config: config,
+                                           authority: Self.accountID)
+        )
+
+        for chainID in ["", "-chain", "chain-", "bad/chain", "scalar-😀", String(repeating: "x", count: 129)] {
+            XCTAssertThrowsError(
+                try codec.buildTransferPayload(input: inputWithoutTTL,
+                                               config: NexusAppConfig(chainId: chainID),
+                                               authority: Self.accountID),
+                chainID
+            ) { error in
+                XCTAssertEqual((error as? NexusAppError)?.code, "invalid_chain_id")
+            }
+        }
+
+        let zeroTTL = NexusTransferInput(
+            sourceAssetID: "\(Self.assetDefinitionID)#\(Self.accountID)",
+            quantity: "12.34",
+            destinationAccountID: Self.destinationAccountID,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            creationTimeMs: 1_700_000_000_000,
+            ttlMs: 0,
+            nonce: 7
+        )
+        XCTAssertThrowsError(
+            try codec.buildTransferPayload(input: zeroTTL,
+                                           config: config,
+                                           authority: Self.accountID)
+        ) { error in
+            XCTAssertEqual((error as? NexusAppError)?.code, "invalid_ttl")
+        }
     }
 
     func testBuildTransferDraftRejectsInvalidQuantityBeforeCustomCodec() throws {

@@ -261,7 +261,7 @@ test("buildRegisterDomainTransaction returns canonical hash", () => {
   assert.deepEqual(recomputed, built.hash);
 });
 
-test("hashSignedTransactionPayload returns the detached scaffold preimage", () => {
+test("transaction identity excludes replaceable authorization proof bytes", () => {
   const first = buildSampleRegisterDomain();
   const signatureMutated = mutateFirstSignedTransactionSignatureByte(
     first.signedTransaction,
@@ -276,8 +276,9 @@ test("hashSignedTransactionPayload returns the detached scaffold preimage", () =
   );
 
   assert.equal(firstPayloadHash.length, 32);
+  assert.notDeepEqual(first.signedTransaction, signatureMutated);
   assert.deepEqual(firstPayloadHash, secondPayloadHash);
-  assert.notDeepEqual(
+  assert.deepEqual(
     hashSignedTransaction(first.signedTransaction, { encoding: "buffer" }),
     hashSignedTransaction(signatureMutated, { encoding: "buffer" }),
   );

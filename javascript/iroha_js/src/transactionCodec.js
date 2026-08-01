@@ -19,7 +19,8 @@ const COMPACT_LEN_FLAG = 0x02;
 const UINT16_MAX = 0xffffn;
 const UINT32_MAX = 0xffff_ffffn;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
-const MAX_CHAIN_ID_BYTES = 1024;
+const MAX_CHAIN_ID_BYTES = 128;
+const DEFAULT_TRANSACTION_TTL_MS = 100_000n;
 const MAX_METADATA_JSON_BYTES = 64 * 1024;
 const MAX_METADATA_ENTRIES = 64;
 const MAX_METADATA_DEPTH = 32;
@@ -439,6 +440,34 @@ function normalizeOptionalUnsigned(value, maximum, context, { nonZero = false } 
     fail("invalid_integer", `${context} must be non-zero when provided`);
   }
   return result;
+}
+
+function validateCanonicalChainId(value, context, errorCode) {
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9._:-]*[A-Za-z0-9])?$/u.test(value)) {
+    fail(
+      errorCode,
+      `${context} must use canonical ASCII alphanumerics with only '.', '_', ':', or '-' internally`,
+    );
+  }
+  return value;
+}
+
+function normalizeChainId(value, context = "chainId") {
+  const normalized = exactString(value, context, {
+    maxBytes: MAX_CHAIN_ID_BYTES,
+  });
+  return validateCanonicalChainId(normalized, context, "invalid_input");
+}
+
+function normalizeTimeToLive(value) {
+  if (value === undefined || value === null) {
+    return DEFAULT_TRANSACTION_TTL_MS;
+  }
+  const normalized = normalizeUnsigned(value, UINT64_MAX, "ttlMs");
+  if (normalized === 0n) {
+    fail("invalid_integer", "ttlMs must be non-zero");
+  }
+  return normalized;
 }
 
 function normalizeQuantity(value) {
@@ -904,7 +933,7 @@ function stringValue(value) {
 }
 
 function chainIdArchive(value) {
-  return struct([stringValue(value)]);
+  return stringValue(value);
 }
 
 function struct(fields) {
@@ -1100,9 +1129,7 @@ function transferInstructionArchive(source, quantity, destination) {
 
 function normalizeTransferInput(input, now) {
   input = snapshotAllowedFields(input, TRANSFER_INPUT_FIELDS, "transfer input");
-  const chainId = exactString(input.chainId, "chainId", {
-    maxBytes: MAX_CHAIN_ID_BYTES,
-  });
+  const chainId = normalizeChainId(input.chainId);
   const requestedDiscriminant =
     input.networkPrefix !== undefined && input.chainDiscriminant !== undefined
       ? fail(
@@ -1174,10 +1201,7 @@ function normalizeTransferInput(input, now) {
     UINT64_MAX,
     "creationTimeMs",
   );
-  let ttlMs = normalizeOptionalUnsigned(input.ttlMs, UINT64_MAX, "ttlMs");
-  if (ttlMs === 0n) {
-    ttlMs = 1n;
-  }
+  const ttlMs = normalizeTimeToLive(input.ttlMs);
   const nonce = normalizeOptionalUnsigned(input.nonce, UINT32_MAX, "nonce", {
     nonZero: true,
   });
@@ -1207,7 +1231,7 @@ function encodeTransferPayload(normalized) {
     accountArchive(normalized.authority),
     u64(normalized.creationTimeMs),
     executable,
-    option(normalized.ttlMs === null ? null : u64(normalized.ttlMs)),
+    option(u64(normalized.ttlMs)),
     option(normalized.nonce === null ? null : u32(normalized.nonce)),
     feePaymentArchive(normalized.feePayment),
     metadataArchive(normalized.metadata),
@@ -1225,9 +1249,7 @@ function normalizeInstructionTransactionInput(input, now) {
     INSTRUCTION_INPUT_FIELDS,
     "instruction transaction input",
   );
-  const chainId = exactString(input.chainId, "chainId", {
-    maxBytes: MAX_CHAIN_ID_BYTES,
-  });
+  const chainId = normalizeChainId(input.chainId);
   const requestedDiscriminant =
     input.networkPrefix !== undefined && input.chainDiscriminant !== undefined
       ? fail(
@@ -1274,8 +1296,7 @@ function normalizeInstructionTransactionInput(input, now) {
     UINT64_MAX,
     "creationTimeMs",
   );
-  let ttlMs = normalizeOptionalUnsigned(input.ttlMs, UINT64_MAX, "ttlMs");
-  if (ttlMs === 0n) ttlMs = 1n;
+  const ttlMs = normalizeTimeToLive(input.ttlMs);
   const nonce = normalizeOptionalUnsigned(input.nonce, UINT32_MAX, "nonce", {
     nonZero: true,
   });
@@ -1301,7 +1322,7 @@ function encodeInstructionTransactionPayload(normalized) {
     accountArchive(normalized.authority),
     u64(normalized.creationTimeMs),
     executable,
-    option(normalized.ttlMs === null ? null : u64(normalized.ttlMs)),
+    option(u64(normalized.ttlMs)),
     option(normalized.nonce === null ? null : u32(normalized.nonce)),
     feePaymentArchive(normalized.feePayment),
     metadataArchive(normalized.metadata),
@@ -1319,9 +1340,7 @@ function normalizeExecutableBatchTransactionInput(input, now) {
     EXECUTABLE_BATCH_INPUT_FIELDS,
     "executable batch input",
   );
-  const chainId = exactString(input.chainId, "chainId", {
-    maxBytes: MAX_CHAIN_ID_BYTES,
-  });
+  const chainId = normalizeChainId(input.chainId);
   const requestedDiscriminant =
     input.networkPrefix !== undefined && input.chainDiscriminant !== undefined
       ? fail(
@@ -1451,8 +1470,7 @@ function normalizeExecutableBatchTransactionInput(input, now) {
     UINT64_MAX,
     "creationTimeMs",
   );
-  let ttlMs = normalizeOptionalUnsigned(input.ttlMs, UINT64_MAX, "ttlMs");
-  if (ttlMs === 0n) ttlMs = 1n;
+  const ttlMs = normalizeTimeToLive(input.ttlMs);
   const nonce = normalizeOptionalUnsigned(input.nonce, UINT32_MAX, "nonce", {
     nonZero: true,
   });
@@ -1498,7 +1516,7 @@ function encodeExecutableBatchTransactionPayload(normalized) {
     accountArchive(normalized.authority),
     u64(normalized.creationTimeMs),
     executable,
-    option(normalized.ttlMs === null ? null : u64(normalized.ttlMs)),
+    option(u64(normalized.ttlMs)),
     option(normalized.nonce === null ? null : u32(normalized.nonce)),
     feePaymentArchive(normalized.feePayment),
     metadataArchive(normalized.metadata),
@@ -1585,14 +1603,9 @@ function validateStringArchive(payload, context, { maxBytes } = {}) {
 }
 
 function validateChainIdArchive(payload, context) {
-  const reader = new Reader(payload, context);
-  const chainId = validateStringArchive(
-    reader.readField("value"),
-    `${context}.value`,
-    { maxBytes: MAX_CHAIN_ID_BYTES },
-  );
-  reader.assertEof();
-  return chainId;
+  return validateStringArchive(payload, context, {
+    maxBytes: MAX_CHAIN_ID_BYTES,
+  });
 }
 
 function validateConstVecBytes(payload, context, expectedLength) {
@@ -2181,7 +2194,11 @@ function validateTransactionPayload(payload, authorityLiteral) {
     reader.readField("chain"),
     "transaction payload.chain",
   );
-  exactString(chainId, "transaction payload.chain", { maxBytes: MAX_CHAIN_ID_BYTES });
+  validateCanonicalChainId(
+    chainId,
+    "transaction payload.chain",
+    "malformed_payload",
+  );
   const authorityArchive = reader.readField("authority");
   const authorityPublicKey = validateAccountArchive(
     authorityArchive,
@@ -2204,9 +2221,12 @@ function validateTransactionPayload(payload, authorityLiteral) {
   if (!sourceOwner.equals(authorityPublicKey)) {
     fail("authority_mismatch", "source asset owner does not match transaction authority");
   }
-  validateOption(reader.readField("ttlMs"), 8, "transaction payload.ttlMs", {
+  const ttlMs = validateOption(reader.readField("ttlMs"), 8, "transaction payload.ttlMs", {
     nonZero: true,
   });
+  if (ttlMs === null) {
+    fail("malformed_payload", "transaction payload.ttlMs is required");
+  }
   validateOption(reader.readField("nonce"), 4, "transaction payload.nonce", {
     nonZero: true,
   });
@@ -2243,9 +2263,11 @@ function validateInstructionTransactionPayload(payload, authorityLiteral) {
     reader.readField("chain"),
     "transaction payload.chain",
   );
-  exactString(chainId, "transaction payload.chain", {
-    maxBytes: MAX_CHAIN_ID_BYTES,
-  });
+  validateCanonicalChainId(
+    chainId,
+    "transaction payload.chain",
+    "malformed_payload",
+  );
   const authorityArchive = reader.readField("authority");
   const authorityPublicKey = validateAccountArchive(
     authorityArchive,
@@ -2278,9 +2300,12 @@ function validateInstructionTransactionPayload(payload, authorityLiteral) {
     );
     batchValidation = { containsContractCall: false };
   }
-  validateOption(reader.readField("ttlMs"), 8, "transaction payload.ttlMs", {
+  const ttlMs = validateOption(reader.readField("ttlMs"), 8, "transaction payload.ttlMs", {
     nonZero: true,
   });
+  if (ttlMs === null) {
+    fail("malformed_payload", "transaction payload.ttlMs is required");
+  }
   validateOption(reader.readField("nonce"), 4, "transaction payload.nonce", {
     nonZero: true,
   });

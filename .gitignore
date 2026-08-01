@@ -79,6 +79,10 @@ javascript/npm-iroha-js.log
 javascript/iroha_js/**/*.log
 javascript/iroha_js/native/*.node
 javascript/iroha_js/native/iroha_js_host.checksums.json
+javascript/iroha_js/native/.build-dist.lock
+javascript/iroha_js/native/.iroha-js-host-txn-*/
+javascript/iroha_js/native/.iroha-js-host-init-txn-v1-*/
+javascript/iroha_js/native/.iroha-js-host-cleanup-*
 javascript/iroha_js/scripts/release_matrix.targets.json
 build/*
 dist/*

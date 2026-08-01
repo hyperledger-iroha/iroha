@@ -101,6 +101,8 @@ run_python312_clean() {
 # - Requires: Python 3.12, rustup + cargo, xcodebuild, lipo.
 # - MOBILE_SDK_PYTHON_BINARY may select an absolute canonical Python 3.12
 #   executable when the fixed Homebrew/system locators are unavailable.
+# - MOBILE_SDK_RUSTUP_BINARY may select the absolute canonical rustup installed
+#   by a pinned CI toolchain action when it is outside the default Cargo home.
 #
 # Usage:
 #   scripts/build_norito_xcframework.sh
@@ -238,13 +240,24 @@ USER_HOME_DIR="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
   "$USER_HOME_DIR")"
 GIT_BINARY="/usr/bin/git"
-RUSTUP_BINARY="$USER_HOME_DIR/.cargo/bin/rustup"
+RUSTUP_BINARY="${MOBILE_SDK_RUSTUP_BINARY:-$USER_HOME_DIR/.cargo/bin/rustup}"
+if [[ "$RUSTUP_BINARY" != /* ]]; then
+  echo "[-] MOBILE_SDK_RUSTUP_BINARY must be an absolute canonical regular executable" >&2
+  exit 1
+fi
 for tool_path in "$PYTHON_BINARY" "$GIT_BINARY" "$RUSTUP_BINARY"; do
   [[ -f "$tool_path" && ! -L "$tool_path" && -x "$tool_path" ]] || {
     echo "[-] Pinned Python, Git, and rustup executables are required: $tool_path" >&2
     exit 1
   }
 done
+CANONICAL_RUSTUP_BINARY="$(run_python312_clean -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$RUSTUP_BINARY")"
+if [[ "$CANONICAL_RUSTUP_BINARY" != "$RUSTUP_BINARY" ]]; then
+  echo "[-] MOBILE_SDK_RUSTUP_BINARY must already name its canonical executable" >&2
+  exit 1
+fi
 for required_input in "$SOURCE_SEAL_SCRIPT" "$HERMETIC_RUNNER" "$ROOT_DIR/rust-toolchain.toml"; do
   [[ -f "$required_input" && ! -L "$required_input" ]] || {
     echo "[-] Required NoritoBridge build input is unavailable: $required_input" >&2

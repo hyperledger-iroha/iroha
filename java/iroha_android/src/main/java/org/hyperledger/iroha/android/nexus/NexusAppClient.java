@@ -24,6 +24,7 @@ import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 public final class NexusAppClient {
 
   public static final String SIGNATURE_ALGORITHM_ED25519 = "ed25519";
+  private static final long DEFAULT_TRANSACTION_TTL_MS = 100_000L;
 
   private final NexusAppConfig config;
   private final NexusConnectTransport connectTransport;
@@ -104,6 +105,7 @@ public final class NexusAppClient {
     final NexusTransferInput normalized = input.toBuilder()
         .authority(authority)
         .signingPublicKey(signingPublicKey)
+        .ttlMs(input.ttlMs() == null ? DEFAULT_TRANSACTION_TTL_MS : input.ttlMs())
         .build();
     final TransactionPayload payload = TransactionPayload.builder()
         .setChainId(config.chainId())

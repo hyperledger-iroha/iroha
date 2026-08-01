@@ -3,9 +3,11 @@ name: pr_csharp
 on:
   pull_request:
     paths:
+      - ".gitattributes"
       - ".github/workflows/pr_csharp.yml"
       - "ci/check_csharp_sdk_package_consumer.sh"
       - "ci/check_kagemusha_recursive_spend_csharp_sdk.sh"
+      - "ci/check_kagemusha_reviewed_cargo_lock.sh"
       - "csharp/**"
       - "crates/connect_norito_bridge/**"
       - "crates/iroha_core/src/smartcontracts/isi/mod.rs"
@@ -27,6 +29,7 @@ on:
       - "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json"
       - "fixtures/kagemusha_recursive_spend_abi6/**"
       - "fixtures/kagemusha_recursive_spend_abi7/**"
+      - "fixtures/kagemusha/cargo-lock.reviewed.v1"
       - "integration_tests/tests/native_escrow.rs"
       - "scripts/check_sorafs_reference_sdk_fixtures.py"
       - "scripts/check_native_sdk_abi21_artifact.py"
@@ -76,9 +79,16 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The Rust setup action invokes Cargo and can create a platform-native
+      # Cargo.lock. Publish the reviewed LF-exact lock before Cargo can run.
+      - name: Materialize the exact reviewed Cargo dependency lock
+        shell: bash
+        run: ci/check_kagemusha_reviewed_cargo_lock.sh --materialize
+
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
           target: ${{ matrix.target }}
+          cache: false
 
       - name: Build native C# bridge on its matching release host
         shell: bash
@@ -128,7 +138,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
-      LD_LIBRARY_PATH: ${{ runner.temp }}/csharp-native-package/runtimes/linux-x64/native
     defaults:
       run:
         working-directory: csharp
@@ -169,6 +178,8 @@ jobs:
         run: dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror
 
       - name: Test
+        env:
+          LD_LIBRARY_PATH: ${{ runner.temp }}/csharp-native-package/runtimes/linux-x64/native
         run: dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build
 
       - name: Pack

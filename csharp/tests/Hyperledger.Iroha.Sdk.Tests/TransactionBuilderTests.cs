@@ -177,9 +177,9 @@ public sealed class TransactionBuilderTests
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
     [Theory]
-    [InlineData("swift_transfer_asset_basic", 805, 1423, "aaf57e9f247a5d92ba3c4c7d5076bd4aacf9b24b7de3b11e511b026784dec38b")]
-    [InlineData("swift_mint_asset_basic", 695, 1313, "e38b26f35c901bf2099facd691511ea1ad1d1ebc7c43d98a9f473731fdeecd09")]
-    [InlineData("swift_burn_asset_basic", 695, 1313, "8e2d28a9da78b1db4800d1e2e86be623a7d566235616c08daf813d9dcdd9a907")]
+    [InlineData("swift_transfer_asset_basic", 799, 1408, "4472e650ddfd3fa6f80e01ded6e62ae60618a72f671951c9712bc28d19e7418d")]
+    [InlineData("swift_mint_asset_basic", 689, 1298, "eefc6b27a647faea5f4637eb1c98b54eb0d27a30567bd3a46cb217708154d7ad")]
+    [InlineData("swift_burn_asset_basic", 689, 1298, "1d7ec87ce6e69a269606296ed259c7fb81e02decf12fc762af86e8e50091515d")]
     public void BuildSignedProducesDeterministicGoldenOutputs(
         string fixtureName,
         int expectedPayloadLength,
@@ -669,6 +669,59 @@ public sealed class TransactionBuilderTests
         var context = new TransactionEncodingContext(FixtureAccountId);
 
         Assert.Throws<ArgumentException>(() => context.EncodeChainId(chainId));
+    }
+
+    [Fact]
+    public void TransactionEncodingContextUsesTransparentCanonicalChainIdWireLayout()
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+
+        Assert.Equal(
+            Convert.FromHexString("083030303030303432"),
+            context.EncodeChainId(FixtureChainId));
+    }
+
+    [Fact]
+    public void TransactionEncodingContextUsesMinimalCompactLengthAtChainIdBoundary()
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+
+        var encoded = context.EncodeChainId(new string('x', 128));
+
+        Assert.Equal(130, encoded.Length);
+        Assert.Equal(0x80, encoded[0]);
+        Assert.Equal(0x01, encoded[1]);
+        Assert.All(encoded[2..], value => Assert.Equal((byte)'x', value));
+    }
+
+    [Theory]
+    [InlineData("-chain")]
+    [InlineData("chain-")]
+    [InlineData("bad/chain")]
+    [InlineData("scalar-😀")]
+    public void TransactionBuilderRejectsNonCanonicalChainIds(string chainId)
+    {
+        Assert.Throws<ArgumentException>(() =>
+            new TransactionBuilder(chainId, FixtureAccountId, EmptyAuthorityFeePayment));
+    }
+
+    [Fact]
+    public void TransactionBuilderRejectsOversizedChainIds()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            new TransactionBuilder(new string('x', 129), FixtureAccountId, EmptyAuthorityFeePayment));
+    }
+
+    [Fact]
+    public void TransactionBuilderDefaultsToSignatureBoundTtlAndRejectsMissingTtl()
+    {
+        var builder = NewTransactionBuilder();
+
+        Assert.Equal(100_000UL, builder.TimeToLiveMilliseconds);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            builder.SetTimeToLiveMilliseconds(null));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            builder.SetTimeToLiveMilliseconds(0));
     }
 
     [Theory]

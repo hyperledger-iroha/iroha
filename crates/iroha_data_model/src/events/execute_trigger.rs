@@ -137,3 +137,21 @@ impl EventFilter for ExecuteTriggerEventFilter {
 pub mod prelude {
     pub use super::{ExecuteTriggerEvent, ExecuteTriggerEventFilter};
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trigger_id_accessor_reports_only_the_configured_constraint() {
+        let trigger_id: TriggerId = "subscription_usage".parse().expect("valid trigger id");
+
+        assert!(ExecuteTriggerEventFilter::new().trigger_id().is_none());
+        assert_eq!(
+            ExecuteTriggerEventFilter::new()
+                .for_trigger(trigger_id.clone())
+                .trigger_id(),
+            Some(&trigger_id)
+        );
+    }
+}

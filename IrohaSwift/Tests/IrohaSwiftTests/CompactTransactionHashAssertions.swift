@@ -37,7 +37,7 @@ func XCTAssertCanonicalExternalEntrypointHash(
     XCTAssertEqual(
         envelope.transactionHash,
         IrohaHash.hash(compact.data),
-        "transaction hash must use compact TransactionEntrypoint::External intent framing",
+        "transaction hash must use compact TransactionEntrypoint::External framing over canonical intent",
         file: file,
         line: line
     )

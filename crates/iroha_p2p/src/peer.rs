@@ -2355,6 +2355,7 @@ struct InboundSourceByteBudget {
 }
 
 impl InboundSourceByteBudget {
+    #[cfg(test)]
     fn shared_only(shared: Arc<SharedByteBudget>) -> Self {
         let decode_scratch = SharedByteBudget::new(shared.class_max_bytes(false), 0)
             .expect("an existing source-byte budget has representable scratch geometry");
@@ -16231,7 +16232,7 @@ mod tests {
     use tokio::io::AsyncWrite;
 
     use super::{Connection, SoranetHandshakeConfig, cryptographer::Cryptographer, state::*};
-    use crate::{ConfidentialHandshakeCaps, ConsensusConfigCaps, RelayRole};
+    use crate::{ConfidentialHandshakeCaps, ConsensusConfigCaps, ConsensusMode, RelayRole};
 
     fn sample_consensus_config_caps() -> ConsensusConfigCaps {
         ConsensusConfigCaps {
@@ -18485,6 +18486,7 @@ mod cryptographer {
         ///
         /// # Errors
         /// Forwards [`SymmetricEncryptor::decrypt_easy_into`] error
+        #[cfg(feature = "quic")]
         pub fn decrypt_into<'a>(
             &self,
             data: &[u8],

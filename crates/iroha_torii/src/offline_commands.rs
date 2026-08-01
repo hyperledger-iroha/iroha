@@ -3444,6 +3444,27 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_abi21_release_fails_closed_with_stable_service_error() {
+        let error = ensure_kagemusha_v4_issuance_window(false, true)
+            .expect_err("new ABI-21 issuance must fail when its exact release is unavailable");
+        assert!(
+            matches!(
+                &error,
+                Error::AppServiceUnavailable {
+                    code: "offline_recursive_release_outside_issuance_window",
+                    ..
+                }
+            ),
+            "unavailable ABI-21 release returned an unstable error: {error:?}",
+        );
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("outside its issuance window"),
+            "stable service error lost its fail-closed explanation: {rendered}",
+        );
+    }
+
+    #[test]
     fn v4_rotated_change_accepts_withdrawn_parent_and_active_successor() {
         ensure_kagemusha_v4_issuance_window(false, false)
             .expect("the exact withdrawn parent remains valid for redemption");

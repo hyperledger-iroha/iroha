@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -21,7 +21,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   probeNativeBindingExports,
@@ -39,11 +39,38 @@ const PLATFORM_KEY = `${PLATFORM}-${ARCH}`;
 const NATIVE_FILENAME = "iroha_js_host.node";
 const MANIFEST_FILENAME = "iroha_js_host.checksums.json";
 const COPY_NATIVE_SCRIPT = path.resolve("scripts/copy-native.mjs");
+const REPOSITORY_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../..",
+);
 const SOURCE_REVISION = "a".repeat(40);
 const SOURCE_TREE_DIGEST = "b".repeat(64);
 const TRANSACTION_INITIALIZER_PREFIX = ".iroha-js-host-init-txn-v1-";
 const CLEANUP_MARKER_PATTERN =
   /^\.iroha-js-host-cleanup-v1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.owner\.json$/u;
+
+test("repository ignores every native publisher scratch artifact", () => {
+  const transactionId = "11111111-1111-4111-8111-111111111111";
+  const initializerId = "22222222-2222-4222-8222-222222222222";
+  const probes = [
+    "javascript/iroha_js/native/.build-dist.lock",
+    `javascript/iroha_js/native/.iroha-js-host-txn-${transactionId}/iroha_js_host.node.next`,
+    `javascript/iroha_js/native/.iroha-js-host-init-txn-v1-${transactionId}-${initializerId}/owner.tmp`,
+    `javascript/iroha_js/native/.iroha-js-host-cleanup-v1-${transactionId}-${initializerId}.owner.json`,
+  ];
+  for (const probe of probes) {
+    const result = spawnSync(
+      "git",
+      ["-C", REPOSITORY_ROOT, "check-ignore", "--quiet", "--no-index", probe],
+      { encoding: "utf8" },
+    );
+    assert.equal(
+      result.status,
+      0,
+      `${probe} must stay outside the sealed native-build source inventory: ${result.stderr}`,
+    );
+  }
+});
 
 function fixtureBuildProvenance(
   source,

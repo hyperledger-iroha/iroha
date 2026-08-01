@@ -1620,7 +1620,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final class ChainIdAdapter implements TypeAdapter<String> {
     @Override
     public void encode(final NoritoEncoder encoder, final String value) {
-      encodeSizedField(encoder, STRING_ADAPTER, value);
+      STRING_ADAPTER.encode(encoder, value);
     }
 
     @Override
@@ -1632,7 +1632,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     private static String decodePayload(
         final byte[] payload, final int flags, final int flagsHint) {
       final NoritoDecoder sized = new NoritoDecoder(payload, flags, flagsHint);
-      final String value = decodeSizedField(sized, STRING_ADAPTER);
+      final String value = STRING_ADAPTER.decode(sized);
       if (sized.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after ChainId payload");
       }
