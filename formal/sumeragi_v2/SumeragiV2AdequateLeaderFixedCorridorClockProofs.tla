@@ -558,10 +558,10 @@ fresh physical ceiling per child.
 No theorem in this module asserts the temporal property.  The one-step
 theorems below derive cut carry and exact occurrence-budget descent from GST,
 the scheduler-coverage and progress invariants, one concrete bracketed
-`AsyncNext`, and an exact scheduled successor.  The remaining seam is to
-supply those antecedents at every fixed-pipeline handoff and compose the
-resulting finite producer episode with token retirement and the configured
-deadline service argument.
+`AsyncNext`, and an exact scheduled successor.  The authority-deadline service
+module supplies those antecedents at every fixed-pipeline handoff and composes
+the resulting finite producer episode with token retirement and the
+configured deadline service argument.
 ***************************************************************************)
 
 AdequateLeaderFixedCrossChildPhysicalDebt(node, cutoffOrdinal) ==
@@ -734,9 +734,10 @@ separate finite continuation prefix rank and has no latent child credit to
 recreate.
 
 This closes the arithmetic rank-reset defect for exact candidate handoffs.
-The remaining deadline proof must still show that the separate frozen
-runner/deferred/I/O selector episodes use only their additive configured terms.
-No temporal provider or ledger status is asserted by this module.
+This module deliberately leaves the separate frozen runner/deferred/I/O
+selector episodes as an interface and asserts no temporal provider or ledger
+status; `SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs` supplies their
+additive configured terms in the release composition.
 ***************************************************************************)
 
 AdequateLeaderFixedInitialCandidateRouteActionCredit(commandClass) ==

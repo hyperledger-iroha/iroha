@@ -1265,9 +1265,8 @@ mod tests {
             Value::String(genesis_public_key.to_string()),
         );
         let mock_env = mock_env_from_value(value);
-        let _ = iroha_config::base::read::ConfigReader::new()
-            .with_env(mock_env.clone())
-            .read_and_complete::<iroha_config::parameters::user::Root>()
+        let reader = iroha_config::base::read::ConfigReader::new().with_env(mock_env.clone());
+        let _ = iroha_config::parameters::user::Root::read_and_complete(reader)
             .expect("config in env should be exhaustive");
         assert!(mock_env.unvisited().is_empty());
     }
@@ -1304,9 +1303,8 @@ mod tests {
             Value::String(genesis_public_key.to_string()),
         );
         let mock_env = mock_env_from_value(value);
-        let _ = iroha_config::base::read::ConfigReader::new()
-            .with_env(mock_env.clone())
-            .read_and_complete::<iroha_config::parameters::user::Root>()
+        let reader = iroha_config::base::read::ConfigReader::new().with_env(mock_env.clone());
+        let _ = iroha_config::parameters::user::Root::read_and_complete(reader)
             .expect("config in env should be exhaustive");
         assert_eq!(
             mock_env.unvisited(),
@@ -1346,9 +1344,8 @@ mod tests {
             Value::String(genesis_public_key.to_string()),
         );
         let mock_env = mock_env_from_value(value);
-        let _ = iroha_config::base::read::ConfigReader::new()
-            .with_env(mock_env.clone())
-            .read_and_complete::<iroha_config::parameters::user::Root>()
+        let reader = iroha_config::base::read::ConfigReader::new().with_env(mock_env.clone());
+        let _ = iroha_config::parameters::user::Root::read_and_complete(reader)
             .expect("config in env should be exhaustive");
         let mut unvisited: Vec<_> = mock_env.unvisited().into_iter().collect();
         unvisited.sort();

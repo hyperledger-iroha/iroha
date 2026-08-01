@@ -1,17 +1,144 @@
 # Executed lexically in sumeragi_v2_proof_ledger_test.py; do not collect directly.
 
-def test_release_inventory_constants_match_current_source_seal() -> None:
+def test_release_inventory_constants_match_current_source_seal(
+    tmp_path: Path,
+) -> None:
     """Every release consumer binds the current production and focus seals."""
 
     module = load_checker()
-    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 813
+    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 818
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "708e0ed0221056b20b9d9f03f1ea8cd07225b0c84c39ad18dd25402e090fb30f"
+        "0be88ecc9810d15528624015bacbf57924fedabea220ff5873b2374bbcfb6de8"
+    )
+    assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
+        "605b12fa4be0556fc9eb79e887b1646d1cedd62864dcef4338863daa851f53a5"
+    )
+    assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
+        "616752567a30ec73d904d1b6a5bb2c4d53e90d2070b6270aee180b7adfc18da9"
+    )
+    assert module._SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 == (
+        "e672412b541730e0e2f0d80b7f0e03e54fb009397a9182e09cad233e5cabdda2"
     )
     assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 309
     assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 310
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
         "b7588b8ab1f3dcba654bd32ec9fc2c196dc129eebc4821de6df89d5b69253cfb"
+    )
+    assert (
+        "_production_liveness_release_inventory_guard_errors"
+        in module._production_liveness_release_inventory_errors.__code__.co_names
+    )
+    assert module._sumeragi_v2_package_layout_guard_errors(ROOT_DIR) == []
+
+    package_root = tmp_path / "package-layout"
+    package_guard = package_root / "scripts" / "check_sumeragi_v2_package_layout.sh"
+    package_verifier = package_root / "scripts" / "verify_sumeragi_v2.sh"
+    package_core_root = (
+        package_root / "crates" / "iroha_core" / "src" / "sumeragi"
+    )
+    package_guard.parent.mkdir(parents=True)
+    package_core_root.mkdir(parents=True)
+    shutil.copy2(
+        ROOT_DIR / "scripts" / "check_sumeragi_v2_package_layout.sh",
+        package_guard,
+    )
+    shutil.copy2(ROOT_DIR / "scripts" / "verify_sumeragi_v2.sh", package_verifier)
+    shutil.copy2(
+        ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_core.rs",
+        package_core_root / "v2_core.rs",
+    )
+    shutil.copytree(
+        ROOT_DIR
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_core",
+        package_core_root / "v2_core",
+    )
+    bash = shutil.which("bash")
+    assert bash is not None
+    baseline = subprocess.run(
+        [bash, str(package_guard)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert baseline.returncode == 0, baseline.stderr
+
+    refinement = package_core_root / "v2_core" / "refinement.rs"
+    refinement_source = refinement.read_text(encoding="utf-8")
+    layout_mutations = (
+        (
+            refinement_source + '\n#[path = "shadow.rs"]\nmod shadow;\n',
+            "second path attribute",
+        ),
+        (
+            refinement_source.replace(
+                '#[path = "refinement_cases.rs"]',
+                '#[path = "../refinement_cases.rs"]',
+                1,
+            ),
+            "parent-relative path attribute",
+        ),
+        (
+            refinement_source.replace(
+                '#[cfg(test)]\n#[path = "refinement_cases.rs"]',
+                '#[path = "refinement_cases.rs"]',
+                1,
+            ),
+            "non-test path attribute",
+        ),
+    )
+    for mutation, description in layout_mutations:
+        refinement.write_text(mutation, encoding="utf-8")
+        result = subprocess.run(
+            [bash, str(package_guard)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode != 0, description
+        assert "only the reviewed package-local refinement test split" in result.stderr
+    refinement.write_text(refinement_source, encoding="utf-8")
+
+    package_guard_source = package_guard.read_text(encoding="utf-8")
+    package_guard.write_text(
+        package_guard_source.replace("set -euo pipefail", "set +e", 1),
+        encoding="utf-8",
+    )
+    errors = module._sumeragi_v2_package_layout_guard_errors(package_root)
+    assert any(
+        "package-layout guard source SHA-256 must equal" in error
+        for error in errors
+    ), errors
+    package_guard.write_text(package_guard_source, encoding="utf-8")
+
+    invocation = 'bash "$REPO_ROOT/scripts/check_sumeragi_v2_package_layout.sh"'
+    verifier_source = package_verifier.read_text(encoding="utf-8")
+    assert verifier_source.splitlines().count(invocation) == 1
+    package_verifier.write_text(
+        verifier_source.replace(invocation, "true # skipped package-layout guard", 1),
+        encoding="utf-8",
+    )
+    errors = module._sumeragi_v2_package_layout_guard_errors(package_root)
+    assert any(
+        "must invoke the package-layout guard exactly once" in error
+        for error in errors
+    ), errors
+
+    checker_source = SCRIPT.read_text(encoding="utf-8")
+    validate_body = checker_source.split("def validate_ledger(", 1)[1].split(
+        "\ndef ",
+        1,
+    )[0]
+    assert (
+        validate_body.count(
+            "errors.extend(_sumeragi_v2_package_layout_guard_errors(ROOT_DIR))"
+        )
+        == 1
     )
 
     receipt_spec = importlib.util.spec_from_file_location(
@@ -23,9 +150,16 @@ def test_release_inventory_constants_match_current_source_seal() -> None:
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert receipt_module._PRODUCTION_TEST_COUNT == 813
+    assert receipt_module._PRODUCTION_TEST_COUNT == 818
     assert receipt_module._G_UNIT_TEST_COUNT == 309
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 813
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 818
+    receipt_module_counts = {
+        module_name: count
+        for _leg_id, module_name, count in receipt_module._PRODUCTION_MODULES
+    }
+    assert receipt_module_counts["sumeragi::v2_effects::tests"] == 68
+    assert receipt_module_counts["sumeragi::v2_runtime::tests"] == 58
+    assert receipt_module_counts["sumeragi::v2_worker::tests"] == 131
     assert sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS) == 309
 
 
@@ -1398,8 +1532,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_inventory) == 813
-    assert len(set(production_inventory)) == 813
+    assert len(production_inventory) == 818
+    assert len(set(production_inventory)) == 818
     leader_wire_slot_product_regression = (
         "sumeragi::serviced_candidate_store::tests::"
         "leader_wire_gate_retains_independent_cross_origin_phase_and_chunk_slots"
@@ -1466,7 +1600,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert final_replenishment_lasso_regressions <= set(
         module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     )
-    assert "readonly expected_production_liveness_test_count=813" in release_source
+    assert "readonly expected_production_liveness_test_count=818" in release_source
     assert (
         "readonly expected_typed_rollover_formal_mutation_count=45"
         in release_source
@@ -1476,7 +1610,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         'root-anchored V3 matrix passed"'
         in release_source
     )
-    assert "_PRODUCTION_TEST_COUNT = 813" in receipt_source
+    assert "_PRODUCTION_TEST_COUNT = 818" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -1486,7 +1620,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 813
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 818
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -1780,10 +1914,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         '"preflight-release-receipt",\n                "pytest",\n                316,'
         in receipt_source
     )
-    assert "did not run exactly 1730 passing tests" in release_source
-    assert "preflight-proof-fidelity pytest 1730" in release_source
+    assert "did not run exactly 3676 passing tests" in release_source
+    assert "preflight-proof-fidelity pytest 3676" in release_source
     assert (
-        "^1730 passed in [0-9]+([.][0-9]+)?s( "
+        "^3676 passed in [0-9]+([.][0-9]+)?s( "
         r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
         in release_source
     )
@@ -1802,7 +1936,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         assert contract_file in release_source
         assert contract_file in receipt_source
     assert (
-        '"preflight-proof-fidelity",\n                "pytest",\n                1730,'
+        '"preflight-proof-fidelity",\n                "pytest",\n                3676,'
         in receipt_source
     )
     assert "did not run exactly 26 passing tests" in release_source
@@ -2098,14 +2232,15 @@ def test_multilane_inventory_seals_standalone_native_evidence_names() -> None:
 def test_multilane_inventory_checker_rejects_weakened_production_count(
     tmp_path: Path,
 ) -> None:
-    """The standalone inventory guard rejects a lower production count."""
+    """Standalone and aggregate guards reject inventory-seal weakening."""
 
+    module = load_checker()
     checker = ROOT_DIR / "ci" / "check_sumeragi_v2_multilane_release_inventory.sh"
     checker_source = checker.read_text(encoding="utf-8")
     helper_start = checker_source.index("require_exact_token() {")
     helper_end = checker_source.index("\n}\n", helper_start) + 3
     helper = checker_source[helper_start:helper_end]
-    canonical_declaration = "readonly canonical_production_test_count=813"
+    canonical_declaration = "readonly canonical_production_test_count=818"
     count_guard = (
         "require_exact_token \\\n"
         '  "$release_runner" \\\n'
@@ -2127,7 +2262,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     bash = shutil.which("bash")
     assert bash is not None
     runner = tmp_path / "run_sumeragi_v2_release_gates.sh"
-    canonical = "readonly expected_production_liveness_test_count=813"
+    canonical = "readonly expected_production_liveness_test_count=818"
     weakened = "readonly expected_production_liveness_test_count=812"
     runner.write_text(f"{canonical}\n", encoding="utf-8")
 
@@ -2155,6 +2290,85 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
         in mutated.stderr
     )
     assert canonical in mutated.stderr
+
+    assert module._production_liveness_release_inventory_guard_errors(
+        ROOT_DIR
+    ) == []
+    aggregate_root = tmp_path / "aggregate"
+    aggregate_checker = (
+        aggregate_root
+        / "ci"
+        / "check_sumeragi_v2_multilane_release_inventory.sh"
+    )
+    aggregate_runner = (
+        aggregate_root / "scripts" / "run_sumeragi_v2_release_gates.sh"
+    )
+    aggregate_checker.parent.mkdir(parents=True, exist_ok=True)
+    aggregate_runner.parent.mkdir(parents=True, exist_ok=True)
+    release_source = (
+        ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
+    ).read_text(encoding="utf-8")
+    aggregate_runner.write_text(release_source, encoding="utf-8")
+
+    guard_mutations = (
+        (
+            canonical_declaration,
+            "readonly canonical_production_test_count=812",
+            "must seal exactly 818 production tests",
+        ),
+        (
+            '    "sumeragi::v2_effects::tests": 68,',
+            '    "sumeragi::v2_effects::tests": 66,',
+            "changed-module counts must equal the exact reviewed release inventory",
+        ),
+        (
+            '    "0be88ecc9810d15528624015bacbf579"',
+            '    "00000000000000000000000000000000"',
+            "canonical production TSV SHA-256 must equal",
+        ),
+        (
+            "readonly expected_production_liveness_test_count="
+            '${canonical_production_test_count}"',
+            "readonly expected_production_liveness_test_count=812\"",
+            "must bind the release-runner production count exactly once",
+        ),
+        (
+            '_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"',
+            '_PRODUCTION_TEST_COUNT = 812"',
+            "must bind the receipt-writer production count exactly once",
+        ),
+        (
+            "set -euo pipefail",
+            "set +e",
+            "independent inventory guard source SHA-256 must equal",
+        ),
+    )
+    for old, new, expected_error in guard_mutations:
+        assert checker_source.count(old) == 1, old
+        aggregate_checker.write_text(
+            checker_source.replace(old, new, 1),
+            encoding="utf-8",
+        )
+        errors = module._production_liveness_release_inventory_guard_errors(
+            aggregate_root
+        )
+        assert any(expected_error in error for error in errors), errors
+
+    aggregate_checker.write_text(checker_source, encoding="utf-8")
+    invocation = "bash ci/check_sumeragi_v2_multilane_release_inventory.sh"
+    assert release_source.splitlines().count(invocation) == 1
+    aggregate_runner.write_text(
+        release_source.replace(invocation, "true # skipped inventory guard", 1),
+        encoding="utf-8",
+    )
+    errors = module._production_liveness_release_inventory_guard_errors(
+        aggregate_root
+    )
+    assert any(
+        "must invoke the independent multilane inventory guard exactly once"
+        in error
+        for error in errors
+    ), errors
 
 
 def test_tlaps_runner_rejects_backend_failure_even_when_tlapm_exits_zero() -> None:

@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 
 use iroha_torii_shared::{
     route_catalog::{
-        ApiSurface, CATALOGED_ROUTES, CatalogProjection, HttpMethod as CatalogHttpMethod,
-        RouteCatalog, sorafs as sorafs_routes,
+        ApiSurface, CATALOGED_ROUTES, CatalogProjection, EnabledFeatures,
+        HttpMethod as CatalogHttpMethod, RouteCatalog, sorafs as sorafs_routes,
     },
     sorafs_hedging_billing_api::{
         BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1,
@@ -11375,7 +11375,7 @@ fn kaigi_relays_events_responses() -> Map {
     responses
 }
 
-fn paths_section() -> Map {
+fn paths_section(enabled_features: EnabledFeatures<'_>) -> Map {
     let mut paths = alias_paths();
     paths.extend(fee_paths());
     paths.extend(time_paths());
@@ -11423,19 +11423,16 @@ fn paths_section() -> Map {
     paths.extend(nexus_paths());
     paths.extend(sumeragi_paths());
     paths.extend(repo_paths());
-    retain_catalog_openapi_operations(&mut paths);
+    retain_catalog_openapi_operations(&mut paths, enabled_features);
     annotate_tool_effects(&mut paths);
     paths
 }
 
-fn retain_catalog_openapi_operations(paths: &mut Map) {
+fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledFeatures<'_>) {
     const OPERATION_METHODS: [&str; 5] = ["get", "post", "put", "patch", "delete"];
 
     let enabled: BTreeSet<(String, &'static str)> = RouteCatalog::new(CATALOGED_ROUTES)
-        .project(
-            CatalogProjection::OpenApi,
-            crate::router::builder::compiled_route_features(),
-        )
+        .project(CatalogProjection::OpenApi, enabled_features)
         .into_iter()
         .filter_map(|route| {
             let method = match route.method() {
@@ -29523,12 +29520,27 @@ fn components_section() -> Value {
 /// Returns the OpenAPI specification for the full Torii surface.
 #[must_use]
 pub fn generate_spec() -> Value {
+    generate_spec_with_features(crate::router::builder::compiled_route_features())
+}
+
+/// Return the OpenAPI specification for one concrete Torii runtime.
+#[must_use]
+pub(crate) fn generate_spec_for_runtime(offline_enabled: bool) -> Value {
+    generate_spec_with_features(crate::router::builder::runtime_route_features(
+        offline_enabled,
+    ))
+}
+
+fn generate_spec_with_features(enabled_features: EnabledFeatures<'_>) -> Value {
     let mut doc = Map::new();
     doc.insert("openapi".into(), Value::String("3.1.0".to_owned()));
     doc.insert("info".into(), info_section(license_section()));
     doc.insert("servers".into(), servers_section());
     doc.insert("tags".into(), tags_section());
-    doc.insert("paths".into(), Value::Object(paths_section()));
+    doc.insert(
+        "paths".into(),
+        Value::Object(paths_section(enabled_features)),
+    );
     doc.insert("components".into(), components_section());
     Value::Object(doc)
 }
@@ -32277,6 +32289,48 @@ mod tests {
                 "retired process-local deal schema leaked into OpenAPI: {schema}"
             );
         }
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn runtime_openapi_omits_offline_operations_when_capability_is_disabled() {
+        use iroha_torii_shared::route_catalog::offline;
+
+        let static_paths = generate_spec()
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("static OpenAPI paths")
+            .clone();
+        let enabled_paths = generate_spec_for_runtime(true)
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("offline-enabled runtime OpenAPI paths")
+            .clone();
+        let disabled_paths = generate_spec_for_runtime(false)
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("offline-disabled runtime OpenAPI paths")
+            .clone();
+
+        for route in offline::ROUTES {
+            let path = route.path().replace("{*", "{");
+            assert!(
+                static_paths.contains_key(&path),
+                "static build-capability OpenAPI must retain {path}"
+            );
+            assert!(
+                enabled_paths.contains_key(&path),
+                "offline-enabled runtime OpenAPI must retain {path}"
+            );
+            assert!(
+                !disabled_paths.contains_key(&path),
+                "offline-disabled runtime OpenAPI must omit {path}"
+            );
+        }
+        assert!(
+            disabled_paths.contains_key("/v1/accounts"),
+            "runtime filtering must preserve unrelated app-api operations"
+        );
     }
 
     #[cfg(feature = "app_api")]

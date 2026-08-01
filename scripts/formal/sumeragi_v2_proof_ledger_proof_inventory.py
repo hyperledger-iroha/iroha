@@ -350,6 +350,7 @@ HISTORICAL_RECOVERY_PROVED_SUPPORT_IDS = (
 DEDUCTIVELY_PROVED_SUPPORT_IDS = (
     "chain-durable-receipt-agreement",
     "terminal-ingress-process-lifetime-absorbency",
+    "adequate-leader-exact-closure-residual",
     "exact-decision-off-scheduler-residual-convergence",
 ) + HISTORICAL_RECOVERY_PROVED_SUPPORT_IDS + (
     "reply-writer-deadline-local-termination",
@@ -358,9 +359,10 @@ DEDUCTIVELY_PROVED_SUPPORT_IDS = (
     "typed-rollover-handoff-model-safety",
     "typed-rollover-handoff-conditional-local-liveness",
 )
-STRICT_PROOFLESS_TEMPORAL_SUPPORT_IDS = (
-    "adequate-leader-exact-closure-residual",
-)
+# Every reviewed temporal support leaf now has a deductive proof body. Keep the
+# empty class explicit so a future proofless compatibility surface cannot be
+# folded into a proved consumer without updating the completion contract.
+STRICT_PROOFLESS_TEMPORAL_SUPPORT_IDS: tuple[str, ...] = ()
 CROSS_TOOL_OPERATOR_SUPPORT_IDS = (
     "autoscale-lifecycle-production-refinement",
     "native-application-evidence-production-refinement",

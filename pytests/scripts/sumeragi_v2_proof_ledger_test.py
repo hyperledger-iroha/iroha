@@ -8667,6 +8667,59 @@ def test_reply_route_ownership_source_fidelity_fails_closed(
             "AsyncReplyRouteFairness must retain non-regressing",
         ),
         (
+            "SumeragiV2AsyncNetworkReplyRoutes.tla",
+            "  /\\ tombstone.outputs # {}\n",
+            "  /\\ TRUE\n",
+            "AsyncReplyPositiveServeOutputForAttempt must retain non-regressing",
+        ),
+        (
+            "SumeragiV2AsyncNetworkReplyRoutes.tla",
+            "  /\\ \\A identity \\in asyncReplyAttemptLifecycleIdentities:\n"
+            "       AsyncReplySemanticServiceReady(\n"
+            "         identity.owner, identity.source, identity.semantic)\n",
+            "  /\\ TRUE\n",
+            "AsyncReplyRouteToBaseAttemptCoupling must retain non-regressing",
+        ),
+        (
+            "SumeragiV2AsyncNetworkReplyRoutes.tla",
+            "AsyncAcquireReplyTicket(owner, semantic, source) ==\n"
+            "  /\\ AsyncReplySemanticServiceReady(owner, source, semantic)\n"
+            "  /\\ AsyncReplyRoute!AcquireReplyTicketV2(\n"
+            "       owner, semantic, source)\n",
+            "AsyncAcquireReplyTicket(owner, semantic, source) ==\n"
+            "  AsyncReplyRoute!AcquireReplyTicketV2(\n"
+            "    owner, semantic, source)\n",
+            "AsyncAcquireReplyTicket must retain non-regressing",
+        ),
+        (
+            "SumeragiV2AsyncNetworkReplyRoutes.tla",
+            "AsyncProductionAsyncProjectionStep ==\n"
+            "  /\\ AsyncNext\n"
+            "  /\\ UNCHANGED AsyncReplyRouteVars\n"
+            "  /\\ AsyncReplyRouteBaseAttemptCoupling'\n",
+            "AsyncProductionAsyncProjectionStep ==\n"
+            "  /\\ AsyncNext\n"
+            "  /\\ UNCHANGED AsyncReplyRouteVars\n",
+            "AsyncProductionAsyncProjectionStep must retain non-regressing",
+        ),
+        (
+            "SumeragiV2AsyncNetworkReplyRoutes.tla",
+            "AsyncProductionNext ==\n"
+            "  \\/ AsyncProductionAsyncProjectionStep\n"
+            "  \\/ AsyncProductionReplyProjectionStep\n",
+            "AsyncProductionNext ==\n"
+            "  \\/ AsyncProductionAsyncProjectionStep\n",
+            "AsyncProductionNext must retain non-regressing",
+        ),
+        (
+            "SumeragiV2AsyncNetworkReplyRouteProofs.tla",
+            "BY AsyncReplyServiceReadyPositiveOutputGuardObligation,\n"
+            "   AsyncReplyBareAcquirePositiveBaseGuardObligation,\n"
+            "   AsyncReplyBareServicePositiveBaseGuardObligation\n",
+            "BY AsyncReplyServiceReadyPositiveOutputGuardObligation\n",
+            "AsyncReplyBareFairnessGuardsRequirePositiveBase must retain deductive connection",
+        ),
+        (
             "SumeragiV2AsyncNetworkReplyRouteProofs.tla",
             "      => AsyncReplyRoute!ReplyRouteV2Spec\n",
             "      => AsyncReplyRoute!ReplyRouteSpec\n",
@@ -9262,7 +9315,7 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
             """"deferred certified Sumeragi v2 body fetch at request capacity"
                     );
                     return Ok(());""",
-            "new and existing Fetch Q-capacity deferrals must retain and retry",
+            "a new Fetch Q-capacity admission must retain and retry",
         ),
         (
             "begin_fetch",
@@ -9273,25 +9326,47 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
                         );
                         self.pending_fetches.remove(&existing_id);
                         return Err(EffectExecutorError::CertifiedRequestCapacity { capacity });""",
-            "new and existing Fetch Q-capacity deferrals must retain and retry",
+            "an existing Fetch Q-capacity upgrade must retain and retry",
         ),
         (
             "begin_fetch",
             "            if merged == existing.task {\n",
             "            if false && merged == existing.task {\n",
-            "idempotent exact Fetch retry must stop before duplicate service enqueue",
+            "an incumbent Fetch retry must retain its FIFO barrier while a younger coalesced lifecycle retries service once and is consumed",
+        ),
+        (
+            "begin_fetch",
+            "                ownership: existing.task.ownership.clone(),\n",
+            "                ownership,\n",
+            "coalesced Fetch retries must retain the immutable incumbent service owner",
+        ),
+        (
+            "begin_fetch",
+            """                services.enqueue_body_fetch(merged).map_err(service_error)?;
+                return Ok(());""",
+            """                services.enqueue_body_fetch(merged).map_err(service_error)?;
+                return Err(EffectExecutorError::PendingWorkCapacity {
+                    capacity: self.config.max_pending_work,
+                });""",
+            "an incumbent Fetch retry must retain its FIFO barrier while a younger coalesced lifecycle retries service once and is consumed",
         ),
         (
             "begin_fetch",
             """            pending.task = merged;
             pending.request_hash = request_hash;
+            return if same_lifecycle {
+                Err(EffectExecutorError::PendingWorkCapacity {
+                    capacity: self.config.max_pending_work,
+                })
+            } else {
+                Ok(())
+            };""",
+            """            pending.task = merged;
+            pending.request_hash = request_hash;
             return Err(EffectExecutorError::PendingWorkCapacity {
                 capacity: self.config.max_pending_work,
             });""",
-            """            pending.task = merged;
-            pending.request_hash = request_hash;
-            return Ok(());""",
-            "existing Fetch authority upgrade must install exact P/Q state while retaining the outer FIFO head",
+            "an existing Fetch authority upgrade must install exact P/Q state, retain only the incumbent FIFO barrier, and consume a younger coalesced lifecycle",
         ),
         (
             "commit_fetch_completion",
@@ -10679,7 +10754,59 @@ def test_serve_scheduler_ordinal_source_seal_rejects_stale_artifact(
         ),
         (
             "SumeragiV2AsyncNetwork.tla",
-            "  /\\ AsyncOlderRuntimeLifecyclePrecedesServeIngress(node)\n"
+            "  \\/ AsyncOrdinaryIngressProtectedRecordsAt(node) # {}\n\n"
+            "AsyncEarliestIngressSchedulerOrdinal(node) ==",
+            "\nAsyncEarliestIngressSchedulerOrdinal(node) ==",
+            "AsyncIngressSchedulerBarrierActive must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "       ELSE AsyncOrdinaryIngressEarliestPhysicalRecord(\n"
+            "              node).schedulerOrdinal",
+            "       ELSE AsyncLeaderWireEarliestPhysicalIngressRecord(\n"
+            "              node).schedulerOrdinal",
+            "AsyncEarliestIngressSchedulerOrdinal must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "  /\\ AsyncSelectedRuntimeSourcePhysicalOrdinal(node)\n"
+            "       < AsyncEarliestIngressPhysicalOrdinal(node)",
+            "  /\\ TRUE",
+            "AsyncOlderRuntimeLifecyclePrecedesIngressScheduler must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "  /\\ LocalSourceLifecyclePhysicalOrdinal(\n"
+            "       node, SelectedLocalSource(node))\n"
+            "       < AsyncEarliestIngressPhysicalOrdinal(node)",
+            "  /\\ TRUE",
+            "AsyncOlderLocalLifecyclePrecedesServeIngress must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "     !.retransmitLifecyclePhysicalCut =\n",
+            "     !.timeoutLifecyclePhysicalCut =\n",
+            "AsyncCandidateLifecycleStateAfterServeIngressAdmission must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "  /\\ \\A node \\in ValidatorIds:\n"
+            "       /\\ AsyncTimeoutLifecycleOwned(node)\n"
+            "       /\\ AsyncRetransmitLifecycleOwned(node)\n"
+            "         => AsyncTimeoutLifecycleOrdinal(node) #\n"
+            "              AsyncRetransmitLifecycleOrdinal(node)",
+            "  /\\ TRUE",
+            "AsyncSharedSchedulerOrdinalInjectionInvariant must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "  /\\ IF AsyncCandidateProducerContinuationOwnsRunNodeTurn(node)\n",
+            "  /\\ IF AsyncCandidateProducerContinuationRunnerResolutionRequired(node)\n",
+            "RunNodeWork must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "  /\\ AsyncOlderRuntimeLifecyclePrecedesIngressScheduler(node)\n"
             "  /\\ UNCHANGED AsyncIoVars",
             "  /\\ TRUE\n  /\\ UNCHANGED AsyncIoVars",
             "SerializedRuntimePrecedesServeIngressStep must equal only",
@@ -10687,9 +10814,9 @@ def test_serve_scheduler_ordinal_source_seal_rejects_stale_artifact(
         (
             "SumeragiV2AsyncNetwork.tla",
             "  /\\ LocalSourceLifecycleOrdinal(node, SelectedLocalSource(node))\n"
-            "       < AsyncServeEarliestIngressSchedulerOrdinal(node)",
+            "       < AsyncEarliestIngressSchedulerOrdinal(node)",
             "  /\\ LocalSourceLifecycleOrdinal(node, SelectedLocalSource(node))\n"
-            "       <= AsyncServeEarliestIngressSchedulerOrdinal(node)",
+            "       <= AsyncEarliestIngressSchedulerOrdinal(node)",
             "AsyncOlderLocalLifecyclePrecedesServeIngress must equal only",
         ),
         (
@@ -10747,17 +10874,15 @@ def test_serve_scheduler_ordinal_source_seal_rejects_stale_artifact(
         (
             "SumeragiV2AsyncNetwork.tla",
             "    /\\ AsyncTimeoutLifecycleOrdinal(node)\n"
-            "         < AsyncServeEarliestIngressSchedulerOrdinal(node)",
+            "         < AsyncEarliestIngressSchedulerOrdinal(node)",
             "    /\\ TRUE",
             "theorem AsyncLaterServeTicketInterleavesOlderRuntimeEpisode "
             "must equal only",
         ),
         (
             "SumeragiV2AsyncNetwork.tla",
-            "       AsyncOlderRuntimeLifecyclePrecedesServeIngress,\n"
-            "       AsyncOlderFrozenTimeoutLifecyclePrecedesServeIngress,\n"
+            "       AsyncOlderRuntimeLifecyclePrecedesIngressScheduler,\n"
             "       SerializedRuntimePrecedesServeIngressStep,",
-            "       AsyncOlderRuntimeLifecyclePrecedesServeIngress,\n"
             "       SerializedRuntimePrecedesServeIngressStep,",
             "theorem AsyncLaterServeTicketInterleavesOlderRuntimeEpisode "
             "must equal only",
@@ -13617,6 +13742,7 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
         "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
         "crates/iroha_core/src/sumeragi/v2_core/wal.rs",
         "crates/iroha_core/src/sumeragi/v2.rs",
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
         "crates/iroha_core/src/sumeragi/v2_runner.rs",
         "crates/iroha_core/src/sumeragi/v2_candidate.rs",
     )
@@ -13741,6 +13867,22 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
             "LocalProposalState::from_replayed_proposal(replayed_proposal, initial_directive)",
             "LocalProposalState::from_replayed_proposal(None, initial_directive)",
             "startup replay-owner handoff",
+        ),
+        (
+            "executor_skips_one_shot_producer_reservation",
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "can_schedule_local_proposal",
+            "self.runtime\n            .local_proposal_admission_available(tag)\n            .map_err(EffectExecutorError::Runtime)",
+            "Ok(true)",
+            "serialized active-view one-shot producer reservation",
+        ),
+        (
+            "runner_replacement_bypasses_one_shot_producer_reservation",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "schedule_local_proposal",
+            "executor.can_schedule_local_proposal()?",
+            "executor.can_admit_local_proposal()",
+            "every locked-load and fresh candidate observation must retain the serialized one-shot producer gate",
         ),
         (
             "wal_high_subject",
@@ -18375,6 +18517,83 @@ def test_exact_output_production_source_is_bound() -> None:
             "runner lane dispatch must fail stop if its guarded peek loses the exact queued owner before drain",
         ),
         (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "pub(crate) fn matches_body_coordinates(",
+            "            && self.identity.view == round.view\n",
+            "",
+            "exact-output ingress seam ingress::leader_wire_token_matches_body_coordinates",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(crate) fn classify_payload_chunk_lifecycle(",
+            "            return Ok(PayloadChunkLifecycleDisposition::Retain);\n",
+            "            return Ok(PayloadChunkLifecycleDisposition::Volatile);\n",
+            "a live exact fetch must retain its productive chunk lifecycle",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "fn begin_apply<S: V2EffectServices>(",
+            "        if let Some(finality) = &self.finality_completion {\n",
+            "        if false && let Some(finality) = &self.finality_completion {\n",
+            "durable Apply completion must tombstone the exact logical request against later periodic recreation",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "fn begin_fetch<S: V2EffectServices>(",
+            "        if round.context_id != self.context.id()\n",
+            "        self.finality_completion = None;\n        if round.context_id != self.context.id()\n",
+            "the durable Apply completion tombstone must be installed exactly once and never cleared or replaced",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(crate) fn complete_application<S: V2EffectServices>(",
+            "        self.finality_completion = Some(FinalityCompletion {\n            tag,\n",
+            "        self.finality_completion = Some(FinalityCompletion {\n            tag: EventTag::new(tag.height(), 0, tag.generation()),\n",
+            "durable Apply completion must retain the exact tag in its non-resurrecting tombstone",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "fn begin_apply<S: V2EffectServices>(",
+            "            let exact = finality.tag == tag\n",
+            "            let exact = true\n",
+            "durable Apply completion must tombstone the exact logical request against later periodic recreation",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "fn begin_apply<S: V2EffectServices>(",
+            "        if let Some(existing) = self.pending_applications.values().next() {\n",
+            "        if false && let Some(existing) = self.pending_applications.values().next() {\n",
+            "exact Apply retransmission must retain the incumbent authority and coalesce every later periodic lifecycle",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn route_payload_chunk<R: EffectRuntime>(",
+            "            if self.has_exact_reconstructed_completion(manifest_hash, &ingress_ownership)? {\n",
+            "            if false && self.has_exact_reconstructed_completion(manifest_hash, &ingress_ownership)? {\n",
+            "an unmatched productive chunk must consult exact reconstructed and executor-owned lifecycle authority before buffering",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn sweep_buffered_payload_chunk_lifecycles<R: EffectRuntime>(",
+            "                    Ok(PayloadChunkLifecycleDisposition::Retain) => {\n                        retained.push_back(buffered);\n                        continue;\n                    }",
+            "                    Ok(PayloadChunkLifecycleDisposition::Retain) => {\n                        continue;\n                    }",
+            "the buffered lifecycle sweep must preserve every nonterminal or unclassifiable exact owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn replay_buffered_chunks<R: EffectRuntime>(",
+            "        self.sweep_buffered_payload_chunk_lifecycles(executor)?;\n",
+            "",
+            "every orphan replay turn must sweep terminal exact chunk owners before selecting live fetch work",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn retire_buffered_payload_chunk_tail(",
+            "                .mark_leader_wire_volatile_terminal(runtime)\n",
+            "                .mark_leader_wire_volatile_terminal(runtime).and(Ok(()))\n",
+            "exact-output ingress seam worker::retire_buffered_payload_chunk_tail",
+        ),
+        (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn rehydrate_with_exact_geometry_after_durable_handoff(",
             "self.requeue_retained_outbound_after_height_rollover();",
@@ -18941,21 +19160,13 @@ def test_fixed_support_theorem_statements_reject_weakening(
     assert any(f"{symbol} must state only" in error for error in errors), errors
 
 
-@pytest.mark.parametrize(
-    ("support_id", "consumer_id"),
-    (
-        (
-            "adequate-leader-exact-closure-residual",
-            "rotating-leader-liveness",
-        ),
-    ),
-)
-def test_proofless_temporal_closure_support_keeps_consumer_unproved(
-    support_id: str,
-    consumer_id: str,
-) -> None:
+def test_proved_adequate_leader_support_allows_only_deductive_promotion() -> None:
     module = load_checker()
     ledger = module.load_ledger()
+    support_id = "adequate-leader-exact-closure-residual"
+    consumer_id = "rotating-leader-liveness"
+    assert support_id in module.DEDUCTIVELY_PROVED_SUPPORT_IDS
+    assert module.STRICT_PROOFLESS_TEMPORAL_SUPPORT_IDS == ()
     target_module, symbol = module.SUPPORT_PROOF_OBLIGATION_INVENTORY[
         support_id
     ]
@@ -18966,14 +19177,31 @@ def test_proofless_temporal_closure_support_keeps_consumer_unproved(
     by_id = {obligation["id"]: obligation for obligation in obligations}
     by_id[consumer_id]["status"] = "tlaps_proved"
 
-    errors = module._proofless_release_theorem_errors(
+    assert module._proofless_release_theorem_errors(
         obligations,
         {target_module: source},
-    )
+    ) == []
 
+    extracted = module._top_level_theorem_body(source, symbol)
+    assert extracted is not None
+    proof_marker = re.search(
+        r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+        extracted[0],
+    )
+    assert proof_marker is not None
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        extracted[0][proof_marker.start() :],
+        "",
+    )
+    errors = module._proofless_release_theorem_errors(
+        obligations,
+        {target_module: mutated},
+    )
     assert any(
-        f"{target_module}!{symbol} may remain only while "
-        f"consumer {consumer_id} is specified_unproved" in error
+        f"proofless release theorem {target_module}!{symbol}" in error
+        and "must have exactly one ledger entry" in error
         for error in errors
     ), errors
 
@@ -22591,6 +22819,18 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
             "authenticated post-cut replay admission gate declaration",
         ),
         (
+            "can_admit_pre_runtime_leader_wire",
+            "if self.fail_closed {",
+            "if false {",
+            "pre-runtime leader-wire physical-cut and clock-owner gate declaration",
+        ),
+        (
+            "can_admit_pre_runtime_leader_wire",
+            "match self.clock_owner_reservation_blocks_occurrence(",
+            "match Ok(false).and(",
+            "pre-runtime leader-wire physical-cut and clock-owner gate declaration",
+        ),
+        (
             "can_admit_network_message_with_ingress_ownership",
             "match self.clock_owner_reservation_blocks_occurrence(",
             "match Ok(false).and(",
@@ -22601,6 +22841,12 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
             "Err(EnqueueError::Full),",
             "Ok(()),",
             "post-cut replay and stale FIFO-debt regression declaration",
+        ),
+        (
+            "distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner",
+            "same_token_pre_runtime.runtime_physical_cut = None;",
+            "same_token_pre_runtime.runtime_physical_cut = Some(0);",
+            "pre-runtime exact-retry coalescing regression declaration",
         ),
     )
     for item_name, old, new, expected_error in mutations:
@@ -23501,6 +23747,25 @@ def test_height_productivity_continuation_contract_rejects_weakening(
             "operator",
             "AsyncCandidateProducerContinuationLifecycleCoveredIn",
             "/\\ lifecycle.ordinal = record.ordinal",
+            "/\\ TRUE",
+            "exact reviewed candidate-producer lifecycle coverage operator",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "operator",
+            "AsyncCandidateProducerContinuationLifecycleCoveredIn",
+            (
+                "/\\ lifecycle.sourcePhysicalOrdinal = "
+                "record.sourcePhysicalOrdinal"
+            ),
+            "/\\ TRUE",
+            "exact reviewed candidate-producer lifecycle coverage operator",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "operator",
+            "AsyncCandidateProducerContinuationLifecycleCoveredIn",
+            "/\\ lifecycle.physicalCut = record.physicalCut",
             "/\\ TRUE",
             "exact reviewed candidate-producer lifecycle coverage operator",
         ),
@@ -34988,6 +35253,12 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
             "StrictSameRoundTcUpgrade must equal only",
         ),
         (
+            "TimeoutReceiptAdmitted",
+            "  /\\ vote.view <= nodeView[node] + 1\n",
+            "  /\\ vote.view <= nodeView[node] + 2\n",
+            "TimeoutReceiptAdmitted must equal only",
+        ),
+        (
             "ProposalJustified",
             "     /\\ proposal.justifyRank < proposal.view\n",
             "     /\\ proposal.justifyRank <= proposal.view\n",
@@ -38098,6 +38369,21 @@ def test_async_source_fidelity_rejects_dormant_potential_owner_weakening(
             "AsyncLeaderWireIngressOwnsSharedPhysicalTurn",
             "node).physicalAdmissionOrdinal",
             "node).schedulerOrdinal",
+        ),
+        (
+            "AsyncOrdinaryIngressEarliestPhysicalRecord",
+            "carrier.physicalOrdinal <= other.physicalOrdinal",
+            "carrier.schedulerOrdinal <= other.schedulerOrdinal",
+        ),
+        (
+            "AsyncOrdinaryIngressOwnsSharedPhysicalTurn",
+            "AsyncOrdinaryIngressEarliestPhysicalRecord(node).physicalOrdinal",
+            "AsyncOrdinaryIngressEarliestPhysicalRecord(node).schedulerOrdinal",
+        ),
+        (
+            "AsyncEarliestIngressPhysicalOrdinal",
+            "AsyncOrdinaryIngressEarliestPhysicalRecord(node).physicalOrdinal",
+            "AsyncOrdinaryIngressEarliestPhysicalRecord(node).schedulerOrdinal",
         ),
     ),
 )

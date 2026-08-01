@@ -71,6 +71,11 @@ stake_asset_id = "xor#universal"
 stake_escrow_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 slash_sink_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 
+[settlement.offline]
+enabled = true
+escrow_required = true
+escrow_accounts = {}
+
 [nexus.storage]
 local_budget_bytes = 44141730227814
 

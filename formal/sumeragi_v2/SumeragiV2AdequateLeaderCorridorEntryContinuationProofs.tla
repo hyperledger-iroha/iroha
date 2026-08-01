@@ -2237,23 +2237,20 @@ lemma above then excludes every formed TC at or above the synchronized view.
 The exit handoff also stores the original corridor authority receipt, so a
 nonresponsive candidate cannot masquerade as the exited target.
 
-TODO: provide `AdequateLeaderFixedCorridorDeadlineServiceProperty` directly
-from the existing service deadlines and frozen owner/stage ranks.  The proof
-must count each exact packet, I/O, deferred, runner, leader-wire, and
-producer-continuation episode and show that their cumulative clock charge is
-at most `AsyncFixedCorridorServiceBudget`.  The receipt is ghost-only and
-`AsyncTickEnabled` is unchanged.  The current qualitative finite-continuation
-provider has no theorem subsuming its rank under the configured numeric
-budget, so it cannot yet be used as this inequality.  Until that arithmetic
-bridge is proved, the conditional provider below is not a release promotion
-of the second ViewReach conjunct.  The numeric provider must additionally
-discharge
-`AdequateLeaderAuthorityBoundActiveReceiptDecisionCarryProperty`: receipt
-acquisition carries the exact frozen authority from the fresh self-leader
-arming boundary, and receipt service includes exact-target CommitQC
-dissemination.  The fresh-source deadline property alone has no past-time
-carrier for an arbitrary later target corridor and therefore cannot be used
-as that stronger interface.
+`SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs` now supplies
+`AdequateLeaderFixedCorridorDeadlineServiceProperty` from the exact packet,
+I/O, deferred, runner, leader-wire, producer-continuation, replacement, and
+global-blocker ranks.  Their additive clock charge is bounded by
+`AsyncFixedCorridorServiceBudget`; the receipt remains ghost-only and
+`AsyncTickEnabled` is unchanged.  That later module combines the freshly
+armed self-leader deadline with responsive Decision dissemination and is the
+release provider for the second ViewReach conjunct.
+
+The conditional interface below remains intentionally narrower and is not
+used as a release shortcut.  In particular, an arbitrary later target cannot
+recover past receipt acquisition from the fresh-source deadline alone;
+`AdequateLeaderAuthorityBoundActiveReceiptDecisionCarryProperty` would still
+be required by any consumer choosing that alternate interface.
 ***************************************************************************)
 
 AdequateLeaderTargetFrozenCorridorOpenGoal(

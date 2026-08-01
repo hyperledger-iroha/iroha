@@ -1,9 +1,10 @@
 //! Measure the non-shipping compact Kagemusha generator under its external guard.
 //!
-//! This diagnostic executes the complete generate, bootstrap, live-prove, and
-//! terminal-verification lifecycle. Proving keys are streamed into anonymous
-//! files, and the process emits only validated byte counts; it cannot frame or
-//! publish candidate or release artifacts.
+//! This diagnostic executes either the complete generate, bootstrap, live-prove,
+//! and terminal-verification lifecycle or a populated k17 circuit-shape probe.
+//! Proving keys are streamed into anonymous files, and the process emits only
+//! validated byte counts and shape summaries; it cannot frame or publish
+//! candidate or release artifacts.
 
 use std::{
     env,
@@ -15,27 +16,31 @@ use std::{
 
 use iroha_core::zk::kagemusha_v2::{
     KagemushaGeneratedParityArtifactsV4, claim_kagemusha_generation_supervisor_permit_v4,
-    generate_kagemusha_pasta_cycle_artifacts_v4, validate_kagemusha_proof_pair_measurement_v4,
-    validate_kagemusha_step_bootstrap_payload_v4,
+    generate_kagemusha_pasta_cycle_artifacts_v4, run_kagemusha_k17_shape_probe_v5,
+    validate_kagemusha_proof_pair_measurement_v4, validate_kagemusha_step_bootstrap_payload_v4,
 };
 use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
-    KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-    KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4, KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
+    KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4,
+    KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
+    KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4, KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
+    KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
     KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4, KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4,
-    KagemushaPastaCycleParityV1, KagemushaPastaPublicLayoutV4, KagemushaStepCircuitParamsV4,
+    KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4, KagemushaPastaCycleParityV1,
+    KagemushaPastaPublicLayoutV4, KagemushaStepCircuitParamsV4,
 };
 
-const SUBCOMMAND: &str = "measure-compact-k16";
-const EXPECTED_PARAMETERS_BYTES: usize = 4_194_372;
-const EXPECTED_VERIFYING_KEY_BYTES: usize = 35_018;
-const EXPECTED_PROVING_KEY_BYTES: u64 = 4_594_903_830;
+const SUBCOMMAND: &str = "measure-compact-k17";
+const K17_SHAPE_PROBE_SUBCOMMAND: &str = "probe-compact-k17-shape";
+const EXPECTED_PARAMETERS_BYTES: usize = 8_388_676;
+const EXPECTED_VERIFYING_KEY_BYTES: usize = 20_362;
+const EXPECTED_PROVING_KEY_BYTES: u64 = 5_347_763_078;
 
 fn benchmark_error(message: impl Into<String>) -> io::Error {
     io::Error::other(message.into())
 }
 
-fn compact_k16_params() -> Result<KagemushaStepCircuitParamsV4, io::Error> {
+fn compact_k17_params() -> Result<KagemushaStepCircuitParamsV4, io::Error> {
     let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
     let layout = KagemushaPastaPublicLayoutV4::for_ipa_round_count(k)
         .map_err(|error| benchmark_error(format!("compact public layout is invalid: {error}")))?;
@@ -49,14 +54,14 @@ fn compact_k16_params() -> Result<KagemushaStepCircuitParamsV4, io::Error> {
         num_instance_columns: 1,
         public_input_limbs: layout.instance_column_limbs,
         minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-        max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4,
+        max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
     };
     let validated_layout = params
         .validate()
         .map_err(|error| benchmark_error(format!("compact circuit profile is invalid: {error}")))?;
-    if validated_layout != layout || layout.instance_column_limbs != 64 {
+    if validated_layout != layout || layout.instance_column_limbs != 66 {
         return Err(benchmark_error(
-            "compact circuit profile does not select the fixed 64-limb public layout",
+            "compact circuit profile does not select the fixed 66-limb public layout",
         ));
     }
     Ok(params)
@@ -84,12 +89,13 @@ fn validate_parity(
             != EXPECTED_PROVING_KEY_BYTES
     {
         return Err(benchmark_error(format!(
-            "generated {label} artifacts do not match the reviewed compact-k16 byte geometry"
+            "generated {label} artifacts do not match the reviewed compact-k17 byte geometry"
         )));
     }
     if artifacts.compiled_protocol_structure_sha256 == [0; 32]
         || artifacts.step_proof_size_bytes == 0
         || artifacts.step_proof_size_bytes > KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4
+        || artifacts.step_proof_size_bytes != KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4
         || artifacts.step_proof_size_bytes != artifacts.circuit_params.max_parent_proof_bytes
     {
         return Err(benchmark_error(format!(
@@ -116,7 +122,7 @@ fn run_measurement() -> Result<(), Box<dyn Error>> {
     // parameter set or opening even the anonymous proving-key sinks.
     let supervisor_permit = claim_kagemusha_generation_supervisor_permit_v4()
         .map_err(|error| benchmark_error(format!("resource guard is unavailable: {error}")))?;
-    let params = compact_k16_params()?;
+    let params = compact_k17_params()?;
     let mut step_eq_proving_key_sink = tempfile::tempfile()?;
     let mut step_ep_proving_key_sink = tempfile::tempfile()?;
     let generated = generate_kagemusha_pasta_cycle_artifacts_v4(
@@ -157,6 +163,9 @@ fn run_measurement() -> Result<(), Box<dyn Error>> {
         .ok_or_else(|| benchmark_error("measured Step-proof byte sum overflowed"))?;
     if pair_bytes <= step_bytes
         || pair_bytes >= generated.max_recursive_pair_bytes
+        || pair_bytes != KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4
+        || generated.max_recursive_pair_bytes
+            != KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4
         || generated.max_recursive_pair_bytes
             > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
     {
@@ -216,9 +225,27 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
     match (args.next(), args.next()) {
         (Some(subcommand), None) if subcommand == OsStr::new(SUBCOMMAND) => run_measurement(),
+        (Some(subcommand), None) if subcommand == OsStr::new(K17_SHAPE_PROBE_SUBCOMMAND) => {
+            // The shape probe allocates full k17 ParamsIPA and populated
+            // protocol graphs, so direct invocation must fail without the
+            // benchmark runner's inherited one-shot capability.
+            let supervisor_permit = claim_kagemusha_generation_supervisor_permit_v4()
+                .map_err(|error| benchmark_error(format!("resource guard is unavailable: {error}")))?;
+            println!("benchmark=NON_SHIPPING_K17_SHAPE_PROBE");
+            run_kagemusha_k17_shape_probe_v5(
+                KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4[0],
+                KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4[0],
+                6,
+                supervisor_permit,
+            )
+                .map_err(benchmark_error)
+                .map_err(Into::into)
+        }
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("usage: kagemusha_recursive_spend_v4_memory_benchmark {SUBCOMMAND}"),
+            format!(
+                "usage: kagemusha_recursive_spend_v4_memory_benchmark <{SUBCOMMAND}|{K17_SHAPE_PROBE_SUBCOMMAND}>"
+            ),
         )
         .into()),
     }

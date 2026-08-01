@@ -6876,19 +6876,31 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         &mut self,
         command: TaggedCommand<D::Command>,
     ) -> Result<(), EnqueueError> {
-        let owner = command.lifecycle_owner()?;
-        if self.clock_owner_reservation_blocks(&owner)? {
-            return Err(EnqueueError::Full);
+        // Fresh commands receive their lifecycle ordinal atomically with
+        // physical FIFO admission below. Only a restored or inherited owner
+        // can carry an older logical position across the frozen clock cut.
+        if command.lifecycle_ordinal.is_some() {
+            let owner = command.lifecycle_owner()?;
+            if self.clock_owner_reservation_blocks(&owner)? {
+                return Err(EnqueueError::Full);
+            }
+        } else {
+            // The queue will mint this owner's ordinal, but corrupt clock
+            // owner/cut pairing must still fail closed before publication.
+            self.validate_clock_owner_physical_cuts()?;
         }
         self.ingress.enqueue(command)
     }
 
-    /// Replace the bounded set of owners currently held by retained executor
-    /// effects or asynchronous Sign/Fetch/Store/Validate/Apply tasks.
+    /// Replace the bounded set of runnable owners currently held by retained
+    /// executor effects or asynchronous Sign/Store/Validate/Apply tasks.
     ///
     /// The executor derives this set from its existing bounded maps before
     /// each runtime step. Supplying a forged carrier or exceeding the existing
     /// pending-work plus one retained-batch bound fails closed.
+    /// A network-waiting Fetch remains executor-owned but is intentionally
+    /// passive here; its exact owner returns with `BodyAvailable` so the wait
+    /// itself cannot block the control traffic needed to finish or supersede it.
     pub(crate) fn set_external_lifecycle_owners(
         &mut self,
         owners: Vec<RuntimeLifecycleOwner>,
@@ -6901,6 +6913,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         self.external_lifecycle_owners = owners;
         Ok(())
+    }
+
+    /// Return the number of runnable external owners published to the runtime.
+    #[cfg(test)]
+    pub(crate) fn external_lifecycle_owner_count(&self) -> usize {
+        self.external_lifecycle_owners.len()
     }
 
     /// Bind external lifecycle capacity to the effect executor's existing
@@ -6978,6 +6996,39 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             owner,
             RuntimeFreshRootKind::LocalProposalAdmission,
         ))
+    }
+
+    /// Return whether the runner may begin one local proposal for this view.
+    ///
+    /// An armed leader reservation is deliberately one-shot: guarded Proposal
+    /// fanout consumes it, while a later timeout or `EnterView` owns the next
+    /// progress transition. A same-view lock update may make the runner's
+    /// candidate state eligible again, but it must not turn that scheduling
+    /// churn into a second Proposal. Report the consumed reservation as
+    /// ordinary backpressure so the pacemaker can advance the view. Corrupt or
+    /// mismatched reservations remain fatal, and the actual admission path
+    /// below still fails closed if a caller bypasses this preflight.
+    pub(crate) fn local_proposal_admission_available(
+        &mut self,
+        tag: EventTag,
+    ) -> Result<bool, String> {
+        if self.fail_closed {
+            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
+        }
+        if tag != self.round_tag {
+            self.latch_fail_closed(
+                "local proposal admission preflight changed the authoritative tag",
+            );
+            return Err("Sumeragi v2 local proposal preflight tag was invalid".to_owned());
+        }
+        let Some(reservation) = self.active_view_producer.as_ref() else {
+            return Ok(!self.clocks_armed);
+        };
+        if reservation.tag != tag || !reservation.ownership.validate_exact() {
+            self.latch_fail_closed("local proposal admission preflight changed its producer");
+            return Err("Sumeragi v2 local proposal preflight producer was invalid".to_owned());
+        }
+        Ok(true)
     }
 
     /// Retain or release the scheduler-visible producer for the authoritative
@@ -9960,11 +10011,116 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     /// Return whether the fair-ingress head can reach authentication and then
     /// either claim its exact runtime prefix or coalesce with an exact queued
     /// authenticated owner.
+    fn can_admit_pre_runtime_leader_wire(
+        &self,
+        outer_message: &wire::ConsensusMessageV2,
+        runtime_message: &wire::ConsensusMessageV2,
+        default_class: CommandClass,
+        ownership: &FairV2IngressOwnershipEvidence,
+    ) -> Option<bool> {
+        let token = ownership.leader_wire_token()?;
+        if ownership.leader_wire_runtime_receipt().is_some() {
+            return None;
+        }
+
+        // Productive fair ingress owns the durable Ingress token while the
+        // packet is still physically queued. Its Runtime receipt can only be
+        // minted by the atomic dequeue immediately after this read-only
+        // predicate succeeds. Validate that exact pre-handoff state here;
+        // generic runtime identity permits the absent receipt and physical cut
+        // only for this read-only probe, while mutating admission still
+        // requires the dequeue-frozen pair.
+        let outer = super::message::BlockMessage::V2(outer_message.clone());
+        if !ownership.validate_exact()
+            || !ownership.matches_message(&outer)
+            || ownership.runtime_physical_cut().is_some()
+            || ownership.runtime_lifecycle_ordinal() != Some(token.scheduler_ordinal())
+            || !self
+                .ingress
+                .lifecycle_ordinals
+                .recognizes_minted(token.scheduler_ordinal())
+                .unwrap_or(false)
+        {
+            // Drain malformed process-local ownership so the mutating seam
+            // reports the exact invariant failure instead of pinning a fair
+            // lane forever.
+            return Some(true);
+        }
+
+        if self.fail_closed {
+            return Some(false);
+        }
+        if let Some((round, _)) = self
+            .driver
+            .wire_ingress_missing_execution_commitment(&runtime_message.payload)
+            && round.height == self.round_tag.height()
+            && round.view == self.round_tag.view()
+        {
+            return Some(false);
+        }
+
+        if let Some((_, admission_ordinal)) = self
+            .driver
+            .deferred_authenticated_message_owner(runtime_message)
+        {
+            // A Busy-deferred aggregate already owns its sole serialized
+            // occurrence. An exact restart retry may rejoin that lifecycle;
+            // a distinct productive token must remain in fair ingress until
+            // the deferred owner retires and a real FIFO slot is available.
+            let same_token = self
+                .deferred_ingress_ownership
+                .get(&admission_ordinal)
+                .and_then(|retained| retained.leader_wire_token().ok().flatten())
+                == Some(token);
+            return Some(same_token);
+        }
+
+        for queued in &self.ingress.commands {
+            if !queued.command.matches_wire_envelope(runtime_message) {
+                continue;
+            }
+            let Some(retained) = queued.ingress_ownership.as_ref() else {
+                // Let the mutating seam expose a corrupt authenticated owner.
+                return Some(true);
+            };
+            match retained.leader_wire_token() {
+                Ok(Some(retained_token)) if retained_token == token => return Some(true),
+                Ok(_) => {}
+                Err(_) => return Some(true),
+            }
+        }
+
+        let Some(source_physical_ordinal) = ownership.physical_admission_ordinal() else {
+            return Some(true);
+        };
+        match self.clock_owner_reservation_blocks_occurrence(
+            token.scheduler_ordinal(),
+            source_physical_ordinal,
+        ) {
+            Ok(true) => return Some(false),
+            Ok(false) => {}
+            // Drain malformed process-local state so the mutating seam can
+            // expose the invariant failure instead of pinning a fair lane.
+            Err(_) => return Some(true),
+        }
+
+        let may_use_progress = self
+            .driver
+            .wire_ingress_may_use_progress(&runtime_message.payload);
+        let capacity = match self.ingress.check_capacity(default_class) {
+            Ok(()) => Ok(()),
+            Err(_) if may_use_progress => self.ingress.check_capacity(CommandClass::Progress),
+            Err(error) => Err(error),
+        };
+        Some(capacity.is_ok())
+    }
+
     pub(crate) fn can_admit_network_message_with_ingress_ownership(
         &self,
         message: &wire::ConsensusMessageV2,
         ingress_ownership: &FairV2IngressOwnershipEvidence,
     ) -> bool {
+        let outer_message = message;
         let (runtime_message, default_class) = match &message.payload {
             wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => (
                 wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
@@ -9980,6 +10136,14 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 (message.clone(), class)
             }
         };
+        if let Some(admissible) = self.can_admit_pre_runtime_leader_wire(
+            outer_message,
+            &runtime_message,
+            default_class,
+            ingress_ownership,
+        ) {
+            return admissible;
+        }
         let Some(ownership) = RuntimeIngressOwnershipEvidence::from_fair_ingress(
             &runtime_message,
             ingress_ownership.clone(),
@@ -12318,6 +12482,12 @@ mod tests {
         source_physical_ordinal: Option<u64>,
         physical_cut: u128,
     ) -> Result<RuntimeDeferredLifecycleOwnership, EnqueueError> {
+        if !owner.validate_exact()
+            || physical_cut == 0
+            || source_physical_ordinal.is_some_and(|source| u128::from(source) >= physical_cut)
+        {
+            return Err(EnqueueError::FailClosed);
+        }
         let runtime_seal = DeferredRuntimeOwnershipSeal::for_test(
             deferred_admission_ordinal,
             owner.causal_origin().lifecycle_key.clone(),
@@ -12433,6 +12603,11 @@ mod tests {
         runtime
             .arm_live_clocks(start)
             .expect("arm clocks after producer reservation");
+        assert!(
+            runtime
+                .local_proposal_admission_available(initial)
+                .expect("armed reservation is eligible")
+        );
 
         let ownership = runtime
             .mint_local_proposal_effect_ownership(initial, &proposal.manifest)
@@ -12452,11 +12627,58 @@ mod tests {
             .complete_active_view_producer_after_proposal_fanout(proposal.round, &ownership)
             .expect("guarded fanout retires the inherited producer");
         assert!(runtime.active_view_producer.is_none());
+        assert!(
+            !runtime
+                .local_proposal_admission_available(initial)
+                .expect("consumed same-view reservation becomes retryable backpressure")
+        );
+        assert!(
+            !runtime.fail_closed,
+            "same-view scheduling churn must leave timeout recovery live"
+        );
         assert!(matches!(
             runtime.step_and_take_scheduler_ownership_for_test(deadline),
             Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
         ));
         assert_eq!(runtime.driver.timeouts, vec![initial]);
+    }
+
+    #[test]
+    fn armed_proposal_admission_cannot_bypass_the_active_view_reservation() {
+        let (context, keys) = authenticated_runtime_context();
+        let message = signed_runtime_proposal(&context, &keys, 0xA9);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = message.payload else {
+            panic!("runtime fixture must produce a Proposal")
+        };
+        let initial = EventTag::new(context.height, 0, Generation::new(1));
+        let start = Instant::now();
+        let (mut runtime, _) = SerializedV2Runtime::with_driver(
+            FakeDriver::new(initial),
+            start,
+            Duration::from_secs(10),
+            RuntimeQueueConfig::new(8, 2, 2),
+            Vec::new(),
+        )
+        .expect("construct unarmed runtime");
+        runtime
+            .reconcile_active_view_producer(initial, false)
+            .expect("nonleader has no proposal reservation");
+        runtime
+            .arm_live_clocks(start)
+            .expect("arm runtime without a producer reservation");
+
+        assert!(
+            !runtime
+                .local_proposal_admission_available(initial)
+                .expect("scheduler observes an unavailable one-shot producer")
+        );
+        assert!(
+            runtime
+                .mint_local_proposal_effect_ownership(initial, &proposal.manifest)
+                .is_err(),
+            "the admission invariant remains fail-closed if preflight is bypassed"
+        );
+        assert!(runtime.fail_closed);
     }
 
     #[test]
@@ -15513,6 +15735,16 @@ mod tests {
                     .expect("small periodic cut has a successor"),
             )
             .expect("publish the later physical admission without refreshing the clock cut");
+        let mut pre_runtime_replay = later_replay_fair.clone();
+        pre_runtime_replay.runtime_physical_cut = None;
+        pre_runtime_replay.leader_wire_runtime_receipt = None;
+        assert!(pre_runtime_replay.validate_exact());
+        assert!(
+            !runtime
+                .can_admit_network_message_with_ingress_ownership(&message, &pre_runtime_replay,),
+            "checked dequeue must retain a post-cut productive replay behind the periodic owner",
+        );
+        assert!(!runtime.fail_closed);
         let queue_len_before_replay = runtime.ingress.commands.len();
         assert_eq!(
             runtime.enqueue_after_clock_reservation(later_replay_command),
@@ -15557,6 +15789,11 @@ mod tests {
         runtime.retransmit_owner = Some(frozen_periodic_owner);
         runtime.retransmit_owner = None;
         runtime.retransmit_owner_physical_cut = None;
+        assert!(
+            runtime
+                .can_admit_network_message_with_ingress_ownership(&message, &pre_runtime_replay,),
+            "the retained productive replay becomes admissible after clock transfer",
+        );
         let later_replay_command = make_command(&runtime, later_replay_fair);
         runtime
             .enqueue_after_clock_reservation(later_replay_command)
@@ -15568,6 +15805,7 @@ mod tests {
         // selector must first exclude C as post-A-cut, then choose B by
         // logical rank.  Retiring each selected owner yields B, A, C without
         // a lasso or an empty eligible set.
+        runtime.ingress.commands.clear();
         runtime.deferred_ingress_ownership.clear();
         runtime.deferred_lifecycle_ownership.clear();
         let (a, b, c) = {
@@ -18125,6 +18363,93 @@ mod tests {
             Some(runtime_ingress_causal_origin_projection_hash(final_ingress))
         );
         assert!(final_owner.validate_exact());
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner() {
+        let directory = TempDir::new().expect("temporary pre-runtime leader-wire directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 2, 2),
+            Some(0),
+        );
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime before Busy-deferred aggregate ingress");
+        let owner_tag = runtime.round_tag();
+        let timeout = runtime
+            .driver
+            .timeout_elapsed(owner_tag)
+            .expect("install a signer fence before aggregate dispatch");
+        assert!(matches!(
+            timeout.effects(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }]
+        ));
+
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate(&context, &keys, 0x7A),
+            ));
+        let first_source = context.roster[2].validator.clone();
+        let second_source = context.roster[1].validator.clone();
+        let (_leader_wire_directory, leader_wire_ingress, ownerships) =
+            preowned_leader_wire_ownerships(
+                &context,
+                &[(message.clone(), first_source)],
+                runtime.ingress.lifecycle_ordinals.clone(),
+            );
+        let [first_ownership]: [FairV2IngressOwnershipEvidence; 1] = ownerships
+            .try_into()
+            .expect("fixture creates one exact runtime-owned carrier");
+        let mut same_token_pre_runtime = first_ownership.clone();
+        same_token_pre_runtime.runtime_physical_cut = None;
+        same_token_pre_runtime.leader_wire_runtime_receipt = None;
+        assert!(same_token_pre_runtime.validate_exact());
+        runtime
+            .enqueue_network_with_ingress_ownership(message.clone(), first_ownership)
+            .expect("first leader-wire carrier enters the runtime");
+        assert!(matches!(
+            runtime.step(now),
+            Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+        ));
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("Busy dispatch retains the first exact carrier");
+        assert_eq!(runtime.deferred_ingress_ownership.len(), 1);
+        assert!(
+            runtime.can_admit_network_message_with_ingress_ownership(
+                &message,
+                &same_token_pre_runtime,
+            ),
+            "an exact pre-runtime retry may merge into its existing Busy owner",
+        );
+
+        assert!(matches!(
+            leader_wire_ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(message.clone()),
+                Some(second_source),
+            )),
+            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let selected = leader_wire_ingress.try_recv_if(|inbound| {
+            let BlockMessage::V2(candidate) = inbound.message() else {
+                return true;
+            };
+            let ownership = inbound
+                .ingress_ownership()
+                .expect("productive fair ingress attaches exact ownership");
+            runtime.can_admit_network_message_with_ingress_ownership(candidate, ownership)
+        });
+        assert!(
+            selected.is_none(),
+            "a distinct productive leader-wire token must remain physically queued behind the Busy owner"
+        );
+        assert_eq!(runtime.deferred_ingress_ownership.len(), 1);
         assert!(!runtime.fail_closed);
     }
 

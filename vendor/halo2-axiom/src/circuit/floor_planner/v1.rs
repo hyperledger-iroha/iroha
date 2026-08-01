@@ -69,9 +69,7 @@ impl FloorPlanner for V1 {
         let mut measure = MeasurementPass::new();
         {
             let pass = &mut measure;
-            circuit
-                .without_witnesses()
-                .synthesize(config.clone(), V1Pass::<_, CS>::measure(pass))?;
+            circuit.synthesize_for_measurement(config.clone(), V1Pass::<_, CS>::measure(pass))?;
         }
 
         // Planning:
@@ -474,6 +472,11 @@ impl<'r, 'a, F: Field, CS: Assignment<F> + SyncDeps> RegionLayouter<F> for V1Reg
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use halo2curves::pasta::vesta;
 
     use crate::{
@@ -527,6 +530,157 @@ mod tests {
             MockProver::run(3, &circuit, vec![]).unwrap_err(),
             Error::NotEnoughColumnsForConstants,
         ));
+    }
+
+    #[test]
+    fn default_measurement_hook_still_uses_without_witnesses() {
+        struct MeasurementCircuit {
+            witnessless: bool,
+            without_calls: Arc<AtomicUsize>,
+            witnessless_synthesis: Arc<AtomicUsize>,
+            witnessed_synthesis: Arc<AtomicUsize>,
+        }
+
+        impl Circuit<vesta::Scalar> for MeasurementCircuit {
+            type Config = Column<Advice>;
+            type FloorPlanner = super::V1;
+            #[cfg(feature = "circuit-params")]
+            type Params = ();
+
+            fn without_witnesses(&self) -> Self {
+                self.without_calls.fetch_add(1, Ordering::SeqCst);
+                Self {
+                    witnessless: true,
+                    without_calls: Arc::clone(&self.without_calls),
+                    witnessless_synthesis: Arc::clone(&self.witnessless_synthesis),
+                    witnessed_synthesis: Arc::clone(&self.witnessed_synthesis),
+                }
+            }
+
+            fn configure(meta: &mut ConstraintSystem<vesta::Scalar>) -> Self::Config {
+                meta.advice_column()
+            }
+
+            fn synthesize(
+                &self,
+                config: Self::Config,
+                mut layouter: impl Layouter<vesta::Scalar>,
+            ) -> Result<(), Error> {
+                if self.witnessless {
+                    self.witnessless_synthesis.fetch_add(1, Ordering::SeqCst);
+                } else {
+                    self.witnessed_synthesis.fetch_add(1, Ordering::SeqCst);
+                }
+                layouter.assign_region(
+                    || "measurement hook",
+                    |mut region| {
+                        region.assign_advice(config, 0, Value::known(vesta::Scalar::from(1)));
+                        Ok(())
+                    },
+                )
+            }
+        }
+
+        let without_calls = Arc::new(AtomicUsize::new(0));
+        let witnessless_synthesis = Arc::new(AtomicUsize::new(0));
+        let witnessed_synthesis = Arc::new(AtomicUsize::new(0));
+        let circuit = MeasurementCircuit {
+            witnessless: false,
+            without_calls: Arc::clone(&without_calls),
+            witnessless_synthesis: Arc::clone(&witnessless_synthesis),
+            witnessed_synthesis: Arc::clone(&witnessed_synthesis),
+        };
+
+        MockProver::run(3, &circuit, vec![]).expect("measurement hook circuit should synthesize");
+        assert_eq!(without_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(witnessless_synthesis.load(Ordering::SeqCst), 1);
+        assert_eq!(witnessed_synthesis.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn custom_measurement_hook_resets_on_success_and_error() {
+        struct ReusableMeasurementCircuit {
+            fail_measurement: bool,
+            without_calls: Arc<AtomicUsize>,
+            resets: Arc<AtomicUsize>,
+            assignments: Arc<AtomicUsize>,
+        }
+
+        impl Circuit<vesta::Scalar> for ReusableMeasurementCircuit {
+            type Config = Column<Advice>;
+            type FloorPlanner = super::V1;
+            #[cfg(feature = "circuit-params")]
+            type Params = ();
+
+            fn without_witnesses(&self) -> Self {
+                self.without_calls.fetch_add(1, Ordering::SeqCst);
+                Self {
+                    fail_measurement: self.fail_measurement,
+                    without_calls: Arc::clone(&self.without_calls),
+                    resets: Arc::clone(&self.resets),
+                    assignments: Arc::clone(&self.assignments),
+                }
+            }
+
+            fn configure(meta: &mut ConstraintSystem<vesta::Scalar>) -> Self::Config {
+                meta.advice_column()
+            }
+
+            fn synthesize_for_measurement(
+                &self,
+                config: Self::Config,
+                layouter: impl Layouter<vesta::Scalar>,
+            ) -> Result<(), Error> {
+                let result = if self.fail_measurement {
+                    Err(Error::Synthesis)
+                } else {
+                    self.synthesize(config, layouter)
+                };
+                self.resets.fetch_add(1, Ordering::SeqCst);
+                result
+            }
+
+            fn synthesize(
+                &self,
+                config: Self::Config,
+                mut layouter: impl Layouter<vesta::Scalar>,
+            ) -> Result<(), Error> {
+                self.assignments.fetch_add(1, Ordering::SeqCst);
+                layouter.assign_region(
+                    || "reusable measurement hook",
+                    |mut region| {
+                        region.assign_advice(config, 0, Value::known(vesta::Scalar::from(1)));
+                        Ok(())
+                    },
+                )
+            }
+        }
+
+        let run = |fail_measurement| {
+            let without_calls = Arc::new(AtomicUsize::new(0));
+            let resets = Arc::new(AtomicUsize::new(0));
+            let assignments = Arc::new(AtomicUsize::new(0));
+            let circuit = ReusableMeasurementCircuit {
+                fail_measurement,
+                without_calls: Arc::clone(&without_calls),
+                resets: Arc::clone(&resets),
+                assignments: Arc::clone(&assignments),
+            };
+            let result = MockProver::run(3, &circuit, vec![]);
+            (result, without_calls, resets, assignments)
+        };
+
+        let (result, without_calls, resets, assignments) = run(false);
+        result.expect("reusable measurement circuit should synthesize");
+        assert_eq!(without_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(resets.load(Ordering::SeqCst), 1);
+        assert_eq!(assignments.load(Ordering::SeqCst), 2);
+
+        let (result, without_calls, resets, assignments) = run(true);
+        assert!(matches!(result, Err(Error::Synthesis)));
+        assert_eq!(without_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(resets.load(Ordering::SeqCst), 1);
+        assert_eq!(assignments.load(Ordering::SeqCst), 0);
     }
 
     #[derive(Clone)]
@@ -612,6 +766,39 @@ mod tests {
         }
     }
 
+    struct ReusableRegionSeparationCircuit(RegionSeparationCircuit);
+
+    impl Circuit<vesta::Scalar> for ReusableRegionSeparationCircuit {
+        type Config = RegionSeparationConfig;
+        type FloorPlanner = super::V1;
+        #[cfg(feature = "circuit-params")]
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            Self(self.0.without_witnesses())
+        }
+
+        fn configure(meta: &mut ConstraintSystem<vesta::Scalar>) -> Self::Config {
+            RegionSeparationCircuit::configure(meta)
+        }
+
+        fn synthesize_for_measurement(
+            &self,
+            config: Self::Config,
+            layouter: impl Layouter<vesta::Scalar>,
+        ) -> Result<(), Error> {
+            self.synthesize(config, layouter)
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            layouter: impl Layouter<vesta::Scalar>,
+        ) -> Result<(), Error> {
+            self.0.synthesize(config, layouter)
+        }
+    }
+
     #[test]
     fn regions_are_disjoint_and_cross_region_equality_is_enforced() {
         let valid = RegionSeparationCircuit {
@@ -628,6 +815,30 @@ mod tests {
                 .verify()
                 .is_err(),
             "cross-region equality must reject a mismatched copy"
+        );
+    }
+
+    #[test]
+    fn reusable_measurement_preserves_v1_verifying_key_layout() {
+        use crate::{
+            SerdeFormat,
+            plonk::keygen_vk,
+            poly::{commitment::ParamsProver as _, ipa::commitment::ParamsIPA},
+        };
+
+        let params = ParamsIPA::<vesta::Affine>::new(4);
+        let default = RegionSeparationCircuit {
+            corrupt_copy: false,
+        };
+        let reusable = ReusableRegionSeparationCircuit(RegionSeparationCircuit {
+            corrupt_copy: false,
+        });
+        let default_vk = keygen_vk(&params, &default).expect("default V1 VK");
+        let reusable_vk = keygen_vk(&params, &reusable).expect("reusable V1 VK");
+        assert_eq!(
+            reusable_vk.to_bytes(SerdeFormat::Processed),
+            default_vk.to_bytes(SerdeFormat::Processed),
+            "reusing the measurement graph must preserve V1 region placement"
         );
     }
 }

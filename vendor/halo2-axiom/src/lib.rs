@@ -24,4 +24,4 @@ pub mod transcript;
 
 pub mod dev;
 mod helpers;
-pub use helpers::{SerdeCurveAffine, SerdeFormat, SerdePrimeField};
+pub use helpers::{SerdeCurveAffine, SerdeFormat, SerdePrimeField, release_allocator_slack};

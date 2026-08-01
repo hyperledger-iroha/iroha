@@ -4,6 +4,7 @@ use group::Curve;
 use super::{Argument, ProvingKey, VerifyingKey};
 use crate::{
     arithmetic::{CurveAffine, parallelize},
+    helpers::release_allocator_slack,
     plonk::{Any, Column, Error},
     poly::{
         EvaluationDomain,
@@ -559,8 +560,8 @@ pub(crate) fn build_vk<'params, C: CurveAffine, P: Params<'params, C>>(
     // retains only commitments, so retaining every n-element permutation
     // column until the first MSM needlessly retains `(columns - 1) * n` extra
     // permutation field elements. The streamed path keeps the n-element omega
-    // table through every column, so the compact k16 Kagemusha commitment peak
-    // falls by a net 18 MiB.
+    // table through every column while avoiding the otherwise duplicated
+    // full-column residency in large recursive provers.
     let mut commitments = Vec::with_capacity(p.columns.len());
     for column in 0..p.columns.len() {
         let mut permutation = domain.empty_lagrange();
@@ -576,6 +577,7 @@ pub(crate) fn build_vk<'params, C: CurveAffine, P: Params<'params, C>>(
                 .commit_lagrange(&permutation, Blind::default())
                 .to_affine(),
         );
+        release_allocator_slack();
     }
 
     VerifyingKey { commitments }

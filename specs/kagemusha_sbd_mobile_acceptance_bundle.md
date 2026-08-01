@@ -30,9 +30,12 @@ python3 scripts/run_kagemusha_v4_generation.py \
 
 The runner permits at most one guarded Kagemusha job, sets single-worker Cargo
 and Rayon defaults, preserves at least 4 GiB or 10% of physical RAM for the
-host, and enforces a maximum 16 GiB process-tree envelope. Linux also installs
+host, and caps the process-tree envelope at the lower of 64 GiB or half of
+physical RAM. Linux also installs
 an address-space rlimit. Because macOS rejects finite `RLIMIT_AS`, the macOS
-supervisor stops at 13 GiB to leave termination margin below the maximum. It
+supervisor stops up to 3 GiB below the effective maximum to leave termination
+margin. Enforcement uses process-tree RSS; macOS physical-footprint samples are
+diagnostic only. It
 stops its own child process group, never signals unrelated processes, and
 writes an owner-private JSON resource receipt. A limit or
 headroom stop exits with status 137 and is not release evidence. The ignored

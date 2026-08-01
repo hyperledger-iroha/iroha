@@ -203,26 +203,64 @@ processed proving key.
 Candidate verifier- and proving-key generation extracts or validates those
 breakpoints after synthesis and drops the populated circuit before key
 assembly. The reciprocal point audit no longer allocates the generic
-variable-base MSM in the Base graph. It canonicalizes and combines all 248
-source coefficients there, then copy-binds the points and normalized GLV
-segments into a source-major dense machine. That machine needs 41,667 rows, 38
-advice columns, one fixed enable column, one equality column, no selectors, and
-no lookups. Its fixed start tag, non-identity offset, canonical decomposition,
-affine exceptional-case checks, and final offset equality make a forged initial
-mode or non-zero aggregate unsatisfiable. The five authenticated Table16 SHA
-lanes use 65,527 table rows so the complete k16 circuit stays inside its 65,527
-usable-row budget.
+variable-base MSM in the Base graph. It canonicalizes and combines source
+coefficients there, then copy-binds the points and normalized GLV segments into
+three source-major dense lanes. The authentic 1,867-source StepEq batch is
+split in stable order as 623/622/622 sources, so the longest lane needs 104,667
+rows instead of the impossible 313,659-row serial trace. Each lane has 37
+advice columns and one fixed enable column; its bus and accumulator coordinates
+are equality enabled. One globally selected non-identity offset is carried
+across lane boundaries, and endpoint-to-start copy constraints close the last
+lane back to the first. The ring closes exactly when the original unsplit MSM
+is the identity. Fixed start tags, canonical decompositions, and affine
+exceptional-case checks remain enforced. The five authenticated Table16 SHA
+lanes have a 65,527-row table floor. The complete k17 circuit has 131,063
+usable rows after its nine mandatory unusable rows.
 
-The authenticated complete-circuit envelope is degree 16 with `[443]` advice
-columns, `[47, 0, 0]` lookup-advice columns, one parameter fixed column, and
-one instance column. The trailing zero lookup phases are the exact
+The release-authenticated compiled-protocol structure digest remains the exact
+value-free V1 SHA-256 descriptor. The qualified compiled-protocol identity is
+V2: its domain, parity, V1 structure digest, point count, every canonical
+32-byte compressed verifier-key point, and transcript initial state are
+absorbed by Poseidon. Each compressed point is represented injectively as its
+two little-endian `u128` halves, preserving the complete compressed encoding
+instead of reducing a coordinate modulo the opposite Pasta field. The
+Poseidon field element is then encoded canonically inside the short V2
+domain/version SHA-256 wrapper, whose 53-byte message uses one compression
+block. The deferred-equation audit uses the same construction under its
+independent V6 domains: every source point contributes the same injective
+two-`u128` encoding to Poseidon before the one-block SHA-256 wrapper. Identity
+points are rejected, and native, scalar-circuit, and reciprocal-circuit paths
+must derive identical commitments.
+
+The authentic final-VK attempt exposed why the earlier placeholder-profile
+probe was insufficient: a 20,154-byte raw protocol-identity SHA preimage
+required 316 compression blocks and drove the five-lane geometry to 147,520
+rows, beyond the 131,063-row k17 capacity, only after roughly 29 minutes of
+setup. Circuit construction now computes the exact queued SHA and dense-MSM
+row profiles and rejects either over-capacity auxiliary machine before key
+generation. A fresh guarded k17 probe of this final compact source, authentic
+candidate generation, release finalization, and live Taira rollout are still
+pending.
+
+The authenticated complete-circuit envelope is degree 17 with `[220]` advice
+columns, `[25, 0, 0]` lookup-advice columns, one parameter fixed column, and
+one instance column. The two trailing zero lookup phases are the exact
 `BaseCircuitBuilder` shape; they do not allocate speculative advice phases.
-Processed-key serialization disables selector compression; the configured
-circuit therefore authenticates 560 fixed and 534 permutation polynomials per
-parity. The exact unframed lengths are 4,194,372 bytes for `ParamsIPA`, 35,018
-bytes for the processed verifier key, and 4,594,903,830 bytes for the processed
-proving key. The proving key remains below the fixed 5 GiB artifact
-corridor.
+Across the complete configured graph this yields 411 advice columns, nine
+base fixed columns, 330 selectors, and 297 equality/permutation columns.
+Processed-key serialization disables selector compression, so each parity
+authenticates 339 fixed polynomials and 297 permutation polynomials, for 636
+commitments. The exact unframed lengths are 8,388,676 bytes for `ParamsIPA`,
+20,362 bytes for the processed verifier key, and 5,347,763,078 bytes for the
+processed proving key. The proving key remains 20,946,042 bytes below the
+fixed 5 GiB artifact corridor.
+
+The single public-instance column contains 66 field elements. Its common
+semantic header occupies `[0, 19)`, the 38-element IPA accumulator occupies
+`[19, 57)`, the Eq and Ep deferred-audit words occupy `[57, 61)` and
+`[61, 65)`, and the live selector is element 65. This layout is shared by the
+Eq/Vesta and Ep/Pallas roles and is authenticated by their distinct schema
+digests.
 
 Proving-key assembly reuses the supplied verifier-key domain and stages compact
 permutation scratch instead of retaining a domain-by-column factor grid or
@@ -240,15 +278,33 @@ h-piece commitments. The outer lifecycle remains in a disposable one-worker
 Rayon pool; large MSMs alone use the admitted fixed two-worker window.
 Accumulator order is unchanged.
 
-The checked static admission estimate for this complete shape is
-9,747,562,496 bytes (9.078125 GiB), not a physical-memory prediction. The
-exact-profile preflight retains a 12 GiB reviewed ceiling, while the userspace
-supervisor enforces the lower of 16 GiB or half of installed physical memory
-and cannot be raised by an operator option. The guarded output parent
+The checked phase-aware admission estimate for this complete shape is
+53,108,563,136 bytes (49.4612 GiB), 7,020,979,008 bytes below the 56 GiB
+reviewed ceiling; it is not a physical-memory prediction. The model includes
+the authenticated upper-width virtual graph, physical-cell map, V1 assignment,
+processed proving key, and allocator reserve that overlap during proving. The
+superseded precompact diagnostic reached an externally guarded peak of
+4,998,922,240 bytes, but that measurement does not validate the final V2/V6
+commitment graph. A fresh guarded final-source k17 probe must establish its
+physical peak and shape. A 93,120-byte transcript
+per role, a 186,852-byte initialization pair, and a 191,862-byte maximum pair
+remain expected values until authentic generation confirms them. Candidate
+promotion must bind the exact generated bounds rather than the larger
+defensive wire ceilings.
+
+The userspace supervisor enforces the lower of
+64 GiB or half of installed physical memory and cannot be raised by an
+operator option. On macOS, candidate generation and its diagnostic benchmark
+enumerate only the owned process group through `libproc`, pin its leader's
+start identity and parent, and enforce the greater of summed RSS or physical-
+footprint high water every 250 ms. A threshold crossing first stops allocation,
+takes one final scoped sample, and then kills and reaps only the owned group.
+The direct child's kernel `wait4` peak-RSS value remains an independent final
+gate. The guarded output parent
 must also retain at least 16 GiB of free disk before generation so both raw
 proving-key spools and the framed copy cannot exhaust the filesystem.
-Production candidate and
-physical-device peak-memory evidence remain required before promotion.
+Production candidate and physical-device peak-memory evidence remain required
+before promotion.
 Semantic construction loads one authenticated role at a time and drops each raw
 carrier after parsing; it never assembles the six-role verifier or eight-role
 prover payload inventory in memory. Runtime verifiers are transient rather
@@ -315,10 +371,10 @@ large artifact allocation when the decoded estimate exceeds the configured
 budget. With a configured seal, startup instead uses the sealed cold path and
 fails closed if the seal is missing, mutable, malformed, or no longer matches
 the source directories or running executable. For each Eq/Ep profile the seal
-binds the manifest's value-free compiled-protocol structure digest separately
-from the qualified full protocol identity derived from the final verifying key;
-the two values must be non-zero and distinct. The sealed path never silently
-falls back to the expensive qualification pass.
+binds the manifest's value-free V1 compiled-protocol structure digest
+separately from the qualified V2 full protocol identity derived from the final
+verifying key; the two values must be non-zero and distinct. The sealed path
+never silently falls back to the expensive qualification pass.
 
 Create a seal only with the no-bind validation command:
 

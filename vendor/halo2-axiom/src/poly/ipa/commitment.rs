@@ -28,9 +28,9 @@ fn commit_with_blind<C: CurveAffine>(
 ) -> C::Curve {
     // Keep the degree-n coefficient/base arrays borrowed. Appending the blind
     // to temporary vectors duplicates both complete arrays at every
-    // commitment, which is particularly costly for the degree-16 recursive
-    // prover. The split computation is the same group expression as the
-    // former (n + 1)-pair MSM.
+    // commitment, which is particularly costly for large recursive provers.
+    // The split computation is the same group expression as the former
+    // (n + 1)-pair MSM.
     best_multiexp::<C>(scalars, bases) + &(blind_base * blind.0)
 }
 

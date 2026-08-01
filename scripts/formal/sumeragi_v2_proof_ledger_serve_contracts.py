@@ -1773,21 +1773,40 @@ _SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256 = {
 }
 _TIMEOUT_VOTE_SEMANTIC_CAPACITY_ITEM_SHA256 = {
     "semantic_ingress_capacity": (
-        "b65b195193821ca2203d872d41c34e052346380a00ca7aca1b8ec8e743cffb96"
+        "329002c5d70440e4b06c7d6b7953abefffad11e097f8a6f2be43df02a07d5701"
     ),
     "admit_authenticated_payload": (
-        "2048303131d791463528a4449228116952b25eab8e473175f4a5d65578e16e24"
+        "5a415b6dd963bff9d6e5c90187d9f74558c05ac0a3534420a2a34d2fe335262d"
     ),
     "prune_ingress_records": (
-        "abc6c048ae87f9b14930fe3b35019c470b55d42a99dc4c65daeb0678137baa7d"
+        "380a67be7fc040a1424c45ebbdd08fac6087450df43acb1521fa756df5ca1db8"
     ),
 }
 _TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256 = {
     "capacity_bypass_records_follow_current_lock_and_timeout_view": (
-        "de482b2922e449c2a988e2125d1505c521d176921d61611f6f78eb25db4301ae"
+        "c4f9a66c50a9216e3e07a3a01fff45d7753562a68bd06e08763cb4a30ef87cfc"
+    ),
+    "adjacent_future_timeout_vote_remains_retryable_until_current_view_advances": (
+        "ba2262f2a0e0d55893f2a84d0720f401ba3a370efe6bf97bc38fe2c95d3ff695"
     ),
     "full_normal_deferred_lane_cannot_drop_absolute_timeout": (
         "db11edaeae4b12ef18085718d49f792ee0d285f0bea71e1773174c6f5b6f4384"
+    ),
+}
+_TIMEOUT_VOTE_VIEW_WINDOW_ITEM_SHA256 = {
+    "timeout_vote_view_is_admissible": (
+        "8db7d1f2d356168f58c0a06133c5673b09f90095fc2296240fb96f4107672c10"
+    ),
+}
+_TIMEOUT_VOTE_VIEW_WINDOW_REGRESSION_TEST_SHA256 = {
+    "adjacent_future_timeout_votes_form_a_catch_up_certificate": (
+        "93e8e493ba5b51262032990d4326960b458fd6d30e2eabc005372b213cff8aae"
+    ),
+    "timeout_install_preserves_adjacent_shares_for_the_new_current_view": (
+        "ad2debc2b510584534a4ca39283b89fa76986004f0dea08dafe130003af7d637"
+    ),
+    "timeout_votes_beyond_adjacent_lookahead_are_ignored": (
+        "f20c28d79268f12a9cfd9c452b496a7b2750210617493a531e9e29f105b92038"
     ),
 }
 RETIRED_ARBITRARY_PRODUCER_BUDGET_SYMBOLS = (

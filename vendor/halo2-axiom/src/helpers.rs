@@ -3,6 +3,33 @@ use ff::PrimeField;
 use halo2curves::{CurveAffine, serde::SerdeObject};
 use std::io;
 
+/// Return allocator-owned free pages to the operating system when supported.
+///
+/// Large recursive circuits repeatedly allocate and release degree-sized MSM
+/// scratch buffers. Darwin's allocator can keep those dirty pages charged to
+/// the process as compressed physical footprint after Rust has dropped every
+/// owning value. Releasing that slack at phase boundaries does not alter any
+/// field, curve, transcript, or serialization operation; it only changes when
+/// already-free allocator pages become reclaimable by the kernel.
+#[inline]
+pub fn release_allocator_slack() {
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::c_void;
+
+        unsafe extern "C" {
+            fn malloc_zone_pressure_relief(zone: *mut c_void, goal: usize) -> usize;
+        }
+
+        // SAFETY: A null zone requests pressure relief across all malloc
+        // zones. The call owns no Rust allocation and only purges pages the
+        // allocator has already classified as free.
+        unsafe {
+            let _ = malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
+        }
+    }
+}
+
 /// This enum specifies how various types are serialized and deserialized.
 #[derive(Clone, Copy, Debug)]
 pub enum SerdeFormat {
@@ -152,4 +179,12 @@ pub(crate) fn write_polynomial_slice_streaming<W: io::Write, F: SerdePrimeField,
 pub(crate) fn polynomial_slice_byte_length<F: PrimeField, B>(slice: &[Polynomial<F, B>]) -> usize {
     let field_len = F::default().to_repr().as_ref().len();
     4 + slice.len() * (4 + field_len * slice.get(0).map(|poly| poly.len()).unwrap_or(0))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn allocator_pressure_relief_is_safe_without_live_allocations() {
+        super::release_allocator_slack();
+    }
 }

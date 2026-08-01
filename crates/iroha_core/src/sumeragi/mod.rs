@@ -1138,6 +1138,45 @@ impl FairV2IngressLeaderWireToken {
         self.source_class
     }
 
+    /// Proposal view retained by this exact productive wire.
+    pub(crate) const fn view(&self) -> iroha_data_model::block::consensus_v2::View {
+        self.identity.view
+    }
+
+    /// Whether this token is the exact chunk lifecycle for one manifest hash.
+    pub(crate) fn matches_chunk_manifest(
+        &self,
+        manifest_hash: HashOf<iroha_data_model::block::consensus_v2::PayloadManifest>,
+    ) -> bool {
+        self.identity.phase == FairV2IngressLeaderWirePhase::Chunk
+            && self.source_class == FairV2IngressLeaderWireSourceClass::Chunk
+            && self.identity.manifest_hash == Some(manifest_hash.into())
+    }
+
+    /// Whether this chunk token names the exact proposal coordinates.
+    pub(crate) fn matches_body_coordinates(
+        &self,
+        round: iroha_data_model::block::consensus_v2::ConsensusRound,
+        subject: iroha_data_model::block::consensus_v2::BlockSubject,
+    ) -> bool {
+        self.identity.phase == FairV2IngressLeaderWirePhase::Chunk
+            && self.source_class == FairV2IngressLeaderWireSourceClass::Chunk
+            && self.identity.context_id == round.context_id
+            && self.identity.height == round.height
+            && self.identity.view == round.view
+            && self.identity.subject_hash == fair_v2_ingress_subject_hash(Some(&subject))
+    }
+
+    /// Whether this chunk token names one exact proposal body.
+    pub(crate) fn matches_exact_body(
+        &self,
+        round: iroha_data_model::block::consensus_v2::ConsensusRound,
+        subject: iroha_data_model::block::consensus_v2::BlockSubject,
+        manifest_hash: HashOf<iroha_data_model::block::consensus_v2::PayloadManifest>,
+    ) -> bool {
+        self.matches_body_coordinates(round, subject) && self.matches_chunk_manifest(manifest_hash)
+    }
+
     /// Validate the complete context-bound token against configured geometry.
     pub(crate) fn validate_exact(
         &self,

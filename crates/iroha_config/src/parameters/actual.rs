@@ -552,9 +552,7 @@ impl Root {
     /// # Errors
     /// If config reading/parsing fails.
     pub fn from_toml_source(src: TomlSource) -> Result<Self, FromTomlSourceError> {
-        ConfigReader::new()
-            .with_toml_source(src)
-            .read_and_complete::<user::Root>()
+        user::Root::read_and_complete(ConfigReader::new().with_toml_source(src))
             .change_context(FromTomlSourceError)?
             .parse()
             .change_context(FromTomlSourceError)
@@ -4540,9 +4538,10 @@ pub fn execution_policy_digest_v1(
     policy.push("content.default_auth_mode", &content.default_auth_mode);
     policy.push("content.stripe_layout", &content.stripe_layout);
 
-    // Offline-cash and deterministic settlement routing. Artifact paths are authenticated by the
-    // promoted release policy digest instead of their local filesystem names.
-    policy.push("settlement.offline.enabled", &settlement.offline.enabled);
+    // Offline-cash and deterministic settlement routing. The process-local
+    // service switch is deliberately excluded: per-asset metadata and escrow
+    // bindings determine consensus execution. Artifact paths are authenticated
+    // by the promoted release policy digest instead of their local filesystem names.
     policy.push(
         "settlement.offline.escrow_required",
         &settlement.offline.escrow_required,
@@ -12299,7 +12298,7 @@ pub struct Settlement {
 /// Kagemusha escrow and execution policy parameters.
 #[derive(Debug, Clone)]
 pub struct Offline {
-    /// Whether this node profile enables the mandatory offline-cash service.
+    /// Whether this node profile enables offline-cash support.
     pub enabled: bool,
     /// Whether Kagemusha cash must be escrow-backed.
     pub escrow_required: bool,
@@ -12318,7 +12317,7 @@ pub struct Offline {
 impl Default for Offline {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             escrow_required: true,
             escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
@@ -14003,18 +14002,19 @@ mod tests {
             Some(PathBuf::from("/srv/iroha/policy.norito"));
         operational.settlement.offline.kagemusha_artifact_dir =
             Some(PathBuf::from("/srv/iroha/artifacts"));
+        operational.settlement.offline.enabled = !operational.settlement.offline.enabled;
 
         assert_eq!(
             execution_policy_hash(&operational),
             expected,
-            "worker, cache, accelerator, tracing, transport, gateway, and path drift must not partition validators"
+            "worker, cache, accelerator, tracing, transport, gateway, offline service switch, and path drift must not partition validators"
         );
     }
 
     #[test]
-    fn offline_defaults_enable_mandatory_escrow_before_release_configuration() {
+    fn offline_defaults_are_dev_friendly_without_weakening_escrow() {
         let offline = Offline::default();
-        assert!(offline.enabled);
+        assert!(!offline.enabled);
         assert!(offline.escrow_required);
         assert!(offline.kagemusha_release_policy_path.is_none());
         assert!(offline.kagemusha_artifact_dir.is_none());

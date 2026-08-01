@@ -1183,10 +1183,12 @@ RetainedLockSourceAuthorityExposureProperty(specification) ==
                       \/ RetainedLockSourceExposureFrontier(
                            target, lockedRound, subject)))
 
-\* TODO: exact PrepareQC identity is closed by
-\* `RetainedLockSourceModeBindsExactPrepareAuthority`.  Compose source-lock
-\* preservation, old-round Commit convergence, and a fresh source service
-\* window.  This does not select a future leader.
+\* Direct-decomposition compatibility boundary (not release-facing): exact
+\* PrepareQC identity is closed by
+\* `RetainedLockSourceModeBindsExactPrepareAuthority`.  A consumer of this
+\* stronger vocabulary must separately compose source-lock preservation,
+\* old-round Commit convergence, and a fresh source service window.  This
+\* boundary does not select a future leader.
 
 RetainedLockPrepareAuthorityTransportProperty(specification) ==
   specification
@@ -1201,9 +1203,11 @@ RetainedLockPrepareAuthorityTransportProperty(specification) ==
                 \/ RetainedLockAuthorityTransportFrontierFor(
                      target, lockedRound, subject, prepareQc))
 
-\* TODO: prove that retransmitted exact Prepare authority reaches a TC whose
-\* next-view leader is responsive.  The QC and TC are complete identities;
-\* a same-rank replacement or a rank/subject projection is not sufficient.
+\* Direct-decomposition compatibility boundary (not release-facing): a
+\* consumer must supply transport showing that retransmitted exact Prepare
+\* authority reaches a TC whose next-view leader is responsive.  The QC and
+\* TC are complete identities; a same-rank replacement or a rank/subject
+\* projection is not sufficient.
 
 RetainedLockTargetLeaderFreshActivationProperty(specification) ==
   specification
@@ -1217,10 +1221,12 @@ RetainedLockTargetLeaderFreshActivationProperty(specification) ==
                 \/ RetainedLockFreshLeaderAuthorityFrontierFor(
                      target, lockedRound, subject, prepareQc))
 
-\* TODO: compose exact TC delivery, BeginInstall, PersistInstall, timeout
-\* lifecycle retirement, and the new-view deadline reset.  A target whose
-\* selected episode is overtaken must re-enter through another exact
-\* target-indexed transport episode; view increase alone is not this proof.
+\* Direct-decomposition compatibility boundary (not release-facing): a
+\* consumer must compose exact TC delivery, BeginInstall, PersistInstall,
+\* timeout lifecycle retirement, and the new-view deadline reset.  A target
+\* whose selected episode is overtaken must re-enter through another exact
+\* target-indexed transport episode; view increase alone is not this
+\* boundary.
 
 RetainedLockLeaderProducerOriginProperty(specification) ==
   specification
@@ -1237,10 +1243,12 @@ RetainedLockLeaderProducerOriginProperty(specification) ==
                        target, leader, lockedRound, subject,
                        prepareQc, leaderView, causalOrigin))
 
-\* TODO: compose exact PersistInstall/local/restart producer activation with
-\* the Assemble/Begin/Persist/safe-Sign Proposal chain.  Causal successors
-\* retain the frozen origin and protected physical owners eventually exit;
-\* the remaining seam is the finite sibling/replacement classification below.
+\* Direct-decomposition compatibility boundary (not release-facing): a
+\* consumer must compose exact PersistInstall/local/restart producer
+\* activation with the Assemble/Begin/Persist/safe-Sign Proposal chain.
+\* Causal successors retain the frozen origin and protected physical owners
+\* eventually exit; the remaining boundary is the finite sibling/replacement
+\* classification below.
 
 RetainedLockRankHandoffProperty(specification) ==
   specification
@@ -1633,10 +1641,12 @@ RetainedLockProducerEpisodeExitGoal(
   \/ RetainedLockStrictHigherFreshLeaderAuthorityFrontierFor(
        target, lockedRound, subject, prepareQc, leaderView)
 
-\* TODO: derive these three exact providers after successful-service identity
-\* persists through strict exit.  They intentionally separate same-origin
-\* durable disposition, cross-origin replacement, and target-indexed re-entry;
-\* none may be inferred merely from physical candidate disappearance.
+\* Direct-decomposition compatibility boundaries (not release-facing): any
+\* consumer of the stronger owner-neutral handoff must supply these three
+\* exact providers after successful-service identity persists through strict
+\* exit.  They intentionally separate same-origin durable disposition,
+\* cross-origin replacement, and target-indexed re-entry; none may be inferred
+\* merely from physical candidate disappearance.
 
 RetainedLockSameOriginLifecycleDispositionClosureProperty(specification) ==
   specification

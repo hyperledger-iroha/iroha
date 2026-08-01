@@ -1339,6 +1339,7 @@ def _fake_plan(
         supervisor=supervisor,
         supervisor_sha256="3" * 64,
         python=Path("/usr/bin/python3"),
+        python_identity=(0,) * 9,
     )
     return bundle, sources, binary.lstat()
 
@@ -1400,7 +1401,7 @@ def test_fresh_plist_has_all_five_binary_stat_seals_and_known_paths(
     )
 
 
-def test_validate_sources_uses_system_launcher_not_controller_python(
+def test_validate_sources_uses_validated_runtime_not_controller_python(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     binary = tmp_path / "irohad"
@@ -1431,23 +1432,32 @@ def test_validate_sources_uses_system_launcher_not_controller_python(
     monkeypatch.setattr(
         MODULE,
         "validate_supervisor_python",
-        lambda path: MODULE.DEFAULT_SUPERVISOR_PYTHON,
+        lambda path: (Path("/System/Python.app/Contents/MacOS/Python"), (7,) * 9),
     )
 
     sources = MODULE.validate_sources(args, bundle, admission)
 
-    assert sources.python == Path("/usr/bin/python3")
+    assert sources.python == Path("/System/Python.app/Contents/MacOS/Python")
+    assert sources.python_identity == (7,) * 9
     assert str(sources.python) != MODULE.sys.executable
 
 
 @pytest.mark.parametrize(
     ("returncode", "stdout"),
-    [(1, ""), (0, "3.8.19\n"), (0, "not-a-version\n"), (0, "4.0.0\n")],
+    [
+        (1, ""),
+        (0, f"3.8.19\n{os.fsencode('/System/Python').hex()}\n"),
+        (0, f"not-a-version\n{os.fsencode('/System/Python').hex()}\n"),
+        (0, f"4.0.0\n{os.fsencode('/System/Python').hex()}\n"),
+    ],
 )
 def test_supervisor_python_probe_fails_closed(
     monkeypatch: pytest.MonkeyPatch, returncode: int, stdout: str
 ) -> None:
     monkeypatch.setattr(MODULE, "canonical_path", lambda path, _label: path)
+    monkeypatch.setattr(
+        MODULE, "require_system_python_launcher", lambda _path: SimpleNamespace()
+    )
     monkeypatch.setattr(
         MODULE, "require_root_controlled_file", lambda *args, **kwargs: None
     )
@@ -1464,20 +1474,103 @@ def test_supervisor_python_probe_fails_closed(
 def test_supervisor_python_accepts_root_controlled_python_39(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    base_prefix = Path("/System/Python3.framework/Versions/3.9")
+    runtime = base_prefix / "Resources/Python.app/Contents/MacOS/Python"
+    identity = SimpleNamespace(
+        st_dev=1,
+        st_ino=2,
+        st_mode=stat.S_IFREG | 0o555,
+        st_uid=0,
+        st_gid=0,
+        st_nlink=1,
+        st_size=3,
+        st_mtime_ns=4,
+        st_ctime_ns=5,
+    )
     monkeypatch.setattr(MODULE, "canonical_path", lambda path, _label: path)
     monkeypatch.setattr(
-        MODULE, "require_root_controlled_file", lambda *args, **kwargs: None
+        MODULE, "require_system_python_launcher", lambda _path: identity
     )
     monkeypatch.setattr(
-        MODULE.subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="3.9.6\n"),
+        MODULE, "require_root_controlled_file", lambda *args, **kwargs: identity
+    )
+    probes = iter(
+        (
+            SimpleNamespace(
+                returncode=0,
+                stdout=f"3.9.6\n{os.fsencode(base_prefix).hex()}\n",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=f"3.9.6\n{os.fsencode(runtime).hex()}\n",
+            ),
+        )
+    )
+    monkeypatch.setattr(MODULE.subprocess, "run", lambda *args, **kwargs: next(probes))
+
+    assert MODULE.validate_supervisor_python(MODULE.DEFAULT_SUPERVISOR_PYTHON) == (
+        runtime,
+        MODULE.metadata_identity(identity),
     )
 
-    assert (
-        MODULE.validate_supervisor_python(MODULE.DEFAULT_SUPERVISOR_PYTHON)
-        == MODULE.DEFAULT_SUPERVISOR_PYTHON
+
+def test_supervisor_python_rejects_runtime_identity_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_prefix = Path("/System/Python3.framework/Versions/3.9")
+    runtime = base_prefix / "Resources/Python.app/Contents/MacOS/Python"
+    stable = SimpleNamespace(
+        st_dev=1,
+        st_ino=2,
+        st_mode=stat.S_IFREG | 0o555,
+        st_uid=0,
+        st_gid=0,
+        st_nlink=1,
+        st_size=3,
+        st_mtime_ns=4,
+        st_ctime_ns=5,
     )
+    changed = copy.copy(stable)
+    changed.st_ino = 9
+    monkeypatch.setattr(MODULE, "canonical_path", lambda path, _label: path)
+    monkeypatch.setattr(
+        MODULE, "require_system_python_launcher", lambda _path: stable
+    )
+    identities = iter((stable, changed))
+    monkeypatch.setattr(
+        MODULE,
+        "require_root_controlled_file",
+        lambda *args, **kwargs: next(identities),
+    )
+    probes = iter(
+        (
+            SimpleNamespace(
+                returncode=0,
+                stdout=f"3.9.6\n{os.fsencode(base_prefix).hex()}\n",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=f"3.9.6\n{os.fsencode(runtime).hex()}\n",
+            ),
+        )
+    )
+    monkeypatch.setattr(MODULE.subprocess, "run", lambda *args, **kwargs: next(probes))
+
+    with pytest.raises(MODULE.DeploymentError, match="identity changed"):
+        MODULE.validate_supervisor_python(MODULE.DEFAULT_SUPERVISOR_PYTHON)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS deployment invariant")
+def test_supervisor_python_live_probe_resolves_direct_clt_runtime() -> None:
+    runtime, identity = MODULE.validate_supervisor_python(
+        MODULE.DEFAULT_SUPERVISOR_PYTHON
+    )
+
+    assert str(runtime).startswith(f"{MODULE.SYSTEM_PYTHON_DEVELOPER_DIR}/")
+    assert str(runtime).endswith("/Resources/Python.app/Contents/MacOS/Python")
+    assert MODULE.metadata_identity(
+        MODULE.require_root_controlled_file(runtime, executable=True)
+    ) == identity
 
 
 def test_supervisor_python_rejects_homebrew_path(
@@ -1521,7 +1614,7 @@ def _health_getter(
                 "blockers": [],
             }
         if "/v1/sumeragi/status" in url:
-            subject = {"block_hash": f"hash:{block_hash.upper()}"}
+            subject = {"block_hash": f"hash:{block_hash.upper()}#A1b2"}
             return {
                 "protocol_version": 3,
                 "restart_required": False,
@@ -1564,11 +1657,41 @@ def _health_getter(
             "asset_definition_id": MODULE.OFFLINE_ASSET_ID,
             "asset_scale": MODULE.OFFLINE_ASSET_SCALE,
             "evaluated_block_height": 7,
-            "evaluated_block_hash": block_hash,
+            "evaluated_block_hash": f"{block_hash}#a1B2",
             "artifact_set": artifact,
         }
 
     return get
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "ab" * 32,
+        "AB" * 32,
+        "hash:" + "aB" * 32,
+        "ab" * 32 + "#0fA9",
+        "hash:" + "AB" * 32 + "#aB01",
+    ],
+)
+def test_block_hash_normalization_accepts_exact_canonical_forms(value: str) -> None:
+    assert MODULE.normalized_block_hash(value, "test block") == "ab" * 32
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "hash:" + "ab" * 32 + "#123",
+        "hash:" + "ab" * 32 + "#12345",
+        "hash:" + "ab" * 32 + "#12xz",
+        "hash:" + "ab" * 32 + "#1234trailing",
+        "HASH:" + "ab" * 32 + "#1234",
+        "hash:" + "ab" * 32 + "#1234\n",
+    ],
+)
+def test_block_hash_normalization_rejects_noncanonical_suffixes(value: str) -> None:
+    with pytest.raises(MODULE.DeploymentError, match="canonical block hash"):
+        MODULE.normalized_block_hash(value, "test block")
 
 
 def test_four_peer_health_requires_exact_common_status_and_offline_block(
@@ -1803,6 +1926,231 @@ def test_controller_fails_before_advancement_when_terminal_latched() -> None:
     assert calls == ["terminal"]
 
 
+def test_restart_log_gate_accepts_snapshot_restore_and_ignores_stale_prefix(
+    tmp_path: Path,
+) -> None:
+    log = tmp_path / "validator-1-supervisor.log"
+    stale = b"\n".join(
+        (
+            MODULE.SNAPSHOT_LOAD_SUCCESS_MARKER,
+            *MODULE.SNAPSHOT_LOAD_FALLBACK_MARKERS,
+        )
+    )
+    _write(log, stale + b"\n")
+    cursor = MODULE.bind_restart_log_cursor(log, os.getuid(), os.getgid())
+
+    with log.open("ab") as stream:
+        stream.write(MODULE.SNAPSHOT_LOAD_SUCCESS_MARKER + b"\n")
+
+    MODULE.require_snapshot_backed_restart(cursor)
+
+
+@pytest.mark.parametrize(
+    ("suffix", "message"),
+    [
+        pytest.param(b"unrelated restart output\n", "exactly one", id="missing"),
+        *[
+            pytest.param(
+                MODULE.SNAPSHOT_LOAD_SUCCESS_MARKER + b"\n" + marker + b"\n",
+                "fallback",
+                id=f"forbidden-{index}",
+            )
+            for index, marker in enumerate(MODULE.SNAPSHOT_LOAD_FALLBACK_MARKERS)
+        ],
+    ],
+)
+def test_restart_log_gate_rejects_missing_or_forbidden_marker(
+    tmp_path: Path, suffix: bytes, message: str
+) -> None:
+    log = tmp_path / "validator-1-supervisor.log"
+    _write(log, b"historical output\n")
+    cursor = MODULE.bind_restart_log_cursor(log, os.getuid(), os.getgid())
+    with log.open("ab") as stream:
+        stream.write(suffix)
+
+    with pytest.raises(MODULE.DeploymentError, match=message):
+        MODULE.require_snapshot_backed_restart(cursor)
+
+
+@pytest.mark.parametrize("mutation", ["truncate", "replace"])
+def test_restart_log_gate_rejects_truncated_or_replaced_inode(
+    tmp_path: Path, mutation: str
+) -> None:
+    log = tmp_path / "validator-1-supervisor.log"
+    _write(log, b"historical output that must remain bound\n")
+    cursor = MODULE.bind_restart_log_cursor(log, os.getuid(), os.getgid())
+
+    if mutation == "truncate":
+        log.write_bytes(b"")
+    else:
+        replacement = tmp_path / "replacement.log"
+        _write(replacement, MODULE.SNAPSHOT_LOAD_SUCCESS_MARKER + b"\n")
+        os.replace(replacement, log)
+
+    with pytest.raises(MODULE.DeploymentError, match="truncated|replaced|changed"):
+        MODULE.require_snapshot_backed_restart(cursor)
+
+
+def test_restart_log_cursor_rejects_symlink_wrong_mode_owner_and_link_count(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target.log"
+    _write(target, b"historical output\n")
+    symlink = tmp_path / "symlink.log"
+    symlink.symlink_to(target)
+    with pytest.raises(MODULE.DeploymentError, match="regular file"):
+        MODULE.bind_restart_log_cursor(symlink, os.getuid(), os.getgid())
+
+    target.chmod(0o666)
+    with pytest.raises(MODULE.DeploymentError, match="owner or mode"):
+        MODULE.bind_restart_log_cursor(target, os.getuid(), os.getgid())
+    target.chmod(0o600)
+
+    alias = tmp_path / "alias.log"
+    os.link(target, alias)
+    with pytest.raises(MODULE.DeploymentError, match="exactly one link"):
+        MODULE.bind_restart_log_cursor(target, os.getuid(), os.getgid())
+
+    info = target.lstat()
+    wrong_owner = SimpleNamespace(
+        st_uid=max(os.getuid(), 0) + 10_000,
+        st_gid=info.st_gid,
+        st_mode=info.st_mode,
+    )
+    with pytest.raises(MODULE.DeploymentError, match="owner or mode"):
+        MODULE._require_safe_restart_log_owner_mode(
+            wrong_owner, os.getuid(), os.getgid()
+        )
+
+
+def test_restart_proof_reverifies_same_child_and_reports_ceil_duration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    peer = SimpleNamespace(number=1, label="validator-1")
+    bundle = SimpleNamespace(
+        peers=(peer,), owner_uid=os.getuid(), owner_gid=os.getgid()
+    )
+    log = tmp_path / "logs" / "validator-1-supervisor.log"
+    _write(log, b"historical output\n")
+    events: list[object] = []
+    managed = iter(((11, 22), (11, 33), (11, 33)))
+
+    def verify(*_args: object, **_kwargs: object) -> tuple[int, int]:
+        identity = next(managed)
+        events.append(identity)
+        return identity
+
+    def terminate(pid: int) -> None:
+        events.append(("terminate", pid))
+        with log.open("ab") as stream:
+            stream.write(MODULE.SNAPSHOT_LOAD_SUCCESS_MARKER + b"\n")
+
+    advanced = object()
+
+    def wait(*_args: object, **_kwargs: object) -> object:
+        events.append("advanced")
+        return advanced
+
+    times_ns = iter((1_000_000_000, 1_001_000_001))
+    monkeypatch.setattr(MODULE.time, "monotonic_ns", lambda: next(times_ns))
+    monkeypatch.setattr(MODULE, "verify_managed_peer", verify)
+    monkeypatch.setattr(MODULE, "wait_for_advancement", wait)
+    ops = SimpleNamespace(terminate=terminate, process_exists=lambda _pid: False)
+
+    actual = MODULE.restart_proof(
+        bundle,
+        "1" * 40,
+        tmp_path,
+        {peer.label: b"plist"},
+        Path("/irohad"),
+        object(),
+        ops,
+    )
+
+    assert actual.fleet is advanced
+    assert actual.duration_ms == 2
+    assert events == [(11, 22), ("terminate", 22), (11, 33), "advanced", (11, 33)]
+
+
+@pytest.mark.parametrize("final_identity", [(11, 44), (12, 33)])
+def test_restart_proof_rejects_child_or_supervisor_drift_after_advancement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    final_identity: tuple[int, int],
+) -> None:
+    peer = SimpleNamespace(number=1, label="validator-1")
+    bundle = SimpleNamespace(
+        peers=(peer,), owner_uid=os.getuid(), owner_gid=os.getgid()
+    )
+    log = tmp_path / "logs" / "validator-1-supervisor.log"
+    _write(log, b"historical output\n")
+    managed = iter(((11, 22), (11, 33), final_identity))
+
+    def terminate(_pid: int) -> None:
+        with log.open("ab") as stream:
+            stream.write(MODULE.SNAPSHOT_LOAD_SUCCESS_MARKER + b"\n")
+
+    monkeypatch.setattr(
+        MODULE,
+        "verify_managed_peer",
+        lambda *_args, **_kwargs: next(managed),
+    )
+    monkeypatch.setattr(
+        MODULE, "wait_for_advancement", lambda *_args, **_kwargs: object()
+    )
+    ops = SimpleNamespace(terminate=terminate, process_exists=lambda _pid: False)
+
+    with pytest.raises(MODULE.DeploymentError, match="supervisor or replacement child"):
+        MODULE.restart_proof(
+            bundle,
+            "1" * 40,
+            tmp_path,
+            {peer.label: b"plist"},
+            Path("/irohad"),
+            object(),
+            ops,
+        )
+
+
+def test_restart_proof_rejects_measured_duration_beyond_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    peer = SimpleNamespace(number=1, label="validator-1")
+    bundle = SimpleNamespace(
+        peers=(peer,), owner_uid=os.getuid(), owner_gid=os.getgid()
+    )
+    log = tmp_path / "logs" / "validator-1-supervisor.log"
+    _write(log, b"historical output\n")
+    managed = iter(((11, 22), (11, 33), (11, 33)))
+
+    def terminate(_pid: int) -> None:
+        with log.open("ab") as stream:
+            stream.write(MODULE.SNAPSHOT_LOAD_SUCCESS_MARKER + b"\n")
+
+    times_ns = iter((1_000_000_000, 46_000_000_001))
+    monkeypatch.setattr(MODULE.time, "monotonic_ns", lambda: next(times_ns))
+    monkeypatch.setattr(
+        MODULE,
+        "verify_managed_peer",
+        lambda *_args, **_kwargs: next(managed),
+    )
+    monkeypatch.setattr(
+        MODULE, "wait_for_advancement", lambda *_args, **_kwargs: object()
+    )
+    ops = SimpleNamespace(terminate=terminate, process_exists=lambda _pid: False)
+
+    with pytest.raises(MODULE.DeploymentError, match="exceeded 45 seconds"):
+        MODULE.restart_proof(
+            bundle,
+            "1" * 40,
+            tmp_path,
+            {peer.label: b"plist"},
+            Path("/irohad"),
+            object(),
+            ops,
+        )
+
+
 def test_controller_fails_before_restart_proof_when_terminal_latched() -> None:
     calls: list[str] = []
 
@@ -1823,6 +2171,118 @@ def test_controller_fails_before_restart_proof_when_terminal_latched() -> None:
         )
 
     assert calls == ["terminal"]
+
+
+def _darwin_procargs_payload(
+    executable: str,
+    argv: tuple[str, ...],
+    *,
+    trailing: bytes = b"",
+) -> bytes:
+    argc = len(argv).to_bytes(
+        MODULE.ctypes.sizeof(MODULE.ctypes.c_int),
+        byteorder=sys.byteorder,
+        signed=True,
+    )
+    encoded_argv = b"".join(os.fsencode(argument) + b"\0" for argument in argv)
+    return argc + os.fsencode(executable) + b"\0\0\0" + encoded_argv + trailing
+
+
+def test_darwin_procargs2_parser_preserves_exact_nul_delimited_arguments() -> None:
+    argv = (
+        "/System Path/Python.app/Contents/MacOS/Python",
+        "argument with spaces",
+        "literal'quote",
+        'literal"quote',
+    )
+    payload = _darwin_procargs_payload(
+        argv[0], argv, trailing=b"KEY=environment value\0"
+    )
+
+    assert MODULE.parse_darwin_procargs2(payload) == argv
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        pytest.param(b"", "invalid size", id="empty"),
+        pytest.param(
+            (0).to_bytes(
+                MODULE.ctypes.sizeof(MODULE.ctypes.c_int),
+                byteorder=sys.byteorder,
+                signed=True,
+            )
+            + b"/runtime\0",
+            "count",
+            id="zero-argc",
+        ),
+        pytest.param(
+            _darwin_procargs_payload("/runtime", ("/other",)),
+            "differs from argv",
+            id="executable-mismatch",
+        ),
+        pytest.param(
+            _darwin_procargs_payload("/runtime", ("/runtime",))[:-1],
+            "incomplete",
+            id="truncated-argv",
+        ),
+        pytest.param(
+            _darwin_procargs_payload("/runtime", ("/runtime", "")),
+            "empty argument",
+            id="empty-argument",
+        ),
+    ],
+)
+def test_darwin_procargs2_parser_rejects_malformed_payloads(
+    payload: bytes, message: str
+) -> None:
+    with pytest.raises(MODULE.DeploymentError, match=message):
+        MODULE.parse_darwin_procargs2(payload)
+
+
+def test_darwin_procargs2_parser_rejects_payload_above_allocation_bound() -> None:
+    payload = b"\0" * (MODULE.MAX_PROCESS_ARGUMENT_BYTES + 1)
+
+    with pytest.raises(MODULE.DeploymentError, match="invalid size"):
+        MODULE.parse_darwin_procargs2(payload)
+
+
+def test_process_inspection_rejects_native_argv_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ops = MODULE.SystemOps()
+    monkeypatch.setattr(
+        ops,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="1 501\n"),
+    )
+    samples = iter((("/runtime", "first"), ("/runtime", "second")))
+    monkeypatch.setattr(
+        MODULE, "read_darwin_process_argv", lambda _pid: next(samples)
+    )
+
+    with pytest.raises(MODULE.DeploymentError, match="changed during capture"):
+        ops.inspect_process(77)
+
+
+def test_process_inspection_preserves_stable_native_argv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ops = MODULE.SystemOps()
+    monkeypatch.setattr(
+        ops,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="1 501\n"),
+    )
+    argv = ("/runtime path", "argument with spaces")
+    monkeypatch.setattr(MODULE, "read_darwin_process_argv", lambda _pid: argv)
+
+    assert ops.inspect_process(77) == MODULE.ProcessInfo(
+        pid=77,
+        ppid=1,
+        uid=501,
+        argv=argv,
+    )
 
 
 class _OldCaptureOps:
@@ -1875,6 +2335,112 @@ def _old_capture_payload(pid_file: Path) -> tuple[dict[str, object], tuple[str, 
             "GroupName": grp.getgrgid(os.getgid()).gr_name,
         },
         supervisor_argv,
+    )
+
+
+def _framework_python_capture_payload(
+    tmp_path: Path,
+) -> tuple[
+    dict[str, object],
+    tuple[str, ...],
+    tuple[str, ...],
+    Path,
+]:
+    package = tmp_path / "Cellar/python@3.14/3.14.6"
+    version_root = (
+        package / "Frameworks/Python.framework/Versions/3.14"
+    )
+    resolved_launcher = version_root / "bin/python3.14"
+    runtime = version_root / "Resources/Python.app/Contents/MacOS/Python"
+    _write(resolved_launcher, b"launcher")
+    _write(runtime, b"runtime")
+    resolved_launcher.chmod(0o500)
+    runtime.chmod(0o500)
+    launcher = package / "bin/python3.14"
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    launcher.symlink_to(resolved_launcher)
+    pid_file = tmp_path / "absent-framework.pid"
+    tail = (
+        "/old/taira_peer_supervisor.py",
+        "--binary",
+        "/old/irohad",
+        "--config",
+        "/old/config.toml",
+        "--pid-file",
+        str(pid_file),
+    )
+    plist_argv = (str(launcher), *tail)
+    runtime_argv = (str(runtime.resolve(strict=True)), *tail)
+    payload = {
+        "ProgramArguments": list(plist_argv),
+        "UserName": pwd.getpwuid(os.getuid()).pw_name,
+        "GroupName": grp.getgrgid(os.getgid()).gr_name,
+    }
+    return payload, plist_argv, runtime_argv, runtime
+
+
+def test_framework_python_rewrite_requires_flag_and_binds_observed_rollback_argv(
+    tmp_path: Path,
+) -> None:
+    payload, _plist_argv, runtime_argv, _runtime = (
+        _framework_python_capture_payload(tmp_path)
+    )
+    ops = _OldCaptureOps(46, runtime_argv)
+
+    with pytest.raises(MODULE.DeploymentError, match="differs from its plist"):
+        MODULE.inspect_old_managed_identity(
+            payload,
+            "old-job",
+            46,
+            ops,
+            allow_absent_child=True,
+        )
+
+    managed = MODULE.inspect_old_managed_identity(
+        payload,
+        "old-job",
+        46,
+        ops,
+        allow_absent_child=True,
+        allow_framework_python_argv0_rewrite=True,
+    )
+    assert managed.supervisor_argv == runtime_argv
+    snapshot = MODULE.PlistSnapshot(
+        path=tmp_path / "old-job.plist",
+        body=b"plist",
+        mode=0o644,
+        uid=0,
+        gid=0,
+        managed=managed,
+    )
+    MODULE.verify_restored_snapshot(snapshot, ops)
+
+    ops.processes[46] = dataclasses.replace(
+        ops.processes[46], argv=tuple(payload["ProgramArguments"])
+    )
+    with pytest.raises(MODULE.DeploymentError, match="identity is wrong"):
+        MODULE.verify_restored_snapshot(snapshot, ops)
+
+
+@pytest.mark.parametrize("mutation", ["wrong-root", "tail", "writable"])
+def test_framework_python_rewrite_rejects_any_nonstructural_difference(
+    tmp_path: Path, mutation: str
+) -> None:
+    _payload, plist_argv, runtime_argv, runtime = (
+        _framework_python_capture_payload(tmp_path)
+    )
+    if mutation == "wrong-root":
+        other = tmp_path / "other/Resources/Python.app/Contents/MacOS/Python"
+        _write(other, b"runtime")
+        other.chmod(0o500)
+        runtime_argv = (str(other.resolve(strict=True)), *runtime_argv[1:])
+    elif mutation == "tail":
+        runtime_argv = (*runtime_argv[:-1], "/other/pid")
+    else:
+        runtime.chmod(0o520)
+
+    assert not MODULE.framework_python_argv0_rewrite_matches(
+        plist_argv, runtime_argv, owner_uid=os.getuid()
     )
 
 
@@ -2474,6 +3040,58 @@ def test_receipt_config_binding_rejects_one_peer_substitution(tmp_path: Path) ->
         MODULE.require_inputs_match_admission(bundle, sources, admission)
 
 
+def test_under_lock_recheck_rejects_python_runtime_identity_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary = Path("/candidate/irohad")
+    supervisor = Path("/candidate/supervisor.py")
+    runtime = Path("/Library/Developer/CommandLineTools/Python.app/Python")
+    stable = SimpleNamespace(
+        st_dev=1,
+        st_ino=2,
+        st_mode=stat.S_IFREG | 0o555,
+        st_uid=0,
+        st_gid=0,
+        st_nlink=1,
+        st_size=3,
+        st_mtime_ns=4,
+        st_ctime_ns=5,
+    )
+    changed = copy.copy(stable)
+    changed.st_ino = 9
+    sources = MODULE.SourcePlan(
+        binary=binary,
+        binary_sha256="a" * 64,
+        supervisor=supervisor,
+        supervisor_sha256="b" * 64,
+        python=runtime,
+        python_identity=MODULE.metadata_identity(stable),
+    )
+    admission = SimpleNamespace(
+        binary_sha256=sources.binary_sha256,
+        supervisor_sha256=sources.supervisor_sha256,
+    )
+    monkeypatch.setattr(MODULE, "require_bundle_runtime_unchanged", lambda _bundle: None)
+    monkeypatch.setattr(
+        MODULE,
+        "sha256_regular",
+        lambda path, _maximum: (
+            sources.binary_sha256 if path == binary else sources.supervisor_sha256,
+            stable,
+        ),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "require_root_controlled_file",
+        lambda path, *, executable: changed,
+    )
+
+    with pytest.raises(MODULE.DeploymentError, match="Python changed"):
+        MODULE.require_admission_bound_inputs_unchanged(
+            SimpleNamespace(), sources, admission
+        )
+
+
 def test_exclusive_deployment_lock_refuses_contention(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2706,4 +3324,5 @@ def test_cli_defaults_match_the_audited_operator_contract() -> None:
     assert not hasattr(args, "expected_binary_sha256")
     assert not hasattr(args, "expected_supervisor_sha256")
     assert args.allow_absent_old_child is False
+    assert args.allow_framework_python_argv0_rewrite is False
     assert args.apply is False

@@ -131,16 +131,16 @@ pub enum PathPolicy {
     },
 }
 
-/// Build-feature expression controlling whether a route is available.
+/// Feature/capability expression controlling whether a route is available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FeatureGate {
     /// The route is available in every build.
     Always,
-    /// The route requires one Cargo feature.
+    /// The route requires one named build feature or runtime capability.
     Feature(&'static str),
-    /// The route requires all listed Cargo features.
+    /// The route requires all listed build features or runtime capabilities.
     All(&'static [&'static str]),
-    /// The route requires at least one listed Cargo feature.
+    /// The route requires at least one listed build feature or runtime capability.
     Any(&'static [&'static str]),
 }
 
@@ -977,7 +977,7 @@ pub mod offline {
         ApiSurface::Public,
         Listener::Torii,
     )
-    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_feature_gate(FeatureGate::All(&["app_api", "offline"]))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
     .with_cors_options(true);
@@ -989,7 +989,7 @@ pub mod offline {
         ApiSurface::Public,
         Listener::Torii,
     )
-    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_feature_gate(FeatureGate::All(&["app_api", "offline"]))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Descriptor for online-to-offline top-up submission.
@@ -1000,7 +1000,7 @@ pub mod offline {
         ApiSurface::Public,
         Listener::Torii,
     )
-    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_feature_gate(FeatureGate::All(&["app_api", "offline"]))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Descriptor for offline redemption submission.
@@ -1011,7 +1011,7 @@ pub mod offline {
         ApiSurface::Public,
         Listener::Torii,
     )
-    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_feature_gate(FeatureGate::All(&["app_api", "offline"]))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Descriptor for reading one offline operation.
@@ -1022,7 +1022,7 @@ pub mod offline {
         ApiSurface::Public,
         Listener::Torii,
     )
-    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_feature_gate(FeatureGate::All(&["app_api", "offline"]))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
     .with_cors_options(true);
@@ -4996,6 +4996,30 @@ mod tests {
             .collect();
         assert_eq!(ids.len(), offline::ROUTES.len());
         assert_eq!(method_paths.len(), offline::ROUTES.len());
+    }
+
+    #[test]
+    fn offline_routes_require_the_runtime_capability_in_addition_to_app_api() {
+        let catalog = RouteCatalog::new(offline::ROUTES);
+        assert!(
+            catalog
+                .project(
+                    CatalogProjection::Mounted,
+                    EnabledFeatures::new(&["app_api"]),
+                )
+                .is_empty(),
+            "an app-api node with offline support disabled must expose no offline paths"
+        );
+        assert_eq!(
+            catalog
+                .project(
+                    CatalogProjection::Mounted,
+                    EnabledFeatures::new(&["app_api", "offline"]),
+                )
+                .len(),
+            offline::ROUTES.len(),
+            "an offline-enabled app-api node must expose the complete route family"
+        );
     }
 
     #[test]

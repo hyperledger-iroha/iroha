@@ -189,8 +189,18 @@ def test_atomic_timeout_kernels_reject_projection_owner_and_survivor_mutations(
         ),
         (
             "TimeoutReceiptSurvivesInstall",
-            "  \\/ received.node # node\n",
-            "  \\/ TRUE\n",
+            "  IN \\/ received.node # node\n",
+            "  IN \\/ TRUE\n",
+        ),
+        (
+            "TimeoutReceiptSurvivesInstall",
+            "        /\\ received.vote.view >= installedView\n",
+            "        /\\ received.vote.view = installedView\n",
+        ),
+        (
+            "TimeoutReceiptSurvivesInstall",
+            "        /\\ received.vote.view <= installedView + 1\n",
+            "        /\\ received.vote.view <= installedView + 2\n",
         ),
     )
     for symbol, needle, replacement in mutations:
@@ -203,6 +213,49 @@ def test_atomic_timeout_kernels_reject_projection_owner_and_survivor_mutations(
         )
         assert any(
             f"{symbol} must equal only the exact reviewed atomic timeout"
+            in error
+            for error in errors
+        ), errors
+
+
+def test_timeout_install_retention_rejects_async_window_mutations(
+    tmp_path: Path,
+) -> None:
+    """Async retained control uses the same installed current/+1 window."""
+
+    module = load_checker()
+    formal_dir = copy_formal_fixture(tmp_path)
+    network_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    canonical = network_path.read_text(encoding="utf-8")
+    assert module._atomic_timeout_completion_source_fidelity_errors(
+        formal_dir
+    ) == []
+
+    mutations = (
+        (
+            "CurrentTimeoutControlFor",
+            "       /\\ item.envelope.vote.view <= installedView + 1\n",
+            "       /\\ item.envelope.vote.view <= installedView + 2\n",
+        ),
+        (
+            "InstalledControlAfterTC",
+            (
+                "        installed \\cup "
+                "CurrentTimeoutControlFor(remembered, node, tc)\n"
+            ),
+            "        installed\n",
+        ),
+    )
+    for symbol, needle, replacement in mutations:
+        network_path.write_text(
+            mutate_operator(canonical, symbol, needle, replacement),
+            encoding="utf-8",
+        )
+        errors = module._atomic_timeout_completion_source_fidelity_errors(
+            formal_dir
+        )
+        assert any(
+            f"{symbol} must equal only the exact reviewed bounded timeout"
             in error
             for error in errors
         ), errors

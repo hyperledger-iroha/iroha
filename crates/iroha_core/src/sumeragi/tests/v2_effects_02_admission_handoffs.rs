@@ -118,7 +118,7 @@
     }
 
     #[test]
-    fn failed_existing_certified_fetch_retransmission_preserves_exact_projection() {
+    fn failed_newer_certified_fetch_retransmission_preserves_exact_projection() {
         let fixture = Fixture::new();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
         let sources = certified_sources(&fixture, &prepare);
@@ -147,7 +147,7 @@
         assert_eq!(services.fetch_tasks.len(), 1);
         assert!(
             services.fail_on.is_none(),
-            "failure injection was not consumed"
+            "failure injection was not consumed by the exact service retry"
         );
     }
 

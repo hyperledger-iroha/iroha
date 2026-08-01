@@ -865,7 +865,8 @@ TimeoutVoteSlotOccupied(node, vote) ==
 
 TimeoutReceiptAdmitted(node, vote) ==
   /\ NoDecisionForNode(node)
-  /\ vote.view = nodeView[node]
+  /\ vote.view >= nodeView[node]
+  /\ vote.view <= nodeView[node] + 1
   /\ ~TimeoutVoteSlotOccupied(node, vote)
 
 TimeoutReceiptsAfter(node, vote) ==
@@ -899,11 +900,15 @@ TimeoutDeliveryGuard(envelope) ==
   /\ envelope.vote.highRank <= envelope.vote.view
 
 TimeoutReceiptSurvivesInstall(received, node, tc) ==
-  \/ received.node # node
-  \/ /\ StrictSameRoundTcUpgrade(node, tc)
-     /\ received.vote.context = context
-     /\ received.vote.height = height
-     /\ received.vote.view = nodeView[node]
+  LET installedView ==
+        IF StrictSameRoundTcUpgrade(node, tc)
+        THEN nodeView[node]
+        ELSE tc.view + 1
+  IN \/ received.node # node
+     \/ /\ received.vote.context = context
+        /\ received.vote.height = height
+        /\ received.vote.view >= installedView
+        /\ received.vote.view <= installedView + 1
 
 ReceivedTimeoutVoteSlotsUnique ==
   \A left, right \in receivedTimeoutVotes:

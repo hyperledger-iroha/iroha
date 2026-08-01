@@ -130,6 +130,9 @@ pub enum ToriiError {
     /// A smoke transaction was rejected (or expired) before commitment.
     #[error("smoke transaction {hash} rejected: {reason}")]
     SmokeRejected { hash: String, reason: String },
+    /// Torii could not prove whether the exact smoke transaction was admitted.
+    #[error("smoke transaction admission outcome remains unknown for {hash}")]
+    SmokeAdmissionOutcomeUnknown { hash: String },
 }
 
 /// High-level classification for [`ToriiError`] variants.
@@ -157,6 +160,8 @@ pub enum ToriiErrorKind {
     Timeout,
     /// Smoke transaction was rejected or expired.
     SmokeRejected,
+    /// Smoke transaction admission remained ambiguous after exact-hash reconciliation.
+    SmokeAdmissionOutcomeUnknown,
 }
 
 /// Summary of a [`ToriiError`] capturing its user-facing message and kind.
@@ -274,7 +279,35 @@ impl ToriiError {
                 format!("Smoke transaction {hash} was rejected"),
                 reason.clone(),
             ),
+            Self::SmokeAdmissionOutcomeUnknown { hash } => ToriiErrorInfo::with_detail(
+                ToriiErrorKind::SmokeAdmissionOutcomeUnknown,
+                format!("Smoke transaction admission outcome remains unknown for {hash}"),
+                "Reconcile or resubmit only the byte-identical signed transaction".to_owned(),
+            ),
         }
+    }
+
+    fn is_queue_plan_journal_outcome_unknown(&self) -> bool {
+        matches!(
+            self,
+            Self::UnexpectedStatus {
+                reject_code: Some(code),
+                ..
+            } if code == QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN_REJECT_CODE
+        )
+    }
+
+    fn confirms_existing_submission(&self) -> bool {
+        matches!(
+            self,
+            Self::UnexpectedStatus {
+                reject_code: Some(code),
+                ..
+            } if matches!(
+                code.as_str(),
+                "PRTRY:ALREADY_ENQUEUED" | "PRTRY:ALREADY_COMMITTED"
+            )
+        )
     }
 }
 
@@ -408,6 +441,7 @@ pub struct SmokeCommitSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SmokeTransactionStatus {
+    Queued,
     Committed(u64),
     Rejected(String),
     Expired,
@@ -424,6 +458,39 @@ pub struct ReadinessSmokePlan {
     pub backoff: Duration,
     /// Transactions to try in order (one per attempt).
     pub transactions: Vec<SignedTransaction>,
+    /// Recipe used to renew Mochi-generated transactions after genesis readiness.
+    ///
+    /// Callers that provide pre-signed transactions through [`Self::new`] retain
+    /// exact-envelope semantics and are never re-signed.
+    factory: Option<ReadinessSmokeFactory>,
+}
+
+#[derive(Debug, Clone)]
+struct ReadinessSmokeFactory {
+    chain_id: String,
+    signer: SigningAuthority,
+    attempts: usize,
+    nonce_offset: usize,
+}
+
+impl ReadinessSmokeFactory {
+    fn build_transactions(
+        &self,
+        creation_time: Duration,
+        ttl: Duration,
+    ) -> Result<Vec<SignedTransaction>, ReadinessSmokeBuildError> {
+        (0..self.attempts)
+            .map(|attempt| {
+                build_readiness_smoke_transaction_at(
+                    &self.chain_id,
+                    &self.signer,
+                    attempt + self.nonce_offset,
+                    creation_time,
+                    ttl,
+                )
+            })
+            .collect()
+    }
 }
 
 impl ReadinessSmokePlan {
@@ -435,6 +502,7 @@ impl ReadinessSmokePlan {
             commit_options: SmokeCommitOptions::default(),
             backoff: Duration::from_millis(400),
             transactions,
+            factory: None,
         }
     }
 
@@ -457,12 +525,17 @@ impl ReadinessSmokePlan {
         nonce_offset: usize,
     ) -> Result<Self, ReadinessSmokeBuildError> {
         let attempts = attempts.max(1);
-        let mut transactions = Vec::with_capacity(attempts);
-        for attempt in 0..attempts {
-            let tx = build_readiness_smoke_transaction(chain_id, signer, attempt + nonce_offset)?;
-            transactions.push(tx);
-        }
-        Ok(Self::new(transactions))
+        let factory = ReadinessSmokeFactory {
+            chain_id: chain_id.to_owned(),
+            signer: signer.clone(),
+            attempts,
+            nonce_offset,
+        };
+        let transactions = factory.build_transactions(unix_time_now(), SMOKE_TTL)?;
+        Ok(Self {
+            factory: Some(factory),
+            ..Self::new(transactions)
+        })
     }
 
     /// Build a single-attempt plan using the bundled development signer.
@@ -476,6 +549,42 @@ impl ReadinessSmokePlan {
     /// Iterator over the hashes of the configured smoke transactions.
     pub fn tx_hashes(&self) -> impl Iterator<Item = HashOf<SignedTransaction>> + '_ {
         self.transactions.iter().map(SignedTransaction::hash)
+    }
+
+    fn renew_generated_transactions_if_needed(
+        &mut self,
+        now: Duration,
+    ) -> Result<(), ReadinessSmokeBuildError> {
+        let Some(factory) = &self.factory else {
+            return Ok(());
+        };
+
+        let required_lifetime = self.required_submission_lifetime();
+        let required_ttl = required_lifetime.max(SMOKE_TTL);
+        let renew_before = now.saturating_add(required_lifetime);
+        let remains_fresh = self.transactions.iter().all(|transaction| {
+            transaction
+                .time_to_live()
+                .and_then(|ttl| transaction.creation_time().checked_add(ttl))
+                .is_some_and(|expires_at| expires_at >= renew_before)
+        });
+        if remains_fresh {
+            return Ok(());
+        }
+
+        self.transactions = factory.build_transactions(now, required_ttl)?;
+        Ok(())
+    }
+
+    fn required_submission_lifetime(&self) -> Duration {
+        let attempts = u32::try_from(self.transactions.len().max(1)).unwrap_or(u32::MAX);
+        let mut lifetime = self.commit_options.timeout.saturating_mul(attempts);
+        let mut backoff = self.backoff.max(Duration::from_millis(50)).min(MAX_BACKOFF);
+        for _ in 1..attempts {
+            lifetime = lifetime.saturating_add(backoff);
+            backoff = backoff.saturating_mul(2).min(MAX_BACKOFF);
+        }
+        lifetime.saturating_add(SMOKE_SUBMISSION_MARGIN)
     }
 }
 
@@ -592,6 +701,44 @@ impl LocalMcpProbeResult {
 }
 
 const SMOKE_TTL: Duration = Duration::from_secs(30);
+const SMOKE_SUBMISSION_MARGIN: Duration = Duration::from_secs(5);
+const SMOKE_EXACT_RESUBMIT_DELAY: Duration = Duration::from_millis(250);
+const SMOKE_EXACT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(1);
+const QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN_REJECT_CODE: &str =
+    "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN";
+
+fn unix_time_now() -> Duration {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+}
+
+#[derive(Debug, Default)]
+struct ReadinessSmokeAttemptCursor {
+    next_index: usize,
+    pinned_index: Option<usize>,
+}
+
+impl ReadinessSmokeAttemptCursor {
+    fn current_index(&self) -> usize {
+        self.pinned_index.unwrap_or(self.next_index)
+    }
+
+    fn record_failure(&mut self, index: usize, error: &ToriiError) {
+        if self.pinned_index.is_some() {
+            return;
+        }
+        if matches!(error, ToriiError::SmokeAdmissionOutcomeUnknown { .. }) {
+            self.pinned_index = Some(index);
+        } else {
+            self.next_index = index.saturating_add(1);
+        }
+    }
+
+    fn is_pinned(&self) -> bool {
+        self.pinned_index.is_some()
+    }
+}
 
 fn build_lane_lifecycle_transaction(
     chain_id: &str,
@@ -633,18 +780,17 @@ fn build_lane_lifecycle_transaction(
         })
 }
 
-fn build_readiness_smoke_transaction(
+fn build_readiness_smoke_transaction_at(
     chain_id: &str,
     signer: &SigningAuthority,
     attempt: usize,
+    creation_time: Duration,
+    ttl: Duration,
 ) -> Result<SignedTransaction, ReadinessSmokeBuildError> {
     let chain_id = chain_id
         .parse::<ChainId>()
         .map_err(|_| ReadinessSmokeBuildError::InvalidChainId(chain_id.to_owned()))?;
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_millis();
+    let now_ms = creation_time.as_millis();
     let domain_id = DomainId::try_new("wonderland", "universal")
         .map_err(|_| ReadinessSmokeBuildError::InvalidDomain("wonderland.universal".to_owned()))?;
     let key = "mochi_smoke"
@@ -662,7 +808,8 @@ fn build_readiness_smoke_transaction(
     if let Some(nonce) = NonZeroU32::new(quantity) {
         builder.set_nonce(nonce);
     }
-    builder.set_ttl(SMOKE_TTL);
+    builder.set_creation_time(creation_time);
+    builder.set_ttl(ttl);
 
     builder
         .try_sign(signer.key_pair().private_key())
@@ -1857,7 +2004,7 @@ fn parse_pipeline_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeT
             smoke_rejection_reason(status),
         ))),
         "Expired" => Ok(Some(SmokeTransactionStatus::Expired)),
-        "Queued" => Ok(None),
+        "Queued" => Ok(Some(SmokeTransactionStatus::Queued)),
         _ => Ok(None),
     }
 }
@@ -1881,6 +2028,7 @@ fn parse_explorer_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeT
             smoke_rejection_reason(record),
         ))),
         "Expired" => Ok(Some(SmokeTransactionStatus::Expired)),
+        "Queued" | "Pending" => Ok(Some(SmokeTransactionStatus::Queued)),
         _ => Ok(None),
     }
 }
@@ -2459,11 +2607,54 @@ impl ToriiClient {
         }
     }
 
+    /// Probe `/status` until the chain has committed its genesis block.
+    ///
+    /// A responsive height-zero peer is still bootstrapping and cannot yet
+    /// admit transactions against committed validator authority. Transient
+    /// status failures and height-zero responses share one bounded
+    /// [`ReadinessOptions`] deadline and exponential backoff.
+    pub async fn wait_for_genesis_commit(
+        &self,
+        options: ReadinessOptions,
+    ) -> ToriiResult<ToriiStatusSnapshot> {
+        let mut backoff = options
+            .poll_interval
+            .max(Duration::from_millis(10))
+            .min(MAX_BACKOFF);
+        let start = Instant::now();
+        let deadline = start
+            .checked_add(options.timeout)
+            .unwrap_or_else(|| start + options.timeout);
+
+        loop {
+            let poll_error = match self.fetch_status_snapshot().await {
+                Ok(snapshot) if snapshot.status.blocks > 0 => return Ok(snapshot),
+                Ok(_) => None,
+                Err(err) => Some(err),
+            };
+
+            let now = Instant::now();
+            if now >= deadline {
+                return match poll_error {
+                    Some(err) => Err(err),
+                    None => Err(ToriiError::Timeout {
+                        context: "genesis commitment (status remained at zero committed blocks)"
+                            .to_owned(),
+                    }),
+                };
+            }
+
+            let remaining = deadline.saturating_duration_since(now);
+            sleep(backoff.min(remaining)).await;
+            backoff = (backoff.saturating_mul(2)).min(MAX_BACKOFF);
+        }
+    }
+
     /// Run a readiness smoke probe that waits for `/status`, submits a smoke transaction,
     /// and observes its commitment with retries/backoff.
     pub async fn wait_for_readiness_smoke(
         &self,
-        plan: ReadinessSmokePlan,
+        mut plan: ReadinessSmokePlan,
     ) -> ToriiResult<ReadinessSmokeOutcome> {
         if plan.transactions.is_empty() {
             return Err(ToriiError::Decode(
@@ -2471,14 +2662,22 @@ impl ToriiClient {
             ));
         }
 
-        self.wait_for_ready(plan.status_options).await?;
+        self.wait_for_genesis_commit(plan.status_options).await?;
+        plan.renew_generated_transactions_if_needed(unix_time_now())
+            .map_err(|err| {
+                ToriiError::Decode(format!(
+                    "failed to renew readiness smoke transactions after genesis commitment: {err}"
+                ))
+            })?;
 
         let attempts = plan.transactions.len();
         let started = Instant::now();
         let mut backoff = plan.backoff.max(Duration::from_millis(50)).min(MAX_BACKOFF);
 
-        for (index, transaction) in plan.transactions.iter().enumerate() {
-            let attempt = index + 1;
+        let mut cursor = ReadinessSmokeAttemptCursor::default();
+        for attempt in 1..=attempts {
+            let transaction_index = cursor.current_index();
+            let transaction = &plan.transactions[transaction_index];
             match self
                 .submit_and_wait_for_commit(transaction, plan.commit_options)
                 .await
@@ -2492,7 +2691,11 @@ impl ToriiClient {
                         status,
                     });
                 }
-                Err(_err) if attempt < attempts => {
+                Err(err @ ToriiError::SmokeRejected { .. }) if cursor.is_pinned() => {
+                    return Err(err);
+                }
+                Err(err) if attempt < attempts => {
+                    cursor.record_failure(transaction_index, &err);
                     sleep(backoff).await;
                     backoff = (backoff.saturating_mul(2)).min(MAX_BACKOFF);
                 }
@@ -2591,18 +2794,37 @@ impl ToriiClient {
         let events_stream = self.events_stream().await?;
         let mut block_rx = block_stream.subscribe();
         let mut event_rx = events_stream.subscribe();
+        let signed_bytes = transaction.encode_versioned();
 
-        self.submit_signed_transaction(transaction).await?;
+        let mut admission_outcome_unknown = match self.submit_transaction(&signed_bytes).await {
+            Ok(()) => false,
+            Err(err) if err.confirms_existing_submission() => false,
+            Err(err) if err.is_queue_plan_journal_outcome_unknown() => true,
+            Err(err) => return Err(err),
+        };
 
         let wait = async {
             let mut status_poll = tokio::time::interval(Duration::from_millis(250));
+            let retry_start = tokio::time::Instant::now() + SMOKE_EXACT_RESUBMIT_DELAY;
+            let mut exact_resubmit =
+                tokio::time::interval_at(retry_start, SMOKE_EXACT_RESUBMIT_INTERVAL);
+            exact_resubmit.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tokio::select! {
                     _ = status_poll.tick() => {
-                        if let Some(status) =
-                            self.fetch_smoke_transaction_status(tx_hash_str.as_str()).await?
+                        let status = match self
+                            .fetch_smoke_transaction_status(tx_hash_str.as_str())
+                            .await
                         {
+                            Ok(status) => status,
+                            Err(_err) if admission_outcome_unknown => None,
+                            Err(err) => return Err(err),
+                        };
+                        if let Some(status) = status {
                             match status {
+                                SmokeTransactionStatus::Queued => {
+                                    admission_outcome_unknown = false;
+                                }
                                 SmokeTransactionStatus::Committed(height) => return Ok(height),
                                 SmokeTransactionStatus::Rejected(reason) => {
                                     return Err(ToriiError::SmokeRejected {
@@ -2619,6 +2841,15 @@ impl ToriiClient {
                             }
                         }
                     }
+                    _ = exact_resubmit.tick(), if admission_outcome_unknown => {
+                        match self.submit_transaction(&signed_bytes).await {
+                            Ok(()) => admission_outcome_unknown = false,
+                            Err(err) if err.confirms_existing_submission() => {
+                                admission_outcome_unknown = false;
+                            }
+                            Err(_err) => {}
+                        }
+                    }
                     message = block_rx.recv() => {
                         match message {
                             Ok(BlockStreamEvent::Block { block, .. }) => {
@@ -2627,7 +2858,9 @@ impl ToriiClient {
                                 }
                             }
                             Ok(BlockStreamEvent::DecodeError { error }) => {
-                                return Err(ToriiError::Decode(error.message));
+                                if !admission_outcome_unknown {
+                                    return Err(ToriiError::Decode(error.message));
+                                }
                             }
                             Ok(BlockStreamEvent::Closed) => {}
                             Ok(BlockStreamEvent::Lagged { .. } | BlockStreamEvent::Text { .. }) => {}
@@ -2665,7 +2898,9 @@ impl ToriiClient {
                                 }
                             }
                             Ok(EventStreamEvent::DecodeError { error }) => {
-                                return Err(ToriiError::Decode(error.message));
+                                if !admission_outcome_unknown {
+                                    return Err(ToriiError::Decode(error.message));
+                                }
                             }
                             Ok(EventStreamEvent::Closed) => {}
                             Ok(EventStreamEvent::Lagged { .. } | EventStreamEvent::Text { .. }) => {}
@@ -2676,11 +2911,15 @@ impl ToriiClient {
             }
         };
 
-        let result = tokio::time::timeout(options.timeout, wait)
-            .await
-            .map_err(|_| ToriiError::Timeout {
+        let result = match tokio::time::timeout(options.timeout, wait).await {
+            Ok(result) => result,
+            Err(_) if admission_outcome_unknown => Err(ToriiError::SmokeAdmissionOutcomeUnknown {
+                hash: tx_hash_str.clone(),
+            }),
+            Err(_) => Err(ToriiError::Timeout {
                 context: format!("smoke commit {tx_hash_str}"),
-            })?;
+            }),
+        };
 
         drop(block_stream);
         drop(events_stream);
@@ -4274,6 +4513,15 @@ fn asset_event_summary(event: &AssetEvent) -> (String, String) {
             "Asset balance decreased".to_owned(),
             format!("asset={} amount={}", change.asset(), change.amount()),
         ),
+        AssetEvent::Transferred(transfer) => (
+            "Asset transferred".to_owned(),
+            format!(
+                "source={} destination={} amount={}",
+                transfer.source(),
+                transfer.destination(),
+                transfer.amount()
+            ),
+        ),
         AssetEvent::MetadataInserted(change) => (
             "Asset metadata inserted".to_owned(),
             format!("asset={} key={}", change.target(), change.key()),
@@ -4281,6 +4529,18 @@ fn asset_event_summary(event: &AssetEvent) -> (String, String) {
         AssetEvent::MetadataRemoved(change) => (
             "Asset metadata removed".to_owned(),
             format!("asset={} key={}", change.target(), change.key()),
+        ),
+        AssetEvent::BatchTransferOutcome(outcome) => (
+            "Asset batch transfer outcome".to_owned(),
+            format!(
+                "leg_index={} leg_id={} asset={} destination={} amount={} status={:?}",
+                outcome.leg_index,
+                outcome.leg_id,
+                outcome.asset,
+                outcome.destination,
+                outcome.amount,
+                outcome.status
+            ),
         ),
     }
 }
@@ -5451,6 +5711,64 @@ mod tests {
     }
 
     #[test]
+    fn queue_plan_outcome_unknown_requires_exact_submission_reconciliation() {
+        let ambiguous = ToriiError::UnexpectedStatus {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            reject_code: Some(QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN_REJECT_CODE.to_owned()),
+            message: Some("admission outcome unknown".to_owned()),
+        };
+        assert!(ambiguous.is_queue_plan_journal_outcome_unknown());
+        assert!(!ambiguous.confirms_existing_submission());
+
+        for reject_code in ["PRTRY:ALREADY_ENQUEUED", "PRTRY:ALREADY_COMMITTED"] {
+            let reconciled = ToriiError::UnexpectedStatus {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                reject_code: Some(reject_code.to_owned()),
+                message: None,
+            };
+            assert!(reconciled.confirms_existing_submission());
+        }
+
+        let unresolved = ToriiError::SmokeAdmissionOutcomeUnknown {
+            hash: "abcd".to_owned(),
+        };
+        let mut cursor = ReadinessSmokeAttemptCursor::default();
+        cursor.record_failure(0, &unresolved);
+        assert_eq!(cursor.current_index(), 0);
+        cursor.record_failure(
+            0,
+            &ToriiError::Timeout {
+                context: "same exact transaction".to_owned(),
+            },
+        );
+        assert_eq!(
+            cursor.current_index(),
+            0,
+            "later observational errors must not advance to a replacement transaction"
+        );
+        let mut ordinary_retry = ReadinessSmokeAttemptCursor::default();
+        ordinary_retry.record_failure(
+            0,
+            &ToriiError::Timeout {
+                context: "ordinary unambiguous timeout".to_owned(),
+            },
+        );
+        assert_eq!(ordinary_retry.current_index(), 1);
+        let unresolved = unresolved.summarize();
+        assert_eq!(
+            unresolved.kind,
+            ToriiErrorKind::SmokeAdmissionOutcomeUnknown
+        );
+        assert!(unresolved.message.contains("abcd"));
+        assert!(
+            unresolved
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("byte-identical"))
+        );
+    }
+
+    #[test]
     fn reject_code_and_message_helpers_extract_values() {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -6159,6 +6477,60 @@ mod tests {
             plan.transactions[1].hash(),
             "smoke attempts should carry distinct nonces"
         );
+    }
+
+    #[test]
+    fn generated_readiness_transactions_renew_for_the_full_retry_budget() {
+        let signer = crate::compose::development_signing_authorities()
+            .first()
+            .expect("development signer available");
+        let mut plan = ReadinessSmokePlan::for_signer_with_attempts("mochi-smoke", signer, 3)
+            .expect("build readiness smoke plan");
+        let old_hashes = plan.tx_hashes().collect::<Vec<_>>();
+        let creation_time = plan.transactions[0].creation_time();
+        let required_lifetime = plan.required_submission_lifetime();
+
+        assert!(
+            required_lifetime > SMOKE_TTL,
+            "the default three-attempt commit budget intentionally exceeds the base TTL"
+        );
+        plan.renew_generated_transactions_if_needed(creation_time)
+            .expect("renew generated smoke transactions");
+
+        assert_ne!(plan.tx_hashes().collect::<Vec<_>>(), old_hashes);
+        for transaction in &plan.transactions {
+            assert_eq!(transaction.creation_time(), creation_time);
+            assert!(
+                transaction
+                    .time_to_live()
+                    .is_some_and(|ttl| { ttl >= required_lifetime && ttl >= SMOKE_TTL })
+            );
+            transaction
+                .verify_signature()
+                .expect("renewed smoke transaction signature verifies");
+        }
+    }
+
+    #[test]
+    fn caller_supplied_readiness_transactions_keep_the_exact_signed_envelope() {
+        let signer = crate::compose::development_signing_authorities()
+            .first()
+            .expect("development signer available");
+        let generated = ReadinessSmokePlan::for_signer("mochi-smoke", signer)
+            .expect("build readiness smoke plan");
+        let transaction = generated.transactions[0].clone();
+        let hash = transaction.hash();
+        let mut exact = ReadinessSmokePlan::new(vec![transaction]);
+        let after_expiry = exact.transactions[0]
+            .creation_time()
+            .saturating_add(SMOKE_TTL)
+            .saturating_add(Duration::from_secs(1));
+
+        exact
+            .renew_generated_transactions_if_needed(after_expiry)
+            .expect("exact plan does not require renewal");
+
+        assert_eq!(exact.transactions[0].hash(), hash);
     }
 
     const BLOCK_WIRE_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/canonical_block_wire.bin");
@@ -7649,6 +8021,64 @@ mod tests {
                 assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
             }
             Err(other) => panic!("unexpected readiness error: {other:?}"),
+        }
+
+        let _ = shutdown.send(());
+        let _ = handle.join();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn wait_for_genesis_commit_retries_zero_height_until_committed() {
+        let zero_height = TelemetryStatus {
+            blocks: 0,
+            ..TelemetryStatus::default()
+        };
+        let committed = TelemetryStatus {
+            blocks: 1,
+            ..TelemetryStatus::default()
+        };
+        let Some((addr, shutdown, handle)) = spawn_status_stub(vec![
+            (200, encode_status_payload(&zero_height)),
+            (200, encode_status_payload(&committed)),
+        ]) else {
+            return;
+        };
+
+        let client = ToriiClient::new(format!("http://{addr}")).expect("client");
+        let options = ReadinessOptions::new(Duration::from_millis(400))
+            .with_poll_interval(Duration::from_millis(20));
+        let snapshot = client
+            .wait_for_genesis_commit(options)
+            .await
+            .expect("committed genesis snapshot");
+
+        assert_eq!(snapshot.status.blocks, 1);
+        let _ = shutdown.send(());
+        let _ = handle.join();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn wait_for_genesis_commit_times_out_at_persistent_zero_height() {
+        let zero_height = TelemetryStatus {
+            blocks: 0,
+            ..TelemetryStatus::default()
+        };
+        let Some((addr, shutdown, handle)) =
+            spawn_status_stub(vec![(200, encode_status_payload(&zero_height))])
+        else {
+            return;
+        };
+
+        let client = ToriiClient::new(format!("http://{addr}")).expect("client");
+        let options = ReadinessOptions::new(Duration::from_millis(120))
+            .with_poll_interval(Duration::from_millis(15));
+
+        match client.wait_for_genesis_commit(options).await {
+            Ok(_) => panic!("expected genesis commitment timeout"),
+            Err(ToriiError::Timeout { context }) => {
+                assert!(context.contains("zero committed blocks"));
+            }
+            Err(other) => panic!("unexpected genesis readiness error: {other:?}"),
         }
 
         let _ = shutdown.send(());
@@ -9516,6 +9946,20 @@ state_tiered_cold_entries 2
             }
             other => panic!("expected rejection, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_pipeline_smoke_status_preserves_queued_reconciliation_evidence() {
+        let value = norito::json!({
+            "hash": "abcd",
+            "status": { "kind": "Queued" },
+            "scope": "local",
+            "resolved_from": "cache"
+        });
+        let status = parse_pipeline_smoke_status(&value)
+            .expect("status")
+            .expect("queued status remains observable");
+        assert_eq!(status, SmokeTransactionStatus::Queued);
     }
 
     #[tokio::test(flavor = "current_thread")]

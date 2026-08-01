@@ -237,8 +237,11 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     "enqueue_network_with_ingress_ownership": (
         "4d24ee550fa9377701d25f13cf660429b5caed20e51955fdb2a91a5604a20a33"
     ),
+    "can_admit_pre_runtime_leader_wire": (
+        "3e049b47299eba83b510bb0bcbba25a48cd5614a77dbbd8189ebbb83b42ac6f7"
+    ),
     "can_admit_network_message_with_ingress_ownership": (
-        "35fa48c500fafb285278d25bed7b0e00603f500bfd900005818685560d9f89df"
+        "338ddd65e84755b37a84a618375f27631ddabc72e478b2405ee7f9904b5ecad3"
     ),
     "take_last_scheduler_ownership": (
         "b781f7ace9823e4ba2b395230912a703a78c2b6ae8fb48e96a0f0f120c9fa7c8"
@@ -250,7 +253,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
 
 _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
     "deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences": (
-        "e6daf057b3d52844546702552174c91b901feef86995195f1fd8f366c935ea7d"
+        "bdd92f55342073ef1a709fbf8400708056ea2042c3a0904fd1f2993993b3298d"
     ),
     "later_same_semantic_fair_retry_retains_runtime_lifecycle_root": (
         "12e41e90bcd59ef22389131ad4b5cdeb56dce7fa04cd15357d18ce9f62cb1b6a"
@@ -263,6 +266,9 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
     ),
     "network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals": (
         "878269e9bdf567147360a1f3c2bf5a7def18b7abd1b38aed3978dc7923624291"
+    ),
+    "distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner": (
+        "1cbfe8b5786abec4911f1846e7ca3338441ff1bbd60c4cb0af42e167683e7924"
     ),
 }
 
@@ -283,7 +289,7 @@ _EFFECT_CAPACITY_PRODUCTION_RUST_ITEM_SHA256 = {
 # methods in addition to the focused ordering checks below.
 _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
     "begin_fetch": (
-        "7b34ba0db72d22ad1e86935f129bbd35d17aa31888b67df601c9865cfbd9eb11"
+        "e9a2a7ee26765b3160f0a4b8062aa0d5b67f2ab639cf3ea9f359062328fb7650"
     ),
     "commit_fetch_completion": (
         "ee63eedba56be13b1af788f81f9f69dc380a834bc0a8d0b36e1de3910f041f92"
@@ -311,10 +317,19 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 813
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 818
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 82
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "708e0ed0221056b20b9d9f03f1ea8cd07225b0c84c39ad18dd25402e090fb30f"
+    "0be88ecc9810d15528624015bacbf57924fedabea220ff5873b2374bbcfb6de8"
+)
+_PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
+    "605b12fa4be0556fc9eb79e887b1646d1cedd62864dcef4338863daa851f53a5"
+)
+_SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
+    "616752567a30ec73d904d1b6a5bb2c4d53e90d2070b6270aee180b7adfc18da9"
+)
+_SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 = (
+    "e672412b541730e0e2f0d80b7f0e03e54fb009397a9182e09cad233e5cabdda2"
 )
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
@@ -427,13 +442,13 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 66),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 68),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 57),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 58),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 34),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 129),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 131),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -945,6 +960,11 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_worker::tests::certified_serve_delayed_lower_view_cross_relay_cannot_resurrect",
     "sumeragi::v2_runtime::tests::busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation",
     "sumeragi::v2_worker::tests::invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity",
+    "sumeragi::v2_effects::tests::fetch_retransmissions_reuse_one_work_slot_and_one_signed_request",
+    "sumeragi::v2_effects::tests::apply_retransmissions_reuse_one_work_slot",
+    "sumeragi::v2_runtime::tests::distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner",
+    "sumeragi::v2_worker::tests::durable_reconstructed_body_terminalizes_late_chunk_across_arrival_order",
+    "sumeragi::v2_worker::tests::productive_retry_after_proofless_reconstruction_does_not_become_orphan",
 )
 _PRODUCTION_LIVENESS_NEW_REGRESSIONS = tuple(
     test_name
@@ -1848,7 +1868,7 @@ _PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256 = {
         "b9ad00e3d2ee76b202fa98f53cab9f7264c63a7d9a3050b0c3d57c0449cfb8f5"
     ),
     "user::Root::parse": (
-        "1d5fb2c92612461d995aea4b517d8d9945c5ed76f5b62721f56baa8275d8dd63"
+        "62ca7de440e955d32002daf28b6c3f8106b3d08ce987f55a1d42efeb5167acfe"
     ),
     "worker::validate_shared_ownership_geometry": (
         "67026793b1424da887ccec0301157480e43b3585d298ab1545fe98e8cb577411"
@@ -1903,6 +1923,27 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
     "effects::accept_certified_body_response_with_ingress_ownership": (
         "0f42039eb636c26adf431576ffb70a9cc59885f1bd19355c2a221d2fdbf59322"
     ),
+    "effects::classify_payload_chunk_lifecycle": (
+        "e6cdcf1439d8ef97a2912811be1ac65a0feb417b168a5480b9a3d9ec57a02333"
+    ),
+    "effects::begin_apply": (
+        "543995f15fed7b38c3c654598fef678d8f3ca6271bd008fc999d6651ae7195da"
+    ),
+    "effects::complete_application": (
+        "81123640348e9c94a6194d9bbf8c8863731bc46ced273137f6a0851be29cf234"
+    ),
+    "ingress::leader_wire_token_view": (
+        "ef9f78efaa117ac2a787a9791e87d5a199978cf1d5a87d8a9e43b94f12e12b82"
+    ),
+    "ingress::leader_wire_token_matches_chunk_manifest": (
+        "062164107c1c1363e538a4ed827b13510b3b0c2a91505d2b77c097f44dbc7a1b"
+    ),
+    "ingress::leader_wire_token_matches_body_coordinates": (
+        "2bc498a9088c735c18803dde3461d50afd70712ac40f7875457290d9796de385"
+    ),
+    "ingress::leader_wire_token_matches_exact_body": (
+        "645a29b8cff1d68fca203fd037f3c665189ab801c1bbe97eca8b6dfdc04e0b7f"
+    ),
     "worker::claimed_with_reply_routes_and_ingress_ownership": (
         "8c95a2604897a3dbf327d36721388bf466784f2203869d1fc6aead594ecd7e44"
     ),
@@ -1919,16 +1960,25 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "95906877d32686cc23249747ff5e31f8552d5abb237277f96fd4091da1a92d77"
     ),
     "worker::route_payload_chunk": (
-        "f633a311a20e8964a46d5f6a6542edbad3bcd052fced5038a65d9a471f2a557a"
+        "ed0c01f2a93defb44b23ffa108c622bbdc4550588a859f44ac7313490f52c705"
+    ),
+    "worker::has_exact_reconstructed_completion": (
+        "2d494b9f5ea950b8fa1e24c3b6f1a9d5f8917dc166658660300d9e66b9064bfe"
     ),
     "worker::buffer_orphan_payload_chunk_inner": (
-        "df4b2555d8fda4e356299093d3fa1f41c58ad3c469fb2b4720cdb17da460849b"
+        "03c11a6a6438f3a0f7cf47cac8f5310b262fd684a9df7891ff906b7f2e0d7de8"
+    ),
+    "worker::sweep_buffered_payload_chunk_lifecycles": (
+        "8f2cbe9282b02b1d05b61454faae71ede5abe13e13d70f5278ca35705ae78a05"
     ),
     "worker::replay_buffered_chunks": (
-        "145f9931fea75aed16111a55937abd9d0d821502314d970c4d57106ccceaf900"
+        "1259249ed54174dfcecffbacb6e2f70b3a5fbf31e59bd088f6160d3148648920"
+    ),
+    "worker::retire_buffered_payload_chunk_tail": (
+        "fa77f1610c7d58dd73f05cb353d10a4c2a1db4f28b58777138bcfc2daad475e1"
     ),
     "worker::deliver_payload_chunk": (
-        "6c218a4286b317b43f4fd68240328979714b1d831aae46f80108622c34e77052"
+        "f4341f1f806d10adab9e14b0c4b13c463fc7c6dae22bd7056863548d0912fb5b"
     ),
     "lane::accept_lane_message_owned": (
         "4c3b13ab1d0821d97604c8f9119ecc27d1c5be5c2a635b228027d35ed3adf96c"

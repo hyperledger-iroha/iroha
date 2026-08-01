@@ -3080,7 +3080,9 @@ const fn deferred_progress_capacity(roster_len: usize) -> usize {
 }
 
 const fn semantic_ingress_capacity(roster_len: usize) -> usize {
-    MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(2))
+    // One exact locked Commit set plus current and adjacent-future TimeoutVote
+    // sets bypass the ordinary semantic table.
+    MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(3))
 }
 
 /// Maximum distinct service stages which one immutable lifecycle can cross.
@@ -4819,7 +4821,7 @@ impl SumeragiV2Adapter {
                 )
             }
             wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
-                if vote.round.view != current_view {
+                if !reducer::timeout_vote_view_is_admissible(current_view, vote.round.view) {
                     return Ok((
                         Some(Self::ignored_outcome(reducer::IgnoreReason::IrrelevantView)),
                         None,
@@ -4920,7 +4922,7 @@ impl SumeragiV2Adapter {
         if capacity_bypass && !protected_capacity_bypass {
             // This is bounded backpressure for ordinary semantic traffic. QCs
             // and TCs do not consume this table. The at-most-roster-sized exact
-            // locked Commit and current-view TimeoutVote sets bypass ordinary
+            // locked Commit and bounded current/future TimeoutVote sets bypass ordinary
             // capacity and use their independent reserved progress partitions.
             return Ok((
                 Some(Self::ignored_outcome(reducer::IgnoreReason::Busy)),
@@ -4988,16 +4990,17 @@ impl SumeragiV2Adapter {
                     && execution_commitment == locked_execution_commitment
             )
         };
-        let matches_current_timeout = |key: IngressSemanticKey| {
+        let matches_retained_timeout = |key: IngressSemanticKey| {
             matches!(
                 key,
                 IngressSemanticKey::TimeoutVote { round, .. }
-                    if round.height == current_height && round.view == current_view
+                    if round.height == current_height
+                        && reducer::timeout_vote_view_is_admissible(current_view, round.view)
             )
         };
         self.ingress_equivocations.retain(|key, record| {
             if record.capacity_bypass {
-                matches_current_lock(*key, record.fingerprint) || matches_current_timeout(*key)
+                matches_current_lock(*key, record.fingerprint) || matches_retained_timeout(*key)
             } else {
                 key.round().view >= oldest_retained_view
                     || matches_current_lock(*key, record.fingerprint)
@@ -7236,6 +7239,28 @@ impl SumeragiV2Adapter {
         &mut self,
         candidate: Option<(ServicedCandidateKey, wire::View, ServicedCandidatePolicy)>,
     ) -> Result<Option<ProducerReservationToken>, AdapterError> {
+        if self.reducer.durable_state().decision().is_some() {
+            // The durable Decision is the sole restart owner for the rest of
+            // this height. Reclamation publishes an empty owner epoch before
+            // any post-Decision application, timer, or queued ingress can be
+            // serviced. Reserving another producer here would persist a live
+            // owner beside `decision_reclaimed = true`, contradicting that
+            // durable boundary before the reducer can discard the occurrence.
+            if !self.serviced_candidates_decision_reclaimed
+                || !self.serviced_candidates.is_empty()
+                || !self.durable_serviced_candidates.is_empty()
+                || !self.producer_continuations.is_empty()
+                || !self.durable_producer_continuations.is_empty()
+                || !self.restored_dormant_producer_continuations.is_empty()
+                || !self.deferred_producer_continuations.is_empty()
+                || !self.pending_producer_handoffs.is_empty()
+            {
+                return Err(self.fail_serviced_candidate_store(
+                    "durable Decision did not retain canonical reclaimed producer state".to_owned(),
+                ));
+            }
+            return Ok(None);
+        }
         let (Some((candidate, _, _)), Some(selected)) =
             (candidate, self.selected_producer_lifecycle.clone())
         else {
@@ -7872,6 +7897,13 @@ impl SumeragiV2Adapter {
                 "snapshot claims durable-Decision reclamation before a durable Decision".to_owned(),
             ));
         }
+        let retired_process_candidates = self
+            .serviced_candidates
+            .iter()
+            .filter_map(|(candidate, service_view)| {
+                (*service_view < current_view).then_some(*candidate)
+            })
+            .collect::<BTreeSet<_>>();
         self.serviced_candidates
             .retain(|_, service_view| *service_view >= current_view);
         let previous_durable_len = self.durable_serviced_candidates.len();
@@ -7880,16 +7912,32 @@ impl SumeragiV2Adapter {
             .retain(|_, service_view| *service_view >= current_view);
         if !decision_durable {
             // A strict certified view advance is itself the durable reason an
-            // older lifecycle cannot re-enter. Remove its paired producer
-            // tombstone whenever the exact service tombstone is reclaimed so
-            // every non-Decision snapshot keeps the two tables atomic.
+            // older terminal lifecycle cannot re-enter. Remove its paired
+            // producer tombstone whenever the exact service tombstone is
+            // reclaimed so every non-Decision snapshot keeps the two tables
+            // atomic. A live reservation is different: its runtime owner can
+            // still be completing the exact transition which installed the
+            // newer view. Retain that restart-safe admission metadata until
+            // the owner explicitly hands off or releases it; dropping only
+            // the durable half here leaves a process-local ghost which the
+            // next legitimate retry must fail closed.
             self.durable_producer_continuations.retain(|_, record| {
                 if record.status() == ProducerContinuationStatus::Terminal {
                     self.durable_serviced_candidates
                         .contains_key(&record.identity().candidate())
                 } else {
-                    record.identity().candidate().source_view() >= current_view
+                    true
                 }
+            });
+            // Process-only terminals close same-episode ABA retries, but a
+            // certified view advance is already the durable retirement reason
+            // for every service marker pruned above. Retaining only this half
+            // of the pair makes a retagged deferred occurrence look like a
+            // corrupt live reservation. Reclaim the terminal with its exact
+            // process marker while preserving every Reserved owner.
+            self.producer_continuations.retain(|_, record| {
+                record.status() != ProducerContinuationStatus::Terminal
+                    || !retired_process_candidates.contains(&record.identity().candidate())
             });
         }
         let mut durable_changed = self.durable_serviced_candidates.len() != previous_durable_len
@@ -8704,7 +8752,7 @@ impl SumeragiV2Adapter {
                 })
             }
             wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
-                if vote.round.view != current_view {
+                if !reducer::timeout_vote_view_is_admissible(current_view, vote.round.view) {
                     return false;
                 }
                 Some(IngressSemanticKey::TimeoutVote {
@@ -8985,6 +9033,7 @@ impl SumeragiV2Adapter {
         AdapterError::DeferredServiceContractViolation
     }
 
+    /// Snapshot every physically retained deferred owner by queue class.
     fn deferred_queue_lengths(&self) -> DeferredQueueLengths {
         DeferredQueueLengths {
             completion: u64::try_from(self.deferred_completions.len())
@@ -8993,6 +9042,31 @@ impl SumeragiV2Adapter {
                 .expect("bounded progress queue length fits u64"),
             normal: u64::try_from(self.deferred_inputs.len())
                 .expect("bounded normal queue length fits u64"),
+        }
+    }
+
+    /// Snapshot only the lifecycle-minimal candidates the runtime authorized
+    /// for this service turn.
+    ///
+    /// The runtime may deliberately exclude an older queue class whose
+    /// physical lifecycle is not yet serviceable. This projection controls
+    /// class rotation alongside the full physical queue snapshot, so an
+    /// excluded owner cannot make a valid filtered selection prove the wrong
+    /// class.
+    fn eligible_deferred_queue_lengths(&self, eligible: &BTreeSet<u128>) -> DeferredQueueLengths {
+        let count = |queue: &VecDeque<DeferredInput>| {
+            u64::try_from(
+                queue
+                    .iter()
+                    .filter(|input| eligible.contains(&input.admission_ordinal))
+                    .count(),
+            )
+            .expect("bounded eligible deferred queue length fits u64")
+        };
+        DeferredQueueLengths {
+            completion: count(&self.deferred_completions),
+            progress: count(&self.deferred_progress_inputs),
+            normal: count(&self.deferred_inputs),
         }
     }
 
@@ -9007,29 +9081,7 @@ impl SumeragiV2Adapter {
         eligible: &BTreeSet<u128>,
     ) -> Result<Option<DeferredServiceSelection>, AdapterError> {
         let queue_lengths_before = self.deferred_queue_lengths();
-        let eligible_queue_lengths_before = DeferredQueueLengths {
-            completion: u64::try_from(
-                self.deferred_completions
-                    .iter()
-                    .filter(|input| eligible.contains(&input.admission_ordinal))
-                    .count(),
-            )
-            .expect("bounded eligible completion length fits u64"),
-            progress: u64::try_from(
-                self.deferred_progress_inputs
-                    .iter()
-                    .filter(|input| eligible.contains(&input.admission_ordinal))
-                    .count(),
-            )
-            .expect("bounded eligible progress length fits u64"),
-            normal: u64::try_from(
-                self.deferred_inputs
-                    .iter()
-                    .filter(|input| eligible.contains(&input.admission_ordinal))
-                    .count(),
-            )
-            .expect("bounded eligible normal length fits u64"),
-        };
+        let eligible_queue_lengths_before = self.eligible_deferred_queue_lengths(eligible);
         let service_cursor_before = self.next_deferred_priority;
         for _ in 0..3 {
             let priority = self.next_deferred_priority;
@@ -13307,6 +13359,142 @@ mod tests {
     }
 
     #[test]
+    fn strict_view_advance_retains_live_producer_admission_until_owner_release() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let event = reducer::Event::TimeoutElapsed { tag };
+        let candidate = adapter
+            .serviced_candidate(&event, DeferredPriority::Completion, None, None)
+            .expect("timeout has a producer stage");
+        let causal_key = Hash::new(b"live producer across strict view advance");
+        adapter
+            .bind_selected_producer_lifecycle(causal_key.clone(), 1)
+            .expect("bind live producer owner");
+        let reservation = adapter
+            .reserve_selected_producer_continuation(Some(candidate))
+            .expect("reserve live producer")
+            .expect("tracked timeout reserves");
+        let address = reservation.address;
+        adapter.clear_selected_producer_lifecycle();
+
+        let round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: tag.view(),
+        };
+        let timeout = wire::TimeoutCertificate {
+            round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xA5; 96],
+            }],
+        };
+        adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout),
+            ))
+            .expect("install timeout certificate and advance the view");
+        assert_eq!(adapter.current_tag().view(), tag.view() + 1);
+        assert_eq!(
+            adapter.durable_producer_continuations.get(&address),
+            adapter.producer_continuations.get(&address),
+            "strict-view reclamation must not split a still-live producer from its durable admission"
+        );
+
+        adapter
+            .bind_selected_producer_lifecycle(causal_key, 1)
+            .expect("rebind exact live retry");
+        let retry = adapter
+            .reserve_selected_producer_continuation(Some(candidate))
+            .expect("exact live retry remains admissible")
+            .expect("exact live retry retains its reservation");
+        assert_eq!(retry.address, address);
+        assert_eq!(retry.change, ProducerReservationChange::Unchanged);
+        assert!(!adapter.fail_closed);
+    }
+
+    #[test]
+    fn strict_view_advance_reclaims_process_terminal_before_retagged_retry() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let event = reducer::Event::TimeoutElapsed { tag };
+        let candidate = adapter
+            .serviced_candidate(&event, DeferredPriority::Completion, None, None)
+            .expect("timeout has a producer stage");
+        let causal_key = Hash::new(b"process terminal before retagged retry");
+        adapter
+            .bind_selected_producer_lifecycle(causal_key.clone(), 1)
+            .expect("bind original producer owner");
+        let reservation = adapter
+            .reserve_selected_producer_continuation(Some(candidate))
+            .expect("reserve original producer")
+            .expect("tracked timeout reserves");
+        let handoff = adapter
+            .record_serviced_candidate(Some(candidate), false, false, Some(reservation))
+            .expect("record original producer service")
+            .expect("original service returns a handoff");
+        let address = handoff.identity().address();
+        adapter
+            .acknowledge_producer_handoff(
+                handoff,
+                ProducerContinuationHandoffEvidence::ConcreteSuccessor,
+            )
+            .expect("acknowledge volatile successor");
+        adapter.clear_selected_producer_lifecycle();
+        assert_eq!(
+            adapter.producer_continuations[&address].status(),
+            ProducerContinuationStatus::Terminal
+        );
+        assert!(
+            !adapter
+                .durable_producer_continuations
+                .contains_key(&address)
+        );
+        assert!(adapter.serviced_candidates.contains_key(&candidate.0));
+
+        let round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: tag.view(),
+        };
+        let timeout = wire::TimeoutCertificate {
+            round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xA6; 96],
+            }],
+        };
+        adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout),
+            ))
+            .expect("install timeout certificate and advance the view");
+        assert_eq!(adapter.current_tag().view(), tag.view() + 1);
+        assert!(!adapter.serviced_candidates.contains_key(&candidate.0));
+        assert!(
+            !adapter.producer_continuations.contains_key(&address),
+            "the strict episode exit must reclaim its process-only terminal"
+        );
+
+        let retagged_candidate = (candidate.0, adapter.current_tag().view(), candidate.2);
+        adapter
+            .bind_selected_producer_lifecycle(causal_key, 1)
+            .expect("rebind the exact deferred owner");
+        let retry = adapter
+            .reserve_selected_producer_continuation(Some(retagged_candidate))
+            .expect("retagged exact retry does not collide with a stale terminal")
+            .expect("retagged exact retry reserves");
+        assert_eq!(retry.change, ProducerReservationChange::Inserted);
+        assert!(!adapter.fail_closed);
+    }
+
+    #[test]
     fn terminal_producer_tombstone_survives_restart_blocks_aba_and_advances_shared_source() {
         let directory = TempDir::new().expect("temporary directory");
         let causal_key = Hash::new(b"terminal producer parent");
@@ -13559,29 +13747,10 @@ mod tests {
             .expect("bind post-Decision completion");
         let completion_reservation = replayed_again
             .reserve_selected_producer_continuation(Some(completion_candidate))
-            .expect("reserve post-Decision completion")
-            .expect("tracked completion reserves");
-        let completion_handoff = replayed_again
-            .record_serviced_candidate(
-                Some(completion_candidate),
-                true,
-                true,
-                Some(completion_reservation.clone()),
-            )
-            .expect("Decision retires process-local completion");
-        assert!(completion_handoff.is_none());
-        assert!(
-            !replayed_again
-                .durable_producer_continuations
-                .contains_key(&completion_reservation.address),
-            "Decision early return cannot publish an orphan producer terminal"
-        );
-        assert!(
-            !replayed_again
-                .producer_continuations
-                .contains_key(&completion_reservation.address),
-            "Decision early return cannot retain a process-local producer ghost"
-        );
+            .expect("suppress post-Decision producer reservation");
+        assert!(completion_reservation.is_none());
+        assert!(replayed_again.durable_producer_continuations.is_empty());
+        assert!(replayed_again.producer_continuations.is_empty());
         replayed_again.clear_selected_producer_lifecycle();
         let post_replay = unowned_body_event(&replayed_again, marker);
         replayed_again
@@ -15021,6 +15190,95 @@ mod tests {
     }
 
     #[test]
+    fn post_decision_selected_lifecycles_cannot_reopen_the_reclaimed_owner_epoch() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
+        assert!(startup.is_empty());
+
+        let decided_subject = subject(0x7c);
+        let leader = adapter.wire_context.leader(0);
+        let proposal = proposal(&adapter.wire_context, leader, decided_subject);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+            unreachable!("proposal helper returns a proposal")
+        };
+        let manifest = proposal.manifest;
+        let (durable, validated) =
+            validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+        let decision = wire::QuorumCertificate {
+            round: manifest.round,
+            proposal_round: manifest.round,
+            phase: wire::GlobalPhase::Commit,
+            subject: decided_subject,
+            execution_commitment: validated.execution_commitment(),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0x7c; 96],
+        };
+        let decided = adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                    decision.clone(),
+                )),
+            ))
+            .expect("install the exact durable Decision");
+        assert!(matches!(
+            decided.effects(),
+            [AdapterEffect::FetchBody { .. }]
+        ));
+        assert!(adapter.serviced_candidates_decision_reclaimed);
+        assert!(adapter.serviced_candidates.is_empty());
+        assert!(adapter.durable_serviced_candidates.is_empty());
+        assert!(adapter.producer_continuations.is_empty());
+        assert!(adapter.durable_producer_continuations.is_empty());
+        let reclaimed_snapshot = std::fs::read(adapter.serviced_candidate_store_path_for_test())
+            .expect("read reclaimed owner snapshot");
+
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"post-Decision validated body"), 1)
+            .expect("bind post-Decision validation lifecycle");
+        let applied = adapter
+            .local_proposal_ready(adapter.current_tag(), manifest, &durable, &validated)
+            .expect("service selected post-Decision validation without a producer owner");
+        adapter.clear_selected_producer_lifecycle();
+        let apply_tag = match applied.effects() {
+            [
+                AdapterEffect::Apply {
+                    tag,
+                    subject,
+                    certificate,
+                },
+            ] if *subject == decided_subject && certificate == &decision => *tag,
+            effects => panic!("unexpected exact Decision application effects: {effects:?}"),
+        };
+        assert!(applied.producer_handoff().is_none());
+
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"post-Decision application"), 2)
+            .expect("bind post-Decision application lifecycle");
+        let completed = adapter
+            .application_completed(apply_tag, decided_subject)
+            .expect("service selected post-Decision application completion");
+        adapter.clear_selected_producer_lifecycle();
+        assert_eq!(completed.disposition(), reducer::StepDisposition::Applied);
+        assert!(completed.effects().is_empty());
+        assert!(completed.producer_handoff().is_none());
+
+        assert!(adapter.serviced_candidates_decision_reclaimed);
+        assert!(adapter.serviced_candidates.is_empty());
+        assert!(adapter.durable_serviced_candidates.is_empty());
+        assert!(adapter.producer_continuations.is_empty());
+        assert!(adapter.durable_producer_continuations.is_empty());
+        assert!(adapter.restored_dormant_producer_continuations.is_empty());
+        assert!(adapter.deferred_producer_continuations.is_empty());
+        assert!(adapter.pending_producer_handoffs.is_empty());
+        assert_eq!(
+            std::fs::read(adapter.serviced_candidate_store_path_for_test())
+                .expect("reread reclaimed owner snapshot"),
+            reclaimed_snapshot,
+            "post-Decision service cannot republish or mutate the reclaimed owner epoch"
+        );
+    }
+
+    #[test]
     fn exact_local_completion_after_decision_reports_body_validated_progress() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
@@ -16012,7 +16270,7 @@ mod tests {
                     });
                     let (outcome, admission) = adapter
                         .admit_authenticated_payload(&payload)
-                        .expect("current TimeoutVote bypasses ordinary capacity");
+                        .expect("retained TimeoutVote bypasses ordinary capacity");
                     assert!(outcome.is_none());
                     let admission = admission.expect("TimeoutVote owns a capacity-bypass record");
                     assert!(
@@ -16046,10 +16304,15 @@ mod tests {
         admit_locked_roster(&mut adapter, first_lock.0, first_lock.1, first_lock.2);
         let roster_len = adapter.wire_context.roster.len();
         admit_timeout_roster(&mut adapter, first_lock.0);
+        let adjacent_timeout_round = wire::ConsensusRound {
+            view: first_lock.0.view + reducer::FUTURE_TIMEOUT_VOTE_LOOKAHEAD,
+            ..first_lock.0
+        };
+        admit_timeout_roster(&mut adapter, adjacent_timeout_round);
         assert_eq!(
             adapter.ingress_equivocations.len(),
             semantic_ingress_capacity(roster_len),
-            "ordinary, exact-lock, and current TimeoutVote owners realize the complete live semantic bound"
+            "ordinary, exact-lock, and bounded TimeoutVote owners realize the complete live semantic bound"
         );
         let ingress = adapter
             .adapter_queue_statuses()
@@ -16070,7 +16333,7 @@ mod tests {
                 .values()
                 .filter(|record| record.capacity_bypass)
                 .count(),
-            roster_len * 2
+            roster_len * 3
         );
         let same_view_equivocations = adapter.ingress_equivocations.clone();
         let same_view_deliveries = adapter.ingress_deliveries.clone();
@@ -17062,6 +17325,22 @@ mod tests {
         assert_eq!(selection.evidence.admission_ordinal, 1);
         assert_eq!(selection.evidence.priority, DeferredPriority::Normal);
         assert_eq!(
+            selection.evidence.queue_lengths_before,
+            DeferredQueueLengths {
+                completion: 1,
+                progress: 0,
+                normal: 2,
+            }
+        );
+        assert_eq!(
+            selection.evidence.queue_lengths_after,
+            DeferredQueueLengths {
+                completion: 1,
+                progress: 0,
+                normal: 1,
+            }
+        );
+        assert_eq!(
             selection.evidence.eligible_queue_lengths_before,
             DeferredQueueLengths {
                 completion: 0,
@@ -17640,7 +17919,7 @@ mod tests {
             "invalid oversized rosters cannot expand the static adapter bound"
         );
         assert_eq!(semantic_ingress_capacity(0), MAX_INGRESS_SEMANTIC_KEYS);
-        assert_eq!(semantic_ingress_capacity(4), MAX_INGRESS_SEMANTIC_KEYS + 8);
+        assert_eq!(semantic_ingress_capacity(4), MAX_INGRESS_SEMANTIC_KEYS + 12);
         assert_eq!(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE, 11);
         assert_eq!(
             BTreeSet::from(ServicedCandidateStage::ALL.map(|stage| stage as u8)).len(),
@@ -17650,7 +17929,7 @@ mod tests {
         assert_eq!(
             serviced_candidate_capacity(4),
             (MAX_INGRESS_SEMANTIC_KEYS
-                + 8
+                + 12
                 + MAX_DEFERRED_INPUTS * 2
                 + 11
                 + MAX_DEFERRED_INPUTS * 4
@@ -18153,6 +18432,142 @@ mod tests {
         assert_eq!(
             adapter.ingress_equivocations.len(),
             MAX_INGRESS_SEMANTIC_KEYS
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn adjacent_future_timeout_vote_remains_retryable_until_current_view_advances() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let current_tag = adapter.current_tag();
+        let current_round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: current_tag.view(),
+        };
+
+        let local_timeout = adapter
+            .timeout_elapsed(current_tag)
+            .expect("start the local TimeoutVote signature fence");
+        let sign_tag = match local_timeout.effects() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(_),
+                },
+            ] => *tag,
+            effects => panic!("unexpected timeout effects: {effects:?}"),
+        };
+
+        let timeout_certificate = wire::TimeoutCertificate {
+            round: current_round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xC1; 96],
+            }],
+        };
+        let deferred_tc = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
+            ))
+            .expect("defer the current-view TC behind the signature fence");
+        assert_eq!(
+            deferred_tc.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        );
+
+        let current_vote = wire::TimeoutVote {
+            round: current_round,
+            highest_prepare_qc: None,
+            signer: 1,
+            signature: vec![0xC2],
+        };
+        let current_key = IngressSemanticKey::TimeoutVote {
+            round: current_round,
+            signer: 1,
+        };
+        let deferred_current = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(current_vote),
+            ))
+            .expect("defer one current-view owner for the signer");
+        assert_eq!(
+            deferred_current.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        );
+        assert!(adapter.ingress_deliveries.contains_key(&current_key));
+        assert_eq!(adapter.deferred_progress_inputs.len(), 2);
+
+        let adjacent_round = wire::ConsensusRound {
+            view: current_round
+                .view
+                .saturating_add(reducer::FUTURE_TIMEOUT_VOTE_LOOKAHEAD),
+            ..current_round
+        };
+        let adjacent_vote = wire::TimeoutVote {
+            round: adjacent_round,
+            highest_prepare_qc: None,
+            signer: 1,
+            signature: vec![0xC3],
+        };
+        let adjacent_key = IngressSemanticKey::TimeoutVote {
+            round: adjacent_round,
+            signer: 1,
+        };
+        for attempt in 0..2 {
+            let busy = adapter
+                .receive_verified(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::TimeoutVote(adjacent_vote.clone()),
+                ))
+                .expect("adjacent TimeoutVote remains retryable behind its current owner");
+            assert_eq!(
+                busy.disposition(),
+                reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy),
+                "pre-advance attempt {attempt} must remain retryable"
+            );
+            assert_eq!(
+                adapter.deferred_progress_inputs.len(),
+                2,
+                "one signer cannot consume both retained timeout-round partitions"
+            );
+            assert!(adapter.ingress_equivocations.contains_key(&adjacent_key));
+            assert!(
+                !adapter.ingress_deliveries.contains_key(&adjacent_key),
+                "unowned adjacent traffic must not be poisoned as delivered"
+            );
+        }
+
+        adapter
+            .signature_completed(sign_tag, vec![0xC4; 96])
+            .expect("complete the local TimeoutVote signature");
+        let enter_view = adapter
+            .drain_deferred()
+            .expect("install the deferred TC in its own macro-step");
+        assert!(enter_view.iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::EnterView { tag, .. } if tag.view() == adjacent_round.view
+        )));
+        assert_eq!(adapter.current_tag().view(), adjacent_round.view);
+
+        let applied = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(adjacent_vote.clone()),
+            ))
+            .expect("apply the adjacent vote after its view becomes current");
+        assert_eq!(applied.disposition(), reducer::StepDisposition::Applied);
+        assert!(adapter.ingress_deliveries.contains_key(&adjacent_key));
+
+        let duplicate = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(adjacent_vote),
+            ))
+            .expect("coalesce the delivered adjacent TimeoutVote");
+        assert_eq!(
+            duplicate.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
         );
     }
 

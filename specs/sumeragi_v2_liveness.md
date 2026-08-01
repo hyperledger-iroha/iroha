@@ -5,7 +5,8 @@ partition, the absence of a responsive dual quorum, or local disk, signing,
 validation, and application work which never completes can prevent progress.
 The first-release target is therefore conditional:
 
-> After GST, with a responsive dual quorum and terminating local work, every
+> After GST, with a representative roster of at least four voting peers, a
+> responsive dual quorum, and deterministic terminating local work, every
 > height eventually decides and every responsive validator eventually applies
 > the decision and activates its successor height.
 
@@ -23,6 +24,11 @@ serialized, completion/ingress/runtime/sidecar work is serviced in finite
 batches, the watchdog is polled on every loop edge, and idle/continue paths use
 the finite 10 ms `IDLE_POLL`. Those checks do not prove host scheduling or I/O
 latency.
+
+The release claim is exercised only by networks with at least four voting
+peers. Single-peer and undersized fixtures are not representative Sumeragi v2
+networks and cannot satisfy the production-network release gate, even when a
+bounded local model is useful as mutation evidence.
 
 For the first release, a “responsive validator” is a voting Sumeragi v2 node
 running on the validator-storage platform contract implemented and exercised
@@ -165,6 +171,16 @@ restarts `ValidateBody`, and a validated body restarts `Apply`. Dropping any
 one volatile owner therefore leaves a deterministic reconstruction path from
 the durable Decision and body-stage record.
 
+Application retransmission has the matching terminal rule. While `Apply` is
+in flight, an exact rediscovery coalesces with the incumbent work identifier
+and lifecycle owner. After Kura returns the typed finality receipt and exact
+artifact, the executor retains their original reducer tag as the completion
+tombstone: later exact rediscovery is absorbed, while any tag, subject,
+context, or CommitQC drift fails closed. Draining the work queue therefore
+cannot recreate the same logical application at its old stage. This is a
+source-level production repair and does not by itself promote the
+`application-liveness` or production-refinement ledger entries.
+
 Decision installation is also a terminal ownership boundary for global reducer
 input and losing carriers. Before its `FetchBody` effect can reserve capacity,
 the executor retires every competing fetch, store, validation, signing,
@@ -292,6 +308,14 @@ installing a marker. The finite TLA+ mutation matrix covers only the
 evidence-bearing `BodyStored` and `ValidationSucceeded` Busy/applied phases.
 The four-phase Rust test extends exact-retry suppression—not the matrix's
 conflict or Busy-owner claim—to `BodyAvailable` and `SignatureCompleted`.
+
+An admitted `FetchBody` becomes passive while it waits on the network. The
+executor retains its exact lifecycle owner, but does not publish that wait as a
+runnable actor-global scheduler minimum. Otherwise a missing response can
+block the timeout, retransmit, Proposal, or QC which supplies or supersedes the
+same acquisition. Before retiring the fetch, the executor reserves and commits
+`BodyAvailable` with the original owner; that concrete completion therefore
+re-enters scheduling at the exact old ordinal, ahead of unrelated later work.
 
 Authenticated consensus-message ownership likewise spans the runtime queue and
 the adapter's Busy-deferred lanes through one generic production path. The
@@ -452,20 +476,27 @@ The adapter's deferred Progress reserve is partitioned by consumer ownership:
 one locked-Commit slot and one independent TimeoutVote slot per frozen
 validator, plus one slot for each PrepareQC, CommitQC, and TC class. Its exact
 capacity is therefore `2 * roster_len + 3`. Exact retransmissions coalesce
-before this capacity check. Vote ownership is signer-injective: a distinct
-Commit or TimeoutVote from the same signer cannot consume a second slot or
-displace the admitted owner, and becomes admissible only after that owner's
-slot is serviced. Once a progress item is admitted, later equal- or
+before this capacity check. Vote ownership is signer-injective: the one
+TimeoutVote slot is shared by the current and adjacent-future rounds, so a
+distinct Commit or TimeoutVote from the same signer cannot consume a second
+slot or displace the admitted owner and becomes admissible only after that
+owner's slot is serviced. Once a progress item is admitted, later equal- or
 higher-ranked traffic cannot displace it; a full class rejects the new item
 while preserving the already admitted vote, reconstruction, or certificate
 owner.
 
 The semantic-admission table applies the same partition before the reducer is
-called. A full ordinary-history budget cannot reject a current-view
-TimeoutVote: at most one key per frozen signer bypasses that budget, remains
-available for equivocation/delivery checks while the view is current, and is
-retired when the view advances. Thus the reserved deferred slot is reachable
-even when ordinary semantic history is saturated.
+called. A full ordinary-history budget cannot reject a TimeoutVote in the
+bounded current/adjacent-future window: at most two keys per frozen signer
+bypass that budget, remain available for equivocation/delivery checks while
+their rounds are in the window, and are retired when they fall behind it. The
+exact live semantic bound is therefore `1024 + 3 * roster_len`: ordinary
+history, one locked-Commit set, and two TimeoutVote sets. On TC installation,
+authenticated shares and retained local TimeoutVote control are filtered
+against the newly installed current/adjacent window, so an early adjacent
+share becomes immediately useful instead of being discarded. Thus the single
+deferred TimeoutVote slot remains reachable without allowing unbounded future
+rounds even when ordinary semantic history is saturated.
 
 The roster-aware transport ingress also prevents auxiliary I/O backpressure
 from becoming a per-validator head-of-line stall. On each source's fair turn it
@@ -656,14 +687,17 @@ lane-application projection, and their two-phase equality kernel. This progress
 argument remains conditional on publication of a ready exact receipt. The
 current `ReplyWriterDeadlineModelObligation` proof script targets local actor
 termination, and `ConditionalResponsiveWriterCursorLiveness` targets cursor
-advance under `ResponsiveWriterReceiptAssumption`; both remain
-`specified_unproved` until a fresh current-source strict run succeeds. Deriving
-that assumption from `ResponsiveReplyWriterSpec` is now the SANY-clean
+advance under `ResponsiveWriterReceiptAssumption`; both have source proof
+bodies and are deductively classified support for the still-unpromoted
+production progress refinement. Deriving that assumption from
+`ResponsiveReplyWriterSpec` is the SANY-clean
 `ResponsiveStrongFairnessToReceiptResidual` proof target. Its chain retains
 outstanding ownership, applies weak fairness to reconnect and first dispatch,
 then applies strong fairness to writer admission and publication across
-fragmented eligibility intervals. A fresh strict TLAPS run is still required;
-responsive TLC remains bounded evidence rather than proof authority. The finite
+fragmented eligibility intervals. It likewise has a source proof body and is
+not an independent ledger row. A fresh strict TLAPS run over the final
+dependency closure is still required; responsive TLC remains bounded evidence
+rather than proof authority. The finite
 `u8` attempt and saturating `Duration` make this a qualitative termination
 statement, not a fixed operational wall-clock SLA: later exponential deadlines
 can be extremely long.
@@ -1134,10 +1168,18 @@ Subsequent source reconciliation and exact-ingress lifecycle, restart,
 provenance, and invalid-QC quarantine regressions bind one actor-global
 logical owner across its physical retries.
 Seven physical-cut, adapter-capability, aggregate-rebase, and ineligible-driver
-regressions bring the current source-bound inventory to 813 exact tests across
+regressions produce the 813-test checkpoint. Five admission/coalescing, Busy
+pre-runtime ownership, and reconstructed-chunk terminality regressions bring
+the current source-bound inventory to 818 exact tests across
 39 modules and 82 pre-network legs.
+The exact Apply regression also drains the typed Kura completion and verifies
+that its immutable finality artifact and original reducer tag absorb a later
+identical periodic rediscovery even after live tag authority is relinquished,
+without allocating a new work ID; tag drift or a conflicting post-completion
+certificate still fails closed. This extends an existing named regression and
+therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`708e0ed0221056b20b9d9f03f1ea8cd07225b0c84c39ad18dd25402e090fb30f`.
+`0be88ecc9810d15528624015bacbf57924fedabea220ff5873b2374bbcfb6de8`.
 Nine of those legs execute the separate 309-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 310 TSV lines and has SHA-256
 `b7588b8ab1f3dcba654bd32ec9fc2c196dc129eebc4821de6df89d5b69253cfb`.
@@ -1385,7 +1427,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 813-test inventory is a mechanically checked
+The current 818-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1465,10 +1507,12 @@ locked-body-reproposal entry denotes the exact three-arm progress obligation:
 old-round Commit, unchanged later-view same-round re-proposal, or legitimate
 Decision/higher-Prepare supersession. It and the production cross-tool refinements remain explicitly
 unproved; no bounded model or source-fidelity check promotes them. The
-aggregate temporal module likewise retains
+aggregate temporal module gives
 `AdequateLeaderExactClosureResidualObligation` and
-`ExactDecisionOffSchedulerResidualConvergenceObligation` as explicit proofless
-residuals; downstream wrappers cannot promote them.
+`ExactDecisionOffSchedulerResidualConvergenceObligation` pinned source proof
+bodies and classifies them as deductively proved support leaves. They are not
+independent ledger rows; downstream wrappers cannot promote their consumers
+without fresh strict evidence for the complete dependency closure.
 
 The adequate-leader residual is target-local rather than aggregate: another
 validator's Decision is not terminal for the indexed target. Its occurrence
@@ -1481,13 +1525,16 @@ The exact-Decision producer audit narrows causal replenishment to reachable
 local debt setters; Serve-capacity growth to ordinary or historical request
 drain, fresh causal Completion admission, or local Control enqueue; and
 priority growth to exact network-claim admission or the same archive's normal,
-recovery, or historical runner. Each classification is action-local. No
-current state expression decreases across every producer episode, so the five
-exact off-scheduler convergence leaves remain proofless.
-Independently, `ResponsiveStrongFairnessToReceiptResidual` now has a SANY-clean
-proof script, but remains `specified_unproved` pending fresh strict TLAPS; the
-current conditional cursor theorem is likewise not promoted from its stale
-receipt. An honest
+recovery, or historical runner. Each classification is action-local. The five
+exact off-scheduler convergence leaves have source proof bodies over immutable
+owner identity, finite prefixes, admission/coalescing, and the nonphysical
+response gate. Their composition does not count replenishment itself as
+progress; fresh strict TLAPS is still required before their consumer is
+promoted.
+Independently, `ResponsiveStrongFairnessToReceiptResidual` and the conditional
+cursor theorem have source proof bodies and remain source-bound support for the
+unpromoted production progress refinement; a stale receipt cannot attest the
+final dependency closure. An honest
 validator outside `Responsive` may retain activation queued before GST;
 neither the formal fairness premise nor the conditional release target promises
 its local-worker progress. The action-by-action safety
@@ -1570,7 +1617,7 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 813 exact production
+Before those longer scenarios, the PR gate inventories 818 exact production
 liveness tests and executes all 39 owning Rust modules serially. The release
 profile additionally records nine G-UNIT legs executing a separate 309-test
 focus inventory. The
@@ -1591,9 +1638,9 @@ persistence macro-step below the eight-effect bound, exactly one serviceable
 deferred adapter step per runtime turn, and refusal of terminal readiness while
 any deferred Completion, Progress input, or ordinary input remains. The adapter
 leg also realizes the complete
-`1024 + 2N` semantic-admission bound, retains current-view signer slots,
-retires old-view TimeoutVote delivery records, and exercises non-poisoning
-same-owner retry across TC installation. The block-sync leg pins
+`1024 + 3N` semantic-admission bound, retains current/adjacent-future signer
+keys, retires out-of-window TimeoutVote delivery records, and exercises
+non-poisoning same-owner retry across TC installation. The block-sync leg pins
 reducer-enqueue ownership, strictly sequential context catch-up, and canonical
 Kura body service by a frozen-roster archive. The archive need not have signed
 the historical QC: the QC authenticates the exact subject, the archive signs
@@ -1714,8 +1761,10 @@ without adding another module or leg. Subsequent source reconciliation and
 exact-ingress lifecycle, restart, provenance, and quarantine regressions bring
 the inventory to the 806-test checkpoint without adding another module or leg.
 Seven physical-cut, adapter-capability, aggregate-rebase, and ineligible-driver
-regressions bring the current inventory to 813 tests, again without adding a
-module or leg. The rollover slice covers
+regressions produce the 813-test checkpoint. Five admission/coalescing, Busy
+pre-runtime ownership, and reconstructed-chunk terminality regressions bring
+the current inventory to 818 tests, again without adding a module or leg. The
+rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
 untyped fail-closed boundaries. The route slice pins semantic deduplication,
@@ -1986,7 +2035,7 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 82 pre-network corridor legs and
-their exact 813-test production inventory, the separate 309-test G-UNIT
+their exact 818-test production inventory, the separate 309-test G-UNIT
 inventory, semantic test names/counts, commands, logs, source-bound localnet
 binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos
