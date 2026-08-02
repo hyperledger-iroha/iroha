@@ -248,14 +248,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             file: None,
             manifest_json: None,
             expected_hash: None,
-            bootstrap_allowlist: Vec::new(),
-            bootstrap_max_bytes: iroha_config::parameters::defaults::genesis::BOOTSTRAP_MAX_BYTES
-                .get(),
-            bootstrap_response_throttle: iroha_config::parameters::defaults::genesis::BOOTSTRAP_RESPONSE_THROTTLE,
-            bootstrap_request_timeout: iroha_config::parameters::defaults::genesis::BOOTSTRAP_REQUEST_TIMEOUT,
-            bootstrap_retry_interval: iroha_config::parameters::defaults::genesis::BOOTSTRAP_RETRY_INTERVAL,
-            bootstrap_max_attempts: iroha_config::parameters::defaults::genesis::BOOTSTRAP_MAX_ATTEMPTS,
-            bootstrap_enabled: true,
         },
         torii: A::Torii {
             address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),

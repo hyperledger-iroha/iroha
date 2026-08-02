@@ -1118,7 +1118,7 @@ pub fn validate_filter(expr: &FilterExpr) -> Result<(), ValidateError> {
 }
 
 impl norito::core::NoritoSerialize for FieldPath {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <String as norito::core::NoritoSerialize>::serialize(&self.0, writer)
     }
 }
@@ -1139,7 +1139,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for FieldPath {
 }
 
 impl norito::core::NoritoSerialize for Selector {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <Vec<FieldPath> as norito::core::NoritoSerialize>::serialize(&self.0, writer)
     }
 }
@@ -1160,7 +1160,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for Selector {
 }
 
 impl norito::core::NoritoSerialize for Order {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let tag = match self {
             Order::Asc => 0u8,
             Order::Desc => 1u8,
@@ -1190,7 +1190,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for Order {
 }
 
 impl norito::core::NoritoSerialize for SortKey {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (self.key.clone(), self.order);
         <(FieldPath, Order) as norito::core::NoritoSerialize>::serialize(&payload, writer)
     }
@@ -1214,7 +1214,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for SortKey {
 }
 
 impl norito::core::NoritoSerialize for FilterExpr {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         validate_filter(self)
             .map_err(|err| norito::core::Error::Message(format!("invalid FilterExpr: {err}")))?;
         let json = norito::json::to_string(&filter_expr_to_value(self))

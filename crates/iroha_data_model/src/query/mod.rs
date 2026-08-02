@@ -870,7 +870,10 @@ mod model {
     pub type QueryBox<T> = Box<dyn ErasedQuery<T> + Send + Sync>;
 
     impl norito::core::NoritoSerialize for QueryBox<QueryOutputBatchBox> {
-        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
             let name = query_wire_id((**self).type_name_key()).to_string();
             let payload = (**self).encode_bytes();
             norito::core::NoritoSerialize::serialize(&(name, payload), writer)
@@ -1962,7 +1965,10 @@ mod model {
             norito::core::NoritoSerialize::encoded_len_exact(&self.0)
         }
 
-        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
             norito::core::NoritoSerialize::serialize(&self.0, writer)
         }
     }

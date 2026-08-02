@@ -35,7 +35,6 @@ pub mod isi {
         metadata::Metadata,
         name::Name,
         nexus::{DataSpaceCatalog, DataSpaceId, LaneVisibility},
-        offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
         validation_fee::ValidationFeePlainElectorateRulesV1,
     };
     use iroha_logger::prelude::*;
@@ -724,47 +723,6 @@ pub mod isi {
         Ok(())
     }
 
-    /// Read the `offline.enabled` metadata flag from an asset definition.
-    pub(crate) fn asset_definition_offline_enabled(
-        metadata: &Metadata,
-    ) -> Result<bool, InstructionExecutionError> {
-        let key = Name::from_str(OFFLINE_ASSET_ENABLED_METADATA_KEY).map_err(|err| {
-            InstructionExecutionError::InvariantViolation(
-                format!("invalid metadata key `{OFFLINE_ASSET_ENABLED_METADATA_KEY}`: {err}")
-                    .into(),
-            )
-        })?;
-        let Some(value) = metadata.get(&key) else {
-            return Ok(false);
-        };
-
-        if let Ok(flag) = value.try_into_any::<bool>() {
-            return Ok(flag);
-        }
-        if let Ok(text) = value.try_into_any::<String>() {
-            let trimmed = text.trim();
-            if trimmed.eq_ignore_ascii_case("true") {
-                return Ok(true);
-            }
-            if trimmed.eq_ignore_ascii_case("false") {
-                return Ok(false);
-            }
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "metadata entry `{OFFLINE_ASSET_ENABLED_METADATA_KEY}` must be `true` or `false`"
-                )
-                .into(),
-            ));
-        }
-
-        Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "metadata entry `{OFFLINE_ASSET_ENABLED_METADATA_KEY}` must be a boolean or string"
-            )
-            .into(),
-        ))
-    }
-
     /// Derive the deterministic offline escrow account for an asset definition.
     pub(crate) fn offline_escrow_account_id(
         chain_id: &ChainId,
@@ -778,10 +736,6 @@ pub mod isi {
         _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if !asset_definition_offline_enabled(asset_definition.metadata())? {
-            return Ok(());
-        }
-
         let definition_id = asset_definition.id();
         let derived = offline_escrow_account_id(state_transaction.chain_id(), definition_id);
         let escrow_account = match state_transaction
@@ -890,6 +844,11 @@ pub mod isi {
             iroha_executor_data_model::permission::account::CanModifyAccountMetadata::try_from(
                 permission,
             )
+        {
+            return account_subject_matches(&permission.account, account_id);
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::query::CanReadAccountData::try_from(permission)
         {
             return account_subject_matches(&permission.account, account_id);
         }
@@ -1603,40 +1562,15 @@ pub mod isi {
                 )
                 .into());
             }
-            let chain_id = state_transaction.chain_id().clone();
-            for (definition_id, asset_definition) in
-                state_transaction.world.asset_definitions.iter()
-            {
-                if asset_definition_offline_enabled(asset_definition.metadata())? {
-                    let derived = offline_escrow_account_id(&chain_id, definition_id);
-                    if derived == account_id {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            format!(
-                                "cannot unregister account {account_id}: it is the deterministic offline escrow account for active asset definition {definition_id} (`offline.enabled` metadata); update asset definition metadata first"
-                            )
-                            .into(),
-                        )
-                        .into());
-                    }
-                }
-            }
             for (definition_id, escrow_account) in
                 &state_transaction.settlement.offline.escrow_accounts
             {
                 if escrow_account != &account_id {
                     continue;
                 }
-                let Some(asset_definition) =
-                    state_transaction.world.asset_definitions.get(definition_id)
-                else {
-                    continue;
-                };
-                if asset_definition_offline_enabled(asset_definition.metadata())? {
-                    continue;
-                }
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it is configured as offline escrow account for active asset definition {definition_id} (`settlement.offline.escrow_accounts`); update settlement config first"
+                        "cannot unregister account {account_id}: it is the lazily derived offline escrow account for asset definition {definition_id}"
                     )
                     .into(),
                 )
@@ -2366,7 +2300,6 @@ pub mod isi {
                 )
                 .into());
             }
-            asset_definition_offline_enabled(asset_definition.metadata())?;
             let mut stored_definition = asset_definition.clone();
             stored_definition.alias = None;
             state_transaction
@@ -2382,8 +2315,6 @@ pub mod isi {
                     bound_at_ms,
                 )?;
             }
-
-            ensure_offline_escrow_account(&asset_definition, authority, state_transaction)?;
 
             state_transaction
                 .world
@@ -3137,7 +3068,7 @@ pub mod isi {
         #[metrics(+"set_key_value_asset_definition")]
         fn execute(
             self,
-            authority: &AccountId,
+            _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let SetKeyValue {
@@ -3145,28 +3076,12 @@ pub mod isi {
                 key,
                 value,
             } = self;
-            let updates_offline_enabled = key.as_ref() == OFFLINE_ASSET_ENABLED_METADATA_KEY;
             crate::smartcontracts::limits::enforce_json_size(
                 state_transaction,
                 &value,
                 "max_metadata_value_bytes",
                 crate::smartcontracts::limits::DEFAULT_JSON_LIMIT,
             )?;
-
-            let offline_enabled = if updates_offline_enabled {
-                let mut proposed_definition = state_transaction
-                    .world
-                    .asset_definition(&asset_definition_id)
-                    .map_err(Error::from)?;
-                proposed_definition
-                    .metadata_mut()
-                    .insert(key.clone(), value.clone());
-                Some(asset_definition_offline_enabled(
-                    proposed_definition.metadata(),
-                )?)
-            } else {
-                None
-            };
 
             state_transaction
                 .world
@@ -3177,22 +3092,6 @@ pub mod isi {
                         .metadata_mut()
                         .insert(key.clone(), value.clone())
                 })?;
-
-            if offline_enabled == Some(true) {
-                let asset_definition = state_transaction
-                    .world
-                    .asset_definition(&asset_definition_id)
-                    .map_err(Error::from)?;
-                ensure_offline_escrow_account(&asset_definition, authority, state_transaction)?;
-            } else if offline_enabled == Some(false) {
-                // Deactivation removes the asset from the active offline-cash scope without
-                // deleting its deterministic escrow account or any reserves held there.
-                state_transaction
-                    .settlement
-                    .offline
-                    .escrow_accounts
-                    .remove(&asset_definition_id);
-            }
 
             state_transaction
                 .world
@@ -3216,8 +3115,6 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition_id = self.object().clone();
-            let removes_offline_enabled = self.key().as_ref() == OFFLINE_ASSET_ENABLED_METADATA_KEY;
-
             let value = state_transaction
                 .world
                 .asset_definition_mut(&asset_definition_id)
@@ -3227,16 +3124,6 @@ pub mod isi {
                         .remove(self.key().as_ref())
                         .ok_or_else(|| FindError::MetadataKey(self.key().clone()))
                 })?;
-
-            if removes_offline_enabled {
-                // Removing the opt-in marker has the same active-scope semantics as setting it
-                // to false. Preserve the escrow account and its balances for safe recovery.
-                state_transaction
-                    .settlement
-                    .offline
-                    .escrow_accounts
-                    .remove(&asset_definition_id);
-            }
 
             state_transaction
                 .world
@@ -3861,7 +3748,6 @@ mod tests {
             LaneConfig, LaneId, LaneVisibility, ManifestVersion, UniversalAccountId,
         },
         nft::{Nft, NftId},
-        offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
         permission::Permission,
         prelude::Domain,
         privacy::{
@@ -8194,7 +8080,7 @@ mod tests {
     }
 
     #[test]
-    fn unregister_account_removes_associated_permissions_from_accounts_and_roles() {
+    fn unregister_account_removes_account_read_permissions_from_accounts_and_roles() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
@@ -8218,16 +8104,16 @@ mod tests {
             .expect("register holder account");
 
         let permission: Permission =
-            iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+            iroha_executor_data_model::permission::query::CanReadAccountData {
                 account: account_id.clone(),
             }
             .into();
         assert!(
-            iroha_executor_data_model::permission::account::CanModifyAccountMetadata::try_from(
+            iroha_executor_data_model::permission::query::CanReadAccountData::try_from(
                 &permission
             )
             .is_ok(),
-            "permission should decode as CanModifyAccountMetadata"
+            "permission should decode as CanReadAccountData"
         );
         Grant::account_permission(permission.clone(), holder_id.clone())
             .execute(&authority, &mut tx)
@@ -8860,7 +8746,7 @@ mod tests {
     }
 
     #[test]
-    fn unregister_account_rejects_metadata_derived_offline_escrow_without_config_binding() {
+    fn ordinary_metadata_does_not_reserve_an_offline_escrow_account() {
         let chain_id: ChainId = "offline-escrow-testnet".parse().expect("chain id");
         let domain_id: DomainId = DomainId::try_new("offline", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
@@ -8871,12 +8757,7 @@ mod tests {
         let escrow_account_id =
             iroha_data_model::offline::offline_escrow_account_id(&chain_id, &asset_definition_id);
         let mut metadata = Metadata::default();
-        metadata.insert(
-            OFFLINE_ASSET_ENABLED_METADATA_KEY
-                .parse()
-                .expect("metadata key"),
-            Json::new(true),
-        );
+        metadata.insert("offline.enabled".parse().expect("legacy metadata key"), Json::new(true));
         let mut asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
             .with_name(asset_definition_id.name().to_string())
             .build(&authority);
@@ -8896,20 +8777,15 @@ mod tests {
         let mut tx = block.transaction();
         assert!(
             tx.settlement.offline.escrow_accounts.is_empty(),
-            "test must exercise metadata-derived escrow without config binding"
+            "ordinary asset metadata must not create an escrow binding"
         );
 
-        let err = Unregister::account(escrow_account_id.clone())
+        Unregister::account(escrow_account_id.clone())
             .execute(&authority, &mut tx)
-            .expect_err("metadata-derived offline escrow account must not be unregistered");
-        let err_string = err.to_string();
+            .expect("legacy-looking metadata must have no offline semantics");
         assert!(
-            err_string.contains("deterministic offline escrow account"),
-            "error should explain metadata-derived offline escrow conflict: {err_string}"
-        );
-        assert!(
-            tx.world.accounts.get(&escrow_account_id).is_some(),
-            "account should remain after rejected unregister"
+            tx.world.accounts.get(&escrow_account_id).is_none(),
+            "ordinary unbound account should be removable"
         );
     }
 
@@ -10103,7 +9979,7 @@ mod tests {
     }
 
     #[test]
-    fn register_asset_definition_auto_creates_offline_escrow_account() {
+    fn asset_registration_is_independent_of_legacy_offline_metadata() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId = DomainId::try_new("offline", "universal").expect("domain id");
@@ -10113,9 +9989,7 @@ mod tests {
         let definition_id = AssetDefinitionId::new(domain_id.clone(), asset_name);
         let mut metadata = Metadata::default();
         metadata.insert(
-            OFFLINE_ASSET_ENABLED_METADATA_KEY
-                .parse()
-                .expect("metadata key"),
+            "offline.enabled".parse().expect("legacy metadata key"),
             Json::new(true),
         );
 
@@ -10139,73 +10013,18 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register asset definition");
 
-        let escrow_account = tx
-            .settlement
-            .offline
-            .escrow_accounts
-            .get(&definition_id)
-            .expect("escrow mapping created")
-            .clone();
-        let expected = super::isi::offline_escrow_account_id(tx.chain_id(), &definition_id);
-        assert_eq!(escrow_account, expected);
-        assert!(
-            tx.world.account(&escrow_account).is_ok(),
-            "escrow account should exist"
-        );
-    }
-
-    #[test]
-    fn local_offline_switch_does_not_change_asset_registration_execution() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId =
-            DomainId::try_new("offline-disabled", "universal").expect("domain id");
-        seed_domain(&mut state, &domain_id, &authority);
-
-        let definition_id = AssetDefinitionId::new(domain_id, "usd".parse().expect("asset name"));
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            OFFLINE_ASSET_ENABLED_METADATA_KEY
-                .parse()
-                .expect("metadata key"),
-            Json::new(true),
-        );
-        let definition = NewAssetDefinition {
-            id: definition_id.clone(),
-            name: "USD".to_owned(),
-            description: None,
-            alias: None,
-            spec: NumericSpec::integer(),
-            mintable: Mintable::Infinitely,
-            logo: None,
-            metadata,
-            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
-        };
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        tx.settlement.offline.enabled = false;
-
-        Register::asset_definition(definition)
-            .execute(&authority, &mut tx)
-            .expect("process-local service switches must not affect consensus execution");
-        assert!(
-            tx.world.asset_definition(&definition_id).is_ok(),
-            "offline-enabled asset registration must be independent of local service state"
-        );
         assert!(
             tx.settlement
                 .offline
                 .escrow_accounts
-                .contains_key(&definition_id),
-            "offline-enabled asset registration must still derive its escrow binding"
+                .get(&definition_id)
+                .is_none(),
+            "ordinary registration must not materialize offline state"
         );
     }
 
     #[test]
-    fn register_asset_definition_without_offline_flag_skips_escrow() {
+    fn register_asset_definition_defers_offline_state_until_offline_use() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId = DomainId::try_new("offline2", "universal").expect("domain id");
@@ -12062,7 +11881,7 @@ mod tests {
     }
 
     #[test]
-    fn set_asset_definition_offline_enabled_creates_escrow_account() {
+    fn legacy_offline_metadata_is_ordinary_metadata() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId = DomainId::try_new("offline3", "universal").expect("domain id");
@@ -12101,31 +11920,24 @@ mod tests {
 
         SetKeyValue::asset_definition(
             definition_id.clone(),
-            OFFLINE_ASSET_ENABLED_METADATA_KEY
-                .parse()
-                .expect("metadata key"),
+            "offline.enabled".parse().expect("legacy metadata key"),
             Json::new(true),
         )
         .execute(&authority, &mut tx)
-        .expect("set offline.enabled metadata");
+        .expect("set ordinary metadata");
 
-        let escrow_account = tx
-            .settlement
-            .offline
-            .escrow_accounts
-            .get(&definition_id)
-            .expect("escrow mapping created")
-            .clone();
-        let expected = super::isi::offline_escrow_account_id(tx.chain_id(), &definition_id);
-        assert_eq!(escrow_account, expected);
         assert!(
-            tx.world.account(&escrow_account).is_ok(),
-            "escrow account should exist"
+            tx.settlement
+                .offline
+                .escrow_accounts
+                .get(&definition_id)
+                .is_none(),
+            "metadata must not create offline runtime state"
         );
     }
 
     #[test]
-    fn setting_asset_definition_offline_enabled_false_deactivates_binding_only() {
+    fn legacy_offline_false_metadata_does_not_change_runtime_state() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id = DomainId::try_new("offline-disable", "universal").expect("domain id");
@@ -12152,38 +11964,14 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register asset definition");
 
-        let metadata_key: Name = OFFLINE_ASSET_ENABLED_METADATA_KEY
-            .parse()
-            .expect("metadata key");
-        SetKeyValue::asset_definition(definition_id.clone(), metadata_key.clone(), Json::new(true))
-            .execute(&authority, &mut tx)
-            .expect("activate offline asset");
-
-        let escrow_account = tx
-            .settlement
-            .offline
-            .escrow_accounts
-            .get(&definition_id)
-            .expect("active escrow binding")
-            .clone();
-        let escrow_reserve = AssetId::new(definition_id.clone(), escrow_account.clone());
-        Mint::asset_quantity(7_u32, escrow_reserve.clone())
-            .execute(&authority, &mut tx)
-            .expect("mint escrow reserve");
-        let reserve_before = tx
-            .world
-            .assets
-            .get(&escrow_reserve)
-            .cloned()
-            .expect("escrow reserve exists before deactivation");
-
+        let metadata_key: Name = "offline.enabled".parse().expect("legacy metadata key");
         SetKeyValue::asset_definition(
             definition_id.clone(),
             metadata_key.clone(),
             Json::new(false),
         )
         .execute(&authority, &mut tx)
-        .expect("deactivate offline asset");
+        .expect("store ordinary metadata");
 
         assert_eq!(
             tx.world
@@ -12194,25 +11982,16 @@ mod tests {
             Some(&Json::new(false))
         );
         assert!(
-            !tx.settlement
+            tx.settlement
                 .offline
                 .escrow_accounts
-                .contains_key(&definition_id),
-            "offline.enabled=false must remove the active escrow binding"
-        );
-        assert!(
-            tx.world.account(&escrow_account).is_ok(),
-            "deactivation must preserve the deterministic escrow account"
-        );
-        assert_eq!(
-            tx.world.assets.get(&escrow_reserve),
-            Some(&reserve_before),
-            "deactivation must preserve escrow reserves"
+                .is_empty(),
+            "legacy-looking metadata must not materialize offline state"
         );
     }
 
     #[test]
-    fn removing_asset_definition_offline_enabled_deactivates_binding_only() {
+    fn removing_legacy_offline_metadata_does_not_change_runtime_state() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id = DomainId::try_new("offline-remove", "universal").expect("domain id");
@@ -12239,30 +12018,10 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register asset definition");
 
-        let metadata_key: Name = OFFLINE_ASSET_ENABLED_METADATA_KEY
-            .parse()
-            .expect("metadata key");
+        let metadata_key: Name = "offline.enabled".parse().expect("legacy metadata key");
         SetKeyValue::asset_definition(definition_id.clone(), metadata_key.clone(), Json::new(true))
             .execute(&authority, &mut tx)
-            .expect("activate offline asset");
-
-        let escrow_account = tx
-            .settlement
-            .offline
-            .escrow_accounts
-            .get(&definition_id)
-            .expect("active escrow binding")
-            .clone();
-        let escrow_reserve = AssetId::new(definition_id.clone(), escrow_account.clone());
-        Mint::asset_quantity(11_u32, escrow_reserve.clone())
-            .execute(&authority, &mut tx)
-            .expect("mint escrow reserve");
-        let reserve_before = tx
-            .world
-            .assets
-            .get(&escrow_reserve)
-            .cloned()
-            .expect("escrow reserve exists before metadata removal");
+            .expect("store ordinary metadata");
 
         RemoveKeyValue::asset_definition(definition_id.clone(), metadata_key.clone())
             .execute(&authority, &mut tx)
@@ -12275,28 +12034,19 @@ mod tests {
                 .metadata()
                 .get(&metadata_key)
                 .is_none(),
-            "offline opt-in metadata must be removed"
+            "metadata must be removed"
         );
         assert!(
-            !tx.settlement
+            tx.settlement
                 .offline
                 .escrow_accounts
-                .contains_key(&definition_id),
-            "removing offline.enabled must remove the active escrow binding"
-        );
-        assert!(
-            tx.world.account(&escrow_account).is_ok(),
-            "metadata removal must preserve the deterministic escrow account"
-        );
-        assert_eq!(
-            tx.world.assets.get(&escrow_reserve),
-            Some(&reserve_before),
-            "metadata removal must preserve escrow reserves"
+                .is_empty(),
+            "metadata removal must not materialize offline state"
         );
     }
 
     #[test]
-    fn local_offline_switch_does_not_change_metadata_activation_execution() {
+    fn legacy_offline_true_metadata_does_not_change_runtime_state() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId =
@@ -12323,14 +12073,10 @@ mod tests {
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register baseline asset definition");
-        tx.settlement.offline.enabled = false;
-
-        let metadata_key: Name = OFFLINE_ASSET_ENABLED_METADATA_KEY
-            .parse()
-            .expect("metadata key");
+        let metadata_key: Name = "offline.enabled".parse().expect("legacy metadata key");
         SetKeyValue::asset_definition(definition_id.clone(), metadata_key.clone(), Json::new(true))
             .execute(&authority, &mut tx)
-            .expect("process-local service switches must not affect consensus execution");
+            .expect("store ordinary metadata");
         assert_eq!(
             tx.world
                 .asset_definition(&definition_id)
@@ -12338,14 +12084,14 @@ mod tests {
                 .metadata()
                 .get(&metadata_key),
             Some(&Json::new(true)),
-            "offline metadata activation must be independent of local service state"
+            "metadata should be stored unchanged"
         );
         assert!(
             tx.settlement
                 .offline
                 .escrow_accounts
-                .contains_key(&definition_id),
-            "offline metadata activation must still derive its escrow binding"
+                .is_empty(),
+            "legacy-looking metadata must not materialize offline state"
         );
     }
 

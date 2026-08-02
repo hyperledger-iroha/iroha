@@ -183,6 +183,36 @@ class CandidateStagerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_authority_build_gates_both_targets_without_dropping_evidence_lab(self) -> None:
+        command = stage._authority_build_command(Path("/toolchain/cargo"))
+        packages = [
+            command[index + 1]
+            for index, argument in enumerate(command)
+            if argument == "-p"
+        ]
+        binaries = [
+            command[index + 1]
+            for index, argument in enumerate(command)
+            if argument == "--bin"
+        ]
+        features = set(command[command.index("--features") + 1].split(","))
+
+        self.assertEqual(packages, ["iroha_core", "connect_norito_bridge"])
+        self.assertEqual(
+            binaries,
+            [
+                "kagemusha_recursive_spend_v4_bundle",
+                "kagemusha_candidate_scenario_validator",
+            ],
+        )
+        self.assertEqual(features, set(stage.AUTHORITY_BUILD_FEATURES))
+        self.assertIn("iroha_core/dev-tools", features)
+        self.assertIn("connect_norito_bridge/dev-tools", features)
+        self.assertIn("iroha_core/kagemusha-candidate-evidence-lab", features)
+        self.assertIn(
+            "connect_norito_bridge/kagemusha-candidate-evidence-lab", features
+        )
+
     def test_device_lifecycle_requires_exact_recursive_steps(self) -> None:
         source = HARNESS.read_text(encoding="utf-8")
         for exact_binding in (

@@ -50,7 +50,7 @@ fi
 if [[ -n "${SORANET_TRUSTLESS_VERIFIER_BIN:-}" ]]; then
   trustless_cmd=("$SORANET_TRUSTLESS_VERIFIER_BIN")
 else
-  trustless_cmd=(cargo run -q -p sorafs_car --features cli --bin soranet_trustless_verifier --)
+  trustless_cmd=(cargo run -q -p sorafs_car --features cli,dev-tools --bin soranet_trustless_verifier --)
 fi
 
 generated_at=300

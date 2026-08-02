@@ -103,7 +103,7 @@ macro_rules! declare_permissions {
         impl ValidateGrantRevoke for AnyPermission {
             fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
                 self.validate_payload()?;
-                if !self.is_genesis_only() && self.is_owned_by(authority, host) {
+                if self.is_holder_delegable() && self.is_owned_by(authority, host) {
                     return Ok(());
                 }
                 match self { $(
@@ -113,7 +113,7 @@ macro_rules! declare_permissions {
 
             fn validate_revoke(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
                 self.validate_payload()?;
-                if !self.is_genesis_only() && self.is_owned_by(authority, host) {
+                if self.is_holder_delegable() && self.is_owned_by(authority, host) {
                     return Ok(());
                 }
                 match self { $(
@@ -157,6 +157,8 @@ declare_permissions! {
     iroha_executor_data_model::permission::account::{CanResolveAccountAlias},
 
     iroha_executor_data_model::permission::query::{CanReadRestrictedDataspace},
+    iroha_executor_data_model::permission::query::{CanReadAllLedgerData},
+    iroha_executor_data_model::permission::query::{CanReadAccountData},
 
     iroha_executor_data_model::permission::asset_definition::{CanUnregisterAssetDefinition},
     iroha_executor_data_model::permission::asset_definition::{CanModifyAssetDefinitionMetadata},
@@ -243,6 +245,7 @@ impl AnyPermission {
             Self::CanManagePeers(_)
                 | Self::CanManageLaneRelayEmergency(_)
                 | Self::CanRegisterDomain(_)
+                | Self::CanReadAllLedgerData(_)
                 | Self::CanReadRestrictedDataspace(_)
                 | Self::CanManageOfflineEscrow(_)
                 | Self::CanActivateKagemushaRecursiveReleaseV4(_)
@@ -252,6 +255,13 @@ impl AnyPermission {
                 | Self::CanRegisterSmartContractCode(_)
                 | Self::CanManageFxCorridors(_)
         )
+    }
+
+    /// Exact account-read holders may use their grant but cannot propagate it: only the
+    /// account named by the token controls its lifecycle. Genesis-only roots are likewise
+    /// non-delegable after bootstrap.
+    fn is_holder_delegable(&self) -> bool {
+        !self.is_genesis_only() && !matches!(self, Self::CanReadAccountData(_))
     }
 
     fn validate_payload(&self) -> Result {
@@ -265,11 +275,28 @@ impl AnyPermission {
 }
 
 mod query {
-    use iroha_executor_data_model::permission::query::CanReadRestrictedDataspace;
+    use iroha_executor_data_model::permission::query::{
+        CanReadAllLedgerData, CanReadRestrictedDataspace,
+    };
 
     use super::*;
 
     impl ValidateGrantRevoke for CanReadRestrictedDataspace {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+    }
+
+    impl ValidateGrantRevoke for CanReadAllLedgerData {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
         }
@@ -1586,6 +1613,7 @@ pub mod account {
         CanModifyAccountMetadata, CanRegisterAccount, CanReplaceAccountController,
         CanResolveAccountAlias, CanUnregisterAccount,
     };
+    use iroha_executor_data_model::permission::query::CanReadAccountData;
 
     use super::*;
 
@@ -1754,6 +1782,21 @@ pub mod account {
         }
     }
 
+    impl ValidateGrantRevoke for CanReadAccountData {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            Owner::from(self).validate(authority, host, context)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            Owner::from(self).validate(authority, host, context)
+        }
+    }
+
     impl ValidateGrantRevoke for CanResolveAccountAlias {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             if can_delegate_account_alias_resolve(authority, &self.scope, context, host) {
@@ -1820,6 +1863,7 @@ pub mod account {
         CanUnregisterAccount,
         CanModifyAccountMetadata,
         CanReplaceAccountController,
+        CanReadAccountData,
     );
 }
 
@@ -2253,7 +2297,7 @@ mod tests {
             CanPublishSpaceDirectoryManifestForUaid, CanWithdrawFeeSponsorProgram,
         },
         peer::CanManagePeers,
-        query::CanReadRestrictedDataspace,
+        query::{CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace},
         settlement::CanExecuteSettlement,
         smart_contract::CanInvokeContractEntrypoint,
     };
@@ -2769,6 +2813,74 @@ mod tests {
         let genesis = make_context(&authority, 1);
         assert!(exact.validate_grant(&authority, &genesis, &Iroha).is_ok());
         assert!(exact.validate_revoke(&authority, &genesis, &Iroha).is_ok());
+    }
+
+    #[test]
+    fn global_ledger_reader_cannot_grant_or_revoke_after_genesis() {
+        let authority = make_account_id();
+        let post_genesis = make_context(&authority, 2);
+        let exact = CanReadAllLedgerData;
+        let permission = PermissionObject::from(exact);
+        let dispatched =
+            AnyPermission::try_from(&permission).expect("global-read permission must be typed");
+        let previous = test_override::replace_permissions(vec![permission]);
+
+        let denied = [
+            dispatched.validate_grant(&authority, &post_genesis, &Iroha),
+            dispatched.validate_revoke(&authority, &post_genesis, &Iroha),
+        ];
+
+        test_override::replace_permissions(previous);
+        for result in denied {
+            let error = result.expect_err(
+                "possession of the global read root must not permit post-genesis propagation",
+            );
+            assert!(matches!(error, ValidationFail::NotPermitted(_)));
+        }
+
+        let genesis = make_context(&authority, 1);
+        assert!(exact.validate_grant(&authority, &genesis, &Iroha).is_ok());
+        assert!(exact.validate_revoke(&authority, &genesis, &Iroha).is_ok());
+    }
+
+    #[test]
+    fn account_subject_exclusively_controls_account_read_grants() {
+        let account = make_account_id();
+        let reader = make_other_account_id();
+        let context = make_context(&account, 2);
+        let exact = CanReadAccountData {
+            account: account.clone(),
+        };
+        let permission = PermissionObject::from(exact.clone());
+        let dispatched =
+            AnyPermission::try_from(&permission).expect("account-read permission must be typed");
+
+        assert!(
+            dispatched
+                .validate_grant(&account, &context, &Iroha)
+                .is_ok(),
+            "the account subject must control its read grant"
+        );
+        assert!(
+            dispatched
+                .validate_revoke(&account, &context, &Iroha)
+                .is_ok(),
+            "the account subject must control revocation"
+        );
+
+        let previous = test_override::replace_permissions(vec![permission]);
+        let reader_context = make_context(&reader, 2);
+        let denied = [
+            dispatched.validate_grant(&reader, &reader_context, &Iroha),
+            dispatched.validate_revoke(&reader, &reader_context, &Iroha),
+        ];
+        test_override::replace_permissions(previous);
+        for result in denied {
+            assert!(
+                matches!(result, Err(ValidationFail::NotPermitted(_))),
+                "an exact reader may use but must not propagate the account's grant"
+            );
+        }
     }
 
     #[test]

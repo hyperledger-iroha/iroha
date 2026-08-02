@@ -1,19 +1,6 @@
 /// Feature-isolated real-network consensus fault-injection control.
 #[cfg(feature = "test-network-message-control")]
 mod consensus_message_control;
-#[allow(
-    dead_code,
-    clippy::clone_on_copy,
-    clippy::collapsible_if,
-    clippy::option_if_let_else,
-    clippy::or_fun_call,
-    clippy::explicit_auto_deref,
-    clippy::unused_async,
-    clippy::unnecessary_wraps,
-    clippy::too_many_lines,
-    clippy::if_not_else
-)]
-mod genesis_bootstrap;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
 /// Asynchronous Nexus DPN fee settlement relay.
@@ -61,21 +48,21 @@ pub use runtime_provider_registry::{
 };
 
 #[cfg(target_os = "windows")]
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::{ffi::OsStrExt, fs::MetadataExt as _};
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     convert::TryFrom,
     env,
     ffi::OsString,
     fs,
     future::Future,
+    num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, Weak},
     time::{Duration, Instant},
 };
 
-use crate::genesis_bootstrap::{GenesisBootstrapper, GenesisFetchPin};
 use crate::soracloud_runtime::{
     QueuedSoracloudRuntimeMutationSink, SoracloudRuntimeManager, SoracloudRuntimeManagerHandle,
 };
@@ -87,9 +74,8 @@ use iroha_config::{
     base::{WithOrigin, read::ConfigReader, util::Emitter},
     parameters::{
         actual::{
-            FastpqExecutionMode, FastpqPoseidonMode, NexusStorageAutoDefault,
-            NexusStorageAutoDefaultFilesystemGroup, NexusStorageBudgetComponent,
-            NexusStorageBudgetSource, Root as Config,
+            FastpqExecutionMode, FastpqPoseidonMode, NexusStorageBudgetComponent,
+            NexusStorageFilesystemBudget, Root as Config,
         },
         user::Root as UserConfig,
     },
@@ -484,7 +470,6 @@ mod shared_sorafs_provider_cache_tests {
 
             [genesis]
             public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-            bootstrap_enabled = false
 
             [streaming]
             identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -5781,12 +5766,9 @@ impl NetworkRelayShared {
             | SoracloudLocalReadProxyResponse(_)
             | ToriiProxyRequest(_)
             | ToriiProxyResponse(_)
-            | GenesisRequest(_)
-            | GenesisResponse(_)
             | Health
             | Connect(_)) => {
                 debug_assert!(Self::is_handled_by_dedicated_subscriber(&msg));
-                // Genesis bootstrap is handled by the dedicated bootstrapper listener.
                 // Health frames are handled elsewhere. Connect, Soracloud local-read proxy,
                 // and Torii proxy frames go to Torii via its own subscriber tasks when those
                 // surfaces are enabled.
@@ -5815,10 +5797,7 @@ impl NetworkRelayShared {
         msg.is_torii_proxy_control_message()
             || matches!(
                 msg,
-                iroha_core::NetworkMessage::GenesisRequest(_)
-                    | iroha_core::NetworkMessage::GenesisResponse(_)
-                    | iroha_core::NetworkMessage::Health
-                    | iroha_core::NetworkMessage::Connect(_)
+                iroha_core::NetworkMessage::Health | iroha_core::NetworkMessage::Connect(_)
             )
     }
 
@@ -8028,11 +8007,11 @@ fn authorize_kura_runtime_start(
 
 fn apply_state_runtime_config_before_snapshot_auth(state: &mut State, config: &Config) {
     // These fields are process-local execution policy and do not touch Kura-owned geometry.
-    // Settlement must be installed before replay because configured offline
-    // assets and every top-up/redemption transition resolve policy through
-    // `State::settlement`. Installing it only after the mandatory readiness
-    // gate would validate an empty/default catalog and replay historical
-    // offline transitions under the wrong policy.
+    // Settlement must be installed before replay because historical
+    // top-up/redemption transitions resolve their deterministic execution
+    // state and any explicitly referenced proof release through
+    // `State::settlement`. This ordering is replay correctness, not an offline
+    // capability or node-readiness gate.
     state.set_crypto(config.crypto.clone());
     state.set_pipeline(config.pipeline.clone());
     state.set_oracle(config.oracle.clone());
@@ -9004,7 +8983,7 @@ impl Iroha {
     #[iroha_logger::log(name = "start", skip_all)] // This is actually easier to understand as a linear sequence of init statements.
     pub(crate) async fn start_with_runtime_deps(
         mut config: Config,
-        mut genesis: Option<GenesisBlock>,
+        genesis: Option<GenesisBlock>,
         logger: LoggerHandle,
         shutdown_signal: ShutdownSignal,
         mut runtime_deps: IrohaRuntimeDeps,
@@ -9056,16 +9035,6 @@ impl Iroha {
         let mut supervisor = Supervisor::new();
         let startup_trace_started_at = Instant::now();
         log_startup_trace("irohad.start.enter", startup_trace_started_at);
-        iroha_torii::ensure_mandatory_offline_configuration_for_chain(
-            &config.common.chain,
-            &config.settlement.offline,
-            config.torii.kagemusha_commands.as_ref(),
-        )
-        .map_err(|error| {
-            Report::new(StartError::InitKura).attach(format!(
-                "mandatory offline cash configuration failed: {error}"
-            ))
-        })?;
         let sorafs_pop_credentials = sorafs_pop_runtime::build(
             config.torii.sorafs_storage.pop_credentials.as_ref(),
             runtime_deps.sorafs_pop_credential_provider_registry.clone(),
@@ -9166,43 +9135,39 @@ impl Iroha {
             |key| iroha_crypto::KeyPair::from(key.0.clone()),
         );
 
-        let genesis_trust_anchor = ConfiguredGenesisTrustAnchor::from(&config.genesis);
+        let genesis = load_deferred_normal_startup_genesis(
+            provisional_imported_prefix,
+            genesis,
+            config.genesis.file.as_ref(),
+        )?;
+        // Resolve the trust source before reading a genesis body from Kura. The on-disk block may
+        // satisfy an already resolved exact hash, but it can never choose its own trust anchor.
+        let startup_trust_root = StartupTrustRoot::resolve(
+            provisional_imported_prefix,
+            &config.genesis.public_key,
+            config.genesis.expected_hash,
+            genesis.as_ref(),
+        )?;
         let stored_genesis_block =
             read_stored_genesis_block(kura.as_ref(), block_count, provisional_imported_prefix)?;
-        let stored_genesis_hash = stored_genesis_block.as_ref().map(|block| block.0.hash());
-        if !provisional_imported_prefix
-            && block_count.0 == 0
-            && stored_genesis_block.is_none()
-            && genesis.is_none()
-        {
-            return Err(Report::new(StartError::InitKura).attach(
-                "fresh Sumeragi v2 startup requires a local signed genesis; peer bootstrap cannot authenticate the genesis-selected handshake context",
-            ));
-        }
         let effective_genesis = stored_genesis_block.as_ref().or(genesis.as_ref());
-        if effective_genesis.is_none() && !provisional_imported_prefix {
-            return Err(Report::new(StartError::InitKura).attach(
-                "Sumeragi v2 requires signed genesis metadata unless an imported snapshot prefix is awaiting signed-lineage authentication",
-            ));
-        }
-        if !provisional_imported_prefix {
-            let genesis_to_verify = effective_genesis.ok_or_else(|| {
-                Report::new(StartError::InitKura).attach(
-                    "signed genesis is unavailable for configured trust-anchor verification",
+        let signed_genesis_context = match &startup_trust_root {
+            StartupTrustRoot::Genesis(anchor) => {
+                let genesis_to_verify = effective_genesis.ok_or_else(|| {
+                    Report::new(StartError::InitKura).attach(
+                        "normal startup has an exact genesis trust anchor but no local or stored signed genesis body; peer genesis retrieval is not supported",
+                    )
+                })?;
+                anchor.verify(genesis_to_verify)?;
+                Some(
+                    signed_v2_genesis_context_metadata(genesis_to_verify)
+                        .map_err(|error| Report::new(StartError::InitKura).attach(error))?,
                 )
-            })?;
-            genesis_trust_anchor.verify(genesis_to_verify)?;
-        }
-        let signed_genesis_context = if provisional_imported_prefix {
-            None
-        } else {
-            effective_genesis
-                .map(signed_v2_genesis_context_metadata)
-                .transpose()
-                .map_err(|error| Report::new(StartError::InitKura).attach(error))?
+            }
+            StartupTrustRoot::AuthenticatedSnapshotPending => None,
         };
 
-        let effective_genesis_public_key = genesis_trust_anchor.public_key().clone();
+        let effective_genesis_public_key = config.genesis.public_key.clone();
 
         let mut loaded_state_from_snapshot = false;
         let snapshot_result = if snapshot_mode_allows_restore(config.snapshot.mode) {
@@ -9558,24 +9523,6 @@ impl Iroha {
             )
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
-        // Only a genuinely empty local store can defer this gate to the
-        // disposable genesis overlay below. A restart with a pending durable
-        // v2 tip remains on the replayed-state gate and fails closed.
-        let fresh_genesis_staging_pending =
-            state.committed_height() == 0 && block_count.0 == 0 && stored_genesis_block.is_none();
-        if !fresh_genesis_staging_pending {
-            iroha_torii::ensure_mandatory_offline_startup_readiness(
-                &state,
-                &config.common.chain,
-                &config.settlement.offline,
-                config.torii.kagemusha_commands.as_ref(),
-                &config.nexus.fees.fee_asset_id,
-            )
-            .map_err(|error| {
-                Report::new(StartError::InitKura)
-                    .attach(format!("mandatory offline cash readiness failed: {error}"))
-            })?;
-        }
         // No Kura writer is live while trust selection or replay can still fail. Only the fully
         // authenticated and replayed state may publish the canonical writer thread.
         let child = Kura::start(kura.clone(), supervisor.shutdown_signal())
@@ -9903,20 +9850,6 @@ impl Iroha {
             }
         }
 
-        let bootstrap_allowlist: HashSet<PeerId> = if config.genesis.bootstrap_allowlist.is_empty()
-        {
-            config
-                .common
-                .trusted_peers
-                .value()
-                .clone()
-                .into_non_empty_vec()
-                .into_iter()
-                .collect()
-        } else {
-            config.genesis.bootstrap_allowlist.iter().cloned().collect()
-        };
-
         let confidential_caps = iroha_p2p::ConfidentialHandshakeCaps {
             enabled: config.confidential.enabled,
             assume_valid: config.confidential.assume_valid,
@@ -9942,130 +9875,6 @@ impl Iroha {
         .attach_with(|| config.network.address.clone().into_attachment())
         .change_context(StartError::StartP2p)?;
         supervisor.monitor(child);
-
-        // Bootstrapper orchestrates request/response handling for genesis.
-        let bootstrap_genesis_config =
-            if let Some(stored_hash) = stored_genesis_block.as_ref().map(|block| block.0.hash()) {
-                let mut cfg = config.genesis.clone();
-                cfg.public_key = effective_genesis_public_key.clone();
-                cfg.expected_hash = Some(stored_hash);
-                cfg
-            } else {
-                config.genesis.clone()
-            };
-        let bootstrapper = GenesisBootstrapper::new(
-            &bootstrap_genesis_config,
-            network.clone(),
-            config.common.chain.clone(),
-        );
-        let trusted = config.common.trusted_peers.value().clone();
-        let peer_seed: Vec<(PeerId, SocketAddr)> = std::iter::once(trusted.myself)
-            .chain(trusted.others.into_iter())
-            .map(|peer| (peer.id().clone(), peer.address.clone()))
-            .collect();
-        bootstrapper.seed_topology(&peer_seed);
-        let genesis_listener = bootstrapper
-            .spawn_listener()
-            .await
-            .expect("a fresh genesis bootstrapper has no active listener");
-        supervisor.monitor(genesis_listener);
-
-        // Audited snapshot bootstrap is a complete alternative trust root and must not advertise
-        // an unrelated local legacy genesis file as if it authenticated the imported history.
-        if snapshot_bootstrap_active {
-            iroha_logger::info!(
-                "authenticated snapshot bootstrap: legacy genesis request serving is disabled"
-            );
-        } else if let Some(stored_genesis) = stored_genesis_block.as_ref() {
-            if let Err(err) = bootstrapper.set_payload(stored_genesis).await {
-                iroha_logger::warn!(
-                    ?err,
-                    "failed to register stored genesis payload for bootstrap"
-                );
-            }
-        } else if let Some(genesis_block) = genesis.as_ref()
-            && let Err(err) = bootstrapper.set_payload(genesis_block).await
-        {
-            iroha_logger::warn!(
-                ?err,
-                "failed to register local genesis payload for bootstrap"
-            );
-        }
-
-        // If we are starting from empty storage without a local genesis file, try bootstrapping
-        // from trusted peers before failing fast.
-        if genesis.is_none() && block_count.0 == 0 {
-            if config.genesis.bootstrap_enabled {
-                let fetch_pin = GenesisFetchPin::from_config(&config.genesis).map_err(|error| {
-                    Report::new(StartError::InitKura).attach(format!(
-                        "invalid remote genesis bootstrap configuration: {error}"
-                    ))
-                })?;
-                let candidates: Vec<PeerId> = bootstrap_allowlist
-                    .iter()
-                    .filter(|peer| *peer != config.common.peer.id())
-                    .cloned()
-                    .collect();
-                if candidates.is_empty() {
-                    iroha_logger::warn!(
-                        "genesis bootstrap skipped: no trusted peers available to request genesis"
-                    );
-                } else {
-                    let genesis_account = AccountId::new(effective_genesis_public_key.clone());
-                    match bootstrapper
-                        .fetch_genesis(&candidates, &genesis_account, fetch_pin)
-                        .await
-                    {
-                        Ok(fetched) => {
-                            let path = config
-                                .kura
-                                .store_dir
-                                .resolve_relative_path()
-                                .join("genesis.bootstrap.nrt");
-                            if let Err(err) = fs::create_dir_all(
-                                path.parent().expect("genesis bootstrap path has parent"),
-                            ) {
-                                iroha_logger::warn!(
-                                    ?err,
-                                    path = %path.display(),
-                                    "failed to create bootstrap genesis directory"
-                                );
-                            } else if let Err(err) = fs::write(&path, &fetched.bytes) {
-                                iroha_logger::warn!(
-                                    ?err,
-                                    path = %path.display(),
-                                    "failed to persist bootstrapped genesis payload"
-                                );
-                            } else {
-                                iroha_logger::info!(
-                                    path = %path.display(),
-                                    "persisted bootstrapped genesis payload"
-                                );
-                                config.genesis.file = Some(WithOrigin::inline(path.clone()));
-                            }
-                            if let Err(err) = bootstrapper.set_payload(&fetched.block).await {
-                                iroha_logger::warn!(
-                                    ?err,
-                                    "failed to register bootstrapped genesis payload"
-                                );
-                            }
-                            genesis = Some(fetched.block);
-                        }
-                        Err(err) => {
-                            iroha_logger::warn!(
-                                %err,
-                                timeout_ms = config.genesis.bootstrap_request_timeout.as_millis(),
-                                "genesis bootstrap failed"
-                            );
-                        }
-                    }
-                }
-            } else {
-                iroha_logger::warn!(
-                    "genesis bootstrap is disabled and no local genesis is available; startup will fail"
-                );
-            }
-        }
 
         if !snapshot_bootstrap_active && let Some(genesis_block) = genesis.as_ref() {
             // On non-empty storage, avoid re-validating the provided genesis signature.
@@ -10175,19 +9984,6 @@ impl Iroha {
                                 "staged genesis cadence {staged_block_cadence_ms} ms differs from authenticated signed cadence {fresh_block_cadence_ms} ms",
                             )));
                         }
-                        iroha_torii::ensure_mandatory_offline_staged_genesis_readiness(
-                            &state_block,
-                            genesis_block.0.header(),
-                            &config.common.chain,
-                            &config.settlement.offline,
-                            config.torii.kagemusha_commands.as_ref(),
-                            &config.nexus.fees.fee_asset_id,
-                        )
-                        .map_err(|error| {
-                            Report::new(StartError::InitKura).attach(format!(
-                                "mandatory offline cash readiness failed in staged genesis: {error}"
-                            ))
-                        })?;
                         let (mode, signed_parameters) =
                             signed_v2_genesis_context_metadata(genesis_block)
                                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
@@ -10316,9 +10112,9 @@ impl Iroha {
         state.set_oracle(oracle_cfg);
         state.set_streaming(streaming_cfg);
         state.set_fraud_monitoring(fraud_cfg);
-        // Settlement was installed before Kura replay and authenticated by the
-        // mandatory offline gate. Do not replace that post-replay snapshot
-        // after Kura has started.
+        // Settlement runtime state was installed before Kura replay. Preserve
+        // its lazily derived escrow bindings instead of replacing the replayed
+        // snapshot after Kura has started.
         state.set_gov(gov_cfg);
         state.set_merge_ledger_cache_capacity(merge_cache_capacity);
         log_startup_trace(
@@ -12050,23 +11846,80 @@ async fn config_updates_relay(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ConfiguredGenesisTrustAnchor {
-    public_key: PublicKey,
-    expected_hash: Option<HashOf<BlockHeader>>,
+enum StartupTrustRoot {
+    /// Normal startup is bound to one exact signed genesis instance.
+    Genesis(ResolvedGenesisTrustAnchor),
+    /// An audited imported snapshot must authenticate its independent lineage before replay.
+    AuthenticatedSnapshotPending,
 }
 
-impl From<&iroha_config::parameters::actual::Genesis> for ConfiguredGenesisTrustAnchor {
-    fn from(config: &iroha_config::parameters::actual::Genesis) -> Self {
-        Self {
-            public_key: config.public_key.clone(),
-            expected_hash: config.expected_hash,
+impl StartupTrustRoot {
+    fn resolve(
+        authenticated_snapshot_pending: bool,
+        public_key: &PublicKey,
+        configured_hash: Option<HashOf<BlockHeader>>,
+        local_genesis: Option<&GenesisBlock>,
+    ) -> ReportResult<Self, StartError> {
+        if authenticated_snapshot_pending {
+            return Ok(Self::AuthenticatedSnapshotPending);
         }
+        ResolvedGenesisTrustAnchor::resolve(public_key, configured_hash, local_genesis)
+            .map(Self::Genesis)
     }
 }
 
-impl ConfiguredGenesisTrustAnchor {
-    fn public_key(&self) -> &PublicKey {
-        &self.public_key
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ResolvedGenesisTrustAnchor {
+    public_key: PublicKey,
+    consensus_header_hash: HashOf<BlockHeader>,
+}
+
+fn load_deferred_normal_startup_genesis(
+    authenticated_snapshot_pending: bool,
+    genesis: Option<GenesisBlock>,
+    signed_file: Option<&WithOrigin<PathBuf>>,
+) -> ReportResult<Option<GenesisBlock>, StartError> {
+    if authenticated_snapshot_pending || genesis.is_some() {
+        return Ok(genesis);
+    }
+    let Some(signed_file) = signed_file else {
+        return Ok(None);
+    };
+    read_genesis(&signed_file.resolve_relative_path())
+        .attach(signed_file.clone().into_attachment().display_path())
+        .change_context(StartError::InitKura)
+        .map(Some)
+}
+
+impl ResolvedGenesisTrustAnchor {
+    fn resolve(
+        public_key: &PublicKey,
+        configured_hash: Option<HashOf<BlockHeader>>,
+        local_genesis: Option<&GenesisBlock>,
+    ) -> ReportResult<Self, StartError> {
+        let local_hash = local_genesis.map(|genesis| genesis.0.hash());
+        let consensus_header_hash = match (configured_hash, local_hash) {
+            (Some(configured), Some(local)) if configured != local => {
+                return Err(Report::new(StartError::InitKura).attach(format!(
+                    "local signed genesis hash {local} differs from configured genesis.expected_hash {configured}"
+                )));
+            }
+            (Some(configured), _) => configured,
+            (None, Some(local)) => local,
+            (None, None) => {
+                return Err(Report::new(StartError::InitKura).attach(
+                    "normal startup requires an exact genesis hash from genesis.expected_hash or a local signed genesis artifact",
+                ));
+            }
+        };
+        let anchor = Self {
+            public_key: public_key.clone(),
+            consensus_header_hash,
+        };
+        if let Some(local_genesis) = local_genesis {
+            anchor.verify(local_genesis)?;
+        }
+        Ok(anchor)
     }
 
     fn verify(&self, block: &GenesisBlock) -> ReportResult<(), StartError> {
@@ -12079,11 +11932,10 @@ impl ConfiguredGenesisTrustAnchor {
         }
 
         let block_hash = block.0.hash();
-        if let Some(expected_hash) = self.expected_hash
-            && block_hash != expected_hash
-        {
+        if block_hash != self.consensus_header_hash {
             return Err(Report::new(StartError::InitKura).attach(format!(
-                "genesis hash {block_hash} does not match configured genesis.expected_hash {expected_hash}"
+                "genesis hash {block_hash} does not match the resolved genesis trust-anchor hash {}",
+                self.consensus_header_hash
             )));
         }
 
@@ -12173,6 +12025,29 @@ mod genesis_key_tests {
         .expect("build signed genesis")
     }
 
+    fn signed_genesis_with_marker(keypair: &KeyPair, marker: &str) -> GenesisBlock {
+        GenesisBuilder::new_without_executor(
+            ChainId::from("configured-genesis-trust-anchor-test"),
+            PathBuf::from("."),
+        )
+        .append_instruction(iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            marker.to_owned(),
+        ))
+        .build_raw()
+        .build_and_sign(keypair)
+        .expect("build marked signed genesis")
+    }
+
+    fn write_signed_genesis(path: &Path, genesis: &GenesisBlock) {
+        let bytes = {
+            let _registry_guard = instruction_registry_test_guard();
+            init_genesis_instruction_registry();
+            genesis.0.encode_wire().expect("encode signed genesis")
+        };
+        fs::write(path, bytes).expect("write signed genesis");
+    }
+
     #[test]
     fn derives_genesis_pubkey_from_block_authority() {
         let chain = ChainId::from("derive-genesis-pubkey-test");
@@ -12196,12 +12071,12 @@ mod genesis_key_tests {
     }
 
     #[test]
-    fn configured_genesis_trust_anchor_accepts_matching_block() {
+    fn resolved_genesis_trust_anchor_accepts_matching_block() {
         let keypair = KeyPair::random();
         let genesis = signed_genesis(&keypair);
-        let anchor = ConfiguredGenesisTrustAnchor {
+        let anchor = ResolvedGenesisTrustAnchor {
             public_key: keypair.public_key().clone(),
-            expected_hash: Some(genesis.0.hash()),
+            consensus_header_hash: genesis.0.hash(),
         };
 
         anchor
@@ -12210,12 +12085,12 @@ mod genesis_key_tests {
     }
 
     #[test]
-    fn configured_genesis_trust_anchor_rejects_wrong_public_key() {
+    fn resolved_genesis_trust_anchor_rejects_wrong_public_key() {
         let signer = KeyPair::random();
         let genesis = signed_genesis(&signer);
-        let anchor = ConfiguredGenesisTrustAnchor {
+        let anchor = ResolvedGenesisTrustAnchor {
             public_key: KeyPair::random().public_key().clone(),
-            expected_hash: Some(genesis.0.hash()),
+            consensus_header_hash: genesis.0.hash(),
         };
 
         let error = anchor
@@ -12229,14 +12104,14 @@ mod genesis_key_tests {
     }
 
     #[test]
-    fn configured_genesis_trust_anchor_rejects_wrong_expected_hash() {
+    fn resolved_genesis_trust_anchor_rejects_wrong_hash() {
         let keypair = KeyPair::random();
         let genesis = signed_genesis(&keypair);
         let wrong_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32]));
         assert_ne!(genesis.0.hash(), wrong_hash);
-        let anchor = ConfiguredGenesisTrustAnchor {
+        let anchor = ResolvedGenesisTrustAnchor {
             public_key: keypair.public_key().clone(),
-            expected_hash: Some(wrong_hash),
+            consensus_header_hash: wrong_hash,
         };
 
         let error = anchor
@@ -12244,8 +12119,167 @@ mod genesis_key_tests {
             .expect_err("configured genesis hash mismatch must reject genesis");
         assert!(matches!(error.current_context(), StartError::InitKura));
         assert!(
-            format!("{error:?}").contains("does not match configured genesis.expected_hash"),
+            format!("{error:?}").contains("does not match the resolved genesis trust-anchor hash"),
             "unexpected mismatch diagnostic: {error:?}"
+        );
+    }
+
+    #[test]
+    fn startup_trust_root_derives_exact_hash_from_local_artifact() {
+        let keypair = KeyPair::random();
+        let genesis = signed_genesis(&keypair);
+
+        let root = StartupTrustRoot::resolve(false, keypair.public_key(), None, Some(&genesis))
+            .expect("a local signed genesis supplies the exact hash anchor");
+        let StartupTrustRoot::Genesis(anchor) = root else {
+            panic!("normal startup must resolve a genesis root");
+        };
+
+        assert_eq!(anchor.consensus_header_hash, genesis.0.hash());
+        anchor.verify(&genesis).expect("resolved anchor verifies");
+    }
+
+    #[test]
+    fn normal_startup_loads_genesis_deferred_by_snapshot_policy() {
+        let keypair = KeyPair::random();
+        let genesis = signed_genesis(&keypair);
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("genesis.nrt");
+        write_signed_genesis(&path, &genesis);
+        let signed_file = WithOrigin::inline(path);
+
+        let loaded = load_deferred_normal_startup_genesis(false, None, Some(&signed_file))
+            .expect("normal startup reads the protected local artifact")
+            .expect("normal startup loads a genesis block");
+
+        assert_eq!(loaded.0.hash(), genesis.0.hash());
+    }
+
+    #[test]
+    fn provisional_snapshot_startup_does_not_read_deferred_genesis() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let missing = WithOrigin::inline(temp.path().join("missing-genesis.nrt"));
+
+        let loaded = load_deferred_normal_startup_genesis(true, None, Some(&missing))
+            .expect("provisional snapshot startup defers to authenticated snapshot lineage");
+
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn snapshot_startup_selects_the_independent_pending_trust_root() {
+        let keypair = KeyPair::random();
+
+        let root = StartupTrustRoot::resolve(true, keypair.public_key(), None, None)
+            .expect("an authenticated provisional snapshot is an independent trust root");
+
+        assert!(matches!(root, StartupTrustRoot::AuthenticatedSnapshotPending));
+    }
+
+    #[test]
+    fn normal_startup_requires_an_exact_hash_source() {
+        let keypair = KeyPair::random();
+
+        let error = StartupTrustRoot::resolve(false, keypair.public_key(), None, None)
+            .expect_err("a signer key alone is not an exact genesis-instance anchor");
+
+        assert!(matches!(error.current_context(), StartError::InitKura));
+        assert!(
+            format!("{error:?}").contains("requires an exact genesis hash"),
+            "unexpected missing-anchor diagnostic: {error:?}"
+        );
+    }
+
+    #[test]
+    fn resolver_rejects_config_and_local_hash_disagreement() {
+        let keypair = KeyPair::random();
+        let genesis = signed_genesis(&keypair);
+        let configured_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB6; 32]));
+        assert_ne!(configured_hash, genesis.0.hash());
+
+        let error = StartupTrustRoot::resolve(
+            false,
+            keypair.public_key(),
+            Some(configured_hash),
+            Some(&genesis),
+        )
+        .expect_err("two exact genesis sources must agree");
+
+        assert!(matches!(error.current_context(), StartError::InitKura));
+        assert!(
+            format!("{error:?}").contains("differs from configured genesis.expected_hash"),
+            "unexpected conflicting-anchor diagnostic: {error:?}"
+        );
+    }
+
+    #[test]
+    fn resolver_accepts_matching_config_and_local_hashes() {
+        let keypair = KeyPair::random();
+        let genesis = signed_genesis(&keypair);
+
+        let root = StartupTrustRoot::resolve(
+            false,
+            keypair.public_key(),
+            Some(genesis.0.hash()),
+            Some(&genesis),
+        )
+        .expect("matching configured and local hashes resolve one exact anchor");
+        let StartupTrustRoot::Genesis(anchor) = root else {
+            panic!("normal startup must resolve a genesis root");
+        };
+
+        assert_eq!(anchor.consensus_header_hash, genesis.0.hash());
+    }
+
+    #[test]
+    fn local_artifact_anchor_rejects_alternate_same_key_same_chain_genesis() {
+        let keypair = KeyPair::random();
+        let trusted = signed_genesis_with_marker(&keypair, "trusted genesis");
+        let alternate = signed_genesis_with_marker(&keypair, "alternate genesis");
+        assert_ne!(trusted.0.hash(), alternate.0.hash());
+
+        let root = StartupTrustRoot::resolve(false, keypair.public_key(), None, Some(&trusted))
+            .expect("local trusted genesis resolves an exact anchor");
+        let StartupTrustRoot::Genesis(anchor) = root else {
+            panic!("normal startup must resolve a genesis root");
+        };
+        let error = anchor
+            .verify(&alternate)
+            .expect_err("same signer and chain must not authorize another genesis instance");
+
+        assert!(matches!(error.current_context(), StartError::InitKura));
+        assert!(
+            format!("{error:?}").contains("does not match the resolved genesis trust-anchor hash"),
+            "unexpected alternate-genesis diagnostic: {error:?}"
+        );
+    }
+
+    #[test]
+    fn configured_hash_anchor_rejects_alternate_same_key_same_chain_genesis() {
+        let keypair = KeyPair::random();
+        let trusted = signed_genesis_with_marker(&keypair, "trusted genesis");
+        let alternate = signed_genesis_with_marker(&keypair, "alternate genesis");
+        assert_ne!(trusted.0.hash(), alternate.0.hash());
+
+        let root = StartupTrustRoot::resolve(
+            false,
+            keypair.public_key(),
+            Some(trusted.0.hash()),
+            None,
+        )
+        .expect("configured expected hash resolves an exact anchor");
+        let StartupTrustRoot::Genesis(anchor) = root else {
+            panic!("normal startup must resolve a genesis root");
+        };
+        let error = anchor
+            .verify(&alternate)
+            .expect_err("the configured hash must reject another genesis from the same signer");
+
+        assert!(matches!(error.current_context(), StartError::InitKura));
+        assert!(
+            format!("{error:?}").contains("does not match the resolved genesis trust-anchor hash"),
+            "unexpected alternate-genesis diagnostic: {error:?}"
         );
     }
 }
@@ -12255,16 +12289,10 @@ mod genesis_key_tests {
 pub enum ConfigError {
     /// Failed to read configuration from disk or environment.
     ReadConfig,
-    /// Failed to persist configuration updates back to disk.
-    WriteConfig,
     /// Configuration contents failed validation.
     ParseConfig,
     /// Failed to load the genesis file.
     ReadGenesis,
-    /// Genesis roster contained only a single peer.
-    LonePeer,
-    /// Remote genesis bootstrap was enabled without an operator-pinned block hash.
-    UnpinnedGenesisBootstrap,
     #[cfg(feature = "dev-telemetry")]
     /// Telemetry output path resolved to root or empty.
     TelemetryOutFileIsRootOrEmpty,
@@ -12311,8 +12339,6 @@ pub enum ConfigError {
     SorafsStorageComplianceRequired,
     /// SoraFS gateway automation was enabled while embedded storage was disabled.
     SorafsGatewayRequiresStorage,
-    /// Nexus auto-derived storage defaults require a writable config path.
-    NexusStorageBudgetPersistenceRequired,
 }
 
 impl core::fmt::Display for ConfigError {
@@ -12322,16 +12348,10 @@ impl core::fmt::Display for ConfigError {
                 f,
                 "Error occurred while reading configuration from file(s) and environment"
             ),
-            Self::WriteConfig => write!(f, "Error occurred while writing configuration to disk"),
             Self::ParseConfig => {
                 write!(f, "Error occurred while validating configuration integrity")
             }
             Self::ReadGenesis => write!(f, "Error occurred while reading genesis block"),
-            Self::LonePeer => write!(f, "The network consists from this one peer only"),
-            Self::UnpinnedGenesisBootstrap => write!(
-                f,
-                "remote genesis bootstrap requires `genesis.expected_hash` when `genesis.file` is unset"
-            ),
             #[cfg(feature = "dev-telemetry")]
             Self::TelemetryOutFileIsRootOrEmpty => {
                 write!(f, "Telemetry output file path is root or empty")
@@ -12392,10 +12412,6 @@ impl core::fmt::Display for ConfigError {
             Self::SorafsGatewayRequiresStorage => write!(
                 f,
                 "SoraFS gateway ACME/compliance configuration requires sorafs.storage.enabled"
-            ),
-            Self::NexusStorageBudgetPersistenceRequired => write!(
-                f,
-                "Nexus auto-derived storage defaults require a writable configuration file path"
             ),
         }
     }
@@ -12567,9 +12583,8 @@ pub fn read_config_and_genesis(
         );
     }
 
-    let storage_budget_filesystems =
-        reconcile_nexus_storage_budget(&mut config, args.config.as_deref())?;
     config.apply_storage_budget();
+    let storage_budget_filesystems = reconcile_nexus_storage_budget(&mut config)?;
     warn_if_nexus_storage_budget_exceeds_available(&config, &storage_budget_filesystems);
 
     if let Some(mode) = args.fastpq_execution_mode {
@@ -12739,82 +12754,53 @@ mod snapshot_bootstrap_genesis_tests {
 struct StorageBudgetFilesystemProbe {
     filesystem_id: String,
     path: PathBuf,
+    total_bytes: u64,
     available_bytes: u64,
+    managed_bytes: u64,
     components: Vec<NexusStorageBudgetComponent>,
+    managed_roots: Vec<PathBuf>,
+    derived_budget_bytes: Option<u64>,
 }
 
 fn reconcile_nexus_storage_budget(
     config: &mut Config,
-    config_path: Option<&Path>,
 ) -> ReportResult<Vec<StorageBudgetFilesystemProbe>, ConfigError> {
     if !config.nexus.enabled {
         return Ok(Vec::new());
     }
 
-    match config.nexus.storage.budget_source {
-        NexusStorageBudgetSource::Unset => {
-            let config_path = require_nexus_storage_budget_config_path(
-                config_path,
-                "nexus.storage.local_budget_bytes is unset and the daemon must persist an auto-derived filesystem budget before startup can continue",
-            )?;
-            let filesystems = probe_nexus_storage_filesystems(config)?;
-            let auto_default = derive_auto_default_nexus_storage_budget(&filesystems);
-            persist_nexus_auto_storage_budget(config_path, &auto_default)?;
-            activate_auto_default_nexus_storage_budget(config, auto_default.clone());
-            iroha_logger::info!(
-                config_path = %config_path.display(),
-                aggregate_budget_bytes = auto_default.aggregate_budget_bytes,
-                filesystem_groups = auto_default.filesystem_groups.len(),
-                "persisted first-run nexus.storage.local_budget_bytes and auto-derived filesystem metadata into config"
-            );
-            Ok(filesystems)
-        }
-        NexusStorageBudgetSource::OperatorExplicit => {
-            match probe_nexus_storage_filesystems(config) {
-                Ok(filesystems) => Ok(filesystems),
-                Err(error) => {
-                    iroha_logger::warn!(
-                        ?error,
-                        "failed to probe Nexus storage filesystems for warning-only budget checks; continuing with operator-explicit budget"
-                    );
-                    Ok(Vec::new())
-                }
-            }
-        }
-        NexusStorageBudgetSource::AutoDerived => {
-            let filesystems = probe_nexus_storage_filesystems(config)?;
-            let Some(auto_default) = config.nexus.storage.auto_default.clone() else {
-                return Ok(filesystems);
-            };
-            if storage_layout_matches_auto_default(&filesystems, &auto_default) {
-                return Ok(filesystems);
-            }
-
-            let config_path = require_nexus_storage_budget_config_path(
-                config_path,
-                "the Nexus storage filesystem layout changed and the persisted auto-derived budget metadata must be rewritten",
-            )?;
-            let regenerated = derive_auto_default_nexus_storage_budget(&filesystems);
-            persist_nexus_auto_storage_budget(config_path, &regenerated)?;
-            activate_auto_default_nexus_storage_budget(config, regenerated.clone());
-            iroha_logger::info!(
-                config_path = %config_path.display(),
-                aggregate_budget_bytes = regenerated.aggregate_budget_bytes,
-                filesystem_groups = regenerated.filesystem_groups.len(),
-                "regenerated nexus.storage.auto_default after the storage filesystem layout changed"
-            );
-            Ok(filesystems)
-        }
+    if config.nexus.storage.local_budget_bytes.is_some() {
+        return probe_nexus_storage_filesystems(config);
     }
-}
 
-fn require_nexus_storage_budget_config_path<'a>(
-    config_path: Option<&'a Path>,
-    detail: &'static str,
-) -> ReportResult<&'a Path, ConfigError> {
-    config_path.ok_or_else(|| {
-        Report::new(ConfigError::NexusStorageBudgetPersistenceRequired).attach(detail)
-    })
+    let mut filesystems = probe_nexus_storage_filesystems(config)?;
+    let filesystem_budgets = derive_runtime_nexus_storage_budget(&filesystems)?;
+    let aggregate_budget_bytes = config
+        .apply_derived_storage_budget(&filesystem_budgets)
+        .map_err(|error| {
+            Report::new(ConfigError::ParseConfig).attach(format!(
+                "failed to apply runtime Nexus storage budget: {error}"
+            ))
+        })?;
+    for (filesystem, budget) in filesystems.iter_mut().zip(&filesystem_budgets) {
+        filesystem.derived_budget_bytes = Some(budget.budget_bytes.get());
+        iroha_logger::info!(
+            filesystem_id = %filesystem.filesystem_id,
+            path = %filesystem.path.display(),
+            components = ?nexus_storage_component_labels(&filesystem.components),
+            total_bytes = filesystem.total_bytes,
+            available_bytes = filesystem.available_bytes,
+            managed_bytes = filesystem.managed_bytes,
+            budget_bytes = budget.budget_bytes.get(),
+            "derived runtime-only Nexus storage budget"
+        );
+    }
+    iroha_logger::info!(
+        aggregate_budget_bytes = aggregate_budget_bytes.get(),
+        filesystem_groups = filesystem_budgets.len(),
+        "activated runtime-only Nexus storage budget; operator configuration remains unchanged"
+    );
+    Ok(filesystems)
 }
 
 fn probe_nexus_storage_filesystems(
@@ -12823,19 +12809,14 @@ fn probe_nexus_storage_filesystems(
     let mut groups = BTreeMap::<String, StorageBudgetFilesystemProbe>::new();
 
     for (component, root) in effective_nexus_storage_component_roots(config) {
-        let normalized_root = normalize_budget_probe_path(root).ok_or_else(|| {
+        let lexical_root = normalize_budget_probe_path(root).ok_or_else(|| {
             Report::new(ConfigError::ParseConfig).attach(format!(
                 "failed to resolve Nexus storage root for component `{}` against the current directory",
                 component.as_str()
             ))
         })?;
-        let probe_path = nearest_existing_ancestor(&normalized_root).ok_or_else(|| {
-            Report::new(ConfigError::ParseConfig).attach(format!(
-                "failed to find an existing ancestor for Nexus storage root `{}` (component `{}`)",
-                normalized_root.display(),
-                component.as_str()
-            ))
-        })?;
+        let resolved_root = resolve_budget_probe_root(&lexical_root, component)?;
+        let probe_path = resolved_root.probe_path;
         let filesystem_id = filesystem_identity(&probe_path).ok_or_else(|| {
             filesystem_probe_config_error(format!(
                 "failed to determine the filesystem identity for `{}` (component `{}`)",
@@ -12843,32 +12824,59 @@ fn probe_nexus_storage_filesystems(
                 component.as_str()
             ))
         })?;
-        let available_bytes = filesystem_available_bytes(&probe_path).ok_or_else(|| {
+        let (available_bytes, total_bytes) = filesystem_space(&probe_path).ok_or_else(|| {
             filesystem_probe_config_error(format!(
-                "failed to determine available free space for `{}` (component `{}`)",
+                "failed to determine filesystem capacity for `{}` (component `{}`)",
                 probe_path.display(),
                 component.as_str()
             ))
         })?;
+        let managed_root = resolved_root.managed_root;
 
         groups
             .entry(filesystem_id.clone())
             .and_modify(|group| {
+                group.available_bytes = group.available_bytes.min(available_bytes);
+                group.total_bytes = group.total_bytes.min(total_bytes);
                 if !group.components.contains(&component) {
                     group.components.push(component);
+                }
+                if let Some(managed_root) = managed_root.as_ref()
+                    && !group.managed_roots.contains(managed_root)
+                {
+                    group.managed_roots.push(managed_root.clone());
                 }
             })
             .or_insert_with(|| StorageBudgetFilesystemProbe {
                 filesystem_id,
                 path: probe_path,
+                total_bytes,
                 available_bytes,
+                managed_bytes: 0,
                 components: vec![component],
+                managed_roots: managed_root.into_iter().collect(),
+                derived_budget_bytes: None,
             });
     }
 
     let mut groups: Vec<_> = groups.into_values().collect();
     for group in &mut groups {
         group.components.sort_unstable();
+        deduplicate_managed_roots(&mut group.managed_roots);
+        group.managed_bytes = group.managed_roots.iter().try_fold(0_u64, |total, root| {
+            let bytes = managed_root_size(root, &group.filesystem_id).map_err(|error| {
+                Report::new(ConfigError::ParseConfig).attach(format!(
+                    "failed to measure Nexus managed storage root `{}`: {error}",
+                    root.display()
+                ))
+            })?;
+            total.checked_add(bytes).ok_or_else(|| {
+                Report::new(ConfigError::ParseConfig).attach(format!(
+                    "managed Nexus storage byte count overflowed for filesystem `{}`",
+                    group.filesystem_id
+                ))
+            })
+        })?;
     }
     groups.sort_by_key(|group| {
         group.components.first().map_or(usize::MAX, |component| {
@@ -12917,201 +12925,64 @@ fn effective_nexus_storage_component_roots(
     roots
 }
 
-fn derive_auto_default_nexus_storage_budget(
+fn derive_runtime_nexus_storage_budget(
     filesystems: &[StorageBudgetFilesystemProbe],
-) -> NexusStorageAutoDefault {
-    let filesystem_groups: Vec<_> = filesystems
-        .iter()
-        .map(|filesystem| NexusStorageAutoDefaultFilesystemGroup {
-            filesystem_id: filesystem.filesystem_id.clone(),
-            budget_bytes: filesystem
-                .available_bytes
-                .saturating_mul(80)
-                .saturating_div(100),
+) -> ReportResult<Vec<NexusStorageFilesystemBudget>, ConfigError> {
+    let mut filesystem_budgets = Vec::with_capacity(filesystems.len());
+    for filesystem in filesystems {
+        let total_bytes = u128::from(filesystem.total_bytes);
+        let headroom_bps = u128::from(
+            iroha_config::parameters::defaults::nexus::storage::AUTO_STORAGE_HEADROOM_BPS,
+        );
+        let bps_total = u128::from(iroha_config::parameters::defaults::nexus::storage::BPS_TOTAL);
+        let reserve_bytes = total_bytes
+            .checked_mul(headroom_bps)
+            .and_then(|value| value.checked_add(bps_total.saturating_sub(1)))
+            .map(|value| value / bps_total)
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or_else(|| {
+                Report::new(ConfigError::ParseConfig).attach(format!(
+                    "failed to derive Nexus storage headroom for filesystem `{}`",
+                    filesystem.filesystem_id
+                ))
+            })?;
+        let usable_bytes = filesystem
+            .managed_bytes
+            .checked_add(filesystem.available_bytes)
+            .ok_or_else(|| {
+                Report::new(ConfigError::ParseConfig).attach(format!(
+                    "managed plus available bytes overflowed for Nexus storage filesystem `{}`",
+                    filesystem.filesystem_id
+                ))
+            })?;
+        let budget_bytes = usable_bytes
+            .checked_sub(reserve_bytes)
+            .and_then(NonZeroU64::new)
+            .ok_or_else(|| {
+                Report::new(ConfigError::ParseConfig).attach(format!(
+                    "filesystem `{}` has no safe non-zero Nexus storage budget after reserving {reserve_bytes} bytes of headroom; configure nexus.storage.local_budget_bytes explicitly only after freeing space",
+                    filesystem.filesystem_id
+                ))
+            })?;
+        if budget_bytes.get() < filesystem.managed_bytes {
+            return Err(Report::new(ConfigError::ParseConfig).attach(format!(
+                "filesystem `{}` derived budget {} is below the {} managed bytes after reserving {reserve_bytes} bytes of headroom; free space before startup or configure nexus.storage.local_budget_bytes deliberately",
+                filesystem.filesystem_id,
+                budget_bytes.get(),
+                filesystem.managed_bytes
+            )));
+        }
+        filesystem_budgets.push(NexusStorageFilesystemBudget {
+            budget_bytes,
             components: filesystem.components.clone(),
-        })
-        .collect();
-    let aggregate_budget_bytes = filesystem_groups.iter().fold(0_u64, |total, filesystem| {
-        total.saturating_add(filesystem.budget_bytes)
-    });
-
-    NexusStorageAutoDefault {
-        version: NexusStorageAutoDefault::VERSION,
-        aggregate_budget_bytes,
-        filesystem_groups,
+        });
     }
-}
 
-fn storage_layout_matches_auto_default(
-    filesystems: &[StorageBudgetFilesystemProbe],
-    auto_default: &NexusStorageAutoDefault,
-) -> bool {
-    let mut current_signature: Vec<_> = filesystems
-        .iter()
-        .map(|filesystem| {
-            (
-                filesystem.filesystem_id.clone(),
-                filesystem.components.clone(),
-            )
-        })
-        .collect();
-    let mut persisted_signature: Vec<_> = auto_default
-        .filesystem_groups
-        .iter()
-        .map(|filesystem| {
-            (
-                filesystem.filesystem_id.clone(),
-                filesystem.components.clone(),
-            )
-        })
-        .collect();
-
-    current_signature.sort_by(|left, right| {
-        left.1
-            .first()
-            .map_or(usize::MAX, |component| {
-                nexus_storage_component_order(*component)
-            })
-            .cmp(&right.1.first().map_or(usize::MAX, |component| {
-                nexus_storage_component_order(*component)
-            }))
-            .then_with(|| left.0.cmp(&right.0))
-    });
-    persisted_signature.sort_by(|left, right| {
-        left.1
-            .first()
-            .map_or(usize::MAX, |component| {
-                nexus_storage_component_order(*component)
-            })
-            .cmp(&right.1.first().map_or(usize::MAX, |component| {
-                nexus_storage_component_order(*component)
-            }))
-            .then_with(|| left.0.cmp(&right.0))
-    });
-
-    current_signature == persisted_signature
-}
-
-fn activate_auto_default_nexus_storage_budget(
-    config: &mut Config,
-    auto_default: NexusStorageAutoDefault,
-) {
-    config.nexus.storage.max_disk_usage_bytes =
-        iroha_config::base::util::Bytes(auto_default.aggregate_budget_bytes);
-    config.nexus.storage.budget_source = NexusStorageBudgetSource::AutoDerived;
-    config.nexus.storage.auto_default = Some(auto_default);
-}
-
-fn persist_nexus_auto_storage_budget(
-    config_path: &Path,
-    auto_default: &NexusStorageAutoDefault,
-) -> ReportResult<(), ConfigError> {
-    let config_text = fs::read_to_string(config_path)
-        .attach(format!(
-            "read config `{}` before persisting storage budget",
-            config_path.display()
-        ))
-        .change_context(ConfigError::WriteConfig)?;
-    let mut config_table: toml::Table = toml::from_str(&config_text)
-        .attach(format!(
-            "parse config `{}` before persisting storage budget",
-            config_path.display()
-        ))
-        .change_context(ConfigError::WriteConfig)?;
-    let persisted_budget = nexus_storage_budget_toml_integer(
-        auto_default.aggregate_budget_bytes,
-        "aggregate Nexus storage budget",
-        config_path,
-    )?;
-    iroha_config::base::toml::Writer::new(&mut config_table)
-        .write(["nexus", "storage", "local_budget_bytes"], persisted_budget);
-    let auto_default_table = nexus_storage_auto_default_to_toml(auto_default, config_path)?;
-    iroha_config::base::toml::Writer::new(&mut config_table).write(
-        ["nexus", "storage", "auto_default"],
-        toml::Value::Table(auto_default_table),
-    );
-    let encoded = toml::to_string(&config_table)
-        .attach(format!(
-            "encode config `{}` after persisting storage budget",
-            config_path.display()
-        ))
-        .change_context(ConfigError::WriteConfig)?;
-    write_bytes_atomic(config_path, encoded.as_bytes())
-        .attach(format!(
-            "write config `{}` after persisting storage budget",
-            config_path.display()
-        ))
-        .change_context(ConfigError::WriteConfig)?;
-    Ok(())
-}
-
-fn nexus_storage_auto_default_to_toml(
-    auto_default: &NexusStorageAutoDefault,
-    config_path: &Path,
-) -> ReportResult<toml::Table, ConfigError> {
-    let mut table = toml::Table::new();
-    table.insert(
-        "version".to_string(),
-        toml::Value::Integer(i64::from(auto_default.version)),
-    );
-    table.insert(
-        "aggregate_budget_bytes".to_string(),
-        toml::Value::Integer(nexus_storage_budget_toml_integer(
-            auto_default.aggregate_budget_bytes,
-            "aggregate Nexus storage budget",
-            config_path,
-        )?),
-    );
-
-    let filesystem_groups = auto_default
-        .filesystem_groups
-        .iter()
-        .map(|filesystem| {
-            let mut filesystem_table = toml::Table::new();
-            filesystem_table.insert(
-                "filesystem_id".to_string(),
-                toml::Value::String(filesystem.filesystem_id.clone()),
-            );
-            filesystem_table.insert(
-                "budget_bytes".to_string(),
-                toml::Value::Integer(nexus_storage_budget_toml_integer(
-                    filesystem.budget_bytes,
-                    "filesystem Nexus storage budget",
-                    config_path,
-                )?),
-            );
-            filesystem_table.insert(
-                "components".to_string(),
-                toml::Value::Array(
-                    filesystem
-                        .components
-                        .iter()
-                        .map(|component| toml::Value::String(component.as_str().to_owned()))
-                        .collect(),
-                ),
-            );
-            Ok(toml::Value::Table(filesystem_table))
-        })
-        .collect::<ReportResult<Vec<_>, ConfigError>>()?;
-    table.insert(
-        "filesystem_groups".to_string(),
-        toml::Value::Array(filesystem_groups),
-    );
-
-    Ok(table)
-}
-
-fn nexus_storage_budget_toml_integer(
-    budget_bytes: u64,
-    label: &'static str,
-    config_path: &Path,
-) -> ReportResult<i64, ConfigError> {
-    i64::try_from(budget_bytes)
-        .attach(format!(
-            "{label} {budget_bytes} does not fit into TOML integer range for `{}`",
-            config_path.display()
-        ))
-        .change_context(ConfigError::WriteConfig)
+    if filesystem_budgets.is_empty() {
+        return Err(Report::new(ConfigError::ParseConfig)
+            .attach("runtime Nexus storage derivation produced no filesystem budget groups"));
+    }
+    Ok(filesystem_budgets)
 }
 
 fn warn_if_nexus_storage_budget_exceeds_available(
@@ -13122,55 +12993,27 @@ fn warn_if_nexus_storage_budget_exceeds_available(
         return;
     }
 
-    match config.nexus.storage.budget_source {
-        NexusStorageBudgetSource::Unset => {}
-        NexusStorageBudgetSource::AutoDerived => {
-            let Some(auto_default) = config.nexus.storage.auto_default.as_ref() else {
-                return;
-            };
-            for filesystem in filesystems {
-                let Some(budget_bytes) = auto_default_budget_shortfall(auto_default, filesystem)
-                else {
-                    continue;
-                };
-                iroha_logger::warn!(
-                    filesystem_id = %filesystem.filesystem_id,
-                    path = %filesystem.path.display(),
-                    components = ?nexus_storage_component_labels(&filesystem.components),
-                    budget_bytes,
-                    available_bytes = filesystem.available_bytes,
-                    "stored auto-derived Nexus filesystem budget exceeds currently available free disk space"
-                );
-            }
-        }
-        NexusStorageBudgetSource::OperatorExplicit => {
-            for filesystem in filesystems {
-                let Some(assigned_budget) = operator_explicit_budget_shortfall(config, filesystem)
-                else {
-                    continue;
-                };
-                iroha_logger::warn!(
-                    filesystem_id = %filesystem.filesystem_id,
-                    path = %filesystem.path.display(),
-                    components = ?nexus_storage_component_labels(&filesystem.components),
-                    assigned_budget_bytes = assigned_budget,
-                    available_bytes = filesystem.available_bytes,
-                    "effective operator-configured Nexus storage caps exceed currently available free disk space on a filesystem"
-                );
-            }
-        }
+    if filesystems
+        .iter()
+        .all(|filesystem| filesystem.derived_budget_bytes.is_some())
+    {
+        return;
     }
-}
 
-fn auto_default_budget_shortfall(
-    auto_default: &NexusStorageAutoDefault,
-    filesystem: &StorageBudgetFilesystemProbe,
-) -> Option<u64> {
-    let stored_group = auto_default.filesystem_groups.iter().find(|stored_group| {
-        stored_group.filesystem_id == filesystem.filesystem_id
-            && stored_group.components == filesystem.components
-    })?;
-    (stored_group.budget_bytes > filesystem.available_bytes).then_some(stored_group.budget_bytes)
+    for filesystem in filesystems {
+        let Some(assigned_budget) = operator_explicit_budget_shortfall(config, filesystem) else {
+            continue;
+        };
+        iroha_logger::warn!(
+            filesystem_id = %filesystem.filesystem_id,
+            path = %filesystem.path.display(),
+            components = ?nexus_storage_component_labels(&filesystem.components),
+            assigned_budget_bytes = assigned_budget,
+            managed_bytes = filesystem.managed_bytes,
+            available_bytes = filesystem.available_bytes,
+            "effective operator-configured Nexus storage caps exceed safe available disk space on a filesystem"
+        );
+    }
 }
 
 fn operator_explicit_budget_shortfall(
@@ -13178,7 +13021,8 @@ fn operator_explicit_budget_shortfall(
     filesystem: &StorageBudgetFilesystemProbe,
 ) -> Option<u64> {
     let assigned_budget = effective_assigned_budget_for_filesystem(config, filesystem);
-    (assigned_budget > filesystem.available_bytes).then_some(assigned_budget)
+    let required_growth = assigned_budget.saturating_sub(filesystem.managed_bytes);
+    (required_growth > filesystem.available_bytes).then_some(assigned_budget)
 }
 
 fn effective_assigned_budget_for_filesystem(
@@ -13221,34 +13065,232 @@ fn nexus_storage_component_order(component: NexusStorageBudgetComponent) -> usiz
 }
 
 fn normalize_budget_probe_path(path: PathBuf) -> Option<PathBuf> {
-    if path.is_absolute() {
-        Some(path)
+    let absolute = if path.is_absolute() {
+        path
     } else {
-        std::env::current_dir().ok().map(|cwd| cwd.join(path))
+        std::env::current_dir().ok()?.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !normalized.pop() {
+                    return None;
+                }
+            }
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            std::path::Component::RootDir => {
+                normalized.push(std::path::MAIN_SEPARATOR_STR);
+            }
+            std::path::Component::Normal(segment) => normalized.push(segment),
+        }
     }
+    Some(normalized)
 }
 
-fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
+fn nearest_existing_ancestor(path: &Path) -> std::io::Result<Option<PathBuf>> {
     let mut current = path.to_path_buf();
     loop {
-        if current.exists() {
-            return Some(current);
+        match fs::symlink_metadata(&current) {
+            Ok(_) => return Ok(Some(current)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
         }
         if !current.pop() {
-            return None;
+            return Ok(None);
         }
     }
 }
 
-fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path must have a parent")
+#[derive(Debug)]
+struct ResolvedStorageBudgetRoot {
+    probe_path: PathBuf,
+    managed_root: Option<PathBuf>,
+}
+
+fn resolve_budget_probe_root(
+    lexical_root: &Path,
+    component: NexusStorageBudgetComponent,
+) -> ReportResult<ResolvedStorageBudgetRoot, ConfigError> {
+    let existing_ancestor = nearest_existing_ancestor(lexical_root)
+        .map_err(|error| {
+            filesystem_probe_config_error(format!(
+                "failed to inspect Nexus storage root `{}` (component `{}`): {error}",
+                lexical_root.display(),
+                component.as_str()
+            ))
+        })?
+        .ok_or_else(|| {
+            filesystem_probe_config_error(format!(
+                "failed to find an existing ancestor for Nexus storage root `{}` (component `{}`)",
+                lexical_root.display(),
+                component.as_str()
+            ))
+        })?;
+    let existing_metadata = fs::symlink_metadata(&existing_ancestor).map_err(|error| {
+        filesystem_probe_config_error(format!(
+            "failed to recheck Nexus storage ancestor `{}` (component `{}`): {error}",
+            existing_ancestor.display(),
+            component.as_str()
+        ))
     })?;
-    fs::create_dir_all(parent)?;
-    let tmp_path = path.with_extension("tmp");
-    fs::write(&tmp_path, bytes)?;
-    fs::rename(&tmp_path, path)?;
-    Ok(())
+    let root_exists = existing_ancestor == lexical_root;
+    if root_exists && metadata_is_symlink_or_reparse(&existing_metadata) {
+        return Err(filesystem_probe_config_error(format!(
+            "Nexus storage root `{}` (component `{}`) must not be a symbolic link or reparse point",
+            lexical_root.display(),
+            component.as_str()
+        )));
+    }
+
+    let canonical_ancestor = fs::canonicalize(&existing_ancestor).map_err(|error| {
+        filesystem_probe_config_error(format!(
+            "failed to canonicalize Nexus storage ancestor `{}` (component `{}`): {error}",
+            existing_ancestor.display(),
+            component.as_str()
+        ))
+    })?;
+    let canonical_metadata = fs::metadata(&canonical_ancestor).map_err(|error| {
+        filesystem_probe_config_error(format!(
+            "failed to inspect canonical Nexus storage ancestor `{}` (component `{}`): {error}",
+            canonical_ancestor.display(),
+            component.as_str()
+        ))
+    })?;
+    if !canonical_metadata.is_dir() {
+        return Err(filesystem_probe_config_error(format!(
+            "Nexus storage ancestor `{}` (component `{}`) is not a directory",
+            canonical_ancestor.display(),
+            component.as_str()
+        )));
+    }
+
+    let missing_suffix = lexical_root
+        .strip_prefix(&existing_ancestor)
+        .expect("nearest ancestor must prefix the normalized storage root");
+    let canonical_root = normalize_budget_probe_path(canonical_ancestor.join(missing_suffix))
+        .ok_or_else(|| {
+            filesystem_probe_config_error(format!(
+                "failed to normalize canonical Nexus storage root `{}` (component `{}`)",
+                lexical_root.display(),
+                component.as_str()
+            ))
+        })?;
+    let probe_path = if root_exists {
+        canonical_root.clone()
+    } else {
+        canonical_ancestor
+    };
+    Ok(ResolvedStorageBudgetRoot {
+        probe_path,
+        managed_root: root_exists.then_some(canonical_root),
+    })
+}
+
+fn metadata_is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(target_os = "windows"))]
+    false
+}
+
+fn deduplicate_managed_roots(roots: &mut Vec<PathBuf>) {
+    roots.sort_by(|left, right| {
+        left.components()
+            .count()
+            .cmp(&right.components().count())
+            .then_with(|| left.cmp(right))
+    });
+    let mut unique = Vec::<PathBuf>::with_capacity(roots.len());
+    for root in std::mem::take(roots) {
+        if !unique.iter().any(|ancestor| root.starts_with(ancestor)) {
+            unique.push(root);
+        }
+    }
+    *roots = unique;
+}
+
+fn managed_root_size(path: &Path, expected_filesystem_id: &str) -> std::io::Result<u64> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata_is_symlink_or_reparse(&metadata) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "managed storage root must not be a symbolic link or reparse point",
+        ));
+    }
+    if filesystem_identity(path).as_deref() != Some(expected_filesystem_id) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "managed storage root moved to a different filesystem during probing",
+        ));
+    }
+    if metadata.is_file() {
+        return Ok(metadata.len());
+    }
+
+    let mut total = 0_u64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let entry_path = entry.path();
+            let entry_metadata = fs::symlink_metadata(&entry_path)?;
+            if metadata_is_symlink_or_reparse(&entry_metadata) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "managed storage tree contains symbolic link or reparse point `{}`",
+                        entry_path.display()
+                    ),
+                ));
+            }
+            let entry_filesystem_id = filesystem_identity(&entry_path).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "failed to determine filesystem identity for managed storage entry `{}`",
+                        entry_path.display()
+                    ),
+                )
+            })?;
+            if entry_filesystem_id != expected_filesystem_id {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "managed storage entry `{}` crosses from filesystem `{expected_filesystem_id}` to `{entry_filesystem_id}`",
+                        entry_path.display()
+                    ),
+                ));
+            }
+            if entry_metadata.is_dir() {
+                stack.push(entry_path);
+            } else if entry_metadata.is_file() {
+                total = total.checked_add(entry_metadata.len()).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "managed storage byte count overflowed u64",
+                    )
+                })?;
+            }
+        }
+    }
+    let final_metadata = fs::symlink_metadata(path)?;
+    if metadata_is_symlink_or_reparse(&final_metadata)
+        || filesystem_identity(path).as_deref() != Some(expected_filesystem_id)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "managed storage root changed identity during measurement",
+        ));
+    }
+    Ok(total)
 }
 
 fn filesystem_probe_config_error(detail: String) -> Report<ConfigError> {
@@ -13272,29 +13314,32 @@ fn filesystem_identity(path: &Path) -> Option<String> {
 }
 
 #[cfg(unix)]
-fn filesystem_available_bytes(path: &Path) -> Option<u64> {
+fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
     let stats = rustix::fs::statvfs(path).ok()?;
     let fragment_size = stats.f_frsize.max(stats.f_bsize);
-    Some(stats.f_bavail.saturating_mul(fragment_size))
+    let available_bytes = stats.f_bavail.checked_mul(fragment_size)?;
+    let total_bytes = stats.f_blocks.checked_mul(fragment_size)?;
+    Some((available_bytes, total_bytes))
 }
 
 #[cfg(target_os = "windows")]
-fn filesystem_available_bytes(path: &Path) -> Option<u64> {
+fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
     let wide_path = windows_wide_path(path);
     let mut free_bytes_available = 0_u64;
+    let mut total_bytes = 0_u64;
     let ok = unsafe {
         GetDiskFreeSpaceExW(
             wide_path.as_ptr(),
             &mut free_bytes_available,
-            std::ptr::null_mut(),
+            &mut total_bytes,
             std::ptr::null_mut(),
         )
     };
-    (ok != 0).then_some(free_bytes_available)
+    (ok != 0).then_some((free_bytes_available, total_bytes))
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
-fn filesystem_available_bytes(_path: &Path) -> Option<u64> {
+fn filesystem_space(_path: &Path) -> Option<(u64, u64)> {
     None
 }
 
@@ -13527,7 +13572,6 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-bootstrap_enabled = false
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -13556,7 +13600,6 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-bootstrap_enabled = false
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -13599,7 +13642,6 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-bootstrap_enabled = false
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -14423,27 +14465,6 @@ fn validate_config_static_io(emitter: &mut Emitter<ConfigError>, config: &Config
     // maybe validate only if snapshot mode is enabled
     validate_directory_path(emitter, &config.snapshot.store_dir);
 
-    if remote_genesis_bootstrap_is_unpinned(config) {
-        emitter.emit(Report::new(ConfigError::UnpinnedGenesisBootstrap).attach(
-            "`genesis.bootstrap_enabled = true` without a local `genesis.file` must configure the exact signed genesis consensus-header hash in `genesis.expected_hash`",
-        ));
-    }
-
-    if config.genesis.file.is_none()
-        && !config
-            .common
-            .trusted_peers
-            .value()
-            .contains_other_trusted_peers()
-    {
-        emitter.emit(Report::new(ConfigError::LonePeer).attach("\
-            Reason: the network consists from this one peer only (no `trusted_peers` provided).\n\
-            Since `genesis.file` is not set, there is no way to receive the genesis block.\n\
-            Either provide the genesis by setting `genesis.file` configuration parameter,\n\
-            or increase the number of trusted peers in the network using `trusted_peers` configuration parameter.\
-        ").attach(config.common.trusted_peers.clone().into_attachment().display_as_debug()));
-    }
-
     if config.network.address.value() == config.torii.address.value() {
         emitter.emit(
             Report::new(ConfigError::SameNetworkAndToriiAddrs)
@@ -14451,12 +14472,6 @@ fn validate_config_static_io(emitter: &mut Emitter<ConfigError>, config: &Config
                 .attach(config.torii.address.clone().into_attachment()),
         );
     }
-}
-
-fn remote_genesis_bootstrap_is_unpinned(config: &Config) -> bool {
-    config.genesis.file.is_none()
-        && config.genesis.bootstrap_enabled
-        && config.genesis.expected_hash.is_none()
 }
 
 fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) {
@@ -15772,17 +15787,6 @@ fn validate_config_for_check(
     MainError,
 > {
     validate_config_offline(config).change_context(MainError::Config)?;
-    iroha_torii::ensure_mandatory_offline_configuration_for_chain(
-        &config.common.chain,
-        &config.settlement.offline,
-        config.torii.kagemusha_commands.as_ref(),
-    )
-    .map_err(|error| {
-        Report::new(MainError::Config).attach(format!(
-            "mandatory offline cash configuration failed: {error}"
-        ))
-    })?;
-
     if build_kagemusha_qualification_seal && genesis.is_none() {
         return Err(Report::new(MainError::Config).attach(
             "`--write-kagemusha-catalog-qualification-seal` requires locally available genesis so the seal is published only after full offline genesis validation",
@@ -15809,9 +15813,10 @@ fn validate_config_for_check(
     };
 
     let Some(genesis) = genesis else {
-        // A joining node may obtain genesis from its trusted peers. Static
-        // validation and catalog authentication are complete even though
-        // bootstrap readiness is pending.
+        // Runtime startup can use an exact configured genesis hash with the
+        // canonical body already persisted in Kura, or an authenticated
+        // provisional snapshot. Static validation and catalog authentication
+        // are complete even though body-level validation is pending.
         return Ok(None);
     };
 
@@ -15877,16 +15882,6 @@ fn load_configured_kagemusha_release_catalog(
     config: &Config,
 ) -> Result<iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4, String> {
     let offline = &config.settlement.offline;
-    if offline.enabled
-        && !offline.escrow_accounts.is_empty()
-        && offline.kagemusha_release_policy_path.is_none()
-        && offline.kagemusha_artifact_dir.is_none()
-    {
-        return Err(
-            "offline-enabled assets cannot start without a Kagemusha V4 release policy and artifact directory"
-                .to_owned(),
-        );
-    }
     iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config(
         offline,
     )
@@ -15902,12 +15897,6 @@ fn load_and_build_configured_kagemusha_catalog_qualification_seal(
     ),
     String,
 > {
-    if !config.settlement.offline.enabled {
-        return Err(
-            "cannot qualify a Kagemusha V4 release catalog while offline settlement is disabled"
-                .to_owned(),
-        );
-    }
     match (
         config
             .settlement
@@ -16127,19 +16116,6 @@ fn validate_genesis_execution_offline(
             "staged genesis cadence {staged_block_cadence_ms} ms differs from authenticated signed cadence {expected_block_cadence_ms} ms"
         )));
     }
-    iroha_torii::ensure_mandatory_offline_staged_genesis_readiness(
-        &staged,
-        genesis.0.header(),
-        &config.common.chain,
-        &config.settlement.offline,
-        config.torii.kagemusha_commands.as_ref(),
-        &config.nexus.fees.fee_asset_id,
-    )
-    .map_err(|error| {
-        Report::new(MainError::Config).attach(format!(
-            "mandatory offline cash readiness failed in staged genesis: {error}"
-        ))
-    })?;
     iroha_core::sumeragi::freeze_staged_genesis_v2(
         genesis,
         &staged,
@@ -16849,44 +16825,6 @@ mod tests {
     const GOVERNANCE_DAG_CHECKPOINT_STORE_HANDLE: &str =
         "sealed:governance-dag:producer-checkpoint";
     const GOVERNANCE_DAG_CHECKPOINT_STORE_POLICY_DIGEST: [u8; 32] = [0xA6; 32];
-
-    #[test]
-    fn remote_genesis_bootstrap_requires_a_pin_only_without_a_local_artifact() {
-        let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
-            .expect("minimal config");
-
-        assert!(
-            !remote_genesis_bootstrap_is_unpinned(&config),
-            "disabled remote bootstrap needs no pin"
-        );
-
-        config.genesis.bootstrap_enabled = true;
-        assert!(remote_genesis_bootstrap_is_unpinned(&config));
-        let mut emitter = Emitter::new();
-        validate_config_static_io(&mut emitter, &config);
-        let report = emitter
-            .into_result()
-            .expect_err("unpinned remote bootstrap must be a configuration error");
-        assert!(report.frames().any(|frame| matches!(
-            frame.downcast_ref::<ConfigError>(),
-            Some(ConfigError::UnpinnedGenesisBootstrap)
-        )));
-
-        config.genesis.expected_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(
-            iroha_crypto::Hash::prehashed([0x51; 32]),
-        ));
-        assert!(
-            !remote_genesis_bootstrap_is_unpinned(&config),
-            "an exact hash pin makes the remote trust root explicit"
-        );
-
-        config.genesis.expected_hash = None;
-        config.genesis.file = Some(WithOrigin::inline(PathBuf::from("genesis.nrt")));
-        assert!(
-            !remote_genesis_bootstrap_is_unpinned(&config),
-            "a local signed genesis is already an explicit artifact"
-        );
-    }
 
     #[derive(Debug)]
     struct GovernanceDagPublisherBindingSigner {
@@ -18189,7 +18127,6 @@ mod tests {
 
                 [genesis]
                 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-                bootstrap_enabled = false
 
                 [streaming]
                 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -20527,10 +20464,6 @@ mod tests {
             extra_instructions: impl IntoIterator<Item = InstructionBox>,
         ) -> OfflineSemanticGenesisFixture {
             let mut config = sample_config();
-            // These fixtures exercise generic staged-genesis semantics. The
-            // authenticated ABI-21/V4 catalog path has its own Torii readiness
-            // fixtures and cannot be represented by this minimal genesis.
-            config.settlement.offline.enabled = false;
             let chain_id = ChainId::from("offline-genesis-validation-test");
             let genesis_authority = iroha_crypto::KeyPair::try_from_seed(
                 b"offline-genesis-validation-authority".to_vec(),
@@ -20614,7 +20547,7 @@ mod tests {
                 fixture.parameters,
                 fixture.cadence_ms,
                 load_configured_kagemusha_release_catalog(&fixture.config)
-                    .expect("disabled offline settlement uses an empty catalog"),
+                    .expect("an omitted release cache uses an empty catalog"),
             )
             .expect("valid genesis should execute in the disposable overlay");
         }
@@ -20635,15 +20568,15 @@ mod tests {
             let execute = check_path
                 .find("ValidBlock::validate_signed_genesis_keep_voting_block(")
                 .expect("offline genesis execution");
-            let readiness = check_path
-                .find("ensure_mandatory_offline_staged_genesis_readiness(")
-                .expect("staged offline readiness gate");
             let freeze = check_path
                 .find("freeze_staged_genesis_v2(")
                 .expect("staged genesis freeze");
             assert!(install < execute);
-            assert!(execute < readiness);
-            assert!(readiness < freeze);
+            assert!(execute < freeze);
+            assert!(
+                !check_path.contains("ensure_mandatory_offline"),
+                "offline support must not introduce a genesis readiness gate"
+            );
 
             let runtime_path = source
                 .split_once("pub async fn start_with_runtime_deps(")
@@ -20659,38 +20592,24 @@ mod tests {
         }
 
         #[test]
-        fn check_config_rejects_public_taira_without_offline_cash_before_genesis_bootstrap() {
+        fn check_config_accepts_taira_without_offline_backend_settings() {
             let mut config = sample_config();
             config.common.chain = ChainId::from("taira");
             config.confidential.enabled = true;
             config.confidential.assume_valid = false;
-            config.settlement.offline.enabled = false;
 
-            let error = validate_config_for_check(&config, None, false)
-                .expect_err("public Taira check-config must require offline cash");
-            let rendered = format!("{error:?}");
-            assert!(
-                rendered.contains("requires settlement.offline.enabled=true"),
-                "unexpected public Taira check-config error: {rendered}"
-            );
+            validate_config_for_check(&config, None, false)
+                .expect("Taira has universal offline primitives without backend enablement");
         }
 
         #[test]
-        fn configured_kagemusha_catalog_loader_requires_paths_only_for_opted_in_assets() {
+        fn configured_kagemusha_catalog_loader_is_optional_for_every_asset() {
             let mut config = sample_config();
-            config.settlement.offline.enabled = false;
-            assert!(
-                load_configured_kagemusha_release_catalog(&config)
-                    .expect("disabled offline settlement uses an empty catalog")
-                    .is_empty()
-            );
-
-            config.settlement.offline.enabled = true;
             config.settlement.offline.kagemusha_release_policy_path = None;
             config.settlement.offline.kagemusha_artifact_dir = None;
             assert!(
                 load_configured_kagemusha_release_catalog(&config)
-                    .expect("enabled support with no opted-in assets uses an empty catalog")
+                    .expect("an omitted verifier cache uses an empty catalog")
                     .is_empty()
             );
 
@@ -20704,9 +20623,8 @@ mod tests {
             );
             assert!(
                 load_configured_kagemusha_release_catalog(&config)
-                    .err()
-                    .expect("an opted-in asset requires authenticated catalog paths")
-                    .contains("cannot start without")
+                    .expect("runtime escrow state must not require a process-local catalog")
+                    .is_empty()
             );
 
             config.settlement.offline.kagemusha_release_policy_path =
@@ -20722,7 +20640,6 @@ mod tests {
         #[test]
         fn configured_kagemusha_catalog_loader_uses_seal_without_fallback() {
             let mut config = sample_config();
-            config.settlement.offline.enabled = true;
             config.settlement.offline.kagemusha_release_policy_path =
                 Some(PathBuf::from("/missing/policy.norito"));
             config.settlement.offline.kagemusha_artifact_dir =
@@ -20744,8 +20661,7 @@ mod tests {
 
         #[test]
         fn qualification_seal_check_requires_local_genesis() {
-            let mut config = sample_config();
-            config.settlement.offline.enabled = false;
+            let config = sample_config();
 
             let error = validate_config_for_check(&config, None, true)
                 .err()
@@ -20777,7 +20693,7 @@ mod tests {
                 fixture.parameters,
                 fixture.cadence_ms,
                 load_configured_kagemusha_release_catalog(&fixture.config)
-                    .expect("disabled offline settlement uses an empty catalog"),
+                    .expect("an omitted release cache uses an empty catalog"),
             )
             .expect_err("duplicate genesis registration must fail semantic execution");
             let rendered = format!("{error:?}");
@@ -21297,254 +21213,225 @@ mod tests {
             Ok(())
         }
 
+        fn storage_budget_probe(
+            total_bytes: u64,
+            available_bytes: u64,
+            managed_bytes: u64,
+        ) -> StorageBudgetFilesystemProbe {
+            StorageBudgetFilesystemProbe {
+                filesystem_id: "dev:test".to_owned(),
+                path: PathBuf::from("/tmp/nexus-storage"),
+                total_bytes,
+                available_bytes,
+                managed_bytes,
+                components: vec![NexusStorageBudgetComponent::Kura],
+                managed_roots: Vec::new(),
+                derived_budget_bytes: None,
+            }
+        }
+
         #[test]
-        fn read_config_persists_first_run_nexus_storage_budget() -> eyre::Result<()> {
-            let (config, _dir, config_path) = load_config_with_overrides(|table, _genesis_key| {
-                iroha_config::base::toml::Writer::new(table).write(["nexus", "enabled"], true);
-            })?;
+        fn runtime_derived_budget_does_not_mutate_operator_configuration() -> eyre::Result<()> {
+            let (mut config, _dir, config_path) =
+                parse_config_with_overrides(|table, _genesis_key| {
+                    iroha_config::base::toml::Writer::new(table).write(["nexus", "enabled"], true);
+                })?;
+            let original_config = std::fs::read_to_string(&config_path)?;
+            assert_eq!(config.nexus.storage.local_budget_bytes, None);
+            assert_eq!(config.nexus.storage.effective_local_budget_bytes, None);
 
+            let filesystem_budget = NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(800).expect("non-zero budget"),
+                components: vec![NexusStorageBudgetComponent::Kura],
+            };
+            let aggregate = config
+                .apply_derived_storage_budget(&[filesystem_budget])
+                .expect("valid filesystem budget");
+
+            assert_eq!(aggregate.get(), 800);
+            assert_eq!(config.nexus.storage.local_budget_bytes, None);
             assert_eq!(
-                config.nexus.storage.budget_source,
-                NexusStorageBudgetSource::AutoDerived
+                config.nexus.storage.effective_local_budget_bytes,
+                Some(iroha_config::base::util::Bytes(800))
             );
-
-            let effective_budget = config.nexus.storage.max_disk_usage_bytes.get();
-            let auto_default = config
-                .nexus
-                .storage
-                .auto_default
-                .as_ref()
-                .expect("config auto_default");
-            assert_eq!(auto_default.aggregate_budget_bytes, effective_budget);
-            assert_eq!(auto_default.sum_budget_bytes(), effective_budget);
-
-            let persisted: toml::Value =
-                toml::from_str(&std::fs::read_to_string(&config_path)?).expect("persisted config");
-            let persisted_budget = persisted
-                .get("nexus")
-                .and_then(toml::Value::as_table)
-                .and_then(|nexus| nexus.get("storage"))
-                .and_then(toml::Value::as_table)
-                .and_then(|storage| storage.get("local_budget_bytes"))
-                .and_then(toml::Value::as_integer)
-                .expect("persisted local budget");
-            assert_eq!(persisted_budget, i64::try_from(effective_budget)?);
-            let persisted_auto_default = persisted
-                .get("nexus")
-                .and_then(toml::Value::as_table)
-                .and_then(|nexus| nexus.get("storage"))
-                .and_then(toml::Value::as_table)
-                .and_then(|storage| storage.get("auto_default"))
-                .and_then(toml::Value::as_table)
-                .expect("persisted auto_default");
-            let persisted_auto_aggregate = persisted_auto_default
-                .get("aggregate_budget_bytes")
-                .and_then(toml::Value::as_integer)
-                .expect("persisted auto aggregate");
-            assert_eq!(persisted_auto_aggregate, persisted_budget);
-            let filesystem_groups = persisted_auto_default
-                .get("filesystem_groups")
-                .and_then(toml::Value::as_array)
-                .expect("persisted filesystem groups");
-            assert!(
-                !filesystem_groups.is_empty(),
-                "auto-derived metadata must persist at least one filesystem group"
-            );
-
-            let persisted_once = std::fs::read_to_string(&config_path)?;
-            let (_config_again, _genesis_again) = read_config_and_genesis(&Args {
-                config: Some(config_path.clone()),
-                genesis_manifest_json: None,
-                startup: StartupArgs {
-                    check_config: false,
-                    write_kagemusha_catalog_qualification_seal: None,
-                    trace_config: false,
-                },
-                terminal_colors: false,
-                language: None,
-                sora: false,
-                fastpq_execution_mode: None,
-                fastpq_poseidon_mode: None,
-                fastpq_device_class: None,
-                fastpq_chip_family: None,
-                fastpq_gpu_kind: None,
-            })
-            .map_err(|report| eyre::eyre!("{report:?}"))?;
-            assert_eq!(std::fs::read_to_string(&config_path)?, persisted_once);
-
+            assert_eq!(config.kura.max_disk_usage_bytes.get(), 800);
+            assert_eq!(std::fs::read_to_string(config_path)?, original_config);
             Ok(())
         }
 
         #[test]
-        fn read_config_does_not_persist_local_budget_when_legacy_alias_is_present()
-        -> eyre::Result<()> {
-            let (config, _dir, config_path) = load_config_with_overrides(|table, _genesis_key| {
-                iroha_config::base::toml::Writer::new(table)
-                    .write(["nexus", "enabled"], true)
-                    .write(["nexus", "storage", "max_disk_usage_bytes"], 4_096_i64);
-            })?;
+        fn operator_local_budget_initializes_the_effective_budget() -> eyre::Result<()> {
+            let (config, _dir, config_path) =
+                parse_config_with_overrides(|table, _genesis_key| {
+                    iroha_config::base::toml::Writer::new(table)
+                        .write(["nexus", "enabled"], true)
+                        .write(["nexus", "storage", "local_budget_bytes"], 4_096_i64);
+                })?;
 
             assert_eq!(
-                config.nexus.storage.budget_source,
-                NexusStorageBudgetSource::OperatorExplicit
+                config.nexus.storage.local_budget_bytes,
+                Some(iroha_config::base::util::Bytes(4_096))
             );
-            assert_eq!(config.nexus.storage.max_disk_usage_bytes.get(), 4_096);
+            assert_eq!(
+                config.nexus.storage.effective_local_budget_bytes,
+                Some(iroha_config::base::util::Bytes(4_096))
+            );
 
-            let persisted: toml::Value =
-                toml::from_str(&std::fs::read_to_string(&config_path)?).expect("persisted config");
+            let persisted: toml::Value = toml::from_str(&std::fs::read_to_string(config_path)?)?;
             let storage = persisted
                 .get("nexus")
                 .and_then(toml::Value::as_table)
                 .and_then(|nexus| nexus.get("storage"))
                 .and_then(toml::Value::as_table)
                 .expect("storage table");
-            assert!(storage.get("local_budget_bytes").is_none());
-            assert!(storage.get("auto_default").is_none());
             assert_eq!(
                 storage
-                    .get("max_disk_usage_bytes")
+                    .get("local_budget_bytes")
                     .and_then(toml::Value::as_integer),
                 Some(4_096)
             );
-
+            assert!(storage.get("effective_local_budget_bytes").is_none());
+            assert!(storage.get("auto_default").is_none());
+            assert!(storage.get("max_disk_usage_bytes").is_none());
             Ok(())
         }
 
         #[test]
-        fn reconcile_nexus_storage_budget_requires_config_path_for_first_run_auto_default()
+        fn runtime_budget_uses_checked_capacity_minus_ceil_headroom() {
+            let probe = storage_budget_probe(1_001, 301, 0);
+            let budgets =
+                derive_runtime_nexus_storage_budget(&[probe]).expect("safe derived budget");
+            assert_eq!(budgets.len(), 1);
+            assert_eq!(budgets[0].budget_bytes.get(), 100);
+        }
+
+        #[test]
+        fn runtime_budget_rejects_existing_usage_above_the_safe_cap() {
+            let probe = storage_budget_probe(1_000, 100, 150);
+            let error = derive_runtime_nexus_storage_budget(&[probe])
+                .expect_err("auto derivation must not activate a cap below managed usage");
+            let diagnostic = format!("{error:?}");
+            assert!(
+                diagnostic.contains("below the 150 managed bytes"),
+                "{diagnostic}"
+            );
+        }
+
+        #[test]
+        fn runtime_budget_rejects_zero_underflow_and_overflow() {
+            for probe in [
+                storage_budget_probe(1_000, 200, 0),
+                storage_budget_probe(1_000, 199, 0),
+                storage_budget_probe(1_000, 1, u64::MAX),
+            ] {
+                assert!(
+                    derive_runtime_nexus_storage_budget(&[probe]).is_err(),
+                    "invalid capacity arithmetic must fail closed"
+                );
+            }
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn budget_root_allows_ancestor_symlink_but_rejects_exact_and_dangling_links()
         -> eyre::Result<()> {
+            use std::os::unix::fs::symlink;
+
+            let temp = tempfile::tempdir()?;
+            let real_parent = temp.path().join("real-parent");
+            let real_root = real_parent.join("managed");
+            std::fs::create_dir_all(&real_root)?;
+            let alias_parent = temp.path().join("alias-parent");
+            symlink(&real_parent, &alias_parent)?;
+
+            let lexical_root =
+                normalize_budget_probe_path(alias_parent.join("managed")).expect("absolute path");
+            let resolved =
+                resolve_budget_probe_root(&lexical_root, NexusStorageBudgetComponent::Kura)
+                    .expect("a symlink strictly above the managed root is allowed");
+            let canonical_root = std::fs::canonicalize(&real_root)?;
+            assert_eq!(
+                resolved.managed_root.as_deref(),
+                Some(canonical_root.as_path())
+            );
+
+            let exact_link = temp.path().join("exact-root-link");
+            symlink(&real_root, &exact_link)?;
+            let exact_error =
+                resolve_budget_probe_root(&exact_link, NexusStorageBudgetComponent::Kura)
+                    .expect_err("the exact managed root must not be a symlink");
+            assert!(
+                format!("{exact_error:?}").contains("must not be a symbolic link or reparse point")
+            );
+
+            let dangling_link = temp.path().join("dangling-root-link");
+            symlink(temp.path().join("missing-target"), &dangling_link)?;
+            assert!(
+                resolve_budget_probe_root(&dangling_link, NexusStorageBudgetComponent::Kura)
+                    .is_err(),
+                "a dangling exact-root link must fail closed"
+            );
+            Ok(())
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn explicit_budget_does_not_downgrade_structural_path_failures() -> eyre::Result<()> {
+            use std::os::unix::fs::symlink;
+
+            let temp = tempfile::tempdir()?;
+            let real_root = temp.path().join("real-root");
+            std::fs::create_dir(&real_root)?;
+            let linked_root = temp.path().join("linked-root");
+            symlink(&real_root, &linked_root)?;
+
             let (mut config, _dir, _config_path) =
                 parse_config_with_overrides(|table, _genesis_key| {
-                    iroha_config::base::toml::Writer::new(table).write(["nexus", "enabled"], true);
+                    iroha_config::base::toml::Writer::new(table)
+                        .write(["nexus", "enabled"], true)
+                        .write(["nexus", "storage", "local_budget_bytes"], 2_000_i64);
                 })?;
+            config.kura.store_dir = WithOrigin::inline(linked_root);
+            let error = reconcile_nexus_storage_budget(&mut config)
+                .expect_err("an explicit budget must not suppress a structural path failure");
+            assert!(format!("{error:?}").contains("must not be a symbolic link or reparse point"));
+            Ok(())
+        }
 
-            let err = reconcile_nexus_storage_budget(&mut config, None)
-                .expect_err("auto-derived first-run budget should require a writable config path");
-            assert!(matches!(
-                err.current_context(),
-                ConfigError::NexusStorageBudgetPersistenceRequired
-            ));
+        #[cfg(unix)]
+        #[test]
+        fn managed_root_measurement_rejects_descendant_links_and_identity_drift() -> eyre::Result<()>
+        {
+            use std::os::unix::fs::symlink;
 
+            let temp = tempfile::tempdir()?;
+            let root = temp.path().join("managed");
+            let outside = temp.path().join("outside");
+            std::fs::create_dir(&root)?;
+            std::fs::create_dir(&outside)?;
+            let descendant_link = root.join("linked-child");
+            symlink(&outside, &descendant_link)?;
+
+            let canonical_root = std::fs::canonicalize(&root)?;
+            let filesystem_id = filesystem_identity(&canonical_root).expect("filesystem identity");
+            let link_error = managed_root_size(&canonical_root, &filesystem_id)
+                .expect_err("descendant links must fail closed");
+            assert!(
+                link_error
+                    .to_string()
+                    .contains("symbolic link or reparse point")
+            );
+
+            std::fs::remove_file(descendant_link)?;
+            assert!(
+                managed_root_size(&canonical_root, "dev:stale").is_err(),
+                "the filesystem identity is rechecked during measurement"
+            );
             Ok(())
         }
 
         #[test]
-        fn read_config_regenerates_auto_default_when_storage_layout_changes() -> eyre::Result<()> {
-            let (config, _dir, config_path) = load_config_with_overrides(|table, _genesis_key| {
-                let mut filesystem_group = toml::Table::new();
-                filesystem_group.insert(
-                    "filesystem_id".to_string(),
-                    toml::Value::String("dev:fake".to_string()),
-                );
-                filesystem_group.insert("budget_bytes".to_string(), toml::Value::Integer(1_024));
-                filesystem_group.insert(
-                    "components".to_string(),
-                    toml::Value::Array(vec![
-                        toml::Value::String("kura".to_string()),
-                        toml::Value::String("wsv_cold".to_string()),
-                        toml::Value::String("sorafs".to_string()),
-                        toml::Value::String("soranet_spool".to_string()),
-                        toml::Value::String("soravpn_spool".to_string()),
-                    ]),
-                );
-                let mut auto_default = toml::Table::new();
-                auto_default.insert("version".to_string(), toml::Value::Integer(1));
-                auto_default.insert(
-                    "aggregate_budget_bytes".to_string(),
-                    toml::Value::Integer(1_024),
-                );
-                auto_default.insert(
-                    "filesystem_groups".to_string(),
-                    toml::Value::Array(vec![toml::Value::Table(filesystem_group)]),
-                );
-
-                let mut storage = toml::Table::new();
-                storage.insert(
-                    "local_budget_bytes".to_string(),
-                    toml::Value::Integer(1_024),
-                );
-                storage.insert("auto_default".to_string(), toml::Value::Table(auto_default));
-                let nexus = table
-                    .entry("nexus")
-                    .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-                    .as_table_mut()
-                    .expect("nexus table");
-                nexus.insert("enabled".to_string(), toml::Value::Boolean(true));
-                nexus.insert("storage".to_string(), toml::Value::Table(storage));
-            })?;
-
-            assert_eq!(
-                config.nexus.storage.budget_source,
-                NexusStorageBudgetSource::AutoDerived
-            );
-            assert_ne!(
-                config
-                    .nexus
-                    .storage
-                    .auto_default
-                    .as_ref()
-                    .and_then(|auto_default| auto_default.filesystem_groups.first())
-                    .map(|filesystem| filesystem.filesystem_id.as_str()),
-                Some("dev:fake")
-            );
-
-            let persisted: toml::Value =
-                toml::from_str(&std::fs::read_to_string(&config_path)?).expect("persisted config");
-            let persisted_auto_default = persisted
-                .get("nexus")
-                .and_then(toml::Value::as_table)
-                .and_then(|nexus| nexus.get("storage"))
-                .and_then(toml::Value::as_table)
-                .and_then(|storage| storage.get("auto_default"))
-                .and_then(toml::Value::as_table)
-                .expect("persisted auto_default");
-            let persisted_first_filesystem_id = persisted_auto_default
-                .get("filesystem_groups")
-                .and_then(toml::Value::as_array)
-                .and_then(|groups| groups.first())
-                .and_then(toml::Value::as_table)
-                .and_then(|group| group.get("filesystem_id"))
-                .and_then(toml::Value::as_str)
-                .expect("persisted filesystem id");
-            assert_ne!(persisted_first_filesystem_id, "dev:fake");
-
-            Ok(())
-        }
-
-        #[test]
-        fn auto_default_budget_shortfall_warns_only_when_budget_exceeds_available() {
-            let filesystem = StorageBudgetFilesystemProbe {
-                filesystem_id: "dev:1".to_string(),
-                path: PathBuf::from("/tmp/storage"),
-                available_bytes: 1_000,
-                components: vec![NexusStorageBudgetComponent::Kura],
-            };
-            let auto_default = NexusStorageAutoDefault {
-                version: NexusStorageAutoDefault::VERSION,
-                aggregate_budget_bytes: 2_000,
-                filesystem_groups: vec![NexusStorageAutoDefaultFilesystemGroup {
-                    filesystem_id: "dev:1".to_string(),
-                    budget_bytes: 2_000,
-                    components: vec![NexusStorageBudgetComponent::Kura],
-                }],
-            };
-
-            assert_eq!(
-                auto_default_budget_shortfall(&auto_default, &filesystem),
-                Some(2_000)
-            );
-
-            let mut no_shortfall = filesystem.clone();
-            no_shortfall.available_bytes = 2_000;
-            assert_eq!(
-                auto_default_budget_shortfall(&auto_default, &no_shortfall),
-                None
-            );
-        }
-
-        #[test]
-        fn operator_explicit_budget_shortfall_warns_only_when_assigned_caps_exceed_available()
-        -> eyre::Result<()> {
+        fn operator_explicit_budget_shortfall_accounts_for_managed_bytes() -> eyre::Result<()> {
             let (mut config, _dir, _config_path) =
                 parse_config_with_overrides(|table, _genesis_key| {
                     iroha_config::base::toml::Writer::new(table)
@@ -21553,31 +21440,26 @@ mod tests {
                 })?;
             config.apply_storage_budget();
 
-            let filesystem = StorageBudgetFilesystemProbe {
-                filesystem_id: "dev:1".to_string(),
+            let mut filesystem = StorageBudgetFilesystemProbe {
+                filesystem_id: "dev:1".to_owned(),
                 path: PathBuf::from("/tmp/storage"),
+                total_bytes: 10_000,
                 available_bytes: 1_000,
-                components: vec![
-                    NexusStorageBudgetComponent::Kura,
-                    NexusStorageBudgetComponent::WsvCold,
-                    NexusStorageBudgetComponent::Sorafs,
-                    NexusStorageBudgetComponent::SoranetSpool,
-                    NexusStorageBudgetComponent::SoravpnSpool,
-                ],
+                managed_bytes: 100,
+                components: NexusStorageBudgetComponent::ORDER.to_vec(),
+                managed_roots: Vec::new(),
+                derived_budget_bytes: None,
             };
-
             assert_eq!(
                 operator_explicit_budget_shortfall(&config, &filesystem),
                 Some(2_000)
             );
 
-            let mut no_shortfall = filesystem.clone();
-            no_shortfall.available_bytes = 2_000;
+            filesystem.available_bytes = 1_900;
             assert_eq!(
-                operator_explicit_budget_shortfall(&config, &no_shortfall),
+                operator_explicit_budget_shortfall(&config, &filesystem),
                 None
             );
-
             Ok(())
         }
 
@@ -21616,53 +21498,7 @@ mod tests {
         }
 
         #[test]
-        fn fails_with_no_trusted_peers_and_submit_role() -> eyre::Result<()> {
-            // Given
-
-            let genesis_key_pair = KeyPair::random();
-            let mut config = config_factory(genesis_key_pair.public_key());
-            iroha_config::base::toml::Writer::new(&mut config);
-
-            let dir = tempfile::tempdir()?;
-            std::fs::write(dir.path().join("config.toml"), toml::to_string(&config)?)?;
-            std::fs::write(dir.path().join("executor.to"), "")?;
-            let config_path = dir.path().join("config.toml");
-
-            // When
-
-            let (config, _genesis) = read_config_and_genesis(&Args {
-                config: Some(config_path),
-                genesis_manifest_json: None,
-                startup: StartupArgs {
-                    check_config: false,
-                    write_kagemusha_catalog_qualification_seal: None,
-                    trace_config: false,
-                },
-                terminal_colors: false,
-                language: None,
-                sora: false,
-                fastpq_execution_mode: None,
-                fastpq_poseidon_mode: None,
-                fastpq_device_class: None,
-                fastpq_chip_family: None,
-                fastpq_gpu_kind: None,
-            })
-            .map_err(|report| eyre::eyre!("{report:?}"))?;
-
-            // Then
-
-            let report = validate_config(&config).unwrap_err();
-
-            assert_contains!(
-                format!("{report:#}"),
-                "The network consists from this one peer only"
-            );
-
-            Ok(())
-        }
-
-        #[test]
-        fn validate_config_io_flags_lone_peer_and_address_conflict() -> eyre::Result<()> {
+        fn validate_config_io_flags_address_conflict() -> eyre::Result<()> {
             let (config, _dir, _config_path) =
                 load_config_with_overrides(|table, _genesis_key| {
                     if let Some(genesis_table) =
@@ -21682,7 +21518,6 @@ mod tests {
                 .into_result()
                 .expect_err("expected validation errors");
             let report_text = format!("{report:#}");
-            assert_contains!(report_text, "The network consists from this one peer only");
             assert_contains!(
                 report_text,
                 "Torii and Network addresses are the same, but should be different"
@@ -21783,8 +21618,6 @@ mod tests {
                             false,
                         );
                 })?;
-            config.settlement.offline.enabled = false;
-
             let result = validate_config_for_check(&config, None, false);
 
             #[cfg(feature = "embedded-soracloud-runtime")]

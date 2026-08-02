@@ -36,7 +36,7 @@ fn assert_generated_header_policy(path: &std::path::Path, expected: &str) {
     assert_eq!(
         section,
         expected,
-        "{} out of date; run: cargo run -p ivm --bin gen_header_doc -- --write",
+        "{} out of date; run: cargo run -p ivm --features dev-tools --bin gen_header_doc -- --write",
         path.display()
     );
 }

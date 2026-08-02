@@ -291,13 +291,14 @@ RetainedLockFrozenProducerOwnerUniverse(
 RetainedLockSameOriginLiveProducerOwnerIdentitySet(
     owner, lockedRound, subject, prepareQc, leaderView, causalOrigin) ==
   {AsyncCandidateServiceIdentity(candidate):
-     candidate \in AsyncCandidateSet,
-     /\ CandidateScheduled(candidate)
-     /\ RetainedLockFrozenProducerCandidateIdentity(
-          candidate, owner, lockedRound, subject, prepareQc, leaderView,
-          causalOrigin)
-     /\ candidate.view = leaderView
-     /\ candidate.kind \in RetainedLockLeaderProducerKinds}
+     candidate \in
+       {scheduled \in AsyncCandidateSet:
+          /\ CandidateScheduled(scheduled)
+          /\ RetainedLockFrozenProducerCandidateIdentity(
+               scheduled, owner, lockedRound, subject, prepareQc, leaderView,
+               causalOrigin)
+          /\ scheduled.view = leaderView
+          /\ scheduled.kind \in RetainedLockLeaderProducerKinds}}
 
 RetainedLockSameOriginProducerEpisodeLiveOwners(
     owner, lockedRound, subject, prepareQc, leaderView, causalOrigin) ==
@@ -840,7 +841,8 @@ THEOREM InstallProposalSuccessorRetainsExactEvidenceAndCausalOrigin ==
        /\ successor.evidence = command.evidence
        /\ successor.causalOrigin = command.causalOrigin
 BY DEF InstallProposalSuccessor,
-       AsyncCandidateAtConsumerWithOrigin,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateSuccessorProposalRound,
        AsyncCandidateWithIdentityAndOrigin
 
 THEOREM InstallProposalSuccessorRetainsExactPrepareAuthority ==
@@ -1287,18 +1289,22 @@ RetainedLockProducerDurableReplayOriginOwned(candidate) ==
     \in
       {replay.causalOrigin:
          replay \in
-           SequenceSet(
-             FreshRestartCandidateSequence(
-               RestartReplay(candidate.node))),
-         replay.causalOrigin
-           \notin AsyncScheduledCandidateOriginsForNode(candidate.node)}
+           {replayCandidate \in
+              SequenceSet(
+                FreshRestartCandidateSequence(
+                  RestartReplay(candidate.node))):
+              replayCandidate.causalOrigin
+                \notin
+                  AsyncScheduledCandidateOriginsForNode(candidate.node)}}
         \cup
       {replay.causalOrigin:
          replay \in
-           SequenceSet(
-             HistoricalLockedRetransmitSuccessors(candidate.node)),
-         replay.causalOrigin
-           \notin AsyncScheduledCandidateOriginsForNode(candidate.node)}
+           {replayCandidate \in
+              SequenceSet(
+                HistoricalLockedRetransmitSuccessors(candidate.node)):
+              replayCandidate.causalOrigin
+                \notin
+                  AsyncScheduledCandidateOriginsForNode(candidate.node)}}
 
 RetainedLockProducerSameOriginPhysicalOrDurableOwner(candidate) ==
   \/ candidate.causalOrigin

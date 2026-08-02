@@ -1,9 +1,9 @@
-//! Check or atomically publish all generator-owned repository IVM fixtures.
+//! Check or publish generator-owned repository IVM fixtures, with atomic replacement per path.
 //!
 //! Usage:
-//! `cargo run --locked -p ivm --bin ivm_fixture_export -- --check`
-//! `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
-//! `cargo run --locked -p ivm --bin ivm_fixture_export -- --write --output-root /tmp/ivm-fixtures`
+//! `cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --check`
+//! `cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --write`
+//! `cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --write --output-root /tmp/ivm-fixtures`
 
 use std::{
     env, fs,
@@ -64,7 +64,7 @@ fn parse_options_from(arguments: &[String], default_output_root: &Path) -> Resul
                 let value = arguments
                     .next()
                     .ok_or_else(|| "--output-root requires a directory path".to_owned())?;
-                if value.is_empty() || value.starts_with("--") {
+                if value.is_empty() || value.starts_with('-') {
                     return Err("--output-root requires a non-empty directory path".to_owned());
                 }
                 output_root = Some(PathBuf::from(value));
@@ -416,6 +416,11 @@ mod tests {
                 "--write".to_owned(),
                 "--output-root".to_owned(),
                 "--check".to_owned(),
+            ],
+            vec![
+                "--write".to_owned(),
+                "--output-root".to_owned(),
+                "-h".to_owned(),
             ],
             vec![
                 "--write".to_owned(),

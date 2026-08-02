@@ -1,5 +1,6 @@
 [package]
 name = "ivm"
+autobins = false
 autotests = false
 version.workspace = true
 edition = "2024"
@@ -93,6 +94,7 @@ hex-literal = "1.1.0"
 # - `metal`: enables Apple Metal GPU kernels on macOS. Ignored on other OSes.
 # - `cuda`: enables CUDA PTX kernels when available. Falls back to CPU otherwise.
 default = ["runtime"]
+dev-tools = []
 # Portable VM runtime. Syscalls, opcodes, pointer ABI, and CPU fallbacks are
 # unconditional; only external acceleration backends remain separate.
 runtime = ["halo2"]
@@ -124,6 +126,55 @@ ivm_zk_tests = []
 ivm_vrf_tests = []
 halo2 = []
 goldilocks_backend = ["iroha_zkp_halo2/goldilocks_backend"]
+
+[[bin]]
+name = "koto"
+path = "src/bin/koto.rs"
+
+[[bin]]
+name = "dump_program"
+path = "src/bin/dump_program.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "gas_probe"
+path = "src/bin/gas_probe.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "gen_abi_hash_doc"
+path = "src/bin/gen_abi_hash_doc.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "gen_header_doc"
+path = "src/bin/gen_header_doc.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "gen_pointer_types_doc"
+path = "src/bin/gen_pointer_types_doc.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "gen_syscalls_doc"
+path = "src/bin/gen_syscalls_doc.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "ivm_fixture_export"
+path = "src/bin/ivm_fixture_export.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "ivm_prebuild"
+path = "src/bin/ivm_prebuild.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "ivm_predecoder_export"
+path = "src/bin/ivm_predecoder_export.rs"
+required-features = ["dev-tools"]
 
 [[bench]]
 name = "bench_vm"

@@ -19,10 +19,12 @@ use iroha_data_model::{
     metadata::Metadata,
     prelude::{AccountId, ChainId},
     privacy::{
-        IrohaJindoPolynomialCommitmentStatementV1, PRIVACY_MAX_CHAIN_ID_BYTES_V1,
-        PrivacyConsensusLimitsV1, PrivacyJindoFieldElementV1, PrivacyProofBytesV1,
-        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1,
-        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+        IROHA_JINDO_FIELD_ELEMENT_BYTES_V1, IROHA_JINDO_MAX_POLYNOMIALS_V1,
+        IROHA_JINDO_RING_DEGREE_V1, IrohaJindoPolynomialCommitmentStatementV1,
+        PRIVACY_MAX_CHAIN_ID_BYTES_V1, PrivacyConsensusLimitsV1, PrivacyJindoFieldElementV1,
+        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1,
+        PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        PrivacyTransactionIntentDigestV1,
     },
     transaction::{
         FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
@@ -64,7 +66,7 @@ pub use sampling::JindoSamplingErrorV1;
 pub use transcript::JindoTranscriptErrorV1;
 
 /// Exact coefficient-field byte width in the first native Jindo profile.
-pub const JINDO_FIELD_ELEMENT_BYTES_V1: usize = 32;
+pub const JINDO_FIELD_ELEMENT_BYTES_V1: usize = IROHA_JINDO_FIELD_ELEMENT_BYTES_V1;
 
 /// CELPC/Jindo coefficient-encoding base `b`.
 pub const JINDO_ENCODING_BASE_V1: u64 = 60_272;
@@ -73,16 +75,23 @@ pub const JINDO_ENCODING_BASE_V1: u64 = 60_272;
 pub const JINDO_ENCODING_EXPONENT_V1: usize = 16;
 
 /// Cyclotomic application-ring degree `d`.
-pub const JINDO_RING_DEGREE_V1: usize = 256;
+pub const JINDO_RING_DEGREE_V1: usize = IROHA_JINDO_RING_DEGREE_V1;
 
 /// Number of coefficient-field slots encoded in one application-ring element.
 pub const JINDO_ENCODING_SLOTS_V1: usize = JINDO_RING_DEGREE_V1 / JINDO_ENCODING_EXPONENT_V1;
 
 /// Maximum polynomial coefficient count in the fixed testnet profile.
-pub const JINDO_MAX_COEFFICIENTS_V1: usize = 256;
+pub const JINDO_MAX_COEFFICIENTS_V1: usize = JINDO_RING_DEGREE_V1;
 
 /// Maximum polynomial count in one first-release batched opening.
-pub const JINDO_MAX_BATCH_SIZE_V1: usize = 4;
+pub const JINDO_MAX_BATCH_SIZE_V1: usize = IROHA_JINDO_MAX_POLYNOMIALS_V1 as usize;
+
+const _: () = {
+    assert!(JINDO_FIELD_ELEMENT_BYTES_V1 == 32);
+    assert!(JINDO_RING_DEGREE_V1 == 256);
+    assert!(JINDO_MAX_COEFFICIENTS_V1 == JINDO_RING_DEGREE_V1);
+    assert!(JINDO_MAX_BATCH_SIZE_V1 == 4);
+};
 
 /// Internal reason why one coefficient vector is not the unique first-release
 /// encoding of a Jindo polynomial.

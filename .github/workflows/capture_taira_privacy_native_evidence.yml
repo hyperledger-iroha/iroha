@@ -61,6 +61,15 @@ env:
 jobs:
   capture:
     name: Native ARM64 expectation capture and final evidence
+    environment: taira-privacy-native-release
+    env:
+      TAIRA_APPROVED_DPN_SIGNER_FINGERPRINT: ${{ vars.TAIRA_PRIVACY_DPN_SIGNER_FINGERPRINT }}
+      TAIRA_APPROVED_DPN_SIGNER_PRINCIPAL: ${{ vars.TAIRA_PRIVACY_DPN_SIGNER_PRINCIPAL }}
+      TAIRA_APPROVED_DPN_SIGNER_PUBLIC_KEY: ${{ vars.TAIRA_PRIVACY_DPN_SIGNER_PUBLIC_KEY }}
+      TAIRA_APPROVED_IROHA_SIGNER_FINGERPRINT: ${{ vars.TAIRA_PRIVACY_IROHA_SIGNER_FINGERPRINT }}
+      TAIRA_APPROVED_IROHA_SIGNER_PRINCIPAL: ${{ vars.TAIRA_PRIVACY_IROHA_SIGNER_PRINCIPAL }}
+      TAIRA_APPROVED_IROHA_SIGNER_PUBLIC_KEY: ${{ vars.TAIRA_PRIVACY_IROHA_SIGNER_PUBLIC_KEY }}
+      TAIRA_APPROVED_RUST_SYSROOT_TREE_SHA256: ${{ vars.TAIRA_PRIVACY_RUST_SYSROOT_TREE_SHA256 }}
     runs-on:
       - self-hosted
       - Linux
@@ -80,16 +89,18 @@ jobs:
           require_sha256() {
             local label="$1"
             local value="$2"
-            if [[ ! "$value" =~ ^[0-9a-f]{64}$ ]]; then
-              echo "$label must be exactly 64 lowercase hexadecimal characters" >&2
+            if [[ ! "$value" =~ ^[0-9a-f]{64}$ \
+              || "$value" = "$(printf '0%.0s' {1..64})" ]]; then
+              echo "$label must be one nonzero lowercase SHA-256" >&2
               exit 1
             fi
           }
           require_commit() {
             local label="$1"
             local value="$2"
-            if [[ ! "$value" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "$label must be one lowercase full Git commit" >&2
+            if [[ ! "$value" =~ ^[0-9a-f]{40}$ \
+              || "$value" = "$(printf '0%.0s' {1..40})" ]]; then
+              echo "$label must be one nonzero lowercase full Git commit" >&2
               exit 1
             fi
           }
@@ -123,6 +134,70 @@ jobs:
             exit 1
           fi
 
+          require_sha256 approved_rust_sysroot_tree_sha256 \
+            "$TAIRA_APPROVED_RUST_SYSROOT_TREE_SHA256"
+          python3 -I -S - <<'PY'
+          import base64
+          import hashlib
+          import os
+          import re
+          import struct
+
+          principal_pattern = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}")
+          fingerprint_pattern = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
+
+          def take_string(blob, offset):
+              if offset + 4 > len(blob):
+                  raise SystemExit("approved SSH public key blob is truncated")
+              length = struct.unpack(">I", blob[offset : offset + 4])[0]
+              offset += 4
+              end = offset + length
+              if end > len(blob):
+                  raise SystemExit("approved SSH public key blob is truncated")
+              return blob[offset:end], end
+
+          for role in ("IROHA", "DPN"):
+              principal = os.environ[f"TAIRA_APPROVED_{role}_SIGNER_PRINCIPAL"]
+              public_key = os.environ[f"TAIRA_APPROVED_{role}_SIGNER_PUBLIC_KEY"]
+              fingerprint = os.environ[
+                  f"TAIRA_APPROVED_{role}_SIGNER_FINGERPRINT"
+              ]
+              if principal_pattern.fullmatch(principal) is None:
+                  raise SystemExit(f"approved {role} signer principal is not canonical")
+              parts = public_key.split(" ")
+              if len(parts) != 2 or parts[0] != "ssh-ed25519":
+                  raise SystemExit(
+                      f"approved {role} signer public key must be canonical ssh-ed25519"
+                  )
+              try:
+                  blob = base64.b64decode(parts[1], validate=True)
+              except ValueError as error:
+                  raise SystemExit(
+                      f"approved {role} signer public key is not canonical Base64"
+                  ) from error
+              if base64.b64encode(blob).decode("ascii") != parts[1]:
+                  raise SystemExit(
+                      f"approved {role} signer public key is not canonical Base64"
+                  )
+              algorithm, offset = take_string(blob, 0)
+              key, offset = take_string(blob, offset)
+              if algorithm != b"ssh-ed25519" or len(key) != 32 or offset != len(blob):
+                  raise SystemExit(
+                      f"approved {role} signer public key is not one Ed25519 key"
+                  )
+              observed = "SHA256:" + base64.b64encode(
+                  hashlib.sha256(blob).digest()
+              ).decode("ascii").rstrip("=")
+              if (
+                  fingerprint_pattern.fullmatch(fingerprint) is None
+                  or fingerprint == "SHA256:" + "A" * 43
+                  or fingerprint != observed
+              ):
+                  raise SystemExit(
+                      f"approved {role} signer fingerprint does not match its key"
+                  )
+          PY
+
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           clean: true
@@ -130,7 +205,7 @@ jobs:
           persist-credentials: false
           ref: ${{ inputs.expected_commit }}
 
-      - name: Reconstruct the reviewed DPN source and install its exact lock
+      - name: Authenticate and reconstruct the reviewed DPN source
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -143,33 +218,350 @@ jobs:
 
           release_root="$(mktemp -d "${RUNNER_TEMP}/taira-privacy-dpn-source.XXXXXXXXXX")"
           source_bundle="$release_root/source-bundle"
-          mkdir "$source_bundle"
-          base_url="https://raw.githubusercontent.com/soramitsu/dpn-api-rust/${TAIRA_INPUT_VALIDATOR_RELEASE_REF}"
-          curl_args=(
-            --proto '=https'
-            --tlsv1.2
-            --fail
-            --silent
-            --show-error
-            --location
-            --retry 3
+          authentication_root="$release_root/authentication"
+          dpn_repository="$release_root/dpn.git"
+          mkdir "$source_bundle" "$authentication_root"
+          chmod 0700 "$authentication_root"
+
+          git_bin="$(command -v git)"
+          ssh_keygen_bin="$(command -v ssh-keygen)"
+          test -x "$git_bin"
+          test -x "$ssh_keygen_bin"
+          git_closed=(
+            env
+            -i
+            LANG=C
+            LC_ALL=C
+            PATH=/usr/local/bin:/usr/bin:/bin
+            GIT_CONFIG_NOSYSTEM=1
+            GIT_CONFIG_GLOBAL=/dev/null
+            GIT_CONFIG_SYSTEM=/dev/null
+            GIT_NO_REPLACE_OBJECTS=1
+            GIT_TERMINAL_PROMPT=0
+            GIT_ASKPASS=/bin/false
+            "$git_bin"
           )
-          curl "${curl_args[@]}" \
-            --output "$release_root/iroha_source_bundle.py" \
-            "$base_url/scripts/iroha_source_bundle.py"
-          for component in \
-            provenance.json \
-            tracked.patch \
-            untracked.tar \
-            untracked.manifest.json \
-            source.manifest.json; do
-            curl "${curl_args[@]}" \
-              --output "$source_bundle/$component" \
-              "$base_url/ops/iroha/taira-validator-source/$component"
+
+          python3 -I -S - "$authentication_root" <<'PY'
+          import os
+          from pathlib import Path
+          import sys
+
+          root = Path(sys.argv[1])
+
+          def create(name, payload):
+              path = root / name
+              flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+              if hasattr(os, "O_NOFOLLOW"):
+                  flags |= os.O_NOFOLLOW
+              descriptor = os.open(path, flags, 0o400)
+              try:
+                  view = memoryview(payload)
+                  while view:
+                      count = os.write(descriptor, view)
+                      view = view[count:]
+                  os.fchmod(descriptor, 0o400)
+                  os.fsync(descriptor)
+              finally:
+                  os.close(descriptor)
+
+          for prefix, role in (("iroha", "IROHA"), ("dpn", "DPN")):
+              principal = os.environ[f"TAIRA_APPROVED_{role}_SIGNER_PRINCIPAL"]
+              public_key = os.environ[f"TAIRA_APPROVED_{role}_SIGNER_PUBLIC_KEY"]
+              create(f"{prefix}-signer.pub", f"{public_key}\n".encode("ascii"))
+              create(
+                  f"{prefix}-allowed-signers",
+                  (
+                      f'{principal} namespaces="git" {public_key}\n'
+                  ).encode("ascii"),
+              )
+          create("ssh-revocation", b"")
+          descriptor = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+          try:
+              os.fsync(descriptor)
+          finally:
+              os.close(descriptor)
+          PY
+
+          for role in iroha dpn; do
+            if [[ "$role" = iroha ]]; then
+              expected_fingerprint="$TAIRA_APPROVED_IROHA_SIGNER_FINGERPRINT"
+            else
+              expected_fingerprint="$TAIRA_APPROVED_DPN_SIGNER_FINGERPRINT"
+            fi
+            key_report="$(
+              LC_ALL=C "$ssh_keygen_bin" \
+                -l -E sha256 -f "$authentication_root/${role}-signer.pub"
+            )"
+            test "$(awk '{print $2}' <<<"$key_report")" = "$expected_fingerprint"
+            test "$(wc -l <<<"$key_report" | tr -d ' ')" = "1"
           done
-          curl "${curl_args[@]}" \
-            --output "$release_root/Cargo.lock" \
-            "$base_url/ops/iroha/taira-validator.Cargo.lock"
+
+          verify_signed_commit() {
+            local repository="$1"
+            local commit="$2"
+            local prefix="$3"
+            local principal="$4"
+            local fingerprint="$5"
+            local allowed_signers="$authentication_root/${prefix}-allowed-signers"
+            local revocation="$authentication_root/ssh-revocation"
+            local metadata="$authentication_root/${prefix}-signature-metadata.bin"
+            local raw_commit="$authentication_root/${prefix}-commit.raw"
+            local transcript="$authentication_root/${prefix}-verify-commit.log"
+            local -a signature_config=(
+              -c gpg.format=ssh
+              -c gpg.minTrustLevel=fully
+              -c "gpg.ssh.program=$ssh_keygen_bin"
+              -c "gpg.ssh.allowedSignersFile=$allowed_signers"
+              -c "gpg.ssh.revocationFile=$revocation"
+              -c "gpg.program=$ssh_keygen_bin"
+              -c "gpg.openpgp.program=$ssh_keygen_bin"
+              -c "gpg.x509.program=$ssh_keygen_bin"
+            )
+
+            test "$(
+              "${git_closed[@]}" -C "$repository" \
+                rev-parse --verify "${commit}^{commit}"
+            )" = "$commit"
+            "${git_closed[@]}" -C "$repository" cat-file commit "$commit" \
+              >"$raw_commit"
+            python3 -I -S - "$raw_commit" <<'PY'
+          from pathlib import Path
+          import sys
+
+          raw = Path(sys.argv[1]).read_bytes()
+          if raw.count(b"-----BEGIN SSH SIGNATURE-----") != 1:
+              raise SystemExit("source commit is not signed by exactly one SSH signature")
+          for marker in (
+              b"-----BEGIN PGP SIGNATURE-----",
+              b"-----BEGIN SIGNED MESSAGE-----",
+              b"-----BEGIN CERTIFICATE-----",
+          ):
+              if marker in raw:
+                  raise SystemExit("source commit contains a forbidden signature format")
+          PY
+            if ! "${git_closed[@]}" -C "$repository" \
+              "${signature_config[@]}" verify-commit --raw "$commit" \
+              >"$transcript" 2>&1; then
+              tail -c 4096 "$transcript" >&2
+              return 1
+            fi
+            "${git_closed[@]}" -C "$repository" \
+              "${signature_config[@]}" show --no-patch \
+              '--format=%G?%x00%GF%x00%GP%x00%GS%x00' "$commit" \
+              >"$metadata"
+            python3 -I -S - "$metadata" "$fingerprint" "$principal" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path, fingerprint, principal = sys.argv[1:]
+          expected = (
+              b"G\0"
+              + fingerprint.encode("ascii")
+              + b"\0\0"
+              + principal.encode("ascii")
+              + b"\0\n"
+          )
+          if Path(path).read_bytes() != expected:
+              raise SystemExit("SSH signature metadata is not the approved identity")
+          PY
+            chmod 0400 "$raw_commit" "$transcript" "$metadata"
+          }
+
+          verify_signed_commit \
+            "$GITHUB_WORKSPACE" \
+            "$TAIRA_INPUT_EXPECTED_COMMIT" \
+            iroha \
+            "$TAIRA_APPROVED_IROHA_SIGNER_PRINCIPAL" \
+            "$TAIRA_APPROVED_IROHA_SIGNER_FINGERPRINT"
+          toolchain_hasher_oid="$(
+            "${git_closed[@]}" -C "$GITHUB_WORKSPACE" rev-parse --verify \
+              "$TAIRA_INPUT_EXPECTED_COMMIT:scripts/hash_taira_rust_toolchain.py"
+          )"
+          test "$(
+            "${git_closed[@]}" -C "$GITHUB_WORKSPACE" cat-file -t \
+              "$toolchain_hasher_oid"
+          )" = blob
+          toolchain_hasher_bytes="$(
+            "${git_closed[@]}" -C "$GITHUB_WORKSPACE" cat-file -s \
+              "$toolchain_hasher_oid"
+          )"
+          if [[ ! "$toolchain_hasher_bytes" =~ ^[1-9][0-9]*$ ]] \
+            || (( toolchain_hasher_bytes > 1048576 )); then
+            echo "signed toolchain hasher is outside its fixed byte bound" >&2
+            exit 1
+          fi
+          "${git_closed[@]}" -C "$GITHUB_WORKSPACE" cat-file blob \
+            "$toolchain_hasher_oid" \
+            >"$authentication_root/hash_taira_rust_toolchain.py"
+          chmod 0400 "$authentication_root/hash_taira_rust_toolchain.py"
+          test "$(stat -c '%s' "$authentication_root/hash_taira_rust_toolchain.py")" \
+            = "$toolchain_hasher_bytes"
+          test "$(stat -c '%h' "$authentication_root/hash_taira_rust_toolchain.py")" \
+            = 1
+
+          "${git_closed[@]}" init --bare --object-format=sha1 "$dpn_repository"
+          "${git_closed[@]}" -C "$dpn_repository" remote add origin \
+            https://github.com/soramitsu/dpn-api-rust.git
+          "${git_closed[@]}" -C "$dpn_repository" fetch \
+            --no-tags \
+            --depth=1 \
+            origin \
+            "$TAIRA_INPUT_VALIDATOR_RELEASE_REF"
+          test "$(
+            "${git_closed[@]}" -C "$dpn_repository" \
+              rev-parse --verify 'FETCH_HEAD^{commit}'
+          )" = "$TAIRA_INPUT_VALIDATOR_RELEASE_REF"
+          "${git_closed[@]}" -C "$dpn_repository" \
+            fsck --strict --no-dangling "$TAIRA_INPUT_VALIDATOR_RELEASE_REF"
+          verify_signed_commit \
+            "$dpn_repository" \
+            "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" \
+            dpn \
+            "$TAIRA_APPROVED_DPN_SIGNER_PRINCIPAL" \
+            "$TAIRA_APPROVED_DPN_SIGNER_FINGERPRINT"
+          "${git_closed[@]}" -C "$dpn_repository" remote remove origin
+
+          python3 -I -S - \
+            "$git_bin" \
+            "$dpn_repository" \
+            "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" \
+            "$release_root" <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+
+          git, repository, commit, release_root_raw = sys.argv[1:]
+          release_root = Path(release_root_raw)
+          paths = {
+              "scripts/iroha_source_bundle.py": (
+                  release_root / "iroha_source_bundle.py",
+                  16 * 1024 * 1024,
+              ),
+              "ops/iroha/taira-validator-source/provenance.json": (
+                  release_root / "source-bundle/provenance.json",
+                  64 * 1024 * 1024,
+              ),
+              "ops/iroha/taira-validator-source/tracked.patch": (
+                  release_root / "source-bundle/tracked.patch",
+                  1024 * 1024 * 1024,
+              ),
+              "ops/iroha/taira-validator-source/untracked.tar": (
+                  release_root / "source-bundle/untracked.tar",
+                  8 * 1024 * 1024 * 1024,
+              ),
+              "ops/iroha/taira-validator-source/untracked.manifest.json": (
+                  release_root / "source-bundle/untracked.manifest.json",
+                  64 * 1024 * 1024,
+              ),
+              "ops/iroha/taira-validator-source/source.manifest.json": (
+                  release_root / "source-bundle/source.manifest.json",
+                  64 * 1024 * 1024,
+              ),
+              "ops/iroha/taira-validator.Cargo.lock": (
+                  release_root / "Cargo.lock",
+                  128 * 1024 * 1024,
+              ),
+          }
+          environment = {
+              "GIT_CONFIG_GLOBAL": "/dev/null",
+              "GIT_CONFIG_NOSYSTEM": "1",
+              "GIT_CONFIG_SYSTEM": "/dev/null",
+              "GIT_NO_REPLACE_OBJECTS": "1",
+              "LANG": "C",
+              "LC_ALL": "C",
+          }
+
+          def git_output(*arguments, maximum):
+              result = subprocess.run(
+                  [git, "-C", repository, *arguments],
+                  check=False,
+                  stdin=subprocess.DEVNULL,
+                  capture_output=True,
+                  env=environment,
+              )
+              if result.returncode != 0 or result.stderr or len(result.stdout) > maximum:
+                  raise SystemExit("DPN Git object query failed closed")
+              return result.stdout
+
+          total = 0
+          for source_path, (destination, maximum) in paths.items():
+              tree = git_output(
+                  "ls-tree",
+                  "-z",
+                  "--full-tree",
+                  commit,
+                  "--",
+                  source_path,
+                  maximum=8192,
+              )
+              match = re.fullmatch(
+                  rb"(100644|100755) blob ([0-9a-f]{40})\t"
+                  + re.escape(source_path.encode("ascii"))
+                  + rb"\0",
+                  tree,
+              )
+              if match is None:
+                  raise SystemExit(f"DPN release path is not one regular blob: {source_path}")
+              oid = match.group(2).decode("ascii")
+              size_raw = git_output("cat-file", "-s", oid, maximum=128)
+              if re.fullmatch(rb"(0|[1-9][0-9]*)\n", size_raw) is None:
+                  raise SystemExit("DPN release blob has a noncanonical size")
+              size = int(size_raw)
+              total += size
+              if size == 0 or size > maximum or total > 10 * 1024 * 1024 * 1024:
+                  raise SystemExit("DPN release blob is outside its fixed byte bound")
+              flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+              if hasattr(os, "O_NOFOLLOW"):
+                  flags |= os.O_NOFOLLOW
+              descriptor = os.open(destination, flags, 0o600)
+              process = None
+              try:
+                  process = subprocess.Popen(
+                      [git, "-C", repository, "cat-file", "blob", oid],
+                      stdin=subprocess.DEVNULL,
+                      stdout=subprocess.PIPE,
+                      stderr=subprocess.DEVNULL,
+                      env=environment,
+                  )
+                  if process.stdout is None:
+                      raise SystemExit("DPN release blob pipe was not created")
+                  remaining = size
+                  while remaining:
+                      chunk = process.stdout.read(min(1024 * 1024, remaining))
+                      if not chunk:
+                          raise SystemExit("DPN release blob ended early")
+                      view = memoryview(chunk)
+                      while view:
+                          count = os.write(descriptor, view)
+                          view = view[count:]
+                      remaining -= len(chunk)
+                  if process.stdout.read(1):
+                      raise SystemExit("DPN release blob exceeded its declared size")
+                  process.stdout.close()
+                  if process.wait() != 0:
+                      raise SystemExit("DPN release blob extraction failed")
+                  os.fchmod(descriptor, 0o600)
+                  os.fsync(descriptor)
+              except BaseException:
+                  if process is not None and process.poll() is None:
+                      process.kill()
+                      process.wait()
+                  destination.unlink(missing_ok=True)
+                  raise
+              finally:
+                  os.close(descriptor)
+          for parent in (release_root / "source-bundle", release_root):
+              descriptor = os.open(
+                  parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+              )
+              try:
+                  os.fsync(descriptor)
+              finally:
+                  os.close(descriptor)
+          PY
 
           for release_input in \
             "$release_root/iroha_source_bundle.py" \
@@ -205,6 +597,98 @@ jobs:
           PY
           )"
           test "$observed_source_tree" = "$TAIRA_INPUT_SOURCE_TREE_SHA256"
+          iroha_allowed_signers_sha="$(
+            sha256sum "$authentication_root/iroha-allowed-signers" | awk '{print $1}'
+          )"
+          dpn_allowed_signers_sha="$(
+            sha256sum "$authentication_root/dpn-allowed-signers" | awk '{print $1}'
+          )"
+          python3 -I -S - \
+            "$authentication_root" \
+            "$git_bin" \
+            "$ssh_keygen_bin" \
+            "$iroha_allowed_signers_sha" \
+            "$dpn_allowed_signers_sha" \
+            "$observed_source_tree" <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import sys
+
+          root = Path(sys.argv[1])
+          git = Path(sys.argv[2])
+          ssh_keygen = Path(sys.argv[3])
+          iroha_policy_sha, dpn_policy_sha, source_tree_sha = sys.argv[4:]
+
+          def digest(path):
+              hasher = hashlib.sha256()
+              with path.open("rb") as stream:
+                  while chunk := stream.read(1024 * 1024):
+                      hasher.update(chunk)
+              return hasher.hexdigest()
+
+          for value in (iroha_policy_sha, dpn_policy_sha, source_tree_sha):
+              if re.fullmatch(r"[0-9a-f]{64}", value) is None or value == "0" * 64:
+                  raise SystemExit("source authentication digest is not canonical")
+          payload = {
+              "schema": "iroha.taira.privacy-native-source-authentication.v1",
+              "iroha_source": {
+                  "allowed_signers_sha256": iroha_policy_sha,
+                  "commit": os.environ["TAIRA_INPUT_EXPECTED_COMMIT"],
+                  "raw_commit_sha256": digest(root / "iroha-commit.raw"),
+                  "signature_format": "ssh",
+                  "signer_fingerprint": os.environ[
+                      "TAIRA_APPROVED_IROHA_SIGNER_FINGERPRINT"
+                  ],
+                  "signer_principal": os.environ[
+                      "TAIRA_APPROVED_IROHA_SIGNER_PRINCIPAL"
+                  ],
+              },
+              "validator_source": {
+                  "allowed_signers_sha256": dpn_policy_sha,
+                  "commit": os.environ["TAIRA_INPUT_VALIDATOR_RELEASE_REF"],
+                  "raw_commit_sha256": digest(root / "dpn-commit.raw"),
+                  "signature_format": "ssh",
+                  "signer_fingerprint": os.environ[
+                      "TAIRA_APPROVED_DPN_SIGNER_FINGERPRINT"
+                  ],
+                  "signer_principal": os.environ[
+                      "TAIRA_APPROVED_DPN_SIGNER_PRINCIPAL"
+                  ],
+                  "source_tree_sha256": source_tree_sha,
+              },
+              "verification_tools": {
+                  "git_path": str(git),
+                  "git_sha256": digest(git),
+                  "ssh_keygen_path": str(ssh_keygen),
+                  "ssh_keygen_sha256": digest(ssh_keygen),
+                  "toolchain_hasher_sha256": digest(
+                      root / "hash_taira_rust_toolchain.py"
+                  ),
+              },
+          }
+          path = root / "source-authentication.json"
+          encoded = json.dumps(payload, indent=2, sort_keys=True).encode() + b"\n"
+          descriptor = os.open(
+              path,
+              os.O_WRONLY
+              | os.O_CREAT
+              | os.O_EXCL
+              | getattr(os, "O_NOFOLLOW", 0),
+              0o400,
+          )
+          try:
+              with os.fdopen(descriptor, "wb") as stream:
+                  stream.write(encoded)
+                  stream.flush()
+                  os.fchmod(stream.fileno(), 0o400)
+                  os.fsync(stream.fileno())
+          except BaseException:
+              path.unlink(missing_ok=True)
+              raise
+          PY
 
           python3 -I -S - "$release_root/Cargo.lock" Cargo.lock <<'PY'
           import os
@@ -230,12 +714,17 @@ jobs:
           python3 -I -S "$release_root/iroha_source_bundle.py" reconstruct \
             --repo "$GITHUB_WORKSPACE" \
             --bundle-dir "$source_bundle"
+          python3 -I -S "$release_root/iroha_source_bundle.py" verify \
+            --repo "$GITHUB_WORKSPACE" \
+            --bundle-dir "$source_bundle"
           test "$(git rev-parse HEAD)" = "$TAIRA_INPUT_EXPECTED_COMMIT"
           printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -
 
           {
             echo "TAIRA_DPN_RELEASE_ROOT=$release_root"
             echo "TAIRA_DPN_SOURCE_BUNDLE=$source_bundle"
+            echo "TAIRA_DPN_ALLOWED_SIGNERS_SHA256=$dpn_allowed_signers_sha"
+            echo "TAIRA_IROHA_ALLOWED_SIGNERS_SHA256=$iroha_allowed_signers_sha"
           } >>"$GITHUB_ENV"
 
       - name: Allocate a canonical evidence root
@@ -249,6 +738,7 @@ jobs:
           evidence_root="$(cd "$evidence_root" && pwd -P)"
           mkdir -p \
             "$evidence_root/bin" \
+            "$evidence_root/provenance/authenticated-origins" \
             "$evidence_root/provenance/privacy-native" \
             "$evidence_root/provenance/source-bundle"
           echo "TAIRA_EVIDENCE_ROOT=$evidence_root" >>"$GITHUB_ENV"
@@ -266,6 +756,47 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
           toolchain: 1.93.1
+
+      - name: Authenticate the installed Rust toolchain tree
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          rust_sysroot="$(rustc --print sysroot)"
+          rust_sysroot="$(cd "$rust_sysroot" && pwd -P)"
+          test -x "$rust_sysroot/bin/rustc"
+          test -x "$rust_sysroot/bin/cargo"
+          toolchain_manifest="$TAIRA_EVIDENCE_ROOT/provenance/rust-toolchain-tree-v1.json"
+          observed_toolchain_sha="$(
+            python3 -I -S \
+              "$TAIRA_DPN_RELEASE_ROOT/authentication/hash_taira_rust_toolchain.py" \
+              --sysroot "$rust_sysroot" \
+              --manifest-out "$toolchain_manifest"
+          )"
+          if [[ ! "$observed_toolchain_sha" =~ ^[0-9a-f]{64}$ \
+            || "$observed_toolchain_sha" != \
+              "$TAIRA_APPROVED_RUST_SYSROOT_TREE_SHA256" ]]; then
+            echo "installed Rust sysroot does not match the protected tree seal" >&2
+            exit 1
+          fi
+          test "$(
+            python3 -I -S - "$toolchain_manifest" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              print(json.load(stream)["tree_sha256"])
+          PY
+          )" = "$observed_toolchain_sha"
+          printf '%s\n' "$observed_toolchain_sha" \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/rust-toolchain-tree-v1.sha256"
+          {
+            echo "TAIRA_AUTHENTICATED_RUST_SYSROOT=$rust_sysroot"
+            echo "TAIRA_RUST_TOOLCHAIN_TREE_SHA256=$observed_toolchain_sha"
+            echo "RUSTC=$rust_sysroot/bin/rustc"
+            echo "CARGO=$rust_sysroot/bin/cargo"
+          } >>"$GITHUB_ENV"
+          echo "$rust_sysroot/bin" >>"$GITHUB_PATH"
 
       - name: Freeze and verify the pre-capture source identity
         shell: bash
@@ -288,6 +819,8 @@ jobs:
             "$TAIRA_EVIDENCE_ROOT/provenance/rustc.txt"
           grep -Fx 'host: aarch64-unknown-linux-gnu' \
             "$TAIRA_EVIDENCE_ROOT/provenance/rustc.txt"
+          test "$(command -v rustc)" = "$TAIRA_AUTHENTICATED_RUST_SYSROOT/bin/rustc"
+          test "$(command -v cargo)" = "$TAIRA_AUTHENTICATED_RUST_SYSROOT/bin/cargo"
           for one_shot_fixture in \
             fixtures/privacy/native_release_expectations_v1.norito \
             fixtures/privacy/native_release_expectations_v1.json \
@@ -534,6 +1067,7 @@ jobs:
           printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -
           {
             echo "TAIRA_BOOTSTRAP_RUNNER=$bootstrap_runner"
+            echo "TAIRA_BOOTSTRAP_RUNNER_SHA256=$bootstrap_runner_sha"
             echo "TAIRA_BOOTSTRAP_TARGET=$bootstrap_target"
           } >>"$GITHUB_ENV"
 
@@ -589,12 +1123,37 @@ jobs:
 
           python3 -I -S scripts/install_taira_privacy_native_expectations.py \
             --repo "$GITHUB_WORKSPACE" \
+            --native-verifier "$TAIRA_BOOTSTRAP_RUNNER" \
+            --native-verifier-sha256 "$TAIRA_BOOTSTRAP_RUNNER_SHA256" \
+            --exact12-matrix "$GITHUB_WORKSPACE/fixtures/privacy/exact12_v1.tsv" \
             --captured-norito "$captured_norito" \
             --captured-json "$captured_json" \
             --captured-x509-resource-norito "$captured_resource_norito" \
             --captured-x509-resource-json "$captured_resource_json" \
             --manifest-out \
-              "$TAIRA_EVIDENCE_ROOT/provenance/expectation-installation.json"
+              "$TAIRA_EVIDENCE_ROOT/provenance/expectation-installation.json" \
+            --authenticated-iroha-source-commit "$TAIRA_INPUT_EXPECTED_COMMIT" \
+            --authenticated-iroha-signer-principal \
+              "$TAIRA_APPROVED_IROHA_SIGNER_PRINCIPAL" \
+            --authenticated-iroha-signer-fingerprint \
+              "$TAIRA_APPROVED_IROHA_SIGNER_FINGERPRINT" \
+            --authenticated-iroha-allowed-signers-sha256 \
+              "$TAIRA_IROHA_ALLOWED_SIGNERS_SHA256" \
+            --authenticated-validator-source-commit \
+              "$TAIRA_INPUT_VALIDATOR_RELEASE_REF" \
+            --authenticated-validator-signer-principal \
+              "$TAIRA_APPROVED_DPN_SIGNER_PRINCIPAL" \
+            --authenticated-validator-signer-fingerprint \
+              "$TAIRA_APPROVED_DPN_SIGNER_FINGERPRINT" \
+            --authenticated-validator-allowed-signers-sha256 \
+              "$TAIRA_DPN_ALLOWED_SIGNERS_SHA256" \
+            --authenticated-validator-source-tree-sha256 \
+              "$TAIRA_INPUT_SOURCE_TREE_SHA256" \
+            --authenticated-bootstrap-source-tree-sha256 \
+              "$TAIRA_BOOTSTRAP_SOURCE_SHA256" \
+            --authenticated-cargo-lock-sha256 "$TAIRA_INPUT_LOCK_SHA256" \
+            --authenticated-rust-toolchain-tree-sha256 \
+              "$TAIRA_RUST_TOOLCHAIN_TREE_SHA256"
           cmp "$captured_norito" \
             fixtures/privacy/native_release_expectations_v1.norito
           cmp "$captured_json" \
@@ -815,6 +1374,14 @@ jobs:
               --root "$GITHUB_WORKSPACE"
           )" = "$TAIRA_FINAL_SOURCE_SHA256"
           printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -
+          final_toolchain_sha="$(
+            python3 -I -S \
+              "$TAIRA_DPN_RELEASE_ROOT/authentication/hash_taira_rust_toolchain.py" \
+              --sysroot "$TAIRA_AUTHENTICATED_RUST_SYSROOT" \
+              --manifest-out \
+                "$TAIRA_EVIDENCE_ROOT/provenance/rust-toolchain-tree-after-builds-v1.json"
+          )"
+          test "$final_toolchain_sha" = "$TAIRA_RUST_TOOLCHAIN_TREE_SHA256"
           {
             echo "TAIRA_FINAL_IROHAD=$final_irohad"
             echo "TAIRA_FINAL_RUNNER=$final_runner"
@@ -954,6 +1521,26 @@ jobs:
           done
           install -m 0444 "$TAIRA_DPN_RELEASE_ROOT/iroha_source_bundle.py" \
             "$TAIRA_EVIDENCE_ROOT/provenance/source-bundle/iroha_source_bundle.py"
+          install -m 0444 "$TAIRA_DPN_RELEASE_ROOT/Cargo.lock" \
+            "$TAIRA_EVIDENCE_ROOT/provenance/source-bundle/Cargo.lock"
+          for origin_evidence in \
+            iroha-signer.pub \
+            iroha-allowed-signers \
+            iroha-commit.raw \
+            iroha-signature-metadata.bin \
+            iroha-verify-commit.log \
+            dpn-signer.pub \
+            dpn-allowed-signers \
+            dpn-commit.raw \
+            dpn-signature-metadata.bin \
+            dpn-verify-commit.log \
+            ssh-revocation \
+            hash_taira_rust_toolchain.py \
+            source-authentication.json; do
+            install -m 0444 \
+              "$TAIRA_DPN_RELEASE_ROOT/authentication/$origin_evidence" \
+              "$TAIRA_EVIDENCE_ROOT/provenance/authenticated-origins/$origin_evidence"
+          done
 
           python3 -I -S - "$TAIRA_EVIDENCE_ROOT" <<'PY'
           import hashlib
@@ -974,7 +1561,10 @@ jobs:
 
           def required_sha(name: str) -> str:
               value = os.environ[name]
-              if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+              if (
+                  re.fullmatch(r"[0-9a-f]{64}", value) is None
+                  or value == "0" * 64
+              ):
                   raise SystemExit(f"{name} is not a canonical SHA-256")
               return value
 
@@ -992,8 +1582,90 @@ jobs:
                   path.unlink(missing_ok=True)
                   raise
 
+          authentication_path = (
+              root
+              / "provenance/authenticated-origins/source-authentication.json"
+          )
+          with authentication_path.open(encoding="utf-8") as stream:
+              authenticated_origins = json.load(stream)
+          iroha_origin = authenticated_origins["iroha_source"]
+          validator_origin = authenticated_origins["validator_source"]
+          if (
+              authenticated_origins.get("schema")
+              != "iroha.taira.privacy-native-source-authentication.v1"
+              or iroha_origin.get("commit")
+              != os.environ["TAIRA_INPUT_EXPECTED_COMMIT"]
+              or iroha_origin.get("signer_principal")
+              != os.environ["TAIRA_APPROVED_IROHA_SIGNER_PRINCIPAL"]
+              or iroha_origin.get("signer_fingerprint")
+              != os.environ["TAIRA_APPROVED_IROHA_SIGNER_FINGERPRINT"]
+              or iroha_origin.get("allowed_signers_sha256")
+              != digest(
+                  root
+                  / "provenance/authenticated-origins/iroha-allowed-signers"
+              )
+              or validator_origin.get("commit")
+              != os.environ["TAIRA_INPUT_VALIDATOR_RELEASE_REF"]
+              or validator_origin.get("signer_principal")
+              != os.environ["TAIRA_APPROVED_DPN_SIGNER_PRINCIPAL"]
+              or validator_origin.get("signer_fingerprint")
+              != os.environ["TAIRA_APPROVED_DPN_SIGNER_FINGERPRINT"]
+              or validator_origin.get("allowed_signers_sha256")
+              != digest(
+                  root / "provenance/authenticated-origins/dpn-allowed-signers"
+              )
+              or validator_origin.get("source_tree_sha256")
+              != os.environ["TAIRA_INPUT_SOURCE_TREE_SHA256"]
+          ):
+              raise SystemExit("authenticated source origins diverged before packaging")
+          installation_path = root / "provenance/expectation-installation.json"
+          with installation_path.open(encoding="utf-8") as stream:
+              installation = json.load(stream)
+          installed_origins = installation.get("authenticated_origins")
+          expected_installed_iroha = {
+              key: iroha_origin[key]
+              for key in (
+                  "allowed_signers_sha256",
+                  "commit",
+                  "signature_format",
+                  "signer_fingerprint",
+                  "signer_principal",
+              )
+          }
+          expected_installed_validator = {
+              key: validator_origin[key]
+              for key in (
+                  "allowed_signers_sha256",
+                  "commit",
+                  "signature_format",
+                  "signer_fingerprint",
+                  "signer_principal",
+                  "source_tree_sha256",
+              )
+          }
+          if (
+              not isinstance(installed_origins, dict)
+              or installed_origins.get("iroha_source")
+              != expected_installed_iroha
+              or installed_origins.get("validator_source")
+              != expected_installed_validator
+              or installed_origins.get("build_inputs")
+              != {
+                  "bootstrap_source_tree_sha256": os.environ[
+                      "TAIRA_BOOTSTRAP_SOURCE_SHA256"
+                  ],
+                  "cargo_lock_sha256": os.environ["TAIRA_INPUT_LOCK_SHA256"],
+              }
+              or installed_origins.get("rust_toolchain", {}).get("tree_sha256")
+              != os.environ["TAIRA_RUST_TOOLCHAIN_TREE_SHA256"]
+          ):
+              raise SystemExit(
+                  "expectation installation diverged from authenticated origins"
+              )
+
           invocation = {
               "schema": "iroha.taira.privacy-native-evidence-invocation.v1",
+              "authenticated_source_origins": authenticated_origins,
               "repository": os.environ["REPOSITORY"],
               "workflow_ref": os.environ["WORKFLOW_REF"],
               "workflow_sha": os.environ["WORKFLOW_SHA"],
@@ -1008,6 +1680,18 @@ jobs:
               ),
               "cargo_lock_sha256": required_sha("TAIRA_INPUT_LOCK_SHA256"),
               "exact12_sha256": required_sha("TAIRA_INPUT_EXACT12_SHA256"),
+              "rust_toolchain_tree_sha256": required_sha(
+                  "TAIRA_RUST_TOOLCHAIN_TREE_SHA256"
+              ),
+              "rust_toolchain_manifest_sha256": digest(
+                  root / "provenance/rust-toolchain-tree-v1.json"
+              ),
+              "rust_toolchain_after_builds_manifest_sha256": digest(
+                  root / "provenance/rust-toolchain-tree-after-builds-v1.json"
+              ),
+              "expectation_installation_manifest_sha256": digest(
+                  installation_path
+              ),
               "workspace_source_manifest_before_expectations_sha256": required_sha(
                   "TAIRA_BOOTSTRAP_SOURCE_SHA256"
               ),
@@ -1109,6 +1793,9 @@ jobs:
             -C "$TAIRA_EVIDENCE_ROOT" \
             -czf "$bundle" \
             .
+          python3 -I -S scripts/audit_taira_privacy_native_archive.py \
+            --archive "$bundle" \
+            --staged-root "$TAIRA_EVIDENCE_ROOT"
           bundle_sha="$(sha256sum "$bundle" | awk '{print $1}')"
           printf '%s  %s\n' "$bundle_sha" "$(basename "$bundle")" >"$checksum"
           echo "bundle=$bundle" >>"$GITHUB_OUTPUT"

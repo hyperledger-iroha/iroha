@@ -3122,6 +3122,7 @@ impl ServicedCandidateCapacityGeometry {
 // Standalone adapter fixtures are paired with the existing 1024-command and
 // 1024-effect test defaults. Production construction always supplies the
 // validated height configuration explicitly through the runner.
+#[cfg_attr(not(test), allow(dead_code))]
 const DEFAULT_SERVICED_CANDIDATE_CAPACITY_GEOMETRY: ServicedCandidateCapacityGeometry =
     ServicedCandidateCapacityGeometry::new(MAX_DEFERRED_INPUTS, MAX_DEFERRED_INPUTS);
 
@@ -3152,6 +3153,7 @@ const fn candidate_lifecycle_capacity(
 /// dormant durable replay, and the disjoint timeout clock. Multiplying by the
 /// exact eleven-class reducer-event projection also covers a retained service
 /// marker while the same causal lifecycle remains active.
+#[cfg_attr(not(test), allow(dead_code))]
 const fn serviced_candidate_capacity_with_geometry(
     roster_len: usize,
     geometry: ServicedCandidateCapacityGeometry,
@@ -3714,6 +3716,7 @@ impl SumeragiV2Adapter {
     /// Network ingress is never exposed before replay has completed.  The
     /// returned startup effects may re-sign an already durable intent or fetch
     /// and apply an already durable decision.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open(
         wal_path: impl Into<PathBuf>,
@@ -3773,6 +3776,7 @@ impl SumeragiV2Adapter {
     /// a `Running` successor handoff. It must publish a status snapshot after
     /// every remaining startup constructor succeeds, live clocks are armed,
     /// and authenticated ingress is open. All ordinary callers use [`Self::open`].
+    #[cfg_attr(not(test), allow(dead_code))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_deferred_status(
         wal_path: impl Into<PathBuf>,
@@ -3822,6 +3826,7 @@ impl SumeragiV2Adapter {
         )
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     #[allow(clippy::too_many_arguments)]
     fn open_with_aggregator(
         wal_path: impl Into<PathBuf>,
@@ -3846,6 +3851,7 @@ impl SumeragiV2Adapter {
         )
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     #[allow(clippy::too_many_arguments)]
     fn open_with_aggregator_and_publication(
         wal_path: impl Into<PathBuf>,
@@ -5523,6 +5529,52 @@ impl SumeragiV2Adapter {
             })
     }
 
+    /// Return the adapter admission ordinals of exact Busy-deferred owners.
+    ///
+    /// The serialized runtime joins these ordinals to its retained lifecycle
+    /// sidecars before it permits an owner-aware completion to coalesce.
+    pub(crate) fn deferred_body_pipeline_completion_exact_owner_ordinals(
+        &self,
+        tag: reducer::EventTag,
+        candidate: &BodyPipelineCompletionEvidence,
+    ) -> Vec<u128> {
+        let (wire_round, wire_subject, expected_stage) = match candidate {
+            BodyPipelineCompletionEvidence::LocalProposalReady { manifest, .. } => (
+                manifest.round,
+                manifest.subject,
+                DeferredBodyPipelineCompletionStage::LocalProposalReady,
+            ),
+            BodyPipelineCompletionEvidence::BodyAvailable { manifest } => (
+                manifest.round,
+                manifest.subject,
+                DeferredBodyPipelineCompletionStage::BodyAvailable,
+            ),
+            BodyPipelineCompletionEvidence::BodyStored { round, subject, .. } => (
+                *round,
+                *subject,
+                DeferredBodyPipelineCompletionStage::BodyStored,
+            ),
+            BodyPipelineCompletionEvidence::ValidationSucceeded { round, subject, .. }
+            | BodyPipelineCompletionEvidence::ValidationFailed { round, subject } => (
+                *round,
+                *subject,
+                DeferredBodyPipelineCompletionStage::Validation,
+            ),
+        };
+        let round = reducer::Round::new(wire_round.height, wire_round.view);
+        let subject = reducer::Subject::new(Hash::new(wire_subject.encode()).into());
+        self.deferred_completions
+            .iter()
+            .chain(&self.deferred_inputs)
+            .filter(|input| {
+                input.completion_evidence.as_ref() == Some(candidate)
+                    && deferred_body_pipeline_completion_stage(input, tag, round, subject)
+                        == Some(expected_stage)
+            })
+            .map(|input| input.admission_ordinal)
+            .collect()
+    }
+
     /// Classify exact decided `LocalProposalReady` owners without mutating any
     /// Busy-deferred lane.
     pub(crate) fn deferred_decided_local_proposal_counts(
@@ -6317,27 +6369,30 @@ impl SumeragiV2Adapter {
             None,
         );
         if let Some((key, _, _)) = serviced_candidate {
-            if self.serviced_candidates.contains_key(&key) {
-                return Preflight::Coalesce;
-            }
+            let serviced = self.serviced_candidates.contains_key(&key);
             let matching = self
                 .producer_continuations
                 .iter()
                 .filter(|(_, record)| record.identity().candidate() == key)
                 .collect::<Vec<_>>();
             match matching.len() {
+                0 if serviced => return Preflight::Coalesce,
                 0 => {}
                 1 => {
                     let (address, record) = matching[0];
-                    if record.status() != ProducerContinuationStatus::Reserved
+                    let identity = record.identity();
+                    if serviced
+                        || record.status() != ProducerContinuationStatus::Reserved
                         || !self
                             .restored_dormant_producer_continuations
                             .contains(address)
                         || self.durable_producer_continuations.get(address) != Some(record)
                     {
-                        return Preflight::Coalesce;
+                        return Preflight::CoalesceOwned {
+                            causal_lifecycle_key: identity.causal_lifecycle_key(),
+                            admission_ordinal: identity.admission_ordinal(),
+                        };
                     }
-                    let identity = record.identity();
                     // `ServicedCandidateKey` is deliberately route/priority
                     // neutral. This branch is nevertheless class-exact:
                     // only internal completion commands reach this
@@ -8834,6 +8889,7 @@ impl SumeragiV2Adapter {
     /// `None` means no owner was serviceable. Production runtime code treats a
     /// `None` after observing [`Self::deferred_work_is_serviceable`] as a
     /// fail-closed source-fidelity violation.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn drain_deferred_with_evidence(
         &mut self,
     ) -> Result<Option<(Vec<AdapterEffect>, DeferredServiceEvidence)>, AdapterError> {
@@ -8849,6 +8905,7 @@ impl SumeragiV2Adapter {
     /// class rotation only within the resulting exact set, so a later
     /// Completion, Progress, or Normal occurrence cannot overtake a frozen
     /// causal owner merely because it occupies the cursor's next class.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn drain_deferred_with_evidence_for_ordinals(
         &mut self,
         eligible: &BTreeSet<u128>,
@@ -15360,14 +15417,17 @@ mod tests {
             .expect("retire the exact Decision application lifecycle");
         assert_eq!(completed.disposition(), reducer::StepDisposition::Applied);
         assert!(completed.effects().is_empty());
+        let expected_retransmit = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
+        ));
         for attempt in 0..3 {
             let retransmit = adapter
                 .retransmit_elapsed(adapter.current_tag())
                 .unwrap_or_else(|error| panic!("post-drain retransmission {attempt}: {error}"));
-            assert!(
-                retransmit.effects().is_empty(),
-                "a drained exact Decision lifecycle cannot recreate physical Fetch/Store/Validate/Apply work: {:?}",
-                retransmit.effects()
+            assert_eq!(
+                retransmit.effects(),
+                std::slice::from_ref(&expected_retransmit),
+                "a drained exact Decision may retransmit only its exact durable CommitQC control"
             );
         }
         assert!(adapter.deferred_completions.is_empty());

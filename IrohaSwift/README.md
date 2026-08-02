@@ -4,7 +4,7 @@ Swift SDK for the first Hyperledger Iroha 3 release on Apple platforms.
 
 Features:
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, prover reports, contracts)
-- Kagemusha cash models, transaction builders, proof binding helpers, and readiness discovery through `/v1/offline/readiness`
+- Kagemusha cash models, transaction builders, proof binding helpers, and universal capability discovery through `/v1/offline/readiness`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
@@ -1054,8 +1054,16 @@ apps can decide how to remediate.
 `ToriiClient` uses only the canonical direct Torii lifecycle:
 `GET /v1/offline/readiness`, `POST /v1/offline/top-up`,
 `POST /v1/offline/redeem`, and `GET /v1/offline/operations/{operation_id}`.
-Use `getKagemushaReadiness(assetDefinitionId:)`, `submitKagemushaTopUp`,
+Use `getOfflineCapability()`, `submitKagemushaTopUp`,
 `submitKagemushaRedeem`, and `getKagemushaOperationStatus(operationId:)`.
+The retained selector-taking `getKagemushaReadiness(assetDefinitionId:)` shim is
+deprecated, ignores its selector, and returns the same `ToriiOfflineStatus`.
+
+`ToriiOfflineStatus` is an asset-neutral protocol contract, not backend
+settlement readiness. Swift accepts only `mandatory: false`,
+`cash_handoff_capability: "cash_handoff_v1"`, bridge ABI `21`, the exact maximum
+hop bound, `ready: true`, and empty `assets` and `blockers`. Assets and
+dataspaces require no offline enrollment or backend enablement.
 
 `KagemushaTopUpRequest` and `KagemushaRedeemRequest` accept only the corresponding
 typed Kagemusha Norito archive. They derive the lowercase idempotency key from
@@ -1066,7 +1074,7 @@ operation and its input note until the operation status reaches final chain
 state. A transport timeout or unknown state is not permission to create a new
 operation ID.
 
-Artifact and readiness validation requires exact bridge ABI 21 and manifest
+Local artifact validation requires exact bridge ABI 21 and manifest
 schema `kagemusha.offline.recursive_spend.artifact_manifest.v4`. The V4
 manifest's eight streamed artifacts are content-addressed and installed
 atomically through `KagemushaRecursiveSpendArtifactInstallSessionV4`; a partial,
@@ -1074,26 +1082,8 @@ corrupt, unpromoted, or role-substituted generation never becomes active.
 `KagemushaRecursiveSpendReleaseAuthenticationV4` requires the canonical
 candidate-bound promotion record in addition to policy, attestation, benchmark,
 and review bytes. Circuit parameters remain authenticated inline in the Eq/Ep
-profiles.
-
-`ToriiKagemushaReadiness.artifactSet` is required but nullable. A non-null value
-binds the authenticated generation, manifest, release-policy and
-release-attestation digests, issuance window, proof-pair bound, and asset scale
-to both exact recursive verifier records:
-`kagemusha_recursive_step_eq_v4_verifier_record` with
-`kagemusha-recursive-spend-step-eq-compact-layout-v5`, and
-`kagemusha_recursive_step_ep_v4_verifier_record` with
-`kagemusha-recursive-spend-step-ep-compact-lineage-v5`. Authenticated
-backend construction is not proof admission. A null artifact set requires both
-recursive records and backend construction to be unavailable with exactly one
-`recursive_v4_registry_unavailable` or `recursive_v4_registry_malformed`
-blocker. `proofBackendAvailable` reports exact backend construction
-independently.
-`recursiveLineageSupported` is true only when the artifact set, distinct active
-Eq/Ep records, and backend are all available; its inverse is represented by
-`recursive_lineage_unavailable`. `ready` is true only when the complete blocker
-set is empty, so unrelated issuer or transfer blockers do not erase valid
-backend and lineage facts.
+profiles. Proof material and verifier bindings are validated by the operation
+that consumes them; they do not change universal offline capability.
 
 Top-up uses `KagemushaTopUpShieldBuildRequestV4`,
 `KagemushaRecursiveSpendTopUpUnsignedV4`, and an authorization over the
@@ -1144,6 +1134,19 @@ availability requires both compiled-catalog symbols, both exact-12 fixture symbo
 the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form selectors are absent; proofs use
 protocol-specific typed APIs.
+
+`PrivacyExact12FixtureCodecV1` is the native-independent counterpart for the
+Rust-derived bundle in
+`fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64`. It exposes typed
+outer rows and strictly decodes or encodes the canonical compact-length Norito
+archive without loading `NoritoBridge`. The codec enforces the closed protocol
+order, exact submit route, byte and allocation ceilings, canonical STANDARD
+Base64, schema-specific frame padding, statement/envelope/proof discriminants,
+instruction and transaction bindings, signed-payload identity, and the pipeline
+transaction hash. Use `requireCanonicalArchive(_:expectedCanonicalArchive:)`
+with the independently supplied Rust fixture to close the BLAKE3-derived
+statement and transaction-intent bindings; Swift does not substitute a
+different digest algorithm for those fields.
 
 The enum contains exactly twelve IDs: `zk-ace-pq-authorization-v0`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
@@ -1310,6 +1313,10 @@ try await sdk.submit(unshield: request, keypair: keypair)
 
 `ProofAttachment` emits registry-bound envelopes (`backend`, `proof_b64`, `vk_ref`, optional
 `vk_commitment_hex`/`envelope_hash_hex`); embedded key bytes are not accepted by the Swift builder.
+The complete canonical nested `ProofBox`, including compact field prefixes and
+the fixed V1 vector count, is capped at 64 MiB. Call
+`ProofAttachment.maximumProofByteCountV1(forBackend:)` to preflight a backend's
+exact proof-vector ceiling without allocating proof storage.
 
 ### Multisig spec builder
 
@@ -1656,18 +1663,25 @@ symbols are unavailable, matching the behaviour of the setter.
 
 ### Norito fixtures & parity
 
-Swift shares the canonical Norito fixtures with Android. Mirror them into
-`IrohaSwift/Fixtures` before updating tests or dashboards:
+The Rust xtask is the sole owner of the shared Norito RPC fixtures in
+`fixtures/norito_rpc`. For that shared corpus, `IrohaSwift/Fixtures` is a generated
+descriptor-only mirror containing `transaction_payloads.json` and
+`transaction_fixtures.manifest.json`; shared `.norito` payload blobs remain in the
+canonical directory. Swift-owned `swift_*` test artifacts are separate and are not
+copies of the shared corpus.
+
+Regenerate the canonical outputs and every SDK mirror before updating tests or
+dashboards:
 
 ```bash
-make swift-fixtures
-# or:
-scripts/swift_fixture_regen.sh
+cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
 ```
 
-Verify the copied fixtures remain byte-identical to the Android source:
+`scripts/swift_fixture_regen.sh` and `make swift-fixtures` are convenience wrappers
+around the same xtask owner. Verify the owner and Swift descriptor mirror with:
 
 ```bash
+cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
 make swift-fixtures-check
 ```
 
@@ -1677,17 +1691,10 @@ Run both the fixture parity check and dashboard validation in one shot:
 make swift-ci
 ```
 
-The script copies `.norito` artifacts plus supporting JSON manifests from
-`java/iroha_android/src/test/resources` (override with
-`SWIFT_FIXTURE_SOURCE`/`SWIFT_FIXTURE_OUT`). Keeping the synced directory committed lets
-dashboards and regression tests diff Swift fixtures independently of the Android tree.
-
-When the Rust exporter publishes the canonical archive, set
-`SWIFT_FIXTURE_ARCHIVE=/path/to/norito-fixtures.tar.gz` (or `.zip`) before running
-`make swift-fixtures`. The regeneration script extracts the archive to a temporary
-directory, mirrors the contents into `IrohaSwift/Fixtures`, and records the archive
-path, digest, and `source_kind=archive` in `artifacts/swift_fixture_regen_state.json`
-so CI cadence checks and dashboards continue to track ownership.
+The parity checker compares the two generated JSON files directly with
+`fixtures/norito_rpc` and rejects copied shared payload blobs. Commit the canonical
+outputs and all generated SDK mirrors together; never use Java resources, an archive,
+or a retained historical payload as an alternate Swift fixture source.
 
 ### Connect (WalletConnect-style relay)
 

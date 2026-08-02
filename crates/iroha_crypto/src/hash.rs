@@ -278,9 +278,17 @@ impl JsonKeyCodec for Hash {
 }
 
 impl norito::core::NoritoSerialize for Hash {
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(self.as_ref())?;
         Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(Self::LENGTH)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(Self::LENGTH)
     }
 }
 
@@ -407,9 +415,17 @@ impl<T> AsRef<[u8; Hash::LENGTH]> for HashOf<T> {
 pub type ArchivedHashOf<T> = norito::core::Archived<HashOf<T>>;
 
 impl<T> norito::core::NoritoSerialize for HashOf<T> {
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(self.0.as_ref())?;
         Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(Hash::LENGTH)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(Hash::LENGTH)
     }
 }
 

@@ -1,9 +1,28 @@
 [package]
 name = "sorafs_chunker"
+autobins = false
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Deterministic content-defined chunking primitives for SoraFS."
+
+[features]
+dev-tools = []
+
+[[bin]]
+name = "export_vectors"
+path = "src/bin/export_vectors.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "sorafs_chunk_digest"
+path = "src/bin/sorafs_chunk_digest.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "sorafs_chunk_dump"
+path = "src/bin/sorafs_chunk_dump.rs"
+required-features = ["dev-tools"]
 
 [dependencies]
 sha3 = "0.10.8"

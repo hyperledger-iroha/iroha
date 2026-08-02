@@ -9494,6 +9494,38 @@ def _top_level_operator_body(
     return stripped[body_start:body_end], stripped.count("\n", 0, body_start) + 1
 
 
+def _top_level_declaration_span(
+    source: str,
+    symbol: str,
+    *,
+    kind: str,
+) -> tuple[int, int] | None:
+    """Return the source span for one top-level operator or theorem."""
+
+    stripped = strip_tla_comments(source, preserve_string_contents=True)
+    if kind == "theorem":
+        pattern = (
+            rf"(?m)^[ \t]*(?:LOCAL[ \t]+)?"
+            rf"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)"
+            rf"(?:[ \t]+|[ \t]*\n[ \t]*)"
+            rf"{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*=="
+        )
+    elif kind == "operator":
+        pattern = rf"(?m)^{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*=="
+    else:
+        raise ValueError(f"unknown TLA+ declaration kind {kind!r}")
+    declaration = re.compile(pattern).search(stripped)
+    if declaration is None:
+        return None
+    next_declaration = re.compile(
+        r"(?m)^(?:[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=]*\))?\s*==|"
+        r"[ \t]*(?:LOCAL[ \t]+)?"
+        r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\b|={4,}\s*$)"
+    ).search(stripped, declaration.end())
+    end = next_declaration.start() if next_declaration is not None else len(stripped)
+    return declaration.start(), end
+
+
 def _top_level_theorem_body(
     source: str, symbol: str, *, preserve_string_contents: bool = False
 ) -> tuple[str, int] | None:
@@ -23702,6 +23734,824 @@ def _candidate_producer_lifecycle_coverage_contract_errors(
     return errors
 
 
+def _nested_filtered_projection_contract_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Pin reviewed set projections that require nested filtered domains."""
+
+    contracts = {
+        "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs.tla": {
+            "HistoricalDiscoveryPacketCandidateCoveredIdentitySet": r"""
+              HistoricalDiscoveryPacketCandidateIdentitySet(packet)
+                \cup
+              {<<"Candidate", record.causalOrigin>>:
+                 record \in
+                   {candidateRecord \in AsyncCandidateServiceTombstones:
+                      candidateRecord.causalOrigin
+                        \in HistoricalDiscoveryPacketCandidateCausalOriginCarrier(
+                             packet)}}
+                \cup
+              {<<"Candidate", record.origin>>:
+                 record \in
+                   {candidateRecord \in AsyncCandidateLifecycleAdmissions:
+                      candidateRecord.origin
+                        \in HistoricalDiscoveryPacketCandidateCausalOriginCarrier(
+                             packet)}}
+            """,
+            "HistoricalDiscoveryPacketServeCoveredIdentitySet": r"""
+              LET carrier == HistoricalDiscoveryPacketServeIdentityCarrier(packet)
+              IN HistoricalDiscoveryPacketServeIdentitySet(packet)
+                   \cup
+                 {<<"Serve", reservation.identity>>:
+                    reservation \in
+                      {serveReservation \in asyncServeReservations:
+                         serveReservation.identity \in carrier}}
+                   \cup
+                 {<<"Serve", tombstone.identity>>:
+                    tombstone \in
+                      {serveTombstone \in asyncServeTombstones:
+                         serveTombstone.identity \in carrier}}
+                   \cup
+                 UNION {
+                   {<<"Serve", tombstone.identity>>:
+                      tombstone \in
+                        {rollbackTombstone \in reservation.rollbackTombstones:
+                           rollbackTombstone.identity \in carrier}}:
+                   reservation \in asyncServeReservations}
+            """,
+        },
+        "SumeragiV2ExactDecisionStageServiceClosureProofs.tla": {
+            "ExactDecisionRequestRuntimeCandidateOriginsAt": r"""
+              {record.origin:
+                 record \in
+                   {owned \in AsyncCandidateLifecycleAdmissions:
+                      /\ owned.node = node
+                      /\ owned.ordinal < schedulerCeiling
+                      /\ owned.sourcePhysicalOrdinal < physicalCut}}
+                \cup
+              {record.causalOrigin:
+                 record \in
+                   {owned \in asyncLeaderWireLifecycles:
+                      /\ owned.recipient = node
+                      /\ owned.schedulerOrdinal < schedulerCeiling
+                      /\ owned.physicalAdmissionOrdinal < physicalCut
+                      /\ AsyncLeaderWireLifecycleActive(owned)}}
+            """,
+            "ExactDecisionRequestRuntimeContinuationSourcesAt": r"""
+              {AsyncCandidateLifecycleSource(record.origin, record.ordinal):
+                 record \in
+                   {owned \in AsyncCandidateLifecycleAdmissions:
+                      /\ owned.node = node
+                      /\ owned.ordinal < schedulerCeiling
+                      /\ owned.sourcePhysicalOrdinal < physicalCut}}
+                \cup
+              {AsyncCandidateLifecycleSource(
+                 record.causalOrigin, record.schedulerOrdinal):
+                 record \in
+                   {owned \in asyncLeaderWireLifecycles:
+                      /\ owned.recipient = node
+                      /\ owned.schedulerOrdinal < schedulerCeiling
+                      /\ owned.physicalAdmissionOrdinal < physicalCut
+                      /\ AsyncLeaderWireLifecycleActive(owned)}}
+            """,
+            "ExactDecisionRequestRuntimeServeSourcesAt": r"""
+              {AsyncServeIngressSourceFor(admission):
+                 admission \in
+                   {owned \in asyncServeIngressAdmissions:
+                      /\ owned.node = node
+                      /\ owned.schedulerOrdinal < schedulerCeiling
+                      /\ owned.ordinal < physicalCut}}
+            """,
+            "ExactDecisionRequestRuntimeLeaderWireIdentitiesAt": r"""
+              {AsyncLeaderWirePotentialOwnerIdentity(record):
+                 record \in
+                   {owned \in asyncLeaderWireLifecycles:
+                      /\ owned.recipient = node
+                      /\ owned.schedulerOrdinal < schedulerCeiling
+                      /\ owned.physicalAdmissionOrdinal < physicalCut
+                      /\ AsyncLeaderWireLifecycleActive(owned)}}
+            """,
+            "ExactDecisionTargetNeutralLiveCandidateCausalRoots": r"""
+              {ExactDecisionTargetNeutralCausalRoot(
+                 candidate.node, candidate.causalOrigin):
+                 candidate \in
+                   {scheduled \in ActiveScheduledCandidates:
+                      scheduled.node \in Responsive}}
+            """,
+            "ExactDecisionTargetNeutralLifecycleRecordCausalRoots": r"""
+              {ExactDecisionTargetNeutralCausalRoot(record.node, record.origin):
+                 record \in
+                   {owned \in AsyncCandidateLifecycleAdmissions:
+                      /\ owned.node \in Responsive
+                      /\ ~owned.retired}}
+            """,
+            "ExactDecisionTargetNeutralProducerContinuationCausalRoots": r"""
+              {ExactDecisionTargetNeutralCausalRoot(
+                 continuation.node, continuation.causalOrigin):
+                 continuation \in
+                   {owned \in AsyncCandidateProducerContinuations:
+                      /\ owned.node \in Responsive
+                      /\ owned.status \in {"Reserved", "Materialized"}}}
+            """,
+            "ExactDecisionTargetNeutralOrdinaryIngressCausalRoots": r"""
+              {ExactDecisionTargetNeutralCausalRoot(
+                 carrier.node, carrier.origin):
+                 carrier
+                   \in {owned \in
+                         asyncControlServiceState.ordinaryIngressCarrierEvidence:
+                         owned.node \in Responsive}}
+            """,
+            "ExactDecisionTargetNeutralLeaderWireCausalRoots": r"""
+              {ExactDecisionTargetNeutralCausalRoot(
+                 owner.recipient, owner.causalOrigin):
+                 owner \in
+                   {owned \in asyncLeaderWireLifecycles:
+                      /\ owned.recipient \in Responsive
+                      /\ AsyncLeaderWireLifecycleActive(owned)}}
+            """,
+            "ExactDecisionTargetNeutralTimeoutReservationCausalRoots": r"""
+              {ExactDecisionTargetNeutralCausalRoot(
+                 node, asyncControlServiceState.timeoutLifecycleOrigin[node]):
+                 node \in
+                   {owner \in Responsive:
+                      AsyncUnmaterializedTimeoutLifecycleReservationIn(
+                        asyncControlServiceState, owner)}}
+            """,
+            "ExactDecisionTargetNeutralDuePacketCausalRoots": r"""
+              {ExactDecisionTargetNeutralCausalRoot(
+                 packet.item.envelope.recipient,
+                 (DeliveryCandidate(packet.item)).causalOrigin):
+                 packet \in
+                   {due \in HistoricalDiscoveryDuePacketsAt(clockValue):
+                      due.item.envelope.recipient \in Responsive}}
+            """,
+            "ExactDecisionTargetNeutralCandidateEpisodeUniverse": r"""
+              {ExactDecisionTargetNeutralCandidateOwnerIdentity(candidate):
+                 candidate \in
+                   {scheduled \in ActiveScheduledCandidates:
+                      ExactDecisionTargetNeutralCausalRoot(
+                        scheduled.node, scheduled.causalOrigin)
+                        \in ExactDecisionTargetNeutralFrozenCausalRoots(clockValue)}}
+            """,
+            "ExactDecisionTargetNeutralLiveCandidateIdentitySet": r"""
+              {ExactDecisionTargetNeutralCandidateOwnerIdentity(candidate):
+                 candidate \in
+                   {scheduledCandidate \in ActiveScheduledCandidates:
+                      scheduledCandidate.node \in Responsive}}
+            """,
+            "ExactDecisionTargetNeutralLiveServeIdentitySet": r"""
+              {ExactDecisionTargetNeutralServeOwnerIdentity(node, job):
+                 node \in Responsive,
+                 job \in
+                   {serveJob \in SequenceSet(asyncIoQueues[node]):
+                      serveJob.class = "Serve"}}
+            """,
+            "ExactDecisionTargetNeutralServeEpisodeUniverse": r"""
+              ExactDecisionTargetNeutralRetainedServeIdentitySet
+                \cup
+              {ExactDecisionTargetNeutralServeRequestOwnerIdentity(
+                 packet.item.envelope.recipient, packet.item):
+                 packet \in
+                   {requestPacket \in HistoricalDiscoveryDuePacketsAt(clockValue):
+                      requestPacket.item.kind \in AsyncReplyRequestKinds}}
+            """,
+            "ExactDecisionTargetNeutralFrozenPredecessorOriginsForSnapshot": r"""
+              {record.origin:
+                 record \in
+                   {owned \in AsyncCandidateLifecycleAdmissions:
+                      /\ owned.node = node
+                      /\ owned.ordinal <= snapshot.schedulerCuts[node]
+                      /\ owned.sourcePhysicalOrdinal < snapshot.physicalCuts[node]}}
+            """,
+        },
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs.tla": {
+            "AdequateLeaderFixedPreAdmissionSubjectReplacementRoutes": r"""
+              {AdequateLeaderFixedPreAdmissionSubjectReplacementRouteIdentity(
+                 item, target, leaderContext, leader, leaderView):
+                 item \in
+                   {retainedItem \in asyncRetainedControl:
+                      /\ retainedItem.source
+                           \in AdequateLeaderFrozenResponsiveRoster(leaderContext)
+                      /\ AdequateLeaderFixedSubjectReplacementOrigin(
+                           AsyncLeaderWireLifecycleCausalOriginAt(
+                             retainedItem, leaderContext),
+                           target, leaderContext, leader, leaderView)}}
+            """,
+            "AdequateLeaderFixedActiveWireSubjectReplacementOwners": r"""
+              {AdequateLeaderFixedSubjectReplacementOwnerIdentity(
+                 target, leaderContext, leader, leaderView,
+                 record.recipient, record.causalOrigin, record.schedulerOrdinal,
+                 record.physicalAdmissionOrdinal):
+                 record
+                   \in {activeRecord \in asyncLeaderWireLifecycles:
+                          /\ AsyncLeaderWireLifecycleActive(activeRecord)
+                          /\ AdequateLeaderFixedSubjectReplacementOrigin(
+                               activeRecord.causalOrigin,
+                               target, leaderContext, leader, leaderView)}}
+            """,
+            "AdequateLeaderFixedDormantWireSubjectReplacementOwners": r"""
+              {AdequateLeaderFixedSubjectReplacementOwnerIdentity(
+                 target, leaderContext, leader, leaderView,
+                 record.recipient, record.causalOrigin, record.schedulerOrdinal,
+                 record.physicalAdmissionOrdinal):
+                 record
+                   \in {dormantRecord \in asyncLeaderWireLifecycles:
+                          /\ AsyncLeaderWireLifecycleDormant(dormantRecord)
+                          /\ AdequateLeaderFixedSubjectReplacementOrigin(
+                               dormantRecord.causalOrigin,
+                               target, leaderContext, leader, leaderView)}}
+            """,
+            "AdequateLeaderFixedProducerSubjectReplacementOwners": r"""
+              {AdequateLeaderFixedSubjectReplacementOwnerIdentity(
+                 target, leaderContext, leader, leaderView,
+                 record.node, record.causalOrigin, record.ordinal,
+                 lifecycle.physicalAdmissionOrdinal):
+                 record
+                   \in {producerRecord \in AsyncCandidateProducerContinuations:
+                          producerRecord.status \in {"Reserved", "Materialized"}},
+                 lifecycle
+                   \in {wireLifecycle \in asyncLeaderWireLifecycles:
+                          /\ wireLifecycle.recipient = record.node
+                          /\ wireLifecycle.causalOrigin = record.causalOrigin
+                          /\ wireLifecycle.schedulerOrdinal = record.ordinal
+                          /\ AdequateLeaderFixedSubjectReplacementOrigin(
+                               record.causalOrigin,
+                               target, leaderContext, leader, leaderView)}}
+            """,
+            "AdequateLeaderFixedDiscoveredPipelineOriginPairs": r"""
+              {<<node, origin>>:
+                 node \in AdequateLeaderFrozenResponsiveRoster(leaderContext),
+                 origin
+                   \in
+                     {pipelineOrigin \in
+                        AsyncCandidateLifecycleOrdinaryOriginsForNodeIn(
+                          asyncControlServiceState, node):
+                        AdequateLeaderFixedOriginIsExactPipelineEpisode(
+                          pipelineOrigin, leaderContext,
+                          leader, leaderView, subject)}}
+            """,
+            "AdequateLeaderFixedLivePipelineOriginPairs": r"""
+              {<<node, origin>>:
+                 node \in AdequateLeaderFrozenResponsiveRoster(leaderContext),
+                 origin
+                   \in
+                     {pipelineOrigin \in
+                        AsyncCandidateLifecycleActiveOriginsForNodeIn(
+                          asyncControlServiceState, node):
+                        AdequateLeaderFixedOriginIsExactPipelineEpisode(
+                          pipelineOrigin, leaderContext,
+                          leader, leaderView, subject)}}
+            """,
+        },
+        "SumeragiV2AdequateLeaderCorridorEntryContinuationProofs.tla": {
+            "AdequateLeaderAuthenticatedTcEpisodePhysicalOwners": r"""
+              {stageOwner \in (1..7) \X AsyncCurrentResponsiveVoters:
+                CASE stageOwner[1] = 1 ->
+                          \/ TimeoutTcExactPersistCandidateOwner(
+                               target, tc, tc.view)
+                          \/ TimeoutTcInstallWalOwner(target, tc, tc.view)
+                   [] stageOwner[1] = 2 ->
+                          \/ TimeoutTcImportedBeginCandidateOwner(
+                               target, tc, tc.view)
+                          \/ TimeoutTcReceivedReducerOwner(target, tc, tc.view)
+                   [] stageOwner[1] = 3 ->
+                          TimeoutTcReducerCandidateOwner(
+                            stageOwner[2], target, tc, tc.view)
+                   [] stageOwner[1] = 4 ->
+                          TimeoutTcIngressOwner(
+                            stageOwner[2], target, tc, tc.view)
+                   [] stageOwner[1] = 5 ->
+                          TimeoutTcPacketOwner(
+                            stageOwner[2], target, tc, tc.view)
+                   [] stageOwner[1] = 6 ->
+                          TimeoutTcRetainedControlOwner(
+                            stageOwner[2], target, tc, tc.view)
+                   [] stageOwner[1] = 7 ->
+                          TimeoutTcInstallWalOwner(
+                            stageOwner[2], tc, tc.view)}
+            """,
+        },
+    }
+    errors: list[str] = []
+    for filename, operator_contracts in contracts.items():
+        path = formal_dir / filename
+        if not path.is_file():
+            continue
+        source = path.read_text(encoding="utf-8")
+        for symbol, expected_body in operator_contracts.items():
+            extracted = _top_level_operator_body(
+                source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{path}: missing nested filtered projection operator "
+                    f"{symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            expected = " ".join(expected_body.split())
+            if normalized != expected:
+                errors.append(
+                    f"{path}:{line}: {symbol} must retain its exact nested "
+                    f"filtered projection {expected!r}; found {normalized!r}"
+                )
+    return errors
+
+
+def _lexicographic_rank_shape_contract_errors(formal_dir: Path) -> list[str]:
+    """Pin the reviewed cell nesting of finite lexicographic ranks."""
+
+    contracts = (
+        (
+            "SumeragiV2ExactDecisionStageServiceClosureProofs.tla",
+            "ExactDecisionRequestRuntimeFrozenPrefixRank",
+            (
+                "<<ExactDecisionRequestRuntimeOlderTimeoutStage(snapshot), "
+                "<<ExactDecisionRequestRuntimeFrozenIngressStage(snapshot), "
+                "<<ExactDecisionRequestRuntimeFrozenSourceRank(snapshot), "
+                "ExactDecisionRequestRuntimeFrozenIngressDependencyRank(snapshot)"
+                + ">>" * 3
+            ),
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs.tla",
+            "AdequateLeaderFixedPipelineRank",
+            (
+                "LET windows == "
+                "AdequateLeaderFixedAuthorityPipelineWindowsRemaining( "
+                "leaderContext, leader, leaderView, subject) "
+                "liveSlotDebt == Cardinality( "
+                "AdequateLeaderFixedLivePipelineOriginSlotsForToken( "
+                "token, leaderContext, leader, leaderView, subject)) "
+                "actionDebt == AdequateLeaderFixedPerTokenCumulativeActionDebt( "
+                "candidate, candidate.node, cutoffOrdinal, semanticRank) "
+                "serviceSlack == "
+                "AdequateLeaderFixedCandidateSelectedServiceSlack( "
+                "owner, packet, candidate) "
+                "IN <<windows, <<liveSlotDebt, <<actionDebt, serviceSlack"
+                + ">>" * 3
+            ),
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs.tla",
+            "AdequateLeaderFixedPreCandidateEntryRank",
+            (
+                "<<AdequateLeaderFixedAuthorityPipelineWindowsRemaining( "
+                "leaderContext, leader, leaderView, subject), "
+                "<<AdequateLeaderFixedPreCandidateReservedLiveSlotDebt( "
+                "token, leaderContext, leader, leaderView, subject), "
+                "<<entryDebt, AdequateLeaderFixedEntryServiceSlack( "
+                "owner, packet, leader)"
+                + ">>" * 3
+            ),
+        ),
+    )
+    errors: list[str] = []
+    for filename, symbol, expected in contracts:
+        path = formal_dir / filename
+        if not path.is_file():
+            continue
+        source = path.read_text(encoding="utf-8")
+        extracted = _top_level_operator_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing exact finite lexicographic rank operator "
+                f"{symbol}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain its exact finite "
+                f"lexicographic rank nesting {expected!r}; found "
+                f"{normalized!r}"
+            )
+    return errors
+
+
+def _non_vacuous_async_quantifier_contract_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Keep heterogeneous binders and fairness implication grouping exact."""
+
+    errors: list[str] = []
+    theorem_contracts = (
+        (
+            "SumeragiV2ExactDecisionStageServiceClosureProofs.tla",
+            "ExactDecisionRequestClockPrefixStepIsDescentOrFrame",
+            "\\A kind \\in ExactDecisionRequestClockPrefixKinds: "
+            "\\A snapshot, node, qc, ownerOrdinal: "
+            "\\A rank \\in "
+            "ExactDecisionRequestRuntimeFrozenPrefixCarrier:",
+        ),
+        (
+            "SumeragiV2ExactDecisionStageServiceClosureProofs.tla",
+            "ExactDecisionRequestClockPrefixResolvedOwnerIsEnabled",
+            "\\A kind \\in ExactDecisionRequestClockPrefixKinds: "
+            "\\A snapshot, node, qc, ownerOrdinal: "
+            "\\A rank \\in "
+            "ExactDecisionRequestRuntimeFrozenPrefixCarrier:",
+        ),
+        (
+            "SumeragiV2ExactDecisionStageServiceClosureProofs.tla",
+            "ExactDecisionRequestClockPrefixResolvedOwnerConsumesRankCell",
+            "\\A kind \\in ExactDecisionRequestClockPrefixKinds: "
+            "\\A snapshot, node, qc, ownerOrdinal: "
+            "\\A rank \\in "
+            "ExactDecisionRequestRuntimeFrozenPrefixCarrier:",
+        ),
+        (
+            "SumeragiV2ExactDecisionStageServiceClosureProofs.tla",
+            "ExactDecisionRequestClockPrefixResolvedFairOwnerIsStable",
+            "\\A kind \\in ExactDecisionRequestClockPrefixKinds: "
+            "\\A snapshot, node, qc, ownerOrdinal: "
+            "\\A rank \\in "
+            "ExactDecisionRequestRuntimeFrozenPrefixCarrier:",
+        ),
+        (
+            "SumeragiV2TimeoutViewProgressProofs.tla",
+            "TimeoutPhysicalControlTickLowersRetainedClockRank",
+            "\\A item: \\A rank \\in Nat:",
+        ),
+        (
+            "SumeragiV2LockedBodyProposalActionProofs.tla",
+            "LockedBodyIgnoredProposalProducerHasDurableDisposition",
+            "\\A target, leader \\in ValidatorIds, "
+            "lockedRound \\in Views, subject \\in Subjects, "
+            "leaderView \\in Views: \\A prepareQc: "
+            "\\A candidate \\in AsyncCandidateSet:",
+        ),
+        (
+            "SumeragiV2LockedBodyProposalActionProofs.tla",
+            "LockedBodyScheduledProposalProducerDepartureIsClassified",
+            "\\A target, leader \\in ValidatorIds, "
+            "lockedRound \\in Views, subject \\in Subjects, "
+            "leaderView \\in Views: \\A prepareQc: "
+            "\\A candidate \\in AsyncCandidateSet:",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "FabricatedStaleUnownedPersistDecisionCannotTriggerRankStep",
+            "\\A candidate: \\A mode \\in AdequateLeaderCompositionModes, "
+            "rank \\in ExactLeaderSemanticRankCarrier, "
+            "leaderContext \\in ContextRecords, "
+            "witness \\in ValidatorIds, roundView \\in Views, "
+            "subject \\in SubjectOrNone:",
+        ),
+        (
+            "SumeragiV2AsyncDecisionApplicationProofs.tla",
+            "DecisionPipelineStagePendingIsProtected",
+            "\\A qc: \\A node \\in AsyncCurrentResponsiveVoters, "
+            "kind \\in DecisionPipelineKinds, "
+            "candidate \\in AsyncCandidateSet:",
+        ),
+        (
+            "SumeragiV2AsyncDecisionApplicationProofs.tla",
+            "DecisionPipelineStagePersistsUntilExactHandoff",
+            "\\A qc: \\A node \\in AsyncCurrentResponsiveVoters, "
+            "kind \\in DecisionPipelineKinds, "
+            "candidate \\in AsyncCandidateSet:",
+        ),
+        (
+            "SumeragiV2AsyncDecisionApplicationProofs.tla",
+            "DecisionPipelineStageReachesExactHandoff",
+            "\\A initialContext: \\A qc: "
+            "\\A node \\in AsyncVotersAt(initialContext), "
+            "kind \\in DecisionPipelineKinds, "
+            "candidate \\in AsyncCandidateSet:",
+        ),
+        (
+            "SumeragiV2AsyncCausalWorkBudgetProofs.tla",
+            "AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget",
+            "\\A origin: \\A node \\in ValidatorIds, "
+            "cutoffOrdinal \\in Nat \\ {0}, "
+            "serviced \\in AsyncCandidateSet:",
+        ),
+        (
+            "SumeragiV2AsyncCausalWorkBudgetProofs.tla",
+            "AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish",
+            "\\A origin: \\A node \\in ValidatorIds, "
+            "cutoffOrdinal \\in Nat \\ {0}:",
+        ),
+        (
+            "SumeragiV2AsyncCausalWorkBudgetProofs.tla",
+            "AsyncCausalEpisodeOwnedLifecycleServeCutCannotReplenish",
+            "\\A origin: \\A node \\in ValidatorIds, "
+            "cutoffOrdinal \\in Nat \\ {0}:",
+        ),
+    )
+    for filename, symbol, exact_binder in theorem_contracts:
+        path = formal_dir / filename
+        if not path.is_file():
+            continue
+        source = path.read_text(encoding="utf-8")
+        extracted = _top_level_theorem_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing exact non-vacuous quantifier theorem {symbol}"
+            )
+            continue
+        body, line = extracted
+        statement = _tla_statement_without_proof(body)
+        if not statement.startswith(exact_binder):
+            errors.append(
+                f"{path}:{line}: {symbol} must begin with the exact "
+                f"non-vacuous binder {exact_binder!r}; found {statement!r}"
+            )
+
+    exact_decision_path = (
+        formal_dir / "SumeragiV2ExactDecisionStageServiceClosureProofs.tla"
+    )
+    exact_decision_operator_contracts = (
+        (
+            "ExactDecisionRequestClockPrefixContinuationClosureProperty",
+            "specification => \\A kind \\in "
+            "ExactDecisionRequestClockPrefixKinds: "
+            "\\A snapshot, qc, ownerOrdinal: "
+            "\\A node \\in AsyncVotersAt(initialContext): "
+            "\\A rank \\in "
+            "ExactDecisionRequestRuntimeFrozenPrefixCarrier:",
+        ),
+        (
+            "ExactDecisionRequestClockPrefixResolvedRankStepProperty",
+            "specification => \\A kind \\in "
+            "ExactDecisionRequestClockPrefixKinds: "
+            "\\A snapshot, qc, ownerOrdinal: "
+            "\\A node \\in AsyncVotersAt(initialContext): "
+            "\\A rank \\in "
+            "ExactDecisionRequestRuntimeFrozenPrefixCarrier:",
+        ),
+        (
+            "ExactDecisionRequestClockPrefixRankStepProperty",
+            "specification => \\A kind \\in "
+            "ExactDecisionRequestClockPrefixKinds: "
+            "\\A snapshot, qc, ownerOrdinal: "
+            "\\A node \\in AsyncVotersAt(initialContext): "
+            "\\A rank \\in "
+            "ExactDecisionRequestRuntimeFrozenPrefixCarrier:",
+        ),
+        (
+            "ExactDecisionRequestClockPrefixClosureProperty",
+            "specification => \\A kind \\in "
+            "ExactDecisionRequestClockPrefixKinds: "
+            "\\A snapshot, qc, ownerOrdinal: "
+            "\\A node \\in AsyncVotersAt(initialContext):",
+        ),
+    )
+    if exact_decision_path.is_file():
+        exact_decision_source = exact_decision_path.read_text(encoding="utf-8")
+        for symbol, exact_binder in exact_decision_operator_contracts:
+            extracted = _top_level_operator_body(
+                exact_decision_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{exact_decision_path}: missing exact non-vacuous "
+                    f"quantifier operator {symbol}"
+                )
+                continue
+            body, line = extracted
+            statement = _tla_statement_without_proof(body)
+            if not statement.startswith(exact_binder):
+                errors.append(
+                    f"{exact_decision_path}:{line}: {symbol} must begin with "
+                    f"the exact non-vacuous binder {exact_binder!r}; found "
+                    f"{statement!r}"
+                )
+
+        exact_fairness_statements = (
+            (
+                "ExactDecisionRequestClockPrefixFairOwnerUsesExistingFairness",
+                "\\A initialContext, snapshot: "
+                "(/\\ snapshot.node \\in AsyncVotersAt(initialContext) "
+                "/\\ ExactDecisionRequestClockPrefixFairOwner(snapshot) "
+                "\\in AsyncCausalEpisodeFairOwnerKinds) "
+                "=> (AsyncSpecAt(initialContext) "
+                "=> WF_AsyncAllVars( "
+                "ExactDecisionRequestClockPrefixFairAction(snapshot)))",
+            ),
+            (
+                "ExactDecisionRequestLifecycleConcreteOwnerUsesAsyncFairness",
+                "\\A initialContext, archive, ownerKind: "
+                "(/\\ archive \\in AsyncVotersAt(initialContext) "
+                "/\\ archive \\in Responsive "
+                "/\\ ownerKind \\in "
+                "ExactDecisionRequestLifecycleConcreteFairOwnerKinds) "
+                "=> (AsyncSpecAt(initialContext) "
+                "=> WF_AsyncAllVars( "
+                "ExactDecisionRequestLifecycleConcreteFairAction( "
+                "archive, ownerKind)))",
+            ),
+            (
+                "ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness",
+                "\\A initialContext, owner: "
+                "owner \\in "
+                "ExactDecisionTargetNeutralFairOwnerSet(initialContext) "
+                "=> (AsyncSpecAt(initialContext) "
+                "=> WF_AsyncAllVars( "
+                "ExactDecisionTargetNeutralFairAction(owner)))",
+            ),
+        )
+        for symbol, exact_statement in exact_fairness_statements:
+            extracted = _top_level_theorem_body(
+                exact_decision_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{exact_decision_path}: missing exact parenthesized "
+                    f"fairness implication theorem {symbol}"
+                )
+                continue
+            body, line = extracted
+            statement = _tla_statement_without_proof(body)
+            if statement != exact_statement:
+                errors.append(
+                    f"{exact_decision_path}:{line}: {symbol} must retain its "
+                    "exact parenthesized antecedent/consequent fairness "
+                    f"implication; found {statement!r}"
+                )
+
+    operator_path = formal_dir / "SumeragiV2AsyncDeadlockProofs.tla"
+    if operator_path.is_file():
+        operator_source = operator_path.read_text(encoding="utf-8")
+        symbol = "Stage2BusyLocalWorkDecreaseStep"
+        exact_binder = (
+            "\\E target, witness \\in AsyncCandidateSet, phase \\in 1..2:"
+        )
+        extracted = _top_level_operator_body(
+            operator_source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{operator_path}: missing exact non-vacuous quantifier "
+                f"operator {symbol}"
+            )
+        else:
+            body, line = extracted
+            statement = " ".join(body.split())
+            if not statement.startswith(exact_binder):
+                errors.append(
+                    f"{operator_path}:{line}: {symbol} must begin with the "
+                    f"exact non-vacuous binder {exact_binder!r}; found "
+                    f"{statement!r}"
+                )
+
+    runner_path = formal_dir / "SumeragiV2AsyncFiniteRunnerEpisodeProofs.tla"
+    runner_contracts = (
+        (
+            "AsyncReadyRunnerEpisodeRankStepProperty",
+            "specification => \\A candidate, position, baselineRank: "
+            "\\A kind \\in AsyncReadyRunnerEpisodeKinds: "
+            "\\A episodeRank \\in AsyncReadyRunnerEpisodeRankCarrier:",
+        ),
+        (
+            "AsyncCapacityRunnerEpisodeRankStepProperty",
+            "specification => \\A candidate, position, baselineRank: "
+            "\\A kind \\in AsyncCapacityRunnerEpisodeKinds: "
+            "\\A episodeRank \\in AsyncCapacityRunnerEpisodeRankCarrier:",
+        ),
+    )
+    if runner_path.is_file():
+        runner_source = runner_path.read_text(encoding="utf-8")
+        for symbol, exact_binder in runner_contracts:
+            extracted = _top_level_operator_body(
+                runner_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{runner_path}: missing exact non-vacuous quantifier "
+                    f"operator {symbol}"
+                )
+                continue
+            body, line = extracted
+            statement = " ".join(body.split())
+            if not statement.startswith(exact_binder):
+                errors.append(
+                    f"{runner_path}:{line}: {symbol} must begin with the "
+                    f"exact non-vacuous binder {exact_binder!r}; found "
+                    f"{statement!r}"
+                )
+
+    historical_runner_path = (
+        formal_dir / "SumeragiV2AsyncHistoricalFiniteRunnerEpisodeProofs.tla"
+    )
+    historical_runner_fairness_contracts = (
+        (
+            "HistoricalRunnerEpisodeOwnerUsesAsyncFairness",
+            "\\A initialContext, node, ownerKind: "
+            "(/\\ node \\in Responsive /\\ ownerKind \\in "
+            "HistoricalRunnerEpisodeFairOwnerKinds) "
+            "=> (AsyncSpecAt(initialContext) "
+            "=> WF_AsyncAllVars( "
+            "HistoricalRunnerEpisodeFairAction(node, ownerKind)))",
+        ),
+        (
+            "HistoricalDiscoveryServeExactWorkerUsesAsyncFairness",
+            "\\A initialContext, recipient, workerKind: "
+            "(/\\ recipient \\in Responsive /\\ workerKind \\in "
+            "HistoricalDiscoveryServeExactWorkerActionKindCarrier) "
+            "=> (AsyncSpecAt(initialContext) "
+            "=> WF_AsyncAllVars( CASE workerKind = \"ServiceIo\" -> "
+            "PostGstServiceIoWorker(recipient) "
+            "[] workerKind = \"ServiceHistoricalIo\" -> "
+            "PostGstServiceHistoricalRecoveryIoWorker(recipient) "
+            "[] OTHER -> FALSE))",
+        ),
+    )
+    if historical_runner_path.is_file():
+        historical_runner_source = historical_runner_path.read_text(
+            encoding="utf-8"
+        )
+        for symbol, expected_statement in historical_runner_fairness_contracts:
+            extracted = _top_level_theorem_body(
+                historical_runner_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{historical_runner_path}: missing parenthesized "
+                    f"historical fairness theorem {symbol}"
+                )
+                continue
+            body, line = extracted
+            statement = _tla_statement_without_proof(body)
+            if statement != expected_statement:
+                errors.append(
+                    f"{historical_runner_path}:{line}: {symbol} must retain "
+                    "its exact parenthesized historical fairness "
+                    f"implication; found {statement!r}"
+                )
+
+    historical_clock_path = (
+        formal_dir / "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs.tla"
+    )
+    if historical_clock_path.is_file():
+        historical_clock_source = historical_clock_path.read_text(
+            encoding="utf-8"
+        )
+        witness_implication_contracts = (
+            (
+                "HistoricalDiscoveryFixedClockClosureLowersClockBudgetFromSupport",
+                "<3>6. (/\\ AsyncStrongTypeInvariant /\\ "
+                "HistoricalDiscoveryClockBudgetFrontier(node, budget)) "
+                "=> \\E clockValue \\in Nat: "
+                "HistoricalDiscoveryFixedClockBudgetedPending( "
+                "node, clockValue, budget)",
+            ),
+            (
+                "HistoricalDiscoveryClockBudgetClosureReachesReleaseGoalFromSupport",
+                "<3>3. (/\\ AsyncStrongTypeInvariant /\\ gst /\\ "
+                "HistoricalRecoveryTarget(node) /\\ "
+                "~HistoricalDiscoveryClockProgressGoal(node)) "
+                "=> \\E budget \\in Nat: "
+                "HistoricalDiscoveryClockBudgetFrontier(node, budget)",
+            ),
+        )
+        for symbol, required in witness_implication_contracts:
+            extracted = _top_level_theorem_body(
+                historical_clock_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{historical_clock_path}: missing parenthesized "
+                    f"budget-frontier witness theorem {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized.count(required) != 1:
+                errors.append(
+                    f"{historical_clock_path}:{line}: {symbol} must retain "
+                    "its exact parenthesized budget-frontier witness "
+                    f"implication {required!r}; found {normalized!r}"
+                )
+
+    return errors
+
+
 def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
     """Require checked scheduler closure and the exact Core-step refinement."""
 
@@ -23710,8 +24560,21 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
         return []
     source = _async_liveness_source(formal_dir)
     stripped = strip_tla_comments(source)
+    network_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    network_source = (
+        network_path.read_text(encoding="utf-8")
+        if network_path.is_file()
+        else ""
+    )
+    strong_type_source = network_source if network_path.is_file() else source
+    strong_type_path = network_path if network_path.is_file() else path
     has_strong_type_architecture = (
-        _top_level_operator_body(source, "AsyncStrongTypeInvariant") is not None
+        network_path.is_file()
+        or _top_level_operator_body(
+            source,
+            "AsyncStrongTypeInvariant",
+        )
+        is not None
     )
     has_transport_content_architecture = (
         _top_level_operator_body(source, "AsyncTransportContentTypeInvariant")
@@ -24038,7 +24901,7 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 )
 
         recovery_execution = _top_level_operator_body(
-            source,
+            strong_type_source,
             "AsyncRecoveryExecutionInvariant",
             preserve_string_contents=True,
         )
@@ -24052,13 +24915,16 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             "ResponsiveReplayScheduledCandidates(asyncRecoveryNode) = {}"
         )
         if recovery_execution is None:
-            errors.append(f"{path}: missing AsyncRecoveryExecutionInvariant")
+            errors.append(
+                f"{strong_type_path}: missing AsyncRecoveryExecutionInvariant"
+            )
         else:
             body, line = recovery_execution
             normalized = " ".join(body.split())
             if normalized != expected_recovery_execution:
                 errors.append(
-                    f"{path}:{line}: AsyncRecoveryExecutionInvariant must equal "
+                    f"{strong_type_path}:{line}: "
+                    "AsyncRecoveryExecutionInvariant must equal "
                     f"only {expected_recovery_execution!r}; found {normalized!r}"
                 )
         bad_recovery_prime_scope = re.compile(
@@ -24073,7 +24939,7 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "call leaves the scheduled-candidate inventory unprimed"
             )
         strong_type = _top_level_operator_body(
-            source,
+            strong_type_source,
             "AsyncStrongTypeInvariant",
             preserve_string_contents=True,
         )
@@ -24094,13 +24960,14 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             "/\\ AsyncSerializedBusyKernelInvariant"
         )
         if strong_type is None:
-            errors.append(f"{path}: missing AsyncStrongTypeInvariant")
+            errors.append(f"{strong_type_path}: missing AsyncStrongTypeInvariant")
         else:
             body, line = strong_type
             normalized = " ".join(body.split())
             if normalized != expected_strong_type:
                 errors.append(
-                    f"{path}:{line}: AsyncStrongTypeInvariant must include the "
+                    f"{strong_type_path}:{line}: "
+                    "AsyncStrongTypeInvariant must include the "
                     "exact recovery execution premise; expected "
                     f"{expected_strong_type!r}; found {normalized!r}"
                 )
@@ -27050,12 +27917,23 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
         }
         for symbol, exact_body in exact_historical_restart_liveness_operators.items():
+            provider_source = (
+                network_source
+                if symbol
+                == "HistoricalLockRestartAuthoritySourceRetentionInvariant"
+                else async_source
+            )
+            provider_path = (
+                network_path
+                if provider_source is network_source
+                else async_path
+            )
             extracted = _top_level_operator_body(
-                async_source, symbol, preserve_string_contents=True
+                provider_source, symbol, preserve_string_contents=True
             )
             if extracted is None:
                 errors.append(
-                    f"{async_path}: missing historical-lock restart liveness "
+                    f"{provider_path}: missing historical-lock restart liveness "
                     f"operator {symbol}"
                 )
                 continue
@@ -27063,17 +27941,20 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             normalized = " ".join(body.split())
             if normalized != exact_body:
                 errors.append(
-                    f"{async_path}:{line}: {symbol} must equal only the exact "
+                    f"{provider_path}:{line}: {symbol} must equal only the exact "
                     f"historical locked-body ownership contract {exact_body!r}; "
                     f"found {normalized!r}"
                 )
 
         strong_type = _top_level_operator_body(
-            async_source, "AsyncStrongTypeInvariant", preserve_string_contents=True
+            network_source,
+            "AsyncStrongTypeInvariant",
+            preserve_string_contents=True,
         )
         if strong_type is None:
             errors.append(
-                f"{async_path}: missing AsyncStrongTypeInvariant historical-lock frame"
+                f"{network_path}: missing AsyncStrongTypeInvariant "
+                "historical-lock frame"
             )
         else:
             body, line = strong_type
@@ -27085,7 +27966,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             missing = [fragment for fragment in required if fragment not in normalized]
             if missing:
                 errors.append(
-                    f"{async_path}:{line}: AsyncStrongTypeInvariant omits exact "
+                    f"{network_path}:{line}: AsyncStrongTypeInvariant omits exact "
                     f"historical-lock restart source retention; missing={missing}"
                 )
 
@@ -35479,6 +36360,1972 @@ def _effect_capacity_production_source_fidelity_errors(
         ("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),
     )
 
+    retry_policy = _require_rust_item(
+        effects_path,
+        source,
+        "candidate_retry_is_redispatched",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        retry_policy,
+        generic_executor_context,
+        "closed eleven-class adapter-effect retry policy",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        effects_path,
+        retry_policy,
+        """
+fn candidate_retry_is_redispatched(effect: &AdapterEffect) -> Option<bool> {
+    match effect {
+        AdapterEffect::Sign {
+            request:
+                SignRequest::Proposal(_) | SignRequest::Vote(_) | SignRequest::TimeoutVote(_),
+            ..
+        } => Some(false),
+        AdapterEffect::FetchBody { .. }
+        | AdapterEffect::StoreBody { .. }
+        | AdapterEffect::ValidateBody { .. }
+        | AdapterEffect::Apply { .. } => Some(true),
+        AdapterEffect::Broadcast(_)
+        | AdapterEffect::EnterView { .. }
+        | AdapterEffect::ReportEquivocation { .. }
+        | AdapterEffect::ReportInvalidCertifiedBody { .. } => None,
+    }
+}
+""",
+        "closed retry policy must classify all three Sign and eight other adapter-effect classes",
+        errors,
+    )
+
+    retained_owners = _require_rust_item(
+        effects_path,
+        source,
+        "retained_candidate_owners",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        retained_owners,
+        generic_executor_context,
+        "route-neutral live and terminal candidate owner inventory",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        retained_owners,
+        """
+let identity = ownership.candidate_semantic_identity().ok_or_else(|| {
+    EffectExecutorError::Contract(
+        "pending asynchronous work omitted its route-neutral candidate identity"
+            .to_owned(),
+    )
+})?;
+match owners.get(&identity) {
+    Some(existing) if existing != ownership.owner() => {
+        Err(EffectExecutorError::Contract(
+            "one semantic candidate lifecycle had conflicting exact owners".to_owned(),
+        ))
+    }
+""",
+        "candidate owner inventory must reject semantic owner replacement",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        retained_owners,
+        """
+for pending in self.pending_applications.values() {
+    insert(pending.task.ownership())?;
+}
+if let Some(finality) = &self.finality_completion {
+    insert(&finality.ownership)?;
+}
+""",
+        "durable Apply tombstone must retain the same candidate owner after completion",
+        errors,
+    )
+
+    retain = _require_rust_item(
+        effects_path,
+        source,
+        "retain_effect_batch",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        retain,
+        generic_executor_context,
+        "exact adapter candidate admission disposition gate",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        retain,
+        """
+let candidate_semantic_identity = evidence.candidate_semantic_identity();
+if candidate_semantic_identity
+    .as_ref()
+    .is_some_and(|identity| {
+        retained_candidate_owners
+            .get(identity)
+            .is_some_and(|existing| existing != evidence.owner())
+    })
+{
+    return Err(EffectExecutorError::Contract(
+        "a coalesced adapter effect changed its exact lifecycle owner".to_owned(),
+    ));
+}
+""",
+        "candidate owner replacement must fail before refinement evidence is constructed",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        retain,
+        """
+match (admission, candidate_semantic_identity) {
+    (RuntimeCandidateAdmissionDisposition::FirstAdmission, Some(identity)) => {
+        retained_candidate_owners.insert(identity, evidence.owner().clone());
+        retain_effect.push(true);
+    }
+    (RuntimeCandidateAdmissionDisposition::CoalescedRetry, Some(_)) => {
+        let redispatch =
+            Self::candidate_retry_is_redispatched(effect).ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "candidate retry omitted its closed adapter-effect policy"
+                        .to_owned(),
+                )
+            })?;
+        retain_effect.push(redispatch);
+    }
+    (RuntimeCandidateAdmissionDisposition::NonCandidate, None) => {
+        if Self::candidate_retry_is_redispatched(effect).is_some() {
+            return Err(EffectExecutorError::Contract(
+                "non-candidate effect entered the candidate retry table".to_owned(),
+            ));
+        }
+        retain_effect.push(true);
+    }
+""",
+        "candidate admission must project only 0-to-1, 1-to-1, and 0-to-0 dispositions",
+        errors,
+    )
+    if retain is not None:
+        retain_tokens = rust_code_tokens(retain.source)
+        ordered_fragments = tuple(
+            rust_code_tokens(fragment)
+            for fragment in (
+                "if candidate_semantic_identity.as_ref().is_some_and",
+                "let candidate_owner_count_before =",
+                "production_adapter_effect_candidate_admission_disposition(",
+                "production_adapter_effect_candidate_trace_projection(",
+                "check_production_effect_to_candidate_transition(projection)",
+                "match (admission, candidate_semantic_identity)",
+                "retained_candidate_owners.insert(identity, evidence.owner().clone())",
+            )
+        )
+        positions: list[int] = []
+        for fragment in ordered_fragments:
+            found = _token_sequence_positions(retain_tokens, fragment)
+            if len(found) != 1:
+                positions = []
+                break
+            positions.append(found[0])
+        if not positions or positions != sorted(positions):
+            errors.append(
+                f"{effects_path}:{retain.line}: owner replacement, exact count "
+                "classification, projection, checked refinement, and owner "
+                "publication must retain the reviewed order"
+            )
+
+    begin_apply = _require_rust_item(
+        effects_path,
+        source,
+        "begin_apply",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        begin_apply,
+        generic_executor_context,
+        "same-owner Apply retry and durable tombstone handler",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_apply,
+        """
+if let Some(finality) = self.finality_completion.as_ref() {
+    if !finality.matches_apply(tag, &self.context, subject, &certificate, &ownership) {
+""",
+        "durable Apply tombstone must compare the retained lifecycle owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_apply,
+        """
+let same_decision = existing.task.tag == tag
+    && existing.task.subject == subject
+    && existing.task.ownership() == &ownership
+    && existing
+        .task
+        .certificate
+        .as_ref()
+        .same_commit_decision(certificate.as_ref());
+""",
+        "in-flight Apply retry must retain the incumbent owner and semantic decision",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_apply,
+        """
+return services
+    .enqueue_apply(existing.task.clone())
+    .map_err(service_error);
+""",
+        "same-owner Apply retry must re-enqueue only the incumbent task",
+        errors,
+    )
+
+    complete_application = _require_rust_item(
+        effects_path,
+        source,
+        "complete_application",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        complete_application,
+        generic_executor_context,
+        "Apply completion owner tombstone installation",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        complete_application,
+        """
+let ownership = task.ownership().clone();
+if let Err(error) = self
+    .runtime
+    .enqueue_application_completed_with_owner(tag, subject, &ownership)
+""",
+        "Apply completion must publish through its incumbent owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        complete_application,
+        """
+self.finality_completion = Some(FinalityCompletion {
+    tag,
+    receipt: completion.receipt,
+    artifact: completion.artifact,
+    ownership,
+});
+""",
+        "durable finality tombstone must retain the completed Apply owner",
+        errors,
+    )
+
+    consume_effects = _require_rust_item(
+        effects_path,
+        source,
+        "consume_effects",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        consume_effects,
+        generic_executor_context,
+        "runtime ownership boundary fail-closed handoff",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        consume_effects,
+        """
+let ownership = match self.runtime.take_effect_ownership(&effects) {
+    Ok(ownership) => ownership,
+    Err(error) => {
+        return Err(self.close(EffectExecutorError::Runtime(error), services));
+    }
+};
+if let Err(error) = self.retain_effect_batch(effects, ownership) {
+""",
+        "executor must close fail-stop output while preserving the typed Runtime ownership error",
+        errors,
+    )
+
+    runtime_path = effects_path.with_name("v2_runtime.rs")
+    if not runtime_path.is_file() or runtime_path.is_symlink():
+        errors.append(
+            f"{runtime_path}: runtime candidate admission source must be a regular file"
+        )
+    else:
+        runtime_source = runtime_path.read_text(encoding="utf-8")
+        serialized_runtime_context = (
+            (
+                "impl",
+                "<",
+                "D",
+                ":",
+                "RuntimeDriver",
+                ">",
+                "SerializedV2Runtime",
+                "<",
+                "D",
+                ">",
+            ),
+        )
+        production_serialized_runtime_context = (
+            ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
+        )
+        bounded_ingress_context = (
+            ("impl", "BoundedIngress", "<", "AdapterCommand", ">"),
+        )
+        _require_rust_source_token_sequence(
+            runtime_path,
+            runtime_source,
+            """
+pub(crate) enum RuntimeCandidateAdmissionDisposition {
+    FirstAdmission,
+    CoalescedRetry,
+    NonCandidate,
+}
+""",
+            "candidate admission disposition must remain private and non-serialized",
+            errors,
+        )
+        _require_rust_source_token_sequence(
+            runtime_path,
+            runtime_source,
+            """
+CoalesceOwned {
+    causal_lifecycle_key: iroha_crypto::Hash,
+    admission_ordinal: u128,
+},
+""",
+            "exact terminal coalescence must carry its retained lifecycle key and ordinal",
+            errors,
+        )
+        disposition = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "production_adapter_effect_candidate_admission_disposition",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            disposition,
+            (),
+            "exact candidate owner-count disposition",
+            errors,
+        )
+        _require_exact_rust_tokens(
+            runtime_path,
+            disposition,
+            """
+pub(crate) fn production_adapter_effect_candidate_admission_disposition(
+    effect: &AdapterEffect,
+    candidate_owner_count_before: u8,
+    candidate_owner_count_after: u8,
+) -> Result<RuntimeCandidateAdmissionDisposition, String> {
+    match (
+        production_adapter_effect_candidate_semantic_identity(effect).is_some(),
+        candidate_owner_count_before,
+        candidate_owner_count_after,
+    ) {
+        (true, 0, 1) => Ok(RuntimeCandidateAdmissionDisposition::FirstAdmission),
+        (true, 1, 1) => Ok(RuntimeCandidateAdmissionDisposition::CoalescedRetry),
+        (false, 0, 0) => Ok(RuntimeCandidateAdmissionDisposition::NonCandidate),
+        _ => Err(
+            "Sumeragi v2 candidate admission used a non-exact owner-count transition".to_owned(),
+        ),
+    }
+}
+""",
+            "candidate admission must expose only exact 0-to-1, 1-to-1, and 0-to-0 transitions",
+            errors,
+        )
+
+        statement_structs = rust_struct_items(
+            runtime_source, "RuntimeCandidateSemanticStatement"
+        )
+        if len(statement_structs) != 1:
+            errors.append(
+                f"{runtime_path}: require exactly one real internal Rust struct "
+                "item named RuntimeCandidateSemanticStatement; found "
+                f"{len(statement_structs)}"
+            )
+            statement_struct = None
+        else:
+            statement_struct = statement_structs[0]
+            _require_rust_item_context(
+                runtime_path,
+                statement_struct,
+                (),
+                "typed non-serialized candidate semantic statement",
+                errors,
+                expected_attributes=(
+                    "#[derive(Clone, Copy, Debug, PartialEq, Eq)]",
+                ),
+            )
+            if _rust_item_header_tokens(statement_struct) != rust_code_tokens(
+                "pub(crate) struct RuntimeCandidateSemanticStatement"
+            ):
+                errors.append(
+                    f"{runtime_path}:{statement_struct.line}: candidate semantic "
+                    "statement must remain crate-private and non-serialized"
+                )
+            _require_exact_rust_tokens(
+                runtime_path,
+                statement_struct,
+                """
+pub(crate) struct RuntimeCandidateSemanticStatement {
+    context_id: wire::HeightContextId,
+    round: wire::ConsensusRound,
+    proposal_round: wire::ConsensusRound,
+    subject: Option<wire::BlockSubject>,
+    phase: Option<wire::GlobalPhase>,
+    execution_commitment: Option<wire::ExecutionCommitment>,
+}
+""",
+                "candidate semantic statement must contain exactly the six frozen coordinates",
+                errors,
+            )
+
+        statement_new = _require_qualified_rust_item(
+            runtime_path,
+            runtime_source,
+            "RuntimeCandidateSemanticStatement",
+            "new",
+            errors,
+            "candidate semantic statement constructor",
+        )
+        _require_exact_rust_tokens(
+            runtime_path,
+            statement_new,
+            """
+fn new(
+    round: wire::ConsensusRound,
+    proposal_round: wire::ConsensusRound,
+    subject: Option<wire::BlockSubject>,
+    phase: Option<wire::GlobalPhase>,
+    execution_commitment: Option<wire::ExecutionCommitment>,
+) -> Self {
+    Self {
+        context_id: round.context_id,
+        round,
+        proposal_round,
+        subject,
+        phase,
+        execution_commitment,
+    }
+}
+""",
+            "candidate semantic statement must freeze context from its consensus round",
+            errors,
+        )
+        statement_validate = _require_qualified_rust_item(
+            runtime_path,
+            runtime_source,
+            "RuntimeCandidateSemanticStatement",
+            "validate_exact",
+            errors,
+            "candidate semantic statement exact validator",
+        )
+        _require_exact_rust_tokens(
+            runtime_path,
+            statement_validate,
+            """
+fn validate_exact(self) -> bool {
+    self.context_id == self.round.context_id
+        && self.context_id == self.proposal_round.context_id
+        && self.round.height == self.proposal_round.height
+        && self.phase.is_some() == self.execution_commitment.is_some()
+        && self.phase.is_none_or(|_| self.subject.is_some())
+        && self
+            .execution_commitment
+            .is_none_or(|_| self.subject.is_some())
+}
+""",
+            "candidate semantic statement must validate context, height, subject, phase, and commitment as one exact tuple",
+            errors,
+        )
+        statement_refinement = _require_qualified_rust_item(
+            runtime_path,
+            runtime_source,
+            "RuntimeCandidateSemanticStatement",
+            "commit_refinement_to",
+            errors,
+            "candidate authority refinement gate",
+        )
+        _require_exact_rust_tokens(
+            runtime_path,
+            statement_refinement,
+            """
+fn commit_refinement_to(
+    self,
+    successor: Self,
+) -> Option<RuntimeCandidateAuthorityRefinement> {
+    if !self.validate_exact()
+        || !successor.validate_exact()
+        || successor.phase != Some(wire::GlobalPhase::Commit)
+        || self.context_id != successor.context_id
+        || self.round != successor.round
+        || self.proposal_round != successor.proposal_round
+        || self.subject != successor.subject
+    {
+        return None;
+    }
+    match (self.phase, self.execution_commitment) {
+        (None, None) => Some(RuntimeCandidateAuthorityRefinement::AcquireCommit),
+        (Some(wire::GlobalPhase::Prepare), Some(commitment))
+            if successor.execution_commitment == Some(commitment) =>
+        {
+            Some(RuntimeCandidateAuthorityRefinement::PromotePrepare)
+        }
+        (Some(wire::GlobalPhase::Commit), Some(_)) if self == successor => {
+            Some(RuntimeCandidateAuthorityRefinement::RetainCommit)
+        }
+        _ => None,
+    }
+}
+""",
+            "candidate authority refinement must freeze identity and admit only local acquisition, matching Prepare promotion, or exact Commit retention",
+            errors,
+        )
+        _require_rust_source_token_sequence(
+            runtime_path,
+            runtime_source,
+            """
+enum RuntimeCandidateAuthorityRefinement {
+    AcquireCommit,
+    PromotePrepare,
+    RetainCommit,
+}
+""",
+            "candidate authority refinement outcomes must remain internal and closed",
+            errors,
+        )
+        statement_identity = _require_qualified_rust_item(
+            runtime_path,
+            runtime_source,
+            "RuntimeCandidateSemanticStatement",
+            "semantic_identity",
+            errors,
+            "six-coordinate candidate semantic identity",
+        )
+        _require_exact_rust_tokens(
+            runtime_path,
+            statement_identity,
+            """
+fn semantic_identity(self) -> Vec<u8> {
+    let mut identity = Vec::new();
+    identity.extend_from_slice(b"iroha:sumeragi:v2:tla-candidate-semantic:v2");
+    append_runtime_identity_field(&mut identity, &self.context_id.encode());
+    append_runtime_identity_field(&mut identity, &self.round.encode());
+    append_runtime_identity_field(&mut identity, &self.proposal_round.encode());
+    append_optional_runtime_identity_bytes(
+        &mut identity,
+        self.subject.map(|subject| subject.encode()),
+    );
+    append_optional_runtime_identity_bytes(
+        &mut identity,
+        self.phase.map(|phase| phase.encode()),
+    );
+    append_optional_runtime_identity_bytes(
+        &mut identity,
+        self.execution_commitment
+            .map(|commitment| commitment.encode()),
+    );
+    identity
+}
+""",
+            "candidate semantic identity must encode exactly the frozen six-coordinate statement under the v2 domain",
+            errors,
+        )
+
+        _require_rust_source_token_sequence(
+            runtime_path,
+            runtime_source,
+            """
+pub(crate) struct RuntimeEffectCandidateSemantic {
+    kind: u8,
+    semantic_identity: Vec<u8>,
+    statement: Option<RuntimeCandidateSemanticStatement>,
+}
+""",
+            "every production candidate binding must retain its independently typed statement",
+            errors,
+        )
+        binding_structs = rust_struct_items(
+            runtime_source, "RuntimeEffectCandidateBinding"
+        )
+        if len(binding_structs) != 1:
+            errors.append(
+                f"{runtime_path}: require exactly one real Rust struct item named "
+                "RuntimeEffectCandidateBinding; found "
+                f"{len(binding_structs)}"
+            )
+        else:
+            _require_rust_token_sequence(
+                runtime_path,
+                binding_structs[0],
+                "candidate_statement: Option<RuntimeCandidateSemanticStatement>",
+                "effect-to-candidate binding must store the typed statement independently of its hashes",
+                errors,
+            )
+        required_statement = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "runtime_candidate_kind_requires_statement",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            required_statement,
+            (),
+            "closed production candidate statement requirement",
+            errors,
+        )
+        _require_exact_rust_tokens(
+            runtime_path,
+            required_statement,
+            """
+fn runtime_candidate_kind_requires_statement(kind: u8) -> bool {
+    matches!(
+        kind,
+        RUNTIME_CANDIDATE_KIND_SIGN_PROPOSAL
+            | RUNTIME_CANDIDATE_KIND_SIGN_VOTE
+            | RUNTIME_CANDIDATE_KIND_SIGN_TIMEOUT
+            | RUNTIME_CANDIDATE_KIND_FETCH_BODY
+            | RUNTIME_CANDIDATE_KIND_STORE_BODY
+            | RUNTIME_CANDIDATE_KIND_VALIDATE_BODY
+            | RUNTIME_CANDIDATE_KIND_APPLY
+    )
+}
+""",
+            "all seven production candidate kinds must require typed statement evidence",
+            errors,
+        )
+
+        statement_builder = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "production_adapter_effect_candidate_statement",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            statement_builder,
+            (),
+            "closed adapter candidate statement builder",
+            errors,
+        )
+        _require_exact_rust_tokens(
+            runtime_path,
+            statement_builder,
+            """
+fn production_adapter_effect_candidate_statement(
+    effect: &AdapterEffect,
+) -> Option<(u8, RuntimeCandidateSemanticStatement)> {
+    Some(match effect {
+        AdapterEffect::Sign {
+            request: super::v2::SignRequest::Proposal(proposal),
+            ..
+        } => (
+            RUNTIME_CANDIDATE_KIND_SIGN_PROPOSAL,
+            RuntimeCandidateSemanticStatement::new(
+                proposal.round,
+                proposal.round,
+                Some(proposal.subject),
+                None,
+                None,
+            ),
+        ),
+        AdapterEffect::Sign {
+            request: super::v2::SignRequest::Vote(vote),
+            ..
+        } => (
+            RUNTIME_CANDIDATE_KIND_SIGN_VOTE,
+            RuntimeCandidateSemanticStatement::new(
+                vote.round,
+                vote.proposal_round,
+                Some(vote.subject),
+                Some(vote.phase),
+                Some(vote.execution_commitment),
+            ),
+        ),
+        AdapterEffect::Sign {
+            request: super::v2::SignRequest::TimeoutVote(vote),
+            ..
+        } => {
+            let highest = vote.highest_prepare_qc.as_ref();
+            (
+                RUNTIME_CANDIDATE_KIND_SIGN_TIMEOUT,
+                RuntimeCandidateSemanticStatement::new(
+                    vote.round,
+                    highest.map_or(vote.round, |certificate| certificate.proposal_round),
+                    highest.map(|certificate| certificate.subject),
+                    highest.map(|certificate| certificate.phase),
+                    highest.map(|certificate| certificate.execution_commitment),
+                ),
+            )
+        }
+        AdapterEffect::FetchBody {
+            round,
+            subject,
+            certificate,
+            ..
+        } => (
+            RUNTIME_CANDIDATE_KIND_FETCH_BODY,
+            RuntimeCandidateSemanticStatement::new(
+                certificate
+                    .as_ref()
+                    .map_or(*round, |certificate| certificate.round),
+                certificate
+                    .as_ref()
+                    .map_or(*round, |certificate| certificate.proposal_round),
+                Some(*subject),
+                certificate.as_ref().map(|certificate| certificate.phase),
+                certificate
+                    .as_ref()
+                    .map(|certificate| certificate.execution_commitment),
+            ),
+        ),
+        AdapterEffect::StoreBody { round, subject, .. } => (
+            RUNTIME_CANDIDATE_KIND_STORE_BODY,
+            RuntimeCandidateSemanticStatement::new(
+                *round,
+                *round,
+                Some(*subject),
+                None,
+                None,
+            ),
+        ),
+        AdapterEffect::ValidateBody { round, subject, .. } => (
+            RUNTIME_CANDIDATE_KIND_VALIDATE_BODY,
+            RuntimeCandidateSemanticStatement::new(
+                *round,
+                *round,
+                Some(*subject),
+                None,
+                None,
+            ),
+        ),
+        AdapterEffect::Apply {
+            subject,
+            certificate,
+            ..
+        } => (
+            RUNTIME_CANDIDATE_KIND_APPLY,
+            RuntimeCandidateSemanticStatement::new(
+                certificate.round,
+                certificate.proposal_round,
+                Some(*subject),
+                Some(certificate.phase),
+                Some(certificate.execution_commitment),
+            ),
+        ),
+        AdapterEffect::Broadcast(_)
+        | AdapterEffect::EnterView { .. }
+        | AdapterEffect::ReportEquivocation { .. }
+        | AdapterEffect::ReportInvalidCertifiedBody { .. } => return None,
+    })
+}
+""",
+            "all eleven adapter-effect classes must map through the exact seven-candidate statement table",
+            errors,
+        )
+
+        candidate_binding = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "production_adapter_effect_candidate_binding",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            candidate_binding,
+            (),
+            "candidate statement inheritance and refinement gate",
+            errors,
+        )
+        for sequence, description in (
+            (
+                """
+AdapterEffect::FetchBody {
+    round,
+    subject,
+    certificate: Some(certificate),
+    ..
+} if certificate.proposal_round != *round || certificate.subject != *subject => {
+    return Err(
+        "Sumeragi v2 certified Fetch disagreed with its proposal-round body key"
+            .to_owned(),
+    );
+}
+""",
+                "certified Fetch must reject a mismatched proposal round or subject",
+            ),
+            (
+                """
+AdapterEffect::Apply {
+    subject,
+    certificate,
+    ..
+} if certificate.phase != wire::GlobalPhase::Commit
+    || certificate.subject != *subject =>
+{
+    return Err("Sumeragi v2 Apply omitted its exact Commit authority".to_owned());
+}
+""",
+                "Apply must reject non-Commit or foreign-subject authority",
+            ),
+            (
+                """
+if !statement.validate_exact() {
+    return Err("Sumeragi v2 candidate statement had inconsistent context or height".to_owned());
+}
+""",
+                "every derived statement must pass exact validation before inheritance",
+            ),
+            (
+                """
+if !parent.validate_exact() {
+    return Err("Sumeragi v2 causal parent lost its exact candidate statement".to_owned());
+}
+""",
+                "every inherited parent statement must be exact before refinement",
+            ),
+            (
+                """
+AdapterEffect::StoreBody { round, subject, .. }
+| AdapterEffect::ValidateBody { round, subject, .. } => {
+    if parent.context_id != round.context_id
+        || parent.proposal_round != *round
+        || parent.subject != Some(*subject)
+    {
+        return Err(
+            "Sumeragi v2 body successor changed its frozen candidate statement"
+                .to_owned(),
+        );
+    }
+    statement = *parent;
+}
+""",
+                "Store and Validate must inherit the exact frozen Fetch statement",
+            ),
+            (
+                """
+AdapterEffect::Apply { .. } => {
+    if parent.commit_refinement_to(statement).is_none() {
+        return Err(
+            "Sumeragi v2 Apply changed its inherited candidate authority".to_owned(),
+        );
+    }
+}
+""",
+                "Apply must pass the authority refinement gate before statement publication",
+            ),
+            (
+                """
+let semantic_identity = statement.semantic_identity();
+Ok(Some(RuntimeEffectCandidateSemantic {
+    kind,
+    semantic_identity,
+    statement: Some(statement),
+}))
+""",
+                "candidate binding must publish matching typed and byte semantic evidence",
+            ),
+        ):
+            _require_rust_token_sequence(
+                runtime_path,
+                candidate_binding,
+                sequence,
+                description,
+                errors,
+            )
+
+        semantic = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "production_adapter_effect_candidate_semantic_identity",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            semantic,
+            (),
+            "route-neutral adapter candidate semantic identity",
+            errors,
+        )
+        _require_exact_rust_tokens(
+            runtime_path,
+            semantic,
+            """
+pub(crate) fn production_adapter_effect_candidate_semantic_identity(
+    effect: &AdapterEffect,
+) -> Option<(u8, Vec<u8>)> {
+    let (kind, statement) = production_adapter_effect_candidate_statement(effect)?;
+    statement
+        .validate_exact()
+        .then(|| (kind, statement.semantic_identity()))
+}
+""",
+            "candidate semantic identity must be derived only from a validated typed statement",
+            errors,
+        )
+
+        production_binding_context = (
+            ("impl", "RuntimeDriver", "for", "SumeragiV2Adapter"),
+        )
+        production_bindings = [
+            item
+            for item in rust_items(
+                runtime_source, "effect_candidate_semantic_binding"
+            )
+            if item.brace_context == production_binding_context
+        ]
+        if len(production_bindings) != 1:
+            errors.append(
+                f"{runtime_path}: require exactly one production RuntimeDriver "
+                "candidate semantic binding override; found "
+                f"{len(production_bindings)}"
+            )
+        else:
+            production_binding = production_bindings[0]
+            _require_rust_item_context(
+                runtime_path,
+                production_binding,
+                production_binding_context,
+                "production typed candidate semantic binding override",
+                errors,
+            )
+            _require_exact_rust_tokens(
+                runtime_path,
+                production_binding,
+                """
+fn effect_candidate_semantic_binding(
+    effect: &Self::Effect,
+    inherited: Option<&RuntimeCandidateSemanticStatement>,
+) -> Result<Option<RuntimeEffectCandidateSemantic>, String> {
+    production_adapter_effect_candidate_binding(effect, inherited)
+}
+""",
+                "production RuntimeDriver must route every candidate through the typed inheritance and refinement gate",
+                errors,
+            )
+
+        binding_projection = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "runtime_effect_candidate_binding_projection_hash",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            binding_projection,
+            (),
+            "typed candidate binding projection",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            binding_projection,
+            """
+match binding.candidate_statement {
+    None => projection.push(0),
+    Some(statement) => {
+        projection.push(1);
+        append_runtime_identity_field(&mut projection, &statement.semantic_identity());
+    }
+}
+append_optional_runtime_hash(
+    &mut projection,
+    binding.candidate_semantic_identity.as_ref(),
+);
+""",
+            "candidate binding projection must independently commit the typed statement before its semantic hash",
+            errors,
+        )
+
+        binding_new = _require_qualified_rust_item(
+            runtime_path,
+            runtime_source,
+            "RuntimeEffectCandidateBinding",
+            "new",
+            errors,
+            "typed candidate binding constructor",
+            expected_attributes=("#[allow(clippy::too_many_arguments)]",),
+        )
+        for sequence, description in (
+            (
+                """
+candidate.statement.is_none_or(|statement| {
+    statement.validate_exact()
+        && statement.semantic_identity().as_slice()
+            == candidate.semantic_identity.as_slice()
+})
+&& (!runtime_candidate_kind_requires_statement(candidate.kind)
+    || candidate.statement.is_some())
+""",
+                "candidate binding construction must require matching typed evidence for every production candidate kind",
+            ),
+            (
+                """
+(
+    candidate.kind,
+    candidate.statement,
+    Some(semantic_identity),
+    Some(candidate_identity),
+)
+""",
+                "candidate binding construction must retain the validated typed statement",
+            ),
+            (
+                """
+candidate_kind,
+candidate_statement,
+candidate_semantic_identity,
+candidate_identity,
+""",
+                "candidate binding construction must publish statement and both derived identities together",
+            ),
+        ):
+            _require_rust_token_sequence(
+                runtime_path,
+                binding_new,
+                sequence,
+                description,
+                errors,
+            )
+
+        binding_validate = _require_qualified_rust_item(
+            runtime_path,
+            runtime_source,
+            "RuntimeEffectCandidateBinding",
+            "validate_exact",
+            errors,
+            "typed candidate binding validator",
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            binding_validate,
+            """
+(
+    candidate_kind,
+    candidate_statement,
+    Some(semantic_identity),
+    Some(candidate_identity),
+) => {
+    candidate_kind != RUNTIME_CANDIDATE_KIND_NONE
+        && self.candidate_count != 0
+        && self.candidate_position != 0
+        && self.candidate_position <= self.candidate_count
+        && (!runtime_candidate_kind_requires_statement(candidate_kind)
+            || candidate_statement.is_some())
+        && candidate_statement.is_none_or(|statement| {
+            statement.validate_exact()
+                && *semantic_identity
+                    == runtime_effect_candidate_semantic_hash(
+                        candidate_kind,
+                        &statement.semantic_identity(),
+                    )
+        })
+        && *candidate_identity
+            == runtime_effect_candidate_identity_hash(
+                owner,
+                candidate_kind,
+                semantic_identity,
+            )
+}
+""",
+            "candidate binding validation must rederive semantic and concrete identity from the retained typed statement and owner",
+            errors,
+        )
+
+        ownership_statement = _require_qualified_rust_item(
+            runtime_path,
+            runtime_source,
+            "RuntimeEffectOwnership",
+            "candidate_semantic_statement",
+            errors,
+            "typed candidate ownership accessor",
+        )
+        _require_exact_rust_tokens(
+            runtime_path,
+            ownership_statement,
+            """
+fn candidate_semantic_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
+    self.binding
+        .as_ref()
+        .and_then(|binding| binding.candidate_statement)
+}
+""",
+            "effect ownership must expose exactly the statement frozen in its validated binding",
+            errors,
+        )
+        for rebind_name, description in (
+            (
+                "rebind_as_inherited_adapter_effect",
+                "causal successor rebind must inherit the incumbent statement",
+            ),
+            (
+                "rebind_same_adapter_effect",
+                "same-effect retry rebind must inherit the incumbent statement",
+            ),
+        ):
+            rebind = _require_qualified_rust_item(
+                runtime_path,
+                runtime_source,
+                "RuntimeEffectOwnership",
+                rebind_name,
+                errors,
+                description,
+            )
+            _require_rust_token_sequence(
+                runtime_path,
+                rebind,
+                """
+let inherited = self.candidate_semantic_statement();
+let candidate = production_adapter_effect_candidate_binding(effect, inherited.as_ref())?;
+""",
+                description,
+                errors,
+            )
+
+        trace_projection = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "production_adapter_effect_candidate_trace_projection",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            trace_projection,
+            (),
+            "typed effect-to-candidate trace projection",
+            errors,
+            expected_attributes=("#[allow(clippy::too_many_arguments)]",),
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            trace_projection,
+            """
+let candidate = production_adapter_effect_candidate_binding(
+    effect,
+    binding.candidate_statement.as_ref(),
+)?;
+""",
+            "effect-to-candidate refinement must recompute from the independently retained typed statement",
+            errors,
+        )
+
+        retain_runtime_effects = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "retain_effect_ownership",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            retain_runtime_effects,
+            serialized_runtime_context,
+            "typed statement effect-batch retention",
+            errors,
+        )
+        for sequence, description in (
+            (
+                """
+fn retain_effect_ownership(
+    &mut self,
+    source: RuntimeEffectSource,
+    parent: Option<&RuntimeLifecycleOwner>,
+    parent_statement: Option<&RuntimeCandidateSemanticStatement>,
+    effects: &[D::Effect],
+) -> Result<(), EnqueueError>
+""",
+                "effect-batch retention must receive the selected parent's typed statement",
+            ),
+            (
+                """
+D::effect_candidate_semantic_binding(
+    effect,
+    matches!(causality, RuntimeEffectCausality::Inherit)
+        .then_some(parent_statement)
+        .flatten(),
+)
+""",
+                "only causally inherited effects may receive the parent statement",
+            ),
+            (
+                """
+let evidence = evidence.bind_runtime_effect(
+    matches!(causality, RuntimeEffectCausality::Inherit)
+        .then_some(parent)
+        .flatten(),
+    D::effect_refinement_kind(effect),
+    &D::effect_semantic_identity(effect),
+    candidate.as_ref(),
+""",
+                "effect retention must bind the derived typed candidate before publication",
+            ),
+        ):
+            _require_rust_token_sequence(
+                runtime_path,
+                retain_runtime_effects,
+                sequence,
+                description,
+                errors,
+            )
+
+        enqueue_successor = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "enqueue_with_lifecycle_owner",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            enqueue_successor,
+            serialized_runtime_context,
+            "candidate statement causal-successor ingress handoff",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            enqueue_successor,
+            """
+tagged.candidate_semantic_statement = ownership.candidate_semantic_statement();
+if !tagged.validate_admission_identity() {
+    self.latch_fail_closed("causal-successor candidate statement was invalid");
+    return Err(EnqueueError::FailClosed);
+}
+let result = self.enqueue_after_clock_reservation(tagged);
+""",
+            "causal-successor ingress must copy and validate the exact statement before publication",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            enqueue_successor,
+            """
+let preflight = self.command_admission_preflight(tag, class, &command)?;
+if self.owned_preflight_is_coalesced(tag, preflight, ownership)? {
+    return Ok(());
+}
+let mut tagged = match preflight {
+""",
+            "owned causal successors must validate a retained coalescence owner before admission",
+            errors,
+        )
+
+        owned_coalescence = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "owned_preflight_is_coalesced",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            owned_coalescence,
+            serialized_runtime_context,
+            "exact retained-owner coalescence gate",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            owned_coalescence,
+            """
+RuntimeCommandAdmissionPreflight::CoalesceOwned {
+    causal_lifecycle_key,
+    admission_ordinal,
+} => {
+    let owner = ownership.owner();
+    if owner.causal_origin().lifecycle_key != causal_lifecycle_key
+        || owner.lifecycle_ordinal() != admission_ordinal
+    {
+        self.latch_fail_closed(
+            "coalesced runtime command changed its retained lifecycle owner",
+        );
+        return Err(EnqueueError::FailClosed);
+    }
+    Ok(true)
+}
+""",
+            "terminal coalescence must compare both retained lifecycle coordinates and fail closed on replacement",
+            errors,
+        )
+
+        owned_completion = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "body_pipeline_completion_is_owned_by",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            owned_completion,
+            production_serialized_runtime_context,
+            "in-flight exact body-completion owner gate",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            owned_completion,
+            """
+let mut retained = self
+    .ingress
+    .exact_body_pipeline_completion_owners(tag, candidate)?;
+for ordinal in self
+    .driver
+    .deferred_body_pipeline_completion_exact_owner_ordinals(tag, candidate)
+{
+    let Some(deferred) = self.deferred_lifecycle_ownership.get(&ordinal) else {
+        self.latch_fail_closed(
+            "exact deferred body completion lost its runtime lifecycle owner",
+        );
+        return Err(EnqueueError::FailClosed);
+    };
+    retained.push(deferred.owner.clone());
+}
+if retained.len() != 1 || retained.first() != Some(ownership.owner()) {
+    self.latch_fail_closed("coalesced body completion changed its exact lifecycle owner");
+    return Err(EnqueueError::FailClosed);
+}
+""",
+            "in-flight body completion coalescence must join and compare its one exact runtime owner",
+            errors,
+        )
+
+        ingress_completion_owners = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "exact_body_pipeline_completion_owners",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            ingress_completion_owners,
+            bounded_ingress_context,
+            "in-flight ingress body-completion owner inventory",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            ingress_completion_owners,
+            """
+queued.command.body_pipeline_completion_ownership(candidate) == Some(true)
+""",
+            "in-flight ingress inventory must return only full-evidence exact owners",
+            errors,
+        )
+
+        enqueue_owned_completion = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "enqueue_body_pipeline_completion_with_owner",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            enqueue_owned_completion,
+            production_serialized_runtime_context,
+            "owned body-completion enqueue gate",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            enqueue_owned_completion,
+            """
+if self.body_pipeline_completion_is_owned_by(tag, &evidence, ownership)? {
+    return Ok(());
+}
+self.enqueue_with_lifecycle_owner(tag, CommandClass::Completion, command, ownership)
+""",
+            "owned body-completion retries must compare the incumbent before queue coalescence",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            owned_coalescence,
+            """
+RuntimeCommandAdmissionPreflight::Coalesce
+    if tag != self.driver.current_tag() =>
+{
+    Ok(true)
+}
+RuntimeCommandAdmissionPreflight::Coalesce => {
+    self.latch_fail_closed(
+        "owned runtime command reached current-tag coalescence without an exact owner",
+    );
+    Err(EnqueueError::FailClosed)
+}
+""",
+            "only stale callbacks may use ownerless coalescence on an owned ingress path",
+            errors,
+        )
+
+        take_runtime_ownership = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "take_effect_ownership",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            take_runtime_ownership,
+            serialized_runtime_context,
+            "runtime effect-ownership fail-closed handoff",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            take_runtime_ownership,
+            """
+let Some(ownership) = self.pending_effect_ownership.take() else {
+    self.latch_fail_closed("effect batch omitted its lifecycle ownership");
+    return Err("Sumeragi v2 effect batch omitted its lifecycle ownership".to_owned());
+};
+""",
+            "a missing nonempty runtime effect sidecar must latch fail closed before returning",
+            errors,
+        )
+
+        coalesced_body = _require_qualified_rust_item(
+            runtime_path,
+            runtime_source,
+            "BodyAvailableReservation",
+            "coalesced_with_owner",
+            errors,
+            "owned coalesced BodyAvailable token",
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            coalesced_body,
+            """
+reservation.lifecycle_ordinal = Some(ownership.owner().lifecycle_ordinal());
+reservation.causal_origin = Some(ownership.owner().causal_origin().clone());
+reservation.candidate_semantic_statement = ownership.candidate_semantic_statement();
+Ok(reservation)
+""",
+            "coalesced BodyAvailable tokens must retain owner coordinates and the candidate statement",
+            errors,
+        )
+
+        tagged_structs = rust_struct_items(runtime_source, "TaggedCommand")
+        if len(tagged_structs) != 1:
+            errors.append(
+                f"{runtime_path}: require exactly one real Rust struct item named "
+                f"TaggedCommand; found {len(tagged_structs)}"
+            )
+        else:
+            _require_rust_token_sequence(
+                runtime_path,
+                tagged_structs[0],
+                "candidate_semantic_statement: Option<RuntimeCandidateSemanticStatement>",
+                "queued runtime commands must retain the candidate statement",
+                errors,
+            )
+        tagged_context = (
+            (
+                "impl",
+                "<",
+                "C",
+                ":",
+                "ExactRuntimeCommandIdentity",
+                ">",
+                "TaggedCommand",
+                "<",
+                "C",
+                ">",
+            ),
+        )
+        tagged_candidates = [
+            item
+            for item in rust_items(runtime_source, "validate_admission_identity")
+            if item.brace_context == tagged_context
+        ]
+        if len(tagged_candidates) != 1:
+            errors.append(
+                f"{runtime_path}: require exactly one TaggedCommand candidate "
+                "statement admission validator; found "
+                f"{len(tagged_candidates)}"
+            )
+            tagged_validate = None
+        else:
+            tagged_validate = tagged_candidates[0]
+            _require_rust_item_context(
+                runtime_path,
+                tagged_validate,
+                tagged_context,
+                "queued candidate statement admission validation",
+                errors,
+            )
+        _require_rust_token_sequence(
+            runtime_path,
+            tagged_validate,
+            """
+self.candidate_semantic_statement.is_none_or(|statement| {
+    statement.validate_exact() && statement.round.height == self.tag.height()
+})
+""",
+            "queued candidate statements must remain exact and height-scoped",
+            errors,
+        )
+
+        reservation_structs = rust_struct_items(
+            runtime_source, "BodyAvailableReservation"
+        )
+        if len(reservation_structs) != 1:
+            errors.append(
+                f"{runtime_path}: require exactly one real Rust struct item "
+                "named BodyAvailableReservation; found "
+                f"{len(reservation_structs)}"
+            )
+        else:
+            _require_rust_token_sequence(
+                runtime_path,
+                reservation_structs[0],
+                "candidate_semantic_statement: Option<RuntimeCandidateSemanticStatement>",
+                "BodyAvailable capacity reservation must retain the candidate statement",
+                errors,
+            )
+        reserve_body = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "reserve_canonical_body_available_internal",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            reserve_body,
+            bounded_ingress_context,
+            "candidate statement BodyAvailable capacity reservation",
+            errors,
+        )
+        for sequence, description in (
+            (
+                "prospective.candidate_semantic_statement = candidate_semantic_statement;",
+                "BodyAvailable preflight must install the inherited statement on the prospective command",
+            ),
+            (
+                "existing.candidate_semantic_statement == candidate_semantic_statement",
+                "BodyAvailable coalescing must compare the complete inherited statement",
+            ),
+            (
+                "reservation.candidate_semantic_statement = candidate_semantic_statement;",
+                "BodyAvailable reservation publication must retain the inherited statement",
+            ),
+        ):
+            _require_rust_token_sequence(
+                runtime_path,
+                reserve_body,
+                sequence,
+                description,
+                errors,
+            )
+        commit_body = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "commit_canonical_body_available",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            commit_body,
+            bounded_ingress_context,
+            "candidate statement BodyAvailable materialization",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            commit_body,
+            """
+command.candidate_semantic_statement = reservation.candidate_semantic_statement;
+command.restored_producer_stage = reservation.restored_producer_stage;
+command.causal_origin = reservation
+    .causal_origin
+    .clone()
+    .ok_or(EnqueueError::FailClosed)?;
+if !command.validate_admission_identity() {
+    return Err(EnqueueError::FailClosed);
+}
+""",
+            "BodyAvailable materialization must copy and validate the reserved statement before ingress",
+            errors,
+        )
+        reserve_owned_body = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "reserve_body_available_with_owner",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            reserve_owned_body,
+            production_serialized_runtime_context,
+            "owned BodyAvailable statement handoff",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            reserve_owned_body,
+            """
+let preflight =
+    self.command_admission_preflight(tag, CommandClass::Completion, &command)?;
+if self.owned_preflight_is_coalesced(tag, preflight, ownership)? {
+    return BodyAvailableReservation::coalesced_with_owner(tag, manifest, ownership);
+}
+""",
+            "owned BodyAvailable tombstone coalescence must pass the exact retained-owner gate",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            reserve_owned_body,
+            """
+let already_owned =
+    self.body_pipeline_completion_is_owned_by(tag, &evidence, ownership)?;
+if already_owned && self.ingress.reserved_body_available.is_none() {
+    return BodyAvailableReservation::coalesced_with_owner(tag, manifest, ownership);
+}
+""",
+            "owned BodyAvailable queue coalescence must compare and retain the incumbent owner",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            reserve_owned_body,
+            """
+let result = self.ingress.reserve_canonical_body_available_internal(
+    tag,
+    manifest,
+    Some(owner),
+    ownership.candidate_semantic_statement(),
+""",
+            "owned BodyAvailable reservation must receive the incumbent effect statement",
+            errors,
+        )
+
+        deferred_structs = rust_struct_items(
+            runtime_source, "RuntimeDeferredLifecycleOwnership"
+        )
+        if len(deferred_structs) != 1:
+            errors.append(
+                f"{runtime_path}: require exactly one real Rust struct item named "
+                "RuntimeDeferredLifecycleOwnership; found "
+                f"{len(deferred_structs)}"
+            )
+        else:
+            _require_rust_token_sequence(
+                runtime_path,
+                deferred_structs[0],
+                "candidate_semantic_statement: Option<RuntimeCandidateSemanticStatement>",
+                "adapter-deferred ownership must retain the candidate statement",
+                errors,
+            )
+        deferred_validate = _require_qualified_rust_item(
+            runtime_path,
+            runtime_source,
+            "RuntimeDeferredLifecycleOwnership",
+            "validate_exact",
+            errors,
+            "adapter-deferred candidate statement validation",
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            deferred_validate,
+            """
+self.candidate_semantic_statement
+    .is_none_or(RuntimeCandidateSemanticStatement::validate_exact)
+""",
+            "adapter-deferred ownership must validate every retained candidate statement",
+            errors,
+        )
+        deferred_install = _require_qualified_rust_item(
+            runtime_path,
+            runtime_source,
+            "RuntimeDeferredLifecycleOwnership",
+            "with_candidate_semantic_statement",
+            errors,
+            "adapter-deferred candidate statement installation",
+        )
+        _require_exact_rust_tokens(
+            runtime_path,
+            deferred_install,
+            """
+fn with_candidate_semantic_statement(
+    mut self,
+    statement: Option<RuntimeCandidateSemanticStatement>,
+) -> Result<Self, EnqueueError> {
+    self.candidate_semantic_statement = statement;
+    self.validate_exact()
+        .then_some(self)
+        .ok_or(EnqueueError::FailClosed)
+}
+""",
+            "adapter-deferred ownership must validate a statement before installing it",
+            errors,
+        )
+        deferred_rebase = _require_qualified_rust_item(
+            runtime_path,
+            runtime_source,
+            "RuntimeDeferredLifecycleOwnership",
+            "rebase_deferred_ingress",
+            errors,
+            "adapter-deferred ingress rebase statement retention",
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            deferred_rebase,
+            "candidate_semantic_statement: self.candidate_semantic_statement,",
+            "deferred ingress rebasing must not rewrite the retained candidate statement",
+            errors,
+        )
+        accept_dispatch = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "accept_driver_dispatch",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            accept_dispatch,
+            serialized_runtime_context,
+            "adapter-deferred candidate statement handoff",
+            errors,
+        )
+        for sequence, description in (
+            (
+                "existing.candidate_semantic_statement != parent_statement",
+                "an existing deferred occurrence must reject candidate statement replacement",
+            ),
+            (
+                "ownership.with_candidate_semantic_statement(parent_statement)",
+                "a new deferred occurrence must install the selected parent statement",
+            ),
+        ):
+            _require_rust_token_sequence(
+                runtime_path,
+                accept_dispatch,
+                sequence,
+                description,
+                errors,
+            )
+        dispatch_deferred = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "dispatch_one_adapter_deferred",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            dispatch_deferred,
+            serialized_runtime_context,
+            "adapter-deferred candidate statement service handoff",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            dispatch_deferred,
+            """
+let parent_statement = lifecycle_ownership.candidate_semantic_statement;
+""",
+            "deferred service must recover the exact retained candidate statement",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            dispatch_deferred,
+            """
+self.retain_effect_ownership(
+    RuntimeEffectSource::Deferred,
+    Some(&lifecycle_owner),
+    parent_statement.as_ref(),
+    &effects,
+)
+""",
+            "deferred service effects must inherit the exact retained candidate statement",
+            errors,
+        )
+
+        for item_name, selected_kind, description in (
+            (
+                "dispatch_one_fence_dependency",
+                "RuntimeEffectSource::Fifo",
+                "fence-completion candidate statement handoff",
+            ),
+            (
+                "step_recovery",
+                "RuntimeEffectSource::Fifo",
+                "recovery FIFO candidate statement handoff",
+            ),
+        ):
+            dispatch = _require_rust_item(
+                runtime_path,
+                runtime_source,
+                item_name,
+                errors,
+            )
+            _require_rust_item_context(
+                runtime_path,
+                dispatch,
+                serialized_runtime_context,
+                description,
+                errors,
+            )
+            _require_rust_token_sequence(
+                runtime_path,
+                dispatch,
+                "let parent_statement = command.candidate_semantic_statement;",
+                f"{description} must recover the statement from the selected command",
+                errors,
+            )
+            _require_rust_token_sequence(
+                runtime_path,
+                dispatch,
+                f"""
+self.retain_effect_ownership(
+    {selected_kind},
+    Some(&owner),
+    parent_statement.as_ref(),
+    &effects,
+)
+""",
+                f"{description} must pass the statement into successor effect binding",
+                errors,
+            )
+
+        live_step = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "step",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            live_step,
+            serialized_runtime_context,
+            "live FIFO candidate statement handoff",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            live_step,
+            "let parent_statement = command.candidate_semantic_statement;",
+            "live FIFO dispatch must recover the statement from the selected command",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            live_step,
+            """
+self.retain_effect_ownership(
+    effect_source,
+    Some(&effect_parent),
+    effect_parent_statement.as_ref(),
+    &effects,
+)
+""",
+            "live dispatch must pass the selected statement into successor effect binding",
+            errors,
+        )
+
+    adapter_path = effects_path.with_name("v2.rs")
+    if not adapter_path.is_file() or adapter_path.is_symlink():
+        errors.append(
+            f"{adapter_path}: durable producer tombstone source must be a regular file"
+        )
+    else:
+        adapter_source = adapter_path.read_text(encoding="utf-8")
+        deferred_exact_owners = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "deferred_body_pipeline_completion_exact_owner_ordinals",
+            errors,
+        )
+        _require_rust_item_context(
+            adapter_path,
+            deferred_exact_owners,
+            (("impl", "SumeragiV2Adapter"),),
+            "Busy-deferred exact completion owner inventory",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            deferred_exact_owners,
+            """
+input.completion_evidence.as_ref() == Some(candidate)
+    && deferred_body_pipeline_completion_stage(input, tag, round, subject)
+        == Some(expected_stage)
+""",
+            "Busy-deferred owner inventory must require the exact stage and full completion evidence",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            deferred_exact_owners,
+            ".map(|input| input.admission_ordinal)",
+            "Busy-deferred owner inventory must return the runtime ownership-map key",
+            errors,
+        )
+        adapter_preflight = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "preflight_runtime_command_admission",
+            errors,
+        )
+        _require_rust_item_context(
+            adapter_path,
+            adapter_preflight,
+            (("impl", "SumeragiV2Adapter"),),
+            "durable producer-tombstone admission preflight",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            adapter_preflight,
+            """
+let serviced = self.serviced_candidates.contains_key(&key);
+let matching = self
+    .producer_continuations
+    .iter()
+    .filter(|(_, record)| record.identity().candidate() == key)
+    .collect::<Vec<_>>();
+""",
+            "terminal preflight must join the service marker to its exact producer record",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            adapter_preflight,
+            """
+let identity = record.identity();
+if serviced
+    || record.status() != ProducerContinuationStatus::Reserved
+    || !self
+        .restored_dormant_producer_continuations
+        .contains(address)
+    || self.durable_producer_continuations.get(address) != Some(record)
+{
+    return Preflight::CoalesceOwned {
+        causal_lifecycle_key: identity.causal_lifecycle_key(),
+        admission_ordinal: identity.admission_ordinal(),
+    };
+}
+""",
+            "live and terminal producer coalescence must return the immutable retained owner",
+            errors,
+        )
+
     drain = _require_rust_item(
         effects_path,
         source,
@@ -35617,14 +38464,30 @@ Err(error) => return Err(error),
         begin_fetch,
         """
 let same_lifecycle = existing.task.ownership == ownership;
+if existing.task.tag != tag {
+    return Err(EffectExecutorError::Contract(
+        "conflicting retransmission for one body-fetch round/subject".to_owned(),
+    ));
+}
+if !same_lifecycle {
+    return Err(EffectExecutorError::Contract(
+        "body-fetch retry or authority upgrade changed its exact lifecycle owner"
+            .to_owned(),
+    ));
+}
 """,
-        "exact Fetch coalescing must distinguish the incumbent lifecycle from a younger periodic producer",
+        "Fetch owner replacement must fail before request, refinement, or service planning",
         errors,
     )
     _require_rust_token_sequence(
         effects_path,
         begin_fetch,
         """
+let merged_ownership = existing
+    .task
+    .ownership
+    .rebind_same_adapter_effect(&merged_effect)
+    .map_err(EffectExecutorError::Contract)?;
 let merged = BodyFetchTask {
     id: existing_id,
     tag,
@@ -35633,10 +38496,10 @@ let merged = BodyFetchTask {
     manifest: merged_manifest,
     sources: merged_sources,
     certified_request: merged_request,
-    ownership: existing.task.ownership.clone(),
+    ownership: merged_ownership,
 };
 """,
-        "coalesced Fetch retries must retain the immutable incumbent service owner",
+        "coalesced Fetch retries must rebind the concrete effect while retaining the incumbent owner",
         errors,
     )
     _require_rust_token_sequence(
@@ -35644,11 +38507,6 @@ let merged = BodyFetchTask {
         begin_fetch,
         """
 if merged == existing.task {
-    if same_lifecycle {
-        return Err(EffectExecutorError::PendingWorkCapacity {
-            capacity: self.config.max_pending_work,
-        });
-    }
     services.enqueue_body_fetch(merged).map_err(service_error)?;
     return Ok(());
 }
@@ -35656,7 +38514,7 @@ services
     .enqueue_body_fetch(merged.clone())
     .map_err(service_error)?;
 """,
-        "an incumbent Fetch retry must retain its FIFO barrier while a younger coalesced lifecycle retries service once and is consumed",
+        "same-owner Fetch retries and upgrades must reach the idempotent service seam after the early owner gate",
         errors,
     )
     _require_rust_token_sequence(
@@ -35676,15 +38534,9 @@ let pending = self
     .expect("serialized body-fetch owner remains present after admission");
 pending.task = merged;
 pending.request_hash = request_hash;
-return if same_lifecycle {
-    Err(EffectExecutorError::PendingWorkCapacity {
-        capacity: self.config.max_pending_work,
-    })
-} else {
-    Ok(())
-};
+return Ok(());
 """,
-        "an existing Fetch authority upgrade must install exact P/Q state, retain only the incumbent FIFO barrier, and consume a younger coalesced lifecycle",
+        "a successful same-owner Fetch authority upgrade must atomically install P/Q state and drain its retry",
         errors,
     )
     if begin_fetch is not None:
@@ -35696,6 +38548,11 @@ return if same_lifecycle {
             errors,
         )
         begin_fetch_tokens = rust_code_tokens(begin_fetch.source)
+        owner_barrier_tokens = rust_code_tokens("if !same_lifecycle")
+        request_plan_tokens = rust_code_tokens("self.plan_certified_fetch_request(")
+        refinement_tokens = rust_code_tokens(
+            "existing.task.ownership.rebind_same_adapter_effect(&merged_effect)"
+        )
         barrier_tokens = rust_code_tokens("if merged == existing.task")
         retry_enqueue_tokens = rust_code_tokens(
             "services.enqueue_body_fetch(merged).map_err(service_error)?"
@@ -35727,6 +38584,42 @@ return if same_lifecycle {
             if begin_fetch_tokens[index : index + len(upgrade_enqueue_tokens)]
             == upgrade_enqueue_tokens
         ]
+        owner_barrier_positions = [
+            index
+            for index in range(
+                len(begin_fetch_tokens) - len(owner_barrier_tokens) + 1
+            )
+            if begin_fetch_tokens[index : index + len(owner_barrier_tokens)]
+            == owner_barrier_tokens
+        ]
+        request_plan_positions = [
+            index
+            for index in range(
+                len(begin_fetch_tokens) - len(request_plan_tokens) + 1
+            )
+            if begin_fetch_tokens[index : index + len(request_plan_tokens)]
+            == request_plan_tokens
+        ]
+        refinement_positions = [
+            index
+            for index in range(
+                len(begin_fetch_tokens) - len(refinement_tokens) + 1
+            )
+            if begin_fetch_tokens[index : index + len(refinement_tokens)]
+            == refinement_tokens
+        ]
+        if not (
+            len(owner_barrier_positions) == 1
+            and len(request_plan_positions) == 2
+            and len(refinement_positions) == 1
+            and owner_barrier_positions[0] < min(request_plan_positions)
+            and owner_barrier_positions[0] < refinement_positions[0]
+        ):
+            errors.append(
+                f"{effects_path}:{begin_fetch.line}: begin_fetch must reject "
+                "one foreign incumbent owner before either request planner "
+                "and before candidate refinement evidence"
+            )
         if not (
             len(barrier_positions) == 1
             and len(retry_enqueue_positions) == 1
@@ -35736,8 +38629,8 @@ return if same_lifecycle {
         ):
             errors.append(
                 f"{effects_path}:{begin_fetch.line}: begin_fetch must keep one "
-                "merged == existing.task barrier, one younger-lifecycle retry "
-                "enqueue inside it, and one later authority-upgrade enqueue"
+                "merged == existing.task barrier, one same-owner retry "
+                "enqueue inside it, and one later same-owner authority-upgrade enqueue"
             )
         for forbidden_source in (
             "self.retained_effect_batch",
@@ -54406,6 +57299,1067 @@ def _adequate_leader_scheduler_readiness_source_fidelity_errors(
     return errors
 
 
+def _async_candidate_semantic_identity_contract_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Keep coalescing identity semantic while concrete identity retains bytes."""
+
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    if not path.is_file() or path.is_symlink():
+        return [
+            f"{path}: async candidate semantic-identity contract must be a "
+            "regular file"
+        ]
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        return [f"{path}: cannot read candidate semantic identity: {error}"]
+
+    errors: list[str] = []
+    semantic = _top_level_operator_body(
+        source,
+        "AsyncCandidateSemanticStatement",
+        preserve_string_contents=True,
+    )
+    expected_fields = (
+        "context",
+        "round",
+        "proposalRound",
+        "subject",
+        "phase",
+        "executionCommitment",
+    )
+    if semantic is None:
+        errors.append(
+            f"{path}: missing reviewed candidate semantic-identity operator "
+            "AsyncCandidateSemanticStatement"
+        )
+    else:
+        body, line = semantic
+        normalized = " ".join(body.split())
+        observed_fields = tuple(
+            re.findall(r"\b([A-Za-z][A-Za-z0-9_]*)\s*\|->", body)
+        )
+        if observed_fields != expected_fields:
+            errors.append(
+                f"{path}:{line}: AsyncCandidateSemanticStatement fields must "
+                "equal exactly frozen context, round, proposalRound, subject, "
+                "phase, and executionCommitment in that order; "
+                f"found {observed_fields!r}"
+            )
+        required_fragments = (
+            "context |-> candidate.causalOrigin.context",
+            "round |-> AsyncCandidateRound( candidate.causalOrigin.context, "
+            "candidate.height, candidate.view)",
+            "proposalRound |-> candidate.proposalRound",
+            "subject |-> candidate.subject",
+            "phase |-> candidate.semanticPhase",
+            "executionCommitment |-> candidate.commitmentIdentity",
+        )
+        missing = [
+            fragment
+            for fragment in required_fragments
+            if normalized.count(fragment) != 1
+        ]
+        if missing:
+            errors.append(
+                f"{path}:{line}: AsyncCandidateSemanticStatement must retain "
+                f"the reviewed frozen semantic projections {missing!r}"
+            )
+        forbidden_dependencies = (
+            "candidate.node",
+            "candidate.class",
+            "candidate.kind",
+            "candidate.item",
+            "candidate.evidence",
+            "candidate.bodyIdentity",
+            "candidate.manifestIdentity",
+            "candidate.consumerGeneration",
+            "AsyncCandidateQcSemanticPayload",
+            "AsyncCandidatePrepareQcSemanticPayload",
+            "AsyncCandidateVoteSemanticPayload",
+            "AsyncCandidateTimeoutVoteSemanticPayload",
+            "AsyncCandidateTcSemanticPayload",
+            "AsyncCandidateProposalSemanticPayload",
+            "AsyncCandidateCertifiedRequestHashSemanticPayload",
+            "AsyncCandidateCertifiedRequestItemSemanticPayload",
+            "AsyncCandidateCommitRequestItemSemanticPayload",
+            "AsyncRouteNeutralCandidateItem",
+            "AsyncRouteNeutralCandidateEvidence",
+            "CertificateRefOf",
+        )
+        forbidden = [
+            token
+            for token in forbidden_dependencies
+            if _tla_dependency_present(body, token)
+        ]
+        if forbidden:
+            errors.append(
+                f"{path}:{line}: AsyncCandidateSemanticStatement may not retain "
+                "concrete bytes, signer/aggregate carriers, routes, owners, or "
+                f"local incarnation state; found {forbidden!r}"
+            )
+
+    def require_exact_phase_operator(symbol: str, expected: str) -> None:
+        extracted = _top_level_operator_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed candidate semantic-phase operator "
+                f"{symbol}"
+            )
+            return
+        body, line = extracted
+        observed = re.sub(r"\s+", "", body)
+        if observed != expected:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain the exact closed "
+                "candidate semantic-phase projection; "
+                f"expected {expected!r}, found {observed!r}"
+            )
+
+    exact_phase_operators = {
+        "NoAsyncCandidateSemanticPhase": '"NoCandidateSemanticPhase"',
+        "AsyncCandidateSemanticPhases": (
+            "Phases\\cup{NoAsyncCandidateSemanticPhase}"
+        ),
+        "AsyncCandidatePrepareQcSemanticPhase": (
+            "IFqc=NoPrepareQCTHENNoAsyncCandidateSemanticPhaseELSEqc.phase"
+        ),
+        "AsyncCandidateItemSemanticPhase": (
+            "IFitem=NoAsyncItemTHENNoAsyncCandidateSemanticPhaseELSECASE"
+            'item.kind\\in{"PrepareVote","PrepareQC"}->"Prepare"[]'
+            'item.kind\\in{"CommitVote","CommitQC",'
+            '"CommitCertificateResponse"}->"Commit"[]'
+            'item.kind="TimeoutVote"->AsyncCandidatePrepareQcSemanticPhase('
+            "item.envelope.vote.highestPrepareQc)[]"
+            'item.kind="TimeoutCertificate"->'
+            "AsyncCandidatePrepareQcSemanticPhase("
+            "item.envelope.tc.highestPrepareQc)[]"
+            'item.kind="CertifiedRequest"->item.envelope.certificate.phase[]'
+            'item.kind="CertifiedResponse"->'
+            "item.envelope.requestHash.exactSignedRequest.preimage.certificate.phase[]"
+            "OTHER->NoAsyncCandidateSemanticPhase"
+        ),
+        "AsyncCandidateEvidenceSemanticPhase": (
+            "IFevidence=NoAsyncItemTHENNoAsyncCandidateSemanticPhaseELSEIF"
+            "evidence\\inAsyncNetworkItemsTHENAsyncCandidateItemSemanticPhase("
+            "evidence)ELSEIFevidence\\inVoteRecordSetTHENevidence.phaseELSEIF"
+            "evidence\\inQcRecordSetTHENevidence.phaseELSEIF"
+            "evidence\\inTimeoutVoteRecordSetTHEN"
+            "AsyncCandidatePrepareQcSemanticPhase(evidence.highestPrepareQc)"
+            "ELSEIFevidence\\inTcRecordSetTHEN"
+            "AsyncCandidatePrepareQcSemanticPhase(evidence.highestPrepareQc)"
+            "ELSENoAsyncCandidateSemanticPhase"
+        ),
+        "AsyncCandidateSemanticPhase": (
+            "LETevidencePhase==AsyncCandidateEvidenceSemanticPhase(evidence)"
+            "itemPhase==AsyncCandidateItemSemanticPhase(item)INCASE"
+            'kind\\in{"AssembleBody","BeginProposal","PersistProposal",'
+            '"SignProposal","StoreBody","ValidateBody","DeliverProposal"}'
+            "->NoAsyncCandidateSemanticPhase[]"
+            'kind\\in{"BeginPrepare","PersistPrepare","FormPrepareQC",'
+            '"BeginObservePrepare","PersistObservePrepare"}->"Prepare"[]'
+            'kind\\in{"BeginLockCommit","PersistLockCommit","FormCommitQC",'
+            '"BeginDecision","PersistDecision","Apply"}->"Commit"[]'
+            "evidencePhase#NoAsyncCandidateSemanticPhase->evidencePhase[]"
+            "OTHER->itemPhase"
+        ),
+        "AsyncCandidateSuccessorSemanticPhase": (
+            'IF/\\kind="SignVote"/\\command.kind="PersistPrepare"THEN'
+            '"Prepare"ELSEIF/\\kind="SignVote"/\\command.kind='
+            '"PersistLockCommit"THEN"Commit"ELSEIF/\\kind="SignTimeout"'
+            "/\\AsyncCandidateSignTimeoutRequests(command)#{}THEN"
+            "LETrequest==CHOOSEpending\\in"
+            "AsyncCandidateSignTimeoutRequests(command):TRUEIN"
+            "AsyncCandidatePrepareQcSemanticPhase("
+            "request.vote.highestPrepareQc)ELSE"
+            "AsyncCandidateSemanticPhase(kind,NoAsyncItem,command.evidence)"
+        ),
+    }
+    for symbol, expected in exact_phase_operators.items():
+        require_exact_phase_operator(symbol, expected)
+
+    payload = _top_level_operator_body(
+        source,
+        "AsyncCandidateServicePayload",
+        preserve_string_contents=True,
+    )
+    if payload is None:
+        errors.append(
+            f"{path}: missing reviewed candidate semantic payload operator "
+            "AsyncCandidateServicePayload"
+        )
+    else:
+        body, line = payload
+        normalized = " ".join(body.split())
+        if normalized != "AsyncCandidateSemanticStatement(candidate)":
+            errors.append(
+                f"{path}:{line}: AsyncCandidateServicePayload must equal only "
+                "AsyncCandidateSemanticStatement(candidate); "
+                f"found {normalized!r}"
+            )
+
+    identity = _top_level_operator_body(
+        source,
+        "AsyncCandidateServiceIdentity",
+        preserve_string_contents=True,
+    )
+    if identity is None:
+        errors.append(
+            f"{path}: missing reviewed candidate semantic-identity operator "
+            "AsyncCandidateServiceIdentity"
+        )
+    else:
+        body, line = identity
+        forbidden = [
+            token
+            for token in (
+                "candidate.consumerContext",
+                "candidate.consumerView",
+                "candidate.consumerGeneration",
+                "candidate.class",
+                "candidate.item",
+                "candidate.evidence",
+                "candidate.bodyIdentity",
+                "candidate.manifestIdentity",
+                "AsyncRouteNeutralCandidateItem",
+                "AsyncRouteNeutralCandidateEvidence",
+            )
+            if _tla_dependency_present(body, token)
+        ]
+        if body.count("AsyncCandidateServicePayload") != 1 or forbidden:
+            errors.append(
+                f"{path}:{line}: AsyncCandidateServiceIdentity must project "
+                "exactly one six-field AsyncCandidateServicePayload and keep "
+                "concrete carriers or local incarnation outside semantic "
+                f"identity; found forbidden={forbidden!r}"
+            )
+
+    concrete = _top_level_operator_body(
+        source,
+        "ExactAsyncCandidateIdentity",
+        preserve_string_contents=True,
+    )
+    if concrete is None:
+        errors.append(
+            f"{path}: missing concrete candidate identity "
+            "ExactAsyncCandidateIdentity"
+        )
+    else:
+        body, line = concrete
+        required_concrete = (
+            "AsyncConsumerEventTag(candidate)",
+            "candidate.item",
+            "candidate.evidence",
+            "candidate.causalOrigin",
+            "AsyncWorkIdentity(candidate)",
+            "candidate.bodyIdentity",
+            "candidate.manifestIdentity",
+            "candidate.commitmentIdentity",
+        )
+        missing = [
+            token
+            for token in required_concrete
+            if not _tla_dependency_present(body, token)
+        ]
+        if missing:
+            errors.append(
+                f"{path}:{line}: ExactAsyncCandidateIdentity must retain full "
+                f"concrete effect bytes and incarnation {missing!r}"
+            )
+    return errors
+
+
+def _async_candidate_proposal_round_contract_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Keep the candidate proposal round internal, exact, and causal."""
+
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    if not path.is_file() or path.is_symlink():
+        return [
+            f"{path}: candidate proposal-round contract must be a regular file"
+        ]
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        return [f"{path}: cannot read candidate proposal-round contract: {error}"]
+
+    errors: list[str] = []
+
+    def operator(symbol: str) -> tuple[str, int] | None:
+        return _top_level_operator_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+
+    def compact(body: str) -> str:
+        return re.sub(r"\s+", "", body)
+
+    exact_operators = {
+        "AsyncCandidateRound": (
+            "[context |-> roundContext, height |-> blockHeight, "
+            "view |-> roundView]"
+        ),
+        "AsyncCandidateRoundSet": (
+            "[context: ContextRecords, height: Heights, view: Views]"
+        ),
+        "AsyncCandidateSuccessorProposalRound": (
+            'IF kind = "SignTimeout" THEN '
+            "AsyncCandidateSignTimeoutProposalRound(command) "
+            "ELSE command.proposalRound"
+        ),
+        "AsyncCandidateSignTimeoutRequests": (
+            "{request \\in signTimeouts: "
+            "/\\ command.node = request.node "
+            "/\\ command.height = request.vote.context.height "
+            "/\\ command.view = request.vote.view "
+            "/\\ command.subject = request.vote.highSubject}"
+        ),
+        "AsyncCandidateSignTimeoutProposalRound": (
+            "LET requests == AsyncCandidateSignTimeoutRequests(command) "
+            "IN IF requests = {} THEN AsyncCandidateRound( "
+            "command.consumerContext, command.height, command.view) "
+            "ELSE LET request == CHOOSE pending \\in requests: TRUE "
+            "vote == request.vote "
+            "IN IF vote.highestPrepareQc = NoPrepareQC "
+            "THEN AsyncCandidateRound(vote.context, vote.height, vote.view) "
+            "ELSE LET qc == vote.highestPrepareQc "
+            "IN AsyncCandidateRound(qc.context, qc.height, qc.view)"
+        ),
+    }
+    for symbol, expected in exact_operators.items():
+        extracted = operator(symbol)
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed candidate proposal-round operator "
+                f"{symbol}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain the exact reviewed "
+                f"proposal-round derivation; expected {expected!r}, "
+                f"found {normalized!r}"
+            )
+
+    item_evidence = operator("AsyncCandidateItemProposalRound")
+    if item_evidence is None:
+        errors.append(
+            f"{path}: missing exact network-item proposal-round projection"
+        )
+    else:
+        body, line = item_evidence
+        observed = compact(body)
+        required_branches = (
+            'item.kind="Proposal"->LETproposal==item.envelope.proposalIN'
+            "AsyncCandidateRound(proposal.context,proposal.height,proposal.view)",
+            'item.kind\\in{"PrepareVote","CommitVote"}->LETvote=='
+            "item.envelope.voteINAsyncCandidateRound("
+            "vote.context,vote.height,vote.view)",
+            'item.kind\\in{"PrepareQC","CommitQC"}->LETqc=='
+            "item.envelope.qcINAsyncCandidateRound(qc.context,qc.height,qc.view)",
+            'item.kind="TimeoutVote"->LETvote==item.envelope.voteINIF'
+            "vote.highestPrepareQc=NoPrepareQCTHENAsyncCandidateRound("
+            "vote.context,vote.height,vote.view)ELSELETqc=="
+            "vote.highestPrepareQcINAsyncCandidateRound("
+            "qc.context,qc.height,qc.view)",
+            'item.kind="TimeoutCertificate"->LETtc==item.envelope.tcINIF'
+            "tc.highestPrepareQc=NoPrepareQCTHENAsyncCandidateRound("
+            "tc.context,tc.height,tc.view)ELSELETqc==tc.highestPrepareQcIN"
+            "AsyncCandidateRound(qc.context,qc.height,qc.view)",
+            'item.kind="CertifiedRequest"->LETqc=='
+            "item.envelope.certificateINAsyncCandidateRound("
+            "qc.context,qc.height,qc.view)",
+            'item.kind="CertifiedResponse"->LETqc=='
+            "item.envelope.requestHash.exactSignedRequest.preimage.certificateIN"
+            "AsyncCandidateRound(qc.context,qc.height,qc.view)",
+            'item.kind="CommitCertificateResponse"->LETqc=='
+            "item.envelope.qcINAsyncCandidateRound(qc.context,qc.height,qc.view)",
+            "OTHER->AsyncCandidateRound(defaultRound.context,"
+            "item.envelope.height,item.envelope.view)",
+        )
+        missing = [
+            branch for branch in required_branches if observed.count(branch) != 1
+        ]
+        if missing or observed.count("[]") != 8:
+            errors.append(
+                f"{path}:{line}: AsyncCandidateItemProposalRound must derive "
+                "each root from its exact authenticated network, QC, vote, "
+                "timeout, or proposal evidence through the closed nine-arm "
+                f"table; missing={missing!r}"
+            )
+
+    root_evidence = operator("AsyncCandidateEvidenceProposalRound")
+    if root_evidence is None:
+        errors.append(
+            f"{path}: missing exact root-evidence proposal-round projection"
+        )
+    else:
+        body, line = root_evidence
+        observed = compact(body)
+        observed_carriers = tuple(
+            re.findall(
+                r"evidence\\in([A-Za-z][A-Za-z0-9_]*)(?=THEN)",
+                observed,
+            )
+        )
+        expected_carriers = (
+            "AsyncNetworkItems",
+            "QcRecordSet",
+            "VoteRecordSet",
+            "TimeoutVoteRecordSet",
+            "TcRecordSet",
+            "ProposalRecordSet",
+        )
+        required_branches = (
+            "evidence\\inAsyncNetworkItemsTHEN"
+            "AsyncCandidateItemProposalRound(defaultRound,evidence)",
+            "evidence\\inQcRecordSetTHENAsyncCandidateRound("
+            "evidence.context,evidence.height,evidence.view)",
+            "evidence\\inVoteRecordSetTHENAsyncCandidateRound("
+            "evidence.context,evidence.height,evidence.view)",
+            "evidence\\inTimeoutVoteRecordSetTHENIF"
+            "evidence.highestPrepareQc=NoPrepareQCTHENAsyncCandidateRound("
+            "evidence.context,evidence.height,evidence.view)ELSELETqc=="
+            "evidence.highestPrepareQcINAsyncCandidateRound("
+            "qc.context,qc.height,qc.view)",
+            "evidence\\inTcRecordSetTHENIF"
+            "evidence.highestPrepareQc=NoPrepareQCTHENAsyncCandidateRound("
+            "evidence.context,evidence.height,evidence.view)ELSELETqc=="
+            "evidence.highestPrepareQcINAsyncCandidateRound("
+            "qc.context,qc.height,qc.view)",
+            "evidence\\inProposalRecordSetTHENAsyncCandidateRound("
+            "evidence.context,evidence.height,evidence.view)",
+        )
+        missing = [
+            branch for branch in required_branches if observed.count(branch) != 1
+        ]
+        if (
+            observed_carriers != expected_carriers
+            or missing
+            or not observed.endswith("ELSEdefaultRound")
+        ):
+            errors.append(
+                f"{path}:{line}: AsyncCandidateEvidenceProposalRound must "
+                "derive roots from the closed exact evidence table and use "
+                "defaultRound only for evidence-free roots; "
+                f"carriers={observed_carriers!r}, missing={missing!r}"
+            )
+
+    root_constructor = operator("AsyncCandidateWithIdentityAndOrigin")
+    if root_constructor is None:
+        errors.append(
+            f"{path}: missing reviewed candidate root constructor"
+        )
+    else:
+        body, line = root_constructor
+        observed = compact(body)
+        expected_projection = (
+            "proposalRound|->AsyncCandidateEvidenceProposalRound("
+            "AsyncCandidateRound(consumerContext,blockHeight,roundView),"
+            "evidence)"
+        )
+        if observed.count(expected_projection) != 1:
+            errors.append(
+                f"{path}:{line}: AsyncCandidateWithIdentityAndOrigin must "
+                "derive exactly one internal proposalRound from its exact "
+                "root evidence"
+            )
+
+    causal_wrapper_name = (
+        "AsyncCandidateCausalSuccessorWithIdentityAndOrigin"
+    )
+    causal_wrapper = operator(causal_wrapper_name)
+    if causal_wrapper is None:
+        errors.append(
+            f"{path}: missing reviewed causal proposal-round seam "
+            f"{causal_wrapper_name}"
+        )
+    else:
+        body, line = causal_wrapper
+        normalized = " ".join(body.split())
+        assignments = tuple(
+            re.findall(r"!\.([A-Za-z][A-Za-z0-9_]*)\s*=", body)
+        )
+        required_assignment = (
+            "!.proposalRound = "
+            "AsyncCandidateSuccessorProposalRound(kind, command)"
+        )
+        if (
+            body.count("AsyncCandidateWithIdentityAndOrigin") != 1
+            or normalized.count(required_assignment) != 1
+            or assignments != ("proposalRound",)
+        ):
+            errors.append(
+                f"{path}:{line}: {causal_wrapper_name} must construct one "
+                "candidate and overwrite only proposalRound through "
+                "AsyncCandidateSuccessorProposalRound; "
+                f"assignments={assignments!r}"
+            )
+
+    causal_callers = (
+        "AsyncCandidateFrom",
+        "CausalCandidateWithEvidence",
+        "InstallCommitSignSuccessor",
+        "InstallLockedFetchSuccessor",
+        "InstallProposalSuccessor",
+        "PersistDecisionRecoverySuccessor",
+    )
+    for symbol in causal_callers:
+        extracted = operator(symbol)
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed causal candidate constructor {symbol}"
+            )
+            continue
+        body, line = extracted
+        if body.count(causal_wrapper_name) != 1:
+            errors.append(
+                f"{path}:{line}: {symbol} must inherit proposalRound through "
+                f"the one reviewed {causal_wrapper_name} seam"
+            )
+
+    liveness_path = formal_dir / "SumeragiV2LivenessProofs.tla"
+    if not liveness_path.is_file() or liveness_path.is_symlink():
+        errors.append(
+            f"{liveness_path}: frozen proposal-round refinement contract "
+            "must be a regular file"
+        )
+    else:
+        try:
+            liveness_source = liveness_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            errors.append(
+                f"{liveness_path}: cannot read frozen proposal-round "
+                f"refinement contract: {error}"
+            )
+        else:
+            frozen_helpers = {
+                "FrozenInstallProposalSuccessor": (
+                    "AsyncCandidateCausalSuccessorWithIdentityAndOrigin( "
+                    '"Normal", "AssembleBody", command, command.node, '
+                    "installedContext.height, command.view + 1, subject, "
+                    "NoAsyncItem, installedContext, command.view + 1, "
+                    "NextCandidateGeneration(priorGeneration), "
+                    "command.evidence, subject, subject, subject)"
+                ),
+                "FrozenNormalBeginPrepareCandidate": (
+                    "AsyncCandidateCausalSuccessorWithIdentityAndOrigin( "
+                    '"Normal", "BeginPrepare", parent, parent.node, '
+                    "blockHeight, parent.view, parent.subject, NoAsyncItem, "
+                    "parent.consumerContext, parent.consumerView, "
+                    "parent.consumerGeneration, parent.evidence, "
+                    "parent.bodyIdentity, parent.manifestIdentity, "
+                    "parent.commitmentIdentity)"
+                ),
+            }
+            for symbol, expected in frozen_helpers.items():
+                extracted = _top_level_operator_body(
+                    liveness_source,
+                    symbol,
+                    preserve_string_contents=True,
+                )
+                if extracted is None:
+                    errors.append(
+                        f"{liveness_path}: missing frozen causal "
+                        f"proposal-round helper {symbol}"
+                    )
+                    continue
+                body, line = extracted
+                normalized = " ".join(body.split())
+                if normalized != expected:
+                    errors.append(
+                        f"{liveness_path}:{line}: {symbol} must use the "
+                        "reviewed causal-successor seam and retain the "
+                        "parent proposalRound exactly; "
+                        f"expected {expected!r}, found {normalized!r}"
+                    )
+
+    candidate_carrier_contracts = {
+        "AsyncCandidateSet": "proposalRound: AsyncCandidateRoundSet",
+        "AsyncCandidateDomain": '"proposalRound"',
+        "AsyncCandidateTyped": (
+            "candidate.proposalRound \\in AsyncCandidateRoundSet"
+        ),
+        "AsyncCandidateSemanticStatement": (
+            "proposalRound |-> candidate.proposalRound"
+        ),
+    }
+    for symbol, expected in candidate_carrier_contracts.items():
+        extracted = operator(symbol)
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed internal candidate carrier {symbol}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized.count(expected) != 1:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain exactly one internal "
+                f"candidate proposalRound coordinate {expected!r}"
+            )
+
+    allowed_proposal_round_operators = {
+        "AsyncCandidateSuccessorProposalRound": 1,
+        "AsyncCandidateWithIdentityAndOrigin": 1,
+        "AsyncCandidateCausalSuccessorWithIdentityAndOrigin": 1,
+        "AsyncCandidateSemanticStatement": 2,
+        "AsyncCandidateSet": 1,
+        "AsyncCandidateDomain": 1,
+        "AsyncCandidateTyped": 1,
+    }
+    operator_declaration = re.compile(
+        r"(?m)^([A-Za-z_][A-Za-z0-9_]*)\s*"
+        r"(?:\([^)=]*\))?\s*=="
+    )
+    for symbol in tuple(
+        dict.fromkeys(operator_declaration.findall(source))
+    ):
+        extracted = operator(symbol)
+        if extracted is None:
+            continue
+        body, line = extracted
+        observed_count = len(re.findall(r"\bproposalRound\b", body))
+        expected_count = allowed_proposal_round_operators.get(symbol, 0)
+        if observed_count != expected_count:
+            errors.append(
+                f"{path}:{line}: internal candidate proposalRound is confined "
+                "to the reviewed candidate-state operators and may not be "
+                f"exposed through wire/API/config operator {symbol}; "
+                f"expected={expected_count}, "
+                f"found={observed_count}"
+            )
+
+    stripped = strip_tla_comments(source, preserve_string_contents=True)
+    constants = re.search(
+        r"(?ms)^CONSTANTS\b(?P<body>.*?)(?=^[A-Za-z_]"
+        r"[A-Za-z0-9_]*\s*(?:\([^)=]*\))?\s*==)",
+        stripped,
+    )
+    if constants is not None and re.search(
+        r"\bproposalRound\b", constants.group("body")
+    ):
+        line = stripped.count("\n", 0, constants.start("body")) + 1
+        errors.append(
+            f"{path}:{line}: internal candidate proposalRound may not become "
+            "a model configuration constant"
+        )
+
+    core_path = formal_dir / "SumeragiV2Core.tla"
+    if core_path.exists():
+        if not core_path.is_file() or core_path.is_symlink():
+            errors.append(
+                f"{core_path}: proposal-round Core boundary must be a regular file"
+            )
+        else:
+            try:
+                core_source = core_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as error:
+                errors.append(
+                    f"{core_path}: cannot read proposal-round Core boundary: "
+                    f"{error}"
+                )
+            else:
+                core_stripped = strip_tla_comments(
+                    core_source,
+                    preserve_string_contents=True,
+                )
+                match = re.search(r"\bproposalRound\b", core_stripped)
+                if match is not None:
+                    line = core_stripped.count("\n", 0, match.start()) + 1
+                    errors.append(
+                        f"{core_path}:{line}: internal candidate proposalRound "
+                        "may not be added to Core wire/API records"
+                    )
+
+    for config_path in sorted(formal_dir.glob("*.cfg")):
+        if not config_path.is_file() or config_path.is_symlink():
+            continue
+        try:
+            config_source = config_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            errors.append(
+                f"{config_path}: cannot read proposal-round configuration "
+                f"boundary: {error}"
+            )
+            continue
+        match = re.search(r"\bproposalRound\b", config_source)
+        if match is not None:
+            line = config_source.count("\n", 0, match.start()) + 1
+            errors.append(
+                f"{config_path}:{line}: internal candidate proposalRound may "
+                "not be exposed as a configuration parameter"
+            )
+    return errors
+
+
+def _adequate_leader_three_way_service_outcome_contract_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Require exhaustive, disjoint service outcomes without fake progress."""
+
+    service_path = (
+        formal_dir / "SumeragiV2AdequateLeaderServiceClosureProofs.tla"
+    )
+    authority_path = (
+        formal_dir
+        / "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs.tla"
+    )
+    errors: list[str] = []
+    sources: dict[Path, str] = {}
+    for path in (service_path, authority_path):
+        if not path.is_file() or path.is_symlink():
+            errors.append(
+                f"{path}: adequate-leader three-way service contract must be a "
+                "regular file"
+            )
+            continue
+        try:
+            sources[path] = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            errors.append(f"{path}: cannot read three-way service contract: {error}")
+
+    branches = (
+        "AdequateLeaderTargetDecisionOrStrictlyLowerOccurrenceAction",
+        "AdequateLeaderTargetEqualCountOwnerReplacementAction",
+        "AdequateLeaderTargetCountIncreasingReplenishmentAction",
+    )
+    if service_path in sources:
+        service_source = sources[service_path]
+        frozen_payload = _top_level_operator_body(
+            service_source,
+            "AdequateLeaderFrozenCandidatePayload",
+            preserve_string_contents=True,
+        )
+        expected_frozen_fields = (
+            "context",
+            "round",
+            "proposalRound",
+            "subject",
+            "phase",
+            "executionCommitment",
+        )
+        if frozen_payload is None:
+            errors.append(
+                f"{service_path}: missing reviewed frozen semantic operator "
+                "AdequateLeaderFrozenCandidatePayload"
+            )
+        else:
+            body, line = frozen_payload
+            observed_fields = tuple(
+                re.findall(r"\b([A-Za-z][A-Za-z0-9_]*)\s*\|->", body)
+            )
+            forbidden = [
+                token
+                for token in (
+                    "candidate.node",
+                    "candidate.class",
+                    "candidate.kind",
+                    "candidate.item",
+                    "candidate.evidence",
+                    "candidate.bodyIdentity",
+                    "candidate.manifestIdentity",
+                    "candidate.consumerContext",
+                    "candidate.consumerView",
+                    "candidate.consumerGeneration",
+                    "AdequateLeaderFrozenCandidateItemPayload",
+                    "AdequateLeaderFrozenCandidateEvidencePayload",
+                    "AdequateLeaderRouteNeutralCandidateItem",
+                    "AdequateLeaderRouteNeutralCandidateEvidence",
+                )
+                if _tla_dependency_present(body, token)
+            ]
+            if observed_fields != expected_frozen_fields or forbidden:
+                errors.append(
+                    f"{service_path}:{line}: "
+                    "AdequateLeaderFrozenCandidatePayload must retain exactly "
+                    "the six carrier-free semantic fields; "
+                    f"fields={observed_fields!r}, forbidden={forbidden!r}"
+                )
+
+        immutable_payload = _top_level_operator_body(
+            service_source,
+            "AdequateLeaderImmutableCandidatePayload",
+            preserve_string_contents=True,
+        )
+        if immutable_payload is None:
+            errors.append(
+                f"{service_path}: missing immutable candidate semantic payload"
+            )
+        else:
+            body, line = immutable_payload
+            normalized = " ".join(body.split())
+            if normalized != "AsyncCandidateSemanticStatement(candidate)":
+                errors.append(
+                    f"{service_path}:{line}: "
+                    "AdequateLeaderImmutableCandidatePayload must equal only "
+                    "AsyncCandidateSemanticStatement(candidate); "
+                    f"found {normalized!r}"
+                )
+
+        frozen_carrier = _top_level_operator_body(
+            service_source,
+            "AdequateLeaderFrozenCandidatePayloadCarrier",
+            preserve_string_contents=True,
+        )
+        if frozen_carrier is None:
+            errors.append(
+                f"{service_path}: missing finite frozen candidate payload carrier"
+            )
+        else:
+            body, line = frozen_carrier
+            normalized = " ".join(body.split())
+            required = (
+                "context: {leaderContext}",
+                "round: [context: {leaderContext}, height: {leaderContext.height}, view: 0..leaderView]",
+                "proposalRound: [context: {leaderContext}, height: {leaderContext.height}, view: 0..leaderView]",
+                "subject: {subject}",
+                "phase: AsyncCandidateSemanticPhases",
+                "executionCommitment: SubjectOrNone",
+            )
+            missing = [
+                fragment
+                for fragment in required
+                if fragment not in normalized
+            ]
+            forbidden_fields = [
+                field
+                for field in (
+                    "class:",
+                    "workKind:",
+                    "causalOrigin:",
+                    "item:",
+                    "evidence:",
+                    "body:",
+                    "manifest:",
+                    "commitment:",
+                    "signer:",
+                    "signers:",
+                    "signature:",
+                    "signatureNonce:",
+                    "aggregateSignature:",
+                    "aggregateSignatures:",
+                    "source:",
+                    "recipient:",
+                    "route:",
+                    "routes:",
+                    "owner:",
+                    "node:",
+                    "generation:",
+                    "incarnation:",
+                    "proposer:",
+                    "requester:",
+                    "archiveServer:",
+                    "citedResponder:",
+                    "signatureOwner:",
+                )
+                if field in normalized
+            ]
+            if missing or forbidden_fields:
+                errors.append(
+                    f"{service_path}:{line}: "
+                    "AdequateLeaderFrozenCandidatePayloadCarrier must range "
+                    "only over the six semantic coordinates; "
+                    f"missing={missing!r}, forbidden={forbidden_fields!r}"
+                )
+
+        phase_universe = _top_level_operator_body(
+            service_source,
+            "AdequateLeaderFrozenCandidateOwnerUniverseAtPhase",
+            preserve_string_contents=True,
+        )
+        if phase_universe is None:
+            errors.append(
+                f"{service_path}: missing phase-indexed frozen candidate owner universe"
+            )
+        else:
+            body, line = phase_universe
+            required = (
+                "AdequateLeaderFrozenCandidateOwnerUniverse",
+                "owner.payload.phase = semanticPhase",
+            )
+            missing = [
+                token
+                for token in required
+                if not _tla_dependency_present(body, token)
+            ]
+            if missing:
+                errors.append(
+                    f"{service_path}:{line}: "
+                    "AdequateLeaderFrozenCandidateOwnerUniverseAtPhase omits "
+                    f"reviewed coordinates {missing!r}"
+                )
+
+    outcome = (
+        _top_level_operator_body(
+            sources[service_path],
+            "AdequateLeaderTargetServiceOutcomeAction",
+            preserve_string_contents=True,
+        )
+        if service_path in sources
+        else None
+    )
+    if outcome is None:
+        errors.append(
+            f"{service_path}: missing reviewed three-way operator "
+            "AdequateLeaderTargetServiceOutcomeAction"
+        )
+    else:
+        body, line = outcome
+        missing_or_repeated = [
+            branch for branch in branches if body.count(branch) != 1
+        ]
+        if missing_or_repeated:
+            errors.append(
+                f"{service_path}:{line}: "
+                "AdequateLeaderTargetServiceOutcomeAction must contain exactly "
+                "one Decision/strict-lower branch, one equal-count owner "
+                "replacement branch, and one count-increasing replenishment "
+                f"branch; missing_or_repeated={missing_or_repeated!r}"
+            )
+        forbidden_aliases = (
+            "AdequateLeaderTargetNonDescentEpisodeAction",
+            "AdequateLeaderTargetRankReplenishmentAction",
+            "AdequateLeaderTargetOccurrenceRankServiceProperty",
+            "AdequateLeaderTargetUniversalOccurrenceServiceGoal",
+            "ResponsiveNodesDecide",
+            "NodeHasApplication",
+        )
+        forbidden = [
+            token
+            for token in forbidden_aliases
+            if _tla_dependency_present(body, token)
+        ]
+        if forbidden:
+            errors.append(
+                f"{service_path}:{line}: three-way service outcome may not hide "
+                "branches behind aliases or count replenishment as progress; "
+                f"found {forbidden!r}"
+            )
+
+    disjoint = (
+        _top_level_theorem_body(
+            sources[service_path],
+            "AdequateLeaderTargetServiceOutcomeIsThreeWayDisjoint",
+            preserve_string_contents=True,
+        )
+        if service_path in sources
+        else None
+    )
+    if disjoint is None:
+        errors.append(
+            f"{service_path}: missing reviewed disjointness theorem "
+            "AdequateLeaderTargetServiceOutcomeIsThreeWayDisjoint"
+        )
+    else:
+        body, line = disjoint
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+            body,
+            maxsplit=1,
+        )[0]
+        missing_pair_occurrences = [
+            branch for branch in branches if statement.count(branch) != 2
+        ]
+        if missing_pair_occurrences or statement.count("~") < 3:
+            errors.append(
+                f"{service_path}:{line}: "
+                "AdequateLeaderTargetServiceOutcomeIsThreeWayDisjoint must "
+                "state all three pairwise exclusions; "
+                f"missing_or_repeated={missing_pair_occurrences!r}"
+            )
+        forbidden = [
+            token
+            for token in (
+                "AdequateLeaderTargetOccurrenceRankServiceProperty",
+                "AdequateLeaderTargetUniversalOccurrenceServiceGoal",
+                "ResponsiveNodesDecide",
+                "NodeHasApplication",
+            )
+            if _tla_dependency_present(body, token)
+        ]
+        if forbidden:
+            errors.append(
+                f"{service_path}:{line}: three-way disjointness is structural "
+                f"and may not assume progress; found {forbidden!r}"
+            )
+
+    exhaustive_matches: list[tuple[Path, str, int]] = []
+    for path, source in sources.items():
+        extracted = _top_level_theorem_body(
+            source,
+            "AdequateLeaderFixedSelectedServiceHasExhaustiveOutcome",
+            preserve_string_contents=True,
+        )
+        if extracted is not None:
+            exhaustive_matches.append((path, extracted[0], extracted[1]))
+    if len(exhaustive_matches) != 1:
+        errors.append(
+            "adequate-leader three-way contract must define exactly one theorem "
+            "AdequateLeaderFixedSelectedServiceHasExhaustiveOutcome; "
+            f"found {len(exhaustive_matches)}"
+        )
+    else:
+        path, body, line = exhaustive_matches[0]
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+            body,
+            maxsplit=1,
+        )[0]
+        required = (
+            "AdequateLeaderFixedSelectedServiceOwnerAction",
+            "AdequateLeaderTargetServiceOutcomeAction",
+            "AsyncNext",
+        )
+        missing = [
+            token for token in required if not _tla_dependency_present(body, token)
+        ]
+        if missing:
+            errors.append(
+                f"{path}:{line}: "
+                "AdequateLeaderFixedSelectedServiceHasExhaustiveOutcome must "
+                f"classify each exact selected service step {missing!r}"
+            )
+        if not _tla_dependency_present(
+            statement, "AdequateLeaderTargetServiceOutcomeAction"
+        ):
+            errors.append(
+                f"{path}:{line}: exhaustive selected-service theorem must expose "
+                "AdequateLeaderTargetServiceOutcomeAction in its statement"
+            )
+        forbidden_statement = [
+            token
+            for token in (
+                *branches[1:],
+                "AdequateLeaderTargetRankReplenishmentAction",
+                "AdequateLeaderTargetStrictOccurrenceDescentGoal",
+                "AdequateLeaderTargetOccurrenceRankServiceProperty",
+                "AdequateLeaderTargetUniversalOccurrenceServiceGoal",
+                "ResponsiveNodesDecide",
+                "NodeHasApplication",
+                "~>",
+                "WF_",
+            )
+            if token in statement
+        ]
+        if forbidden_statement:
+            errors.append(
+                f"{path}:{line}: exhaustive selected-service classification may "
+                "not promote equal replacement or replenishment to progress; "
+                f"found {forbidden_statement!r}"
+            )
+    return errors
+
+
 def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     """Reject async-model shortcuts that previously made progress circular."""
 
@@ -54415,6 +58369,481 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     source = path.read_text(encoding="utf-8")
     stripped = strip_tla_comments(source)
     errors: list[str] = []
+    exact_header = (
+        "---- MODULE SumeragiV2AsyncNetwork ----\n"
+        "EXTENDS SumeragiV2Inductive, Sequences, FiniteSets, Naturals, "
+        "Functions, TLAPS, FiniteSetTheorems, NaturalsInduction, "
+        "WellFoundedInduction, SumeragiV2QuorumProofs\n"
+    )
+    if not source.startswith(exact_header):
+        errors.append(
+            f"{path}: SumeragiV2AsyncNetwork must retain the exact TLAPS-aware "
+            "module header required for complete SANY semantic import"
+        )
+    async_base_invariant_bodies = {
+        "AsyncRecoveryExecutionInvariant": (
+            'asyncRecoveryPhase = "Replaying" => '
+            "/\\ asyncOutstandingTags[asyncRecoveryNode] = {} "
+            "/\\ AsyncServeIngressLifecycleOwnerIdentities( "
+            "asyncRecoveryNode) = {} "
+            "/\\ SequenceHasUniqueValues(asyncRecoveryReplayQueue) "
+            "/\\ SequenceSet(asyncRecoveryReplayQueue) \\cap "
+            "ResponsiveReplayScheduledCandidates(asyncRecoveryNode) = {}"
+        ),
+        "HistoricalLockRestartAuthoritySourceRetentionInvariant": (
+            "\\A authority \\in asyncHistoricalLockRestartAuthorities: "
+            "HistoricalLockRestartAuthoritySource(authority)"
+        ),
+        "AsyncGstRecoveryPhaseInvariant": (
+            "gst => asyncRecoveryPhase \\notin "
+            '{"RestartRequired", "ReplayRequired", "Replaying"}'
+        ),
+        "AsyncStrongTypeInvariant": (
+            "/\\ StrongInductiveInvariant /\\ AsyncSchedulerTypeInvariant "
+            "/\\ AsyncServiceActivationPairInvariant "
+            "/\\ AsyncControlServiceStateTypeInvariant "
+            "/\\ AsyncCandidateLifecycleSchedulerCoverageInvariant "
+            "/\\ AsyncCertifiedResponseClaimIngressOwnershipInvariant "
+            "/\\ AsyncLeaderWireIngressCarrierOwnershipInvariant "
+            "/\\ AsyncOrdinaryIngressCarrierOwnershipInvariant "
+            "/\\ ReceivedTimeoutVotePoolInvariant "
+            "/\\ AsyncRecoveryTypeInvariant /\\ AsyncRestartAuthorityInvariant "
+            "/\\ AsyncRecoveryExecutionInvariant "
+            "/\\ AsyncHistoricalLockRestartAuthorityTypeInvariant "
+            "/\\ HistoricalLockRestartAuthoritySourceRetentionInvariant "
+            "/\\ AsyncGstRecoveryPhaseInvariant "
+            "/\\ AsyncSerializedBusyKernelInvariant"
+        ),
+    }
+    for symbol, expected_body in async_base_invariant_bodies.items():
+        extracted = _top_level_operator_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing base asynchronous invariant provider {symbol}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected_body:
+            errors.append(
+                f"{path}:{line}: {symbol} must equal only its exact reviewed "
+                f"base asynchronous invariant body {expected_body!r}; found "
+                f"{normalized!r}"
+            )
+    liveness_facade_path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    if liveness_facade_path.is_file():
+        liveness_source = _async_liveness_source(formal_dir)
+        for symbol in async_base_invariant_bodies:
+            duplicate = _top_level_operator_body(liveness_source, symbol)
+            if duplicate is not None:
+                errors.append(
+                    f"{liveness_facade_path}:{duplicate[1]}: {symbol} must be "
+                    "provided only by SumeragiV2AsyncNetwork before any local "
+                    "theorem consumer"
+                )
+    item_frozen_accessors = {
+        "CertifiedResponseClaimItemFrozenCandidateOrigins": (
+            "CertifiedResponseClaimRecordForItem(item).frozenCandidateOrigins"
+        ),
+        "CertifiedResponseClaimItemFrozenServeSources": (
+            "CertifiedResponseClaimRecordForItem(item).frozenServeSources"
+        ),
+        "CertifiedResponseClaimItemFrozenContinuationSources": (
+            "CertifiedResponseClaimRecordForItem(item).frozenContinuationSources"
+        ),
+        "CertifiedResponseClaimItemFrozenLeaderWireIdentities": (
+            "CertifiedResponseClaimRecordForItem(item).frozenLeaderWireIdentities"
+        ),
+    }
+    for symbol, expected_body in item_frozen_accessors.items():
+        extracted = _top_level_operator_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing item-indexed certified-response accessor "
+                f"{symbol}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected_body:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain its exact item-indexed "
+                f"claim-record projection {expected_body!r}; found "
+                f"{normalized!r}"
+            )
+    for forbidden in (
+        "CertifiedResponseClaimFrozenCandidateOrigins",
+        "CertifiedResponseClaimFrozenServeSources",
+        "CertifiedResponseClaimFrozenContinuationSources",
+        "CertifiedResponseClaimFrozenLeaderWireIdentities",
+    ):
+        if re.search(rf"\b{re.escape(forbidden)}\s*\(", stripped):
+            errors.append(
+                f"{path}: item-indexed certified-response accessors may not "
+                f"collide with the finite-runner node accessor {forbidden}"
+            )
+    local_rank_names = (
+        (
+            "AsyncCandidateProducerContinuationResolutionSelectionIsLogicalMinimum",
+            "LogicalRanks",
+        ),
+        (
+            "AsyncCandidateProducerContinuationRuntimeSelectionIsLogicalMinimum",
+            "RuntimeRanks",
+        ),
+    )
+    for theorem, local_name in local_rank_names:
+        extracted = _top_level_theorem_body(
+            source,
+            theorem,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing finite minimum-selection theorem {theorem}"
+            )
+            continue
+        body, line = extracted
+        if body.count(f"DEFINE {local_name} ==") != 1:
+            errors.append(
+                f"{path}:{line}: {theorem} must use the unique local rank "
+                f"namespace {local_name}"
+            )
+    if re.search(r"(?m)^\s*<\d+>\s+DEFINE\s+Ranks\s*==", source):
+        errors.append(
+            f"{path}: proof-local minimum rank sets may not shadow the "
+            "imported Core Ranks carrier"
+        )
+    semantic_order_contracts = {
+        "AsyncConfiguration": (
+            (
+                "AsyncCandidateLifecycleCapacityDerivesFromReviewedOwners",
+                "theorem",
+            ),
+            (
+                "AsyncCandidateServiceRecordCapacityMatchesConfiguredGeometry",
+                "theorem",
+            ),
+        ),
+        "AsyncControlServiceIdentityMatches": (
+            ("AsyncControlServiceIdentityServicedOrAdvancedIn", "operator"),
+        ),
+        "CommandMatches": (
+            ("AsyncPersistDecisionCommandThisStep", "operator"),
+        ),
+        "AsyncProposedTimeoutCausalOrigin": (
+            ("AsyncEffectiveTimeoutLifecycleOrigin", "operator"),
+        ),
+        "AsyncTimeoutLifecycleOwned": (
+            ("AsyncControlServiceStateTypeInvariant", "operator"),
+        ),
+        "AsyncRetransmitLifecycleOwned": (
+            ("AsyncControlServiceStateTypeInvariant", "operator"),
+        ),
+        "HistoricalLockedCommitItem": (
+            ("DeliveryClass", "operator"),
+        ),
+        "DeliveryKind": (
+            ("AsyncDeliveryCandidateCausalOriginAt", "operator"),
+            ("DeliveryCandidate", "operator"),
+        ),
+        "DeliveryClass": (
+            ("DeliveryCandidate", "operator"),
+        ),
+        "DeliverySubject": (
+            ("AsyncDeliveryCandidateCausalOriginAt", "operator"),
+            ("DeliveryCandidate", "operator"),
+        ),
+        "DeliveryView": (
+            ("AsyncDeliveryCandidateCausalOriginAt", "operator"),
+            ("DeliveryCandidate", "operator"),
+        ),
+        "DeliveryHeight": (
+            ("AsyncDeliveryCandidateCausalOriginAt", "operator"),
+            ("DeliveryCandidate", "operator"),
+        ),
+        "AsyncDeliveryCandidateCausalOriginAt": (
+            ("DeliveryCandidate", "operator"),
+        ),
+        "DeliveryCandidate": (
+            ("AsyncOrdinaryIngressCarrierEvidence", "operator"),
+            ("AsyncControlServiceStateTypeInvariant", "operator"),
+        ),
+        "AsyncFixedCorridorDeadlineTransition": (
+            ("AsyncCoreOuterFrame", "operator"),
+        ),
+        "AsyncProducerProjectionStep": (
+            ("AsyncCoreOuterFrame", "operator"),
+        ),
+        "AsyncCoreOuterFrame": (
+            ("AsyncNonCrashOuterFrame", "operator"),
+            ("AsyncRecoveryOuterFrame", "operator"),
+        ),
+        "AsyncNonCrashOuterFrame": (
+            ("AsyncNonRunnerOuterFrame", "operator"),
+        ),
+        "AsyncCandidateLifecycleRecordsForIn": (
+            (
+                "AsyncUnmaterializedTimeoutLifecycleReservationIn",
+                "operator",
+            ),
+        ),
+        "AsyncCandidateLifecycleRecordsForNodeIn": (
+            ("AsyncCandidateLifecycleClockRecordBucketIn", "operator"),
+            ("AsyncCandidateLifecycleSlotInjectionInvariantIn", "operator"),
+        ),
+        "AsyncCandidateLifecycleClockRecordBucketIn": (
+            ("AsyncCandidateLifecycleSlotInjectionInvariantIn", "operator"),
+        ),
+        "AsyncCandidateLifecycleServiceRecordCoversIn": (
+            ("AsyncCandidateLifecycleSlotInjectionInvariantIn", "operator"),
+        ),
+        "AsyncUnmaterializedTimeoutLifecycleReservationIn": (
+            (
+                "AsyncUnmaterializedTimeoutLifecycleReservationNodesIn",
+                "operator",
+            ),
+            ("AsyncCandidateLifecycleSlotInjectionInvariantIn", "operator"),
+        ),
+        "AsyncCandidateLifecycleRecordOwnerToken": (
+            ("AsyncCandidateLifecycleReviewedOwnerTokensIn", "operator"),
+        ),
+        "AsyncCandidateLifecycleClockOwnerToken": (
+            ("AsyncCandidateLifecycleReviewedOwnerTokensIn", "operator"),
+        ),
+        "AsyncUnmaterializedTimeoutLifecycleReservationNodesIn": (
+            ("AsyncCandidateLifecycleReviewedOwnerTokensIn", "operator"),
+        ),
+        "AsyncCandidateLifecycleReviewedOwnerTokensIn": (
+            ("AsyncCandidateLifecycleSlotProjectionIn", "operator"),
+            ("AsyncCandidateLifecycleSlotInjectionInvariantIn", "operator"),
+        ),
+        "AsyncCandidateLifecycleSlotAddresses": (
+            ("AsyncCandidateLifecycleSlotInjectionInvariantIn", "operator"),
+        ),
+        "AsyncCandidateLifecycleSlotProjectionIn": (
+            ("AsyncCandidateLifecycleSlotInjectionInvariantIn", "operator"),
+        ),
+        "AsyncCandidateLifecycleSlotInjectionInvariantIn": (
+            (
+                "AsyncCandidateLifecycleReviewedCapacityInvariantIn",
+                "operator",
+            ),
+        ),
+        "AsyncCandidateLifecycleReviewedCapacityInvariantIn": (
+            ("AsyncControlServiceStateTypeInvariant", "operator"),
+        ),
+        "AsyncCandidateLifecycleStageIdentityInvariant": (
+            (
+                "AsyncCandidateSchedulerCoverageExposesBoundedProducerOrigin",
+                "theorem",
+            ),
+        ),
+        "AsyncServeIngressLifecycleOwnerIdentities": (
+            ("AsyncRecoveryExecutionInvariant", "operator"),
+        ),
+        "SequenceHasUniqueValues": (
+            ("AsyncRecoveryExecutionInvariant", "operator"),
+        ),
+        "ResponsiveReplayScheduledCandidates": (
+            ("AsyncRecoveryExecutionInvariant", "operator"),
+        ),
+        "HistoricalLockRestartAuthoritySource": (
+            (
+                "HistoricalLockRestartAuthoritySourceRetentionInvariant",
+                "operator",
+            ),
+        ),
+        "AsyncSchedulerTypeInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "AsyncServiceActivationPairInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "AsyncControlServiceStateTypeInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "AsyncCandidateLifecycleSchedulerCoverageInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "AsyncCertifiedResponseClaimIngressOwnershipInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "AsyncLeaderWireIngressCarrierOwnershipInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "AsyncOrdinaryIngressCarrierOwnershipInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "AsyncRecoveryTypeInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "AsyncRestartAuthorityInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "AsyncRecoveryExecutionInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "AsyncHistoricalLockRestartAuthorityTypeInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "HistoricalLockRestartAuthoritySourceRetentionInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "AsyncGstRecoveryPhaseInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "AsyncSerializedBusyKernelInvariant": (
+            ("AsyncStrongTypeInvariant", "operator"),
+        ),
+        "AsyncStrongTypeInvariant": (
+            ("AsyncNextNodeCommandOwnsOldestLifecycleOrdinal", "theorem"),
+            (
+                "AsyncNextDeferredCommandOwnsOldestLifecycleWithoutHandoff",
+                "theorem",
+            ),
+            ("AsyncDeferredHandoffRetainsExactSelectedLifecycle", "theorem"),
+            (
+                "AsyncRetainedCommitQcPacketAdmissionCreatesExactIngressOwner",
+                "theorem",
+            ),
+            (
+                "AsyncRetainedCommitQcIngressCreatesExactDeliverQcOwner",
+                "theorem",
+            ),
+            (
+                "AsyncRetainedCommitQcDeliveryRecordsExactReceipt",
+                "theorem",
+            ),
+            (
+                "AsyncNextPreservesCandidateProducerContinuationScheduledExclusion",
+                "theorem",
+            ),
+            (
+                "CertifiedResponseClaimAdmissionMatchesPostStateLifecycleCarrier",
+                "theorem",
+            ),
+            (
+                "CertifiedResponseClaimAdmissionFreezesCompletePredecessorSources",
+                "theorem",
+            ),
+            ("CertifiedResponseLiveClaimCannotBeReplacedAtGst", "theorem"),
+            (
+                "AsyncNextPreservesLeaderWireContinuationSharedOrdinalNoCollision",
+                "theorem",
+            ),
+            (
+                "CertifiedResponseClaimNewTimeoutSourceIsExcludedOrAboveFrozenCeiling",
+                "theorem",
+            ),
+        ),
+        "AsyncProgressOwnershipInvariant": (
+            (
+                "AsyncRetainedCommitQcIngressCreatesExactDeliverQcOwner",
+                "theorem",
+            ),
+            (
+                "AsyncNextPreservesCandidateProducerContinuationScheduledExclusion",
+                "theorem",
+            ),
+            (
+                "AsyncNextPreservesLeaderWireContinuationSharedOrdinalNoCollision",
+                "theorem",
+            ),
+            (
+                "AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst",
+                "theorem",
+            ),
+        ),
+    }
+    for provider, consumers in semantic_order_contracts.items():
+        provider_span = _top_level_declaration_span(
+            source, provider, kind="operator"
+        )
+        if provider_span is None:
+            errors.append(
+                f"{path}: missing SANY semantic-order provider {provider}"
+            )
+            continue
+        provider_position = provider_span[0]
+        for consumer, consumer_kind in consumers:
+            extractor = (
+                _top_level_theorem_body
+                if consumer_kind == "theorem"
+                else _top_level_operator_body
+            )
+            extracted = extractor(
+                source, consumer, preserve_string_contents=True
+            )
+            consumer_span = _top_level_declaration_span(
+                source, consumer, kind=consumer_kind
+            )
+            if extracted is None or consumer_span is None:
+                errors.append(
+                    f"{path}: missing SANY semantic-order consumer {consumer}"
+                )
+                continue
+            consumer_position = consumer_span[0]
+            body, line = extracted
+            dependency_scope = (
+                _tla_statement_without_proof(body)
+                if consumer_kind == "theorem"
+                else body
+            )
+            if not _tla_dependency_present(dependency_scope, provider):
+                errors.append(
+                    f"{path}:{line}: {consumer} must retain its reviewed "
+                    f"dependency on {provider}"
+                )
+            if provider_position >= consumer_position:
+                errors.append(
+                    f"{path}:{line}: SANY requires provider {provider} to be "
+                    f"declared before consumer {consumer}"
+                )
+    base_invariant_boundary = (
+        "AsyncRecoveryExecutionInvariant",
+        "HistoricalLockRestartAuthoritySourceRetentionInvariant",
+        "AsyncGstRecoveryPhaseInvariant",
+        "AsyncStrongTypeInvariant",
+        "AsyncNextNodeCommandOwnsOldestLifecycleOrdinal",
+        "AsyncNextDeferredCommandOwnsOldestLifecycleWithoutHandoff",
+        "AsyncDeferredHandoffRetainsExactSelectedLifecycle",
+        "AsyncRetainedCommitQcPacketAdmissionCreatesExactIngressOwner",
+        "AsyncRetainedCommitQcIngressCreatesExactDeliverQcOwner",
+        "AsyncRetainedCommitQcDeliveryRecordsExactReceipt",
+        "AsyncNextPreservesCandidateProducerContinuationScheduledExclusion",
+        "CertifiedResponseClaimAdmissionMatchesPostStateLifecycleCarrier",
+        "CertifiedResponseClaimAdmissionFreezesCompletePredecessorSources",
+        "CertifiedResponseLiveClaimCannotBeReplacedAtGst",
+        "AsyncNextPreservesLeaderWireContinuationSharedOrdinalNoCollision",
+        "AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst",
+        "CertifiedResponseClaimNewTimeoutSourceIsExcludedOrAboveFrozenCeiling",
+    )
+    declarations = _top_level_declarations(source)
+    declaration_names = tuple(item[0] for item in declarations)
+    try:
+        async_type_index = declaration_names.index("AsyncTypeInvariant")
+    except ValueError:
+        errors.append(f"{path}: missing base invariant boundary AsyncTypeInvariant")
+    else:
+        observed_boundary = declaration_names[
+            async_type_index + 1 : async_type_index + 1 + len(base_invariant_boundary)
+        ]
+        if observed_boundary != base_invariant_boundary:
+            errors.append(
+                f"{path}: the base asynchronous invariant providers and local "
+                "theorem consumers must immediately follow AsyncTypeInvariant "
+                f"in reviewed dependency order {base_invariant_boundary!r}; "
+                f"found {observed_boundary!r}"
+            )
     async_next = _top_level_operator_body(
         source,
         "AsyncNext",
@@ -54911,16 +59340,6 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             '[kind |-> "CandidateLifecycleDurableOwner", carrier |-> '
             "carrier, node |-> node, position |-> position, "
             "origin |-> origin]"
-        ),
-        "AsyncCandidateLifecycleDurableReplayOriginsForNodeAfter": (
-            "{candidate.causalOrigin: candidate \\in SequenceSet( "
-            "FreshRestartCandidateSequence(RestartReplay(node))'), "
-            "candidate.causalOrigin \\notin "
-            "AsyncScheduledCandidateOriginsForNodeAfter(node)} "
-            "\\cup {candidate.causalOrigin: candidate \\in SequenceSet("
-            "HistoricalLockedRetransmitSuccessors(node)'), "
-            "candidate.causalOrigin \\notin "
-            "AsyncScheduledCandidateOriginsForNodeAfter(node)}"
         ),
         "AsyncCandidateLifecycleDurableOwnerTokensForNodeAfter": (
             "{AsyncCandidateLifecycleDurableOwnerToken( \"RestartReplay\", "
@@ -57673,6 +62092,12 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     }
     for symbol in (
         *reviewed_normalized_operator_sha256,
+        # Candidate coalescing is checked structurally below: its six-field
+        # semantic statement must remain carrier-free while concrete identity
+        # retains the complete bytes.  An old exact-body seal would pin the
+        # carrier-heavy representation that this contract rejects.
+        "AsyncCandidateServicePayload",
+        "AsyncCandidateServiceIdentity",
         # Policy-rejected packets now drain to deterministic terminal
         # outcomes; no dormant transport predicate remains.
         "AsyncDormantExactReplyRequestPacket",
@@ -57735,6 +62160,152 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             errors.append(
                 f"{path}:{line}: {symbol} must equal only {expected!r}; "
                 f"found {normalized!r}"
+            )
+
+    async_filtered_projections = {
+        "AsyncCandidateLifecycleOriginsRecordedForNodeIn": r"""
+          {record.origin:
+             record \in
+               {candidateRecord \in state.candidateLifecycleAdmissions:
+                  candidateRecord.node = node}}
+        """,
+        "AsyncCandidateLifecycleDurableReplayOriginsForNode": r"""
+          {candidate.causalOrigin:
+             candidate \in
+               {replayCandidate \in
+                  SequenceSet(
+                    FreshRestartCandidateSequence(RestartReplay(node))):
+                  replayCandidate.causalOrigin
+                    \notin AsyncScheduledCandidateOriginsForNode(node)}}
+            \cup
+          {candidate.causalOrigin:
+             candidate \in
+               {replayCandidate \in
+                  SequenceSet(HistoricalLockedRetransmitSuccessors(node)):
+                  replayCandidate.causalOrigin
+                    \notin AsyncScheduledCandidateOriginsForNode(node)}}
+        """,
+        "AsyncCandidateLifecycleDurableReplayOriginsForNodeAfter": r"""
+          {candidate.causalOrigin:
+             candidate \in
+               {replayCandidate \in
+                  SequenceSet(
+                    FreshRestartCandidateSequence(RestartReplay(node))'):
+                  replayCandidate.causalOrigin
+                    \notin AsyncScheduledCandidateOriginsForNodeAfter(node)}}
+            \cup
+          {candidate.causalOrigin:
+             candidate \in
+               {replayCandidate \in
+                  SequenceSet(HistoricalLockedRetransmitSuccessors(node)'):
+                  replayCandidate.causalOrigin
+                    \notin AsyncScheduledCandidateOriginsForNodeAfter(node)}}
+        """,
+        "AsyncCandidateLifecycleDurableOwnerTokensForNodeAfter": r"""
+          {AsyncCandidateLifecycleDurableOwnerToken(
+             "RestartReplay", node, index,
+             FreshRestartCandidateSequence(
+               RestartReplay(node))'[index].causalOrigin):
+             index \in
+               {candidateIndex \in
+                  1..Len(FreshRestartCandidateSequence(RestartReplay(node))'):
+                  FreshRestartCandidateSequence(
+                    RestartReplay(node))'[candidateIndex].causalOrigin
+                    \notin AsyncScheduledCandidateOriginsForNodeAfter(node)}}
+          \cup
+          {AsyncCandidateLifecycleDurableOwnerToken(
+             "HistoricalRetransmit", node, index,
+             HistoricalLockedRetransmitSuccessors(node)'[index].causalOrigin):
+             index \in
+               {candidateIndex \in
+                  1..Len(HistoricalLockedRetransmitSuccessors(node)'):
+                  HistoricalLockedRetransmitSuccessors(node)'[
+                    candidateIndex].causalOrigin
+                    \notin AsyncScheduledCandidateOriginsForNodeAfter(node)}}
+        """,
+        "AsyncCandidateLifecycleActiveOriginsForNodeIn": r"""
+          {record.origin:
+             record \in
+               {candidateRecord \in
+                  AsyncCandidateLifecycleRecordsForNodeIn(state, node):
+                  candidateRecord.slot \in AsyncCandidateLifecycleActiveSlots}}
+        """,
+        "AsyncLeaderWireIngressCarrierCoordinates": r"""
+          {<<source, index>>:
+             source \in AsyncIngressSources,
+             index \in
+               {laneIndex \in 1..Len(IngressLane(record.recipient, source)):
+                  AsyncLeaderWireAdmissionMatchesRecord(
+                    IngressLane(record.recipient, source)[laneIndex], record)}}
+        """,
+        "AsyncOrdinaryIngressCarrierCoordinates": r"""
+          {<<source, index>>:
+             source \in AsyncIngressSources,
+             index \in
+               {laneIndex \in 1..Len(IngressLane(carrier.node, source)):
+                  ExactAsyncCandidateIdentity(
+                    DeliveryCandidate(
+                      IngressLane(carrier.node, source)[laneIndex]))
+                    = carrier.carrierIdentity}}
+        """,
+        "AsyncLeaderWireIngressCarrierCoordinatesAfter": r"""
+          {<<source, index>>:
+             source \in AsyncIngressSources,
+             index \in
+               {laneIndex \in
+                  1..Len(asyncIngressLanes'[record.recipient][source]):
+                  AsyncLeaderWireAdmissionMatchesRecord(
+                    asyncIngressLanes'[record.recipient][source][laneIndex],
+                    record)}}
+        """,
+    }
+    for symbol, expected_body in async_filtered_projections.items():
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing async filtered projection operator {symbol}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        expected_normalized = " ".join(expected_body.split())
+        if normalized != expected_normalized:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain its exact filtered "
+                f"projection {expected_normalized!r}; found {normalized!r}"
+            )
+
+    post_state_coordinate_consumers = {
+        "CertifiedResponseClaimAdmissionMatchesPostStateLifecycleCarrier": (
+            "Cardinality( "
+            "AsyncLeaderWireIngressCarrierCoordinatesAfter( record)) = 1"
+        ),
+        "DormantLeaderWireReactivationPublishesOneFreshPhysicalCarrier": (
+            "Cardinality( "
+            "AsyncLeaderWireIngressCarrierCoordinatesAfter(after)) = 1"
+        ),
+    }
+    for symbol, required_fragment in post_state_coordinate_consumers.items():
+        extracted = _top_level_theorem_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing post-state filtered-coordinate theorem "
+                f"{symbol}"
+            )
+            continue
+        body, line = extracted
+        statement = _tla_statement_without_proof(body)
+        if statement.count(required_fragment) != 1:
+            errors.append(
+                f"{path}:{line}: {symbol} must consume the exact post-state "
+                f"filtered-coordinate projection {required_fragment!r} once; "
+                f"found {statement!r}"
             )
 
     for symbol, expected_sha256 in reviewed_normalized_operator_sha256.items():
@@ -58992,147 +63563,6 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "AsyncCandidateTyped": (
             "AsyncEvidenceTyped(candidate.evidence)",
         ),
-        "AsyncCandidateQcSemanticPayload": "CertificateRefOf(qc)",
-        "AsyncCandidatePrepareQcSemanticPayload": (
-            "IF qc = NoPrepareQC THEN NoPrepareQC "
-            "ELSE AsyncCandidateQcSemanticPayload(qc)"
-        ),
-        "AsyncCandidateVoteSemanticPayload": (
-            "[context |-> vote.context, height |-> vote.height, "
-            "view |-> vote.view, phase |-> vote.phase, "
-            "subject |-> vote.subject, signer |-> vote.signer]"
-        ),
-        "AsyncCandidateTimeoutVoteSemanticPayload": (
-            "[context |-> vote.context, height |-> vote.height, "
-            "view |-> vote.view, signer |-> vote.signer, "
-            "highestPrepareQc |-> "
-            "AsyncCandidatePrepareQcSemanticPayload(vote.highestPrepareQc), "
-            "highRank |-> vote.highRank, highSubject |-> vote.highSubject]"
-        ),
-        "AsyncCandidateTcSemanticPayload": (
-            "IF tc = NoTimeoutCertificate THEN NoTimeoutCertificate "
-            "ELSE [context |-> tc.context, height |-> tc.height, "
-            "view |-> tc.view, highestPrepareQc |-> "
-            "AsyncCandidatePrepareQcSemanticPayload(tc.highestPrepareQc)]"
-        ),
-        "AsyncCandidateProposalSemanticPayload": (
-            "[context |-> proposal.context, height |-> proposal.height, "
-            "view |-> proposal.view, subject |-> proposal.subject, "
-            "proposer |-> proposal.proposer, timeoutCertificate |-> "
-            "AsyncCandidateTcSemanticPayload(proposal.timeoutCertificate), "
-            "highestPrepareQc |-> "
-            "AsyncCandidatePrepareQcSemanticPayload(proposal.highestPrepareQc), "
-            "justifyRank |-> proposal.justifyRank, "
-            "justifySubject |-> proposal.justifySubject]"
-        ),
-        "AsyncCandidateCertifiedRequestHashSemanticPayload": (
-            "LET signed == requestHash.exactSignedRequest "
-            "preimage == signed.preimage signature == signed.signature "
-            "IN [round |-> preimage.round, subject |-> preimage.subject, "
-            "certificate |-> "
-            "AsyncCandidateQcSemanticPayload(preimage.certificate), "
-            "requester |-> preimage.requester, signer |-> signature.signer, "
-            "signatureNonce |-> signature.nonce]"
-        ),
-        "AsyncCandidateCertifiedRequestItemSemanticPayload": (
-            "[recipient |-> item.envelope.recipient, "
-            "height |-> item.envelope.height, view |-> item.envelope.view, "
-            "subject |-> item.envelope.subject, "
-            "requester |-> item.envelope.requester, certificate |-> "
-            "AsyncCandidateQcSemanticPayload(item.envelope.certificate), "
-            "signatureNonce |-> item.envelope.signatureNonce]"
-        ),
-        "AsyncCandidateCommitRequestItemSemanticPayload": (
-            "[kind |-> item.kind, source |-> item.source, "
-            "recipient |-> item.envelope.recipient, "
-            "height |-> item.envelope.height, view |-> item.envelope.view, "
-            "subject |-> item.envelope.subject, "
-            "chunk |-> item.envelope.chunk, nonce |-> item.envelope.nonce]"
-        ),
-        "AsyncRouteNeutralCandidateItem": (
-            'IF item = NoAsyncItem THEN [kind |-> "NoItem", source |-> 0, '
-            "payload |-> NoAsyncItem] ELSE [kind |-> item.kind, source |-> "
-            'IF item.kind \\in {"PrepareQC", "CommitQC", '
-            '"TimeoutCertificate", "CertifiedResponse", '
-            '"CommitCertificateResponse"} THEN AsyncUntrustedSource '
-            "ELSE item.source, payload |-> "
-            'CASE item.kind = "Proposal" -> '
-            "[recipient |-> item.envelope.recipient, proposal |-> "
-            "AsyncCandidateProposalSemanticPayload(item.envelope.proposal)] "
-            '[] item.kind \\in {"PrepareVote", "CommitVote"} -> '
-            "[recipient |-> item.envelope.recipient, vote |-> "
-            "AsyncCandidateVoteSemanticPayload(item.envelope.vote)] "
-            '[] item.kind \\in {"PrepareQC", "CommitQC"} -> '
-            "[recipient |-> item.envelope.recipient, qc |-> "
-            "AsyncCandidateQcSemanticPayload(item.envelope.qc)] "
-            '[] item.kind = "TimeoutVote" -> '
-            "[recipient |-> item.envelope.recipient, vote |-> "
-            "AsyncCandidateTimeoutVoteSemanticPayload(item.envelope.vote)] "
-            '[] item.kind = "TimeoutCertificate" -> '
-            "[recipient |-> item.envelope.recipient, tc |-> "
-            "AsyncCandidateTcSemanticPayload(item.envelope.tc)] "
-            '[] item.kind = "CertifiedRequest" -> '
-            "AsyncCandidateCertifiedRequestItemSemanticPayload(item) "
-            '[] item.kind = "CommitCertificateRequest" -> '
-            "AsyncCandidateCommitRequestItemSemanticPayload(item) "
-            '[] item.kind = "CertifiedResponse" -> '
-            "[recipient |-> item.envelope.recipient, "
-            "height |-> item.envelope.height, view |-> item.envelope.view, "
-            "subject |-> item.envelope.subject, requestHash |-> "
-            "AsyncCandidateCertifiedRequestHashSemanticPayload("
-            "item.envelope.requestHash), "
-            "archiveServer |-> item.envelope.archiveServer, "
-            "citedResponder |-> item.envelope.citedResponder, "
-            "signatureOwner |-> item.envelope.signatureOwner] "
-            '[] item.kind = "CommitCertificateResponse" -> '
-            "[recipient |-> item.envelope.recipient, request |-> "
-            "AsyncCandidateCommitRequestItemSemanticPayload("
-            "item.envelope.request), qc |-> "
-            "AsyncCandidateQcSemanticPayload(item.envelope.qc)] "
-            "[] OTHER -> item.envelope]"
-        ),
-        "AsyncRouteNeutralCandidateEvidence": (
-            'IF evidence = NoAsyncItem THEN [kind |-> "NoEvidence", '
-            "payload |-> NoAsyncItem] ELSE IF AsyncItemTyped(evidence) "
-            'THEN [kind |-> "NetworkItem", payload |-> '
-            "AsyncRouteNeutralCandidateItem(evidence)] "
-            "ELSE IF evidence \\in ProposalRecordSet "
-            'THEN [kind |-> "Proposal", payload |-> '
-            "AsyncCandidateProposalSemanticPayload(evidence)] "
-            "ELSE IF evidence \\in VoteRecordSet "
-            'THEN [kind |-> "Vote", payload |-> '
-            "AsyncCandidateVoteSemanticPayload(evidence)] "
-            "ELSE IF evidence \\in TimeoutVoteRecordSet "
-            'THEN [kind |-> "TimeoutVote", payload |-> '
-            "AsyncCandidateTimeoutVoteSemanticPayload(evidence)] "
-            "ELSE IF evidence \\in QcRecordSet "
-            'THEN [kind |-> "QC", payload |-> '
-            "AsyncCandidateQcSemanticPayload(evidence)] "
-            "ELSE IF evidence \\in TcRecordSet "
-            'THEN [kind |-> "TC", payload |-> '
-            "AsyncCandidateTcSemanticPayload(evidence)] "
-            'ELSE [kind |-> "Body", payload |-> evidence]'
-        ),
-        "AsyncCandidateServicePayload": (
-            "[workKind |-> candidate.kind, "
-            "causalOrigin |-> candidate.causalOrigin, "
-            "item |-> AsyncRouteNeutralCandidateItem(candidate.item), "
-            "evidence |-> "
-            "AsyncRouteNeutralCandidateEvidence(candidate.evidence), "
-            "body |-> candidate.bodyIdentity, "
-            "manifest |-> candidate.manifestIdentity, "
-            "commitment |-> candidate.commitmentIdentity]"
-        ),
-        "AsyncCandidateServiceIdentity": (
-            "[target |-> candidate.node, "
-            "context |-> candidate.consumerContext, "
-            "height |-> candidate.height, "
-            "leader |-> Leader(candidate.consumerContext, candidate.view), "
-            "view |-> candidate.view, subject |-> candidate.subject, "
-            "phase |-> candidate.kind, owner |-> candidate.node, "
-            'kind |-> "Candidate", '
-            "payload |-> AsyncCandidateServicePayload(candidate)]"
-        ),
         "AsyncCandidateServiceMarker": (
             "identity |-> AsyncCandidateServiceIdentity(candidate)",
             "generation |-> episodeGeneration",
@@ -60155,17 +64585,17 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             effects_path,
             consume,
             """
-let ownership = self
-    .runtime
-    .take_effect_ownership(&effects)
-    .map_err(EffectExecutorError::Runtime)?;
+let ownership = match self.runtime.take_effect_ownership(&effects) {
+    Ok(ownership) => ownership,
+    Err(error) => {
+        return Err(self.close(EffectExecutorError::Runtime(error), services));
+    }
+};
 if let Err(error) = self.retain_effect_batch(effects, ownership) {
     return Err(self.close(error, services));
 }
-self.drain_retained_effect_batch(services)
-    .map_err(|error| self.close(error, services))
 """,
-            "consume_effects must bind the complete ownership vector and retained reducer batch before draining it",
+            "consume_effects must close a missing ownership boundary, preserve its Runtime type, and retain the complete owned batch before draining it",
             errors,
         )
         if consume is not None:
@@ -85565,6 +89995,11 @@ def validate_ledger(
     )
     errors.extend(_async_spec_shape_errors(formal_dir))
     errors.extend(_acyclic_liveness_debt_topology_errors(formal_dir))
+    errors.extend(_nested_filtered_projection_contract_errors(formal_dir))
+    errors.extend(_lexicographic_rank_shape_contract_errors(formal_dir))
+    errors.extend(
+        _non_vacuous_async_quantifier_contract_errors(formal_dir)
+    )
     errors.extend(_async_proof_architecture_errors(formal_dir))
     errors.extend(
         _height_productivity_continuation_contract_errors(formal_dir)
@@ -85669,6 +90104,15 @@ def validate_ledger(
     )
     errors.extend(
         _adequate_leader_scheduler_readiness_source_fidelity_errors(formal_dir)
+    )
+    errors.extend(
+        _async_candidate_semantic_identity_contract_errors(formal_dir)
+    )
+    errors.extend(
+        _async_candidate_proposal_round_contract_errors(formal_dir)
+    )
+    errors.extend(
+        _adequate_leader_three_way_service_outcome_contract_errors(formal_dir)
     )
     errors.extend(_async_source_fidelity_errors(formal_dir))
     errors.extend(_serve_lifecycle_temporal_contract_errors(formal_dir))

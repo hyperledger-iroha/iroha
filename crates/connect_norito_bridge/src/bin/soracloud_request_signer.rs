@@ -235,7 +235,7 @@ impl norito::core::NoritoSerialize for UploadedModelBundleRootPayload<'_> {
         norito::core::type_name_schema_hash::<UploadedModelBundleRootTuple<'static>>()
     }
 
-    fn serialize<W: io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         let current = norito::core::get_decode_flags();
         let defaults = norito::core::default_encode_flags();
         let dynamic_mask = norito::core::header_flags::PACKED_SEQ;
@@ -254,21 +254,21 @@ impl norito::core::NoritoSerialize for UploadedModelBundleRootPayload<'_> {
         };
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(merged, merged);
 
-        serialize_tuple_field(&mut writer, &self.service_name)?;
-        serialize_tuple_field(&mut writer, &self.model_id)?;
-        serialize_tuple_field(&mut writer, &self.weight_version)?;
-        serialize_tuple_field(&mut writer, &self.family)?;
-        serialize_tuple_field(&mut writer, self.modalities)?;
-        serialize_tuple_field(&mut writer, &self.plaintext_root)?;
-        serialize_tuple_field(&mut writer, &self.runtime_format)?;
-        serialize_tuple_field(&mut writer, &self.sorafs_manifest_digest)?;
-        serialize_tuple_field(&mut writer, &self.plaintext_bytes)?;
-        serialize_tuple_field(&mut writer, &self.ciphertext_bytes)?;
-        serialize_tuple_field(&mut writer, &self.chunk_manifest_root)?;
-        serialize_tuple_field(&mut writer, self.upload_recipient)?;
-        serialize_tuple_field(&mut writer, self.wrapped_bundle_key)?;
-        serialize_tuple_field(&mut writer, self.pricing_policy)?;
-        serialize_tuple_field(&mut writer, &self.decryption_policy_ref)?;
+        serialize_tuple_field(writer, &self.service_name)?;
+        serialize_tuple_field(writer, &self.model_id)?;
+        serialize_tuple_field(writer, &self.weight_version)?;
+        serialize_tuple_field(writer, &self.family)?;
+        serialize_tuple_field(writer, self.modalities)?;
+        serialize_tuple_field(writer, &self.plaintext_root)?;
+        serialize_tuple_field(writer, &self.runtime_format)?;
+        serialize_tuple_field(writer, &self.sorafs_manifest_digest)?;
+        serialize_tuple_field(writer, &self.plaintext_bytes)?;
+        serialize_tuple_field(writer, &self.ciphertext_bytes)?;
+        serialize_tuple_field(writer, &self.chunk_manifest_root)?;
+        serialize_tuple_field(writer, self.upload_recipient)?;
+        serialize_tuple_field(writer, self.wrapped_bundle_key)?;
+        serialize_tuple_field(writer, self.pricing_policy)?;
+        serialize_tuple_field(writer, &self.decryption_policy_ref)?;
 
         Ok(())
     }
@@ -607,13 +607,12 @@ where
     Ok(Hash::new(encoded))
 }
 
-fn serialize_tuple_field<W, T>(writer: &mut W, value: &T) -> Result<(), norito::Error>
-where
-    W: io::Write,
-    T: norito::core::NoritoSerialize + ?Sized,
-{
+fn serialize_tuple_field(
+    writer: &mut norito::core::Encoder<'_>,
+    value: &dyn norito::core::NoritoSerialize,
+) -> Result<(), norito::Error> {
     let mut payload = Vec::new();
-    value.serialize(&mut payload)?;
+    norito::core::serialize_to_buffer(value, &mut payload)?;
     let len = u64::try_from(payload.len()).map_err(|_| norito::Error::LengthMismatch)?;
     norito::core::write_len(writer, len)?;
     writer.write_all(&payload)?;

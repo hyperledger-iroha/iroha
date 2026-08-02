@@ -9,11 +9,16 @@
 pub mod bounds;
 pub mod codec;
 pub mod compression;
+mod credential_sampling;
+mod falcon512;
+mod holder_aes256;
+pub mod issuer;
 pub mod params;
 pub mod proof;
 pub mod relation;
 pub mod ring;
 pub mod sampling;
+pub mod scope;
 mod toolbox;
 pub mod transcript;
 
@@ -77,7 +82,12 @@ fn compile_bound_presentation_v1(
     BoundPresentationErrorV1,
 > {
     let matrix_seed = transcript::matrix_seed_v1(*statement.context.parameter_digest.as_bytes())?;
-    let relation = relation::compile_application_relation_v1(statement, policy, matrix_seed)?;
+    let relation = relation::compile_application_relation_v1(
+        statement,
+        policy,
+        matrix_seed,
+        canonical_genesis_hash,
+    )?;
     let statement_digest = PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone())
         .digest()
         .map_err(|_| BoundPresentationErrorV1::StatementDigest)?;

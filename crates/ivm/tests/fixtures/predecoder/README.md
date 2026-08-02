@@ -5,11 +5,11 @@ This directory hosts golden vectors for the IVM opcode pre-decoder.
 
 Generate/refresh fixtures with:
 
-  cargo run --locked -p ivm --bin ivm_fixture_export -- --write
+  cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --write
 
 Check the tracked fixtures without changing them with:
 
-  cargo run --locked -p ivm --bin ivm_fixture_export -- --check
+  cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --check
 
 This produces the following under `mixed/`:
 
@@ -20,4 +20,3 @@ This produces the following under `mixed/`:
 
 Cross-implementation consumers can parse `decoded.json` to validate canonical
 decoding, and can load `artifacts/*.to` to validate header parsing invariants.
-

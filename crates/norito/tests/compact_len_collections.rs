@@ -14,7 +14,7 @@ use norito::{
 
 fn serialize_payload<T: NoritoSerialize>(value: &T) -> Vec<u8> {
     let mut out = Vec::new();
-    value.serialize(&mut out).expect("serialize");
+    core::serialize_to_buffer(value, &mut out).expect("serialize");
     out
 }
 

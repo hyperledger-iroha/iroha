@@ -1014,7 +1014,7 @@ impl iroha_version::codec::DecodeVersioned for SignedBlock {
 pub mod stream {
     //! Blocks for streaming API.
 
-    use std::{io::Write, num::NonZeroU64, sync::Arc};
+    use std::{num::NonZeroU64, sync::Arc};
 
     use iroha_schema::IntoSchema;
     use norito::{
@@ -1067,7 +1067,7 @@ pub mod stream {
             <BlockMessage as NoritoSerialize>::schema_hash()
         }
 
-        fn serialize<W: Write>(&self, writer: W) -> Result<(), NoritoError> {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
             // Serialize as a BlockMessage wrapper to keep schema and layout consistent
             let msg = BlockMessage(self.0.as_ref().clone());
             NoritoSerialize::serialize(&msg, writer)

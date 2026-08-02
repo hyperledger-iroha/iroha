@@ -1,6 +1,6 @@
 //! Regenerate QR stream fixtures shared across SDKs.
 //!
-//! Run with `cargo run -p iroha_data_model --features test-fixtures --bin qr_stream_fixtures`
+//! Run with `cargo run -p iroha_data_model --features dev-tools,test-fixtures --bin qr_stream_fixtures`
 //! to refresh `fixtures/qr_stream/*.json`. Use `--check` to verify fixtures are up to date.
 
 use std::{env, error::Error, fs, path::Path};
@@ -90,7 +90,7 @@ fn write_fixture(path: &str, value: &Value, check_only: bool) -> Result<(), Box<
         let existing = fs::read_to_string(path)?;
         if existing.trim() != rendered.trim() {
             return Err(format!(
-                "fixture {path} is stale; run cargo run -p iroha_data_model --features test-fixtures --bin qr_stream_fixtures"
+                "fixture {path} is stale; run cargo run -p iroha_data_model --features dev-tools,test-fixtures --bin qr_stream_fixtures"
             )
             .into());
         }

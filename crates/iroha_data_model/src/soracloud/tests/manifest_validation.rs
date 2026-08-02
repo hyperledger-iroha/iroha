@@ -2426,3 +2426,66 @@
             }
         ));
     }
+    #[test]
+    fn validation_helper_schema_version_preserves_error_details() {
+        assert_eq!(validate_schema_version("test manifest", 1, 1), Ok(()));
+        assert_eq!(
+            validate_schema_version("test manifest", 2, 1),
+            Err(SoracloudManifestError::UnsupportedVersion {
+                manifest: "test manifest",
+                expected: 1,
+                found: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn validation_helper_nonblank_field_rejects_only_blank_text() {
+        assert_eq!(
+            validate_nonblank_field("test manifest", "name", " value "),
+            Ok(())
+        );
+        assert_eq!(
+            validate_nonblank_field("test manifest", "name", " \t\n"),
+            Err(SoracloudManifestError::EmptyField {
+                manifest: "test manifest",
+                field: "name",
+            })
+        );
+    }
+
+    #[test]
+    fn validation_helper_optional_nonempty_accepts_absent_values() {
+        assert_eq!(
+            validate_optional_nonempty("test manifest", "name", None),
+            Ok(())
+        );
+        assert_eq!(
+            validate_optional_nonempty("test manifest", "name", Some("value")),
+            Ok(())
+        );
+        assert_eq!(
+            validate_optional_nonempty("test manifest", "name", Some("  ")),
+            Err(SoracloudManifestError::EmptyField {
+                manifest: "test manifest",
+                field: "name",
+            })
+        );
+    }
+
+    #[test]
+    fn validation_helper_invalid_field_preserves_error_details_and_message() {
+        let error = invalid_field("test manifest", "name", "must be canonical");
+        assert_eq!(
+            error,
+            SoracloudManifestError::InvalidField {
+                manifest: "test manifest",
+                field: "name",
+                reason: "must be canonical".to_owned(),
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "test manifest field `name` is invalid: must be canonical"
+        );
+    }

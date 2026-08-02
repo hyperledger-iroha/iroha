@@ -32,11 +32,18 @@ public final class ProofAttachmentModelTests {
     final long maximum = ProofAttachment.MAXIMUM_ENCODED_PROOF_BOX_BYTES;
     final long backendBytes = "halo2/ipa".getBytes(StandardCharsets.UTF_8).length;
     assert ProofAttachment.canonicalProofBoxEncodedLength(
-            backendBytes, maximum - 32L - backendBytes)
+            backendBytes, maximum - 23L)
         == maximum;
     assert ProofAttachment.canonicalProofBoxEncodedLength(
-            backendBytes, maximum - 31L - backendBytes)
+            backendBytes, maximum - 22L)
         == maximum + 1L;
+    assert ProofAttachment.canonicalProofBoxEncodedLength(126L, 0L) == 137L;
+    assert ProofAttachment.canonicalProofBoxEncodedLength(127L, 0L) == 139L;
+    assert ProofAttachment.canonicalProofBoxEncodedLength(128L, 0L) == 141L;
+    assert ProofAttachment.canonicalProofBoxEncodedLength(1L, 119L) == 131L;
+    assert ProofAttachment.canonicalProofBoxEncodedLength(1L, 120L) == 133L;
+    assert ProofAttachment.canonicalProofBoxEncodedLength(1L, 16_375L) == 16_388L;
+    assert ProofAttachment.canonicalProofBoxEncodedLength(1L, 16_376L) == 16_390L;
     expectThrows(() -> ProofAttachment.canonicalProofBoxEncodedLength(Long.MAX_VALUE, 1L));
   }
 

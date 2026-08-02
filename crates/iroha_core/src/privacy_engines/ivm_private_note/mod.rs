@@ -45,7 +45,8 @@ pub use facade::{
 };
 #[cfg(feature = "privacy-release-evidence")]
 pub(crate) use fixture::{
-    ivm_private_note_release_fixture_v1, ivm_private_note_release_invalid_path_fixture_v1,
+    ivm_private_note_network_fixture_v1, ivm_private_note_release_fixture_v1,
+    ivm_private_note_release_invalid_path_fixture_v1,
 };
 pub(crate) use relation::{
     IVM_PRIVATE_NOTE_ENGINE_DESCRIPTOR_V1, IVM_PRIVATE_NOTE_HASH_PROFILE_DESCRIPTOR_V1,

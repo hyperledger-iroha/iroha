@@ -4,6 +4,9 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Replaced asset-selected offline readiness discovery with the universal
+  `getOfflineCapability()`/`OfflineStatus` contract. Deprecated selector-based
+  shims now ignore the selector and never add an asset query parameter.
 - Bound validation-fee policy and payout-lifecycle proposal fingerprints to
   the complete first-release PLAIN electorate rules. Both native exports now
   validate exact JSON and compute canonical `ProposalKind` fingerprints, and

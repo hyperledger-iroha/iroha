@@ -391,11 +391,11 @@ BY AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
 
 THEOREM HistoricalRunnerEpisodeOwnerUsesAsyncFairness ==
   \A initialContext, node, ownerKind:
-    /\ node \in Responsive
-    /\ ownerKind \in HistoricalRunnerEpisodeFairOwnerKinds
-    => AsyncSpecAt(initialContext)
-         => WF_AsyncAllVars(
-              HistoricalRunnerEpisodeFairAction(node, ownerKind))
+    (/\ node \in Responsive
+     /\ ownerKind \in HistoricalRunnerEpisodeFairOwnerKinds)
+      => (AsyncSpecAt(initialContext)
+            => WF_AsyncAllVars(
+                 HistoricalRunnerEpisodeFairAction(node, ownerKind)))
 BY Isa
    DEF HistoricalRunnerEpisodeFairOwnerKinds,
        HistoricalRunnerEpisodeFairAction,
@@ -831,16 +831,16 @@ BY HistoricalDiscoveryServeFairActionLowersOccurrenceDebt,
 
 THEOREM HistoricalDiscoveryServeExactWorkerUsesAsyncFairness ==
   \A initialContext, recipient, workerKind:
-    /\ recipient \in Responsive
-    /\ workerKind
-         \in HistoricalDiscoveryServeExactWorkerActionKindCarrier
-    => AsyncSpecAt(initialContext)
-         => WF_AsyncAllVars(
-              CASE workerKind = "ServiceIo" ->
-                     PostGstServiceIoWorker(recipient)
-                [] workerKind = "ServiceHistoricalIo" ->
-                     PostGstServiceHistoricalRecoveryIoWorker(recipient)
-                [] OTHER -> FALSE)
+    (/\ recipient \in Responsive
+     /\ workerKind
+          \in HistoricalDiscoveryServeExactWorkerActionKindCarrier)
+      => (AsyncSpecAt(initialContext)
+            => WF_AsyncAllVars(
+                 CASE workerKind = "ServiceIo" ->
+                        PostGstServiceIoWorker(recipient)
+                   [] workerKind = "ServiceHistoricalIo" ->
+                        PostGstServiceHistoricalRecoveryIoWorker(recipient)
+                   [] OTHER -> FALSE))
 BY Isa
    DEF HistoricalDiscoveryServeExactWorkerActionKindCarrier,
        AsyncSpecAt, AsyncFairnessAt

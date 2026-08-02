@@ -40,8 +40,7 @@ const PROOF_VERSION_V1: u8 = 1;
 const MAX_CHAIN_ID_BYTES_V1: usize = 255;
 const COMPOSITION_DOMAIN_V1: &[u8] = b"iroha-zk-ams-v1:batch-admission:masked-relaxed-spartan-t256";
 const COMMITMENT_KEY_LABEL_V1: &[u8] = b"iroha.zk-ams.v1.batch-admission.hyrax-t256";
-const PROFILE_DESCRIPTOR_V1: &[u8] =
-    b"iroha.zk-ams.v1.batch-admission.canonical-phc-es256-root-transition";
+const PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha.zk-ams.v1.batch-admission.canonical-phc-es256-root-transition.homogeneous-lineage.unique-anchors";
 const SOURCE_PROFILE_V1: &[u8] = b"arxiv:2602.16130v2:algorithms-1-4:appendices-a-c";
 const PHC_HASH_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ams:phc:v1";
 const REGISTRY_TRANSITION_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ams:registry-transition:v1";
@@ -328,6 +327,15 @@ pub enum ZkAmsAdmissionRelationErrorV1 {
         /// Supplied number of strict instances.
         actual: usize,
     },
+    /// Batch rows do not share one issuer, policy, registry, and epoch lineage.
+    #[error("inconsistent ZK-AMS admission batch lineage")]
+    InconsistentBatchLineage,
+    /// Two batch rows reuse the same canonical credential digest.
+    #[error("duplicate ZK-AMS admission credential digest")]
+    DuplicateCredentialDigest,
+    /// Two batch rows reuse the same admitted seed public key.
+    #[error("duplicate ZK-AMS admission seed public key")]
+    DuplicateSeedPublicKey,
     /// Commitment worker count is outside `1..=20`.
     #[error("invalid ZK-AMS admission worker count {actual}")]
     InvalidWorkerCount {
@@ -646,6 +654,7 @@ fn validate_batch(
             actual: public_inputs.len(),
         }
     })?;
+    let lineage = public_inputs[0];
     for (index, public) in public_inputs.iter().copied().enumerate() {
         public.validate()?;
         if public.batch_size != count
@@ -655,11 +664,45 @@ fn validate_batch(
         {
             return Err(ZkAmsAdmissionRelationErrorV1::InvalidPublicInput);
         }
-        if index > 0 && public.prior_registry_root != public_inputs[index - 1].next_registry_root {
-            return Err(ZkAmsAdmissionRelationErrorV1::InvalidPublicInput);
+        if index > 0 {
+            if !same_batch_lineage(lineage, public) {
+                return Err(ZkAmsAdmissionRelationErrorV1::InconsistentBatchLineage);
+            }
+            if public.prior_registry_root != public_inputs[index - 1].next_registry_root {
+                return Err(ZkAmsAdmissionRelationErrorV1::InvalidPublicInput);
+            }
+            if public_inputs[..index]
+                .iter()
+                .any(|prior| prior.phc_hash == public.phc_hash)
+            {
+                return Err(ZkAmsAdmissionRelationErrorV1::DuplicateCredentialDigest);
+            }
+            if public_inputs[..index]
+                .iter()
+                .any(|prior| prior.seed_public_key == public.seed_public_key)
+            {
+                return Err(ZkAmsAdmissionRelationErrorV1::DuplicateSeedPublicKey);
+            }
         }
     }
     Ok(())
+}
+
+fn same_batch_lineage(
+    expected: ZkAmsAdmissionPublicInputV1,
+    actual: ZkAmsAdmissionPublicInputV1,
+) -> bool {
+    actual.issuer_key_x == expected.issuer_key_x
+        && actual.issuer_key_y == expected.issuer_key_y
+        && actual.issuer_key_prefix == expected.issuer_key_prefix
+        && actual.issuer_id == expected.issuer_id
+        && actual.policy_id == expected.policy_id
+        && actual.issuer_policy_record_digest == expected.issuer_policy_record_digest
+        && actual.registry_id == expected.registry_id
+        && actual.registry_record_digest == expected.registry_record_digest
+        && actual.policy_digest == expected.policy_digest
+        && actual.current_registry_epoch == expected.current_registry_epoch
+        && actual.next_registry_epoch == expected.next_registry_epoch
 }
 
 fn validate_context(
@@ -867,9 +910,10 @@ fn map_composition_error(error: MaskedRelaxedErrorV1) -> ZkAmsAdmissionRelationE
         MaskedRelaxedErrorV1::InvalidWorkerCount { actual, .. } => {
             ZkAmsAdmissionRelationErrorV1::InvalidWorkerCount { actual }
         }
-        MaskedRelaxedErrorV1::InvalidProfile | MaskedRelaxedErrorV1::UnsatisfiedWitness => {
+        MaskedRelaxedErrorV1::InvalidProfile => {
             ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile
         }
+        MaskedRelaxedErrorV1::UnsatisfiedWitness => ZkAmsAdmissionRelationErrorV1::InvalidWitness,
         MaskedRelaxedErrorV1::InvalidProofEncoding => {
             ZkAmsAdmissionRelationErrorV1::InvalidProofEncoding
         }
@@ -961,6 +1005,19 @@ mod tests {
             .expect("fixed-shape admission synthesis")
     }
 
+    fn coherent_two_anchor_batch() -> [ZkAmsAdmissionPublicInputV1; 2] {
+        let mut first = admission_assignment_fixture().public;
+        first.batch_size = 2;
+        first.anchor_index = 0;
+        let mut second = first;
+        second.phc_hash = [0x71; 32];
+        second.seed_public_key = [0x72; 32];
+        second.prior_registry_root = first.next_registry_root;
+        second.next_registry_root = [0x73; 32];
+        second.anchor_index = 1;
+        [first, second]
+    }
+
     fn assignment_is_satisfied(assignment: &CircuitAssignment) -> bool {
         assignment
             .shape
@@ -1011,6 +1068,121 @@ mod tests {
             version: PROOF_VERSION_V1,
             relation: empty_relation(),
         }
+    }
+
+    #[test]
+    fn admission_batch_rejects_every_mixed_governance_and_epoch_lineage() {
+        let canonical = coherent_two_anchor_batch();
+        validate_batch(&canonical, canonical.len()).expect("coherent two-anchor lineage");
+
+        let mutations: [(&str, fn(&mut ZkAmsAdmissionPublicInputV1)); 11] = [
+            ("issuer-key-x", |row| row.issuer_key_x[31] ^= 1),
+            ("issuer-key-y", |row| row.issuer_key_y[31] ^= 1),
+            ("issuer-key-prefix", |row| row.issuer_key_prefix ^= 1),
+            ("issuer-id", |row| row.issuer_id[31] ^= 1),
+            ("policy-id", |row| row.policy_id[31] ^= 1),
+            ("issuer-policy-record", |row| {
+                row.issuer_policy_record_digest[31] ^= 1;
+            }),
+            ("registry-id", |row| row.registry_id[31] ^= 1),
+            ("registry-record", |row| {
+                row.registry_record_digest[31] ^= 1;
+            }),
+            ("policy-digest", |row| row.policy_digest[31] ^= 1),
+            ("current-epoch", |row| {
+                row.current_registry_epoch += 1;
+                row.next_registry_epoch += 1;
+            }),
+            ("next-epoch", |row| {
+                row.current_registry_epoch -= 1;
+                row.next_registry_epoch -= 1;
+            }),
+        ];
+        for (label, mutate) in mutations {
+            let mut adversarial = canonical;
+            mutate(&mut adversarial[1]);
+            assert_eq!(
+                validate_batch(&adversarial, adversarial.len()),
+                Err(ZkAmsAdmissionRelationErrorV1::InconsistentBatchLineage),
+                "mixed {label} lineage must fail before proof work"
+            );
+        }
+    }
+
+    #[test]
+    fn admission_batch_rejects_duplicate_anchors_and_broken_ordering() {
+        let canonical = coherent_two_anchor_batch();
+
+        let mut duplicate_credential = canonical;
+        duplicate_credential[1].phc_hash = duplicate_credential[0].phc_hash;
+        assert_eq!(
+            validate_batch(&duplicate_credential, duplicate_credential.len()),
+            Err(ZkAmsAdmissionRelationErrorV1::DuplicateCredentialDigest)
+        );
+
+        let mut duplicate_seed = canonical;
+        duplicate_seed[1].seed_public_key = duplicate_seed[0].seed_public_key;
+        assert_eq!(
+            validate_batch(&duplicate_seed, duplicate_seed.len()),
+            Err(ZkAmsAdmissionRelationErrorV1::DuplicateSeedPublicKey)
+        );
+
+        let mut broken_root_chain = canonical;
+        broken_root_chain[1].prior_registry_root = [0x74; 32];
+        assert_eq!(
+            validate_batch(&broken_root_chain, broken_root_chain.len()),
+            Err(ZkAmsAdmissionRelationErrorV1::InvalidPublicInput)
+        );
+
+        let mut repeated_index = canonical;
+        repeated_index[1].anchor_index = 0;
+        assert_eq!(
+            validate_batch(&repeated_index, repeated_index.len()),
+            Err(ZkAmsAdmissionRelationErrorV1::InvalidPublicInput)
+        );
+
+        let mut false_batch_size = canonical;
+        false_batch_size[1].batch_size = 1;
+        assert_eq!(
+            validate_batch(&false_batch_size, false_batch_size.len()),
+            Err(ZkAmsAdmissionRelationErrorV1::InvalidPublicInput)
+        );
+    }
+
+    #[test]
+    fn admission_batch_bounds_and_unsatisfied_witness_errors_are_exact() {
+        assert_eq!(
+            validate_batch(&[], 0),
+            Err(ZkAmsAdmissionRelationErrorV1::InvalidBatchSize { actual: 0 })
+        );
+
+        let canonical = coherent_two_anchor_batch();
+        assert_eq!(
+            validate_batch(&canonical, 1),
+            Err(ZkAmsAdmissionRelationErrorV1::InvalidBatchSize {
+                actual: canonical.len(),
+            })
+        );
+
+        let oversized_len = MAX_MASKED_RELAXED_STRICT_INSTANCES_V1 + 1;
+        let oversized_batch_size = u32::try_from(oversized_len).expect("bounded hostile batch");
+        let mut oversized = vec![canonical[0]; oversized_len];
+        for (index, row) in oversized.iter_mut().enumerate() {
+            row.batch_size = oversized_batch_size;
+            row.anchor_index = u32::try_from(index).expect("bounded hostile index");
+        }
+        assert_eq!(
+            validate_batch(&oversized, oversized.len()),
+            Err(ZkAmsAdmissionRelationErrorV1::InvalidBatchSize {
+                actual: MAX_MASKED_RELAXED_STRICT_INSTANCES_V1 + 1,
+            })
+        );
+
+        assert_eq!(
+            map_composition_error(MaskedRelaxedErrorV1::UnsatisfiedWitness),
+            ZkAmsAdmissionRelationErrorV1::InvalidWitness,
+            "attacker-controlled witness failure must not be reported as profile drift"
+        );
     }
 
     #[test]
@@ -1089,8 +1261,7 @@ mod tests {
             let flags =
                 norito::core::default_encode_flags() & !norito::core::header_flags::COMPACT_LEN;
             let _flags = norito::core::DecodeFlagsGuard::enter(flags);
-            proof
-                .serialize(&mut alternate)
+            norito::core::serialize_to_buffer(&proof, &mut alternate)
                 .expect("encode alternate length layout");
         }
         assert_ne!(alternate, canonical);

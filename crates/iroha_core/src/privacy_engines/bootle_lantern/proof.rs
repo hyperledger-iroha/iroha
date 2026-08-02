@@ -1,9 +1,10 @@
-//! Native fixed-profile Bootle/Lantern presentation prover and verifier.
+//! Native fixed-profile Bootle/Lantern P1/P2 prover and verifier.
 //!
-//! This module implements the complete presentation path: transparent
-//! commitments, projected norm witnesses, Schwartz compression, the generic
-//! quadratic linearization, ABDLOP response compression, strict proof
-//! construction, verifier-side challenge reconstruction, and prover
+//! This module implements the blind-issuance-request (P1) and presentation
+//! (P2) paths over their distinct transcript purposes and nominal wire types:
+//! transparent commitments, projected norm witnesses, Schwartz compression,
+//! the generic quadratic linearization, ABDLOP response compression, strict
+//! proof construction, verifier-side challenge reconstruction, and prover
 //! self-verification.
 
 use rand_core_06::{CryptoRng, RngCore};
@@ -13,9 +14,10 @@ use zeroize::{Zeroize, Zeroizing};
 use super::{
     bounds::{ResponseBoundErrorV1, validate_public_response_bounds_v1},
     codec::{
-        BootleLanternPresentationProofV1, H_POLYNOMIALS_V1, HINT_POLYNOMIALS_V1,
-        PROOF_COEFFICIENTS_V1, ProofCodecErrorV1, T_A1_POLYNOMIALS_V1, T_B_POLYNOMIALS_V1,
-        Z1_POLYNOMIALS_V1, Z3_POLYNOMIALS_V1, Z4_POLYNOMIALS_V1, Z21_POLYNOMIALS_V1,
+        BootleLanternBlindIssuanceRequestProofV1, BootleLanternPresentationProofV1,
+        H_POLYNOMIALS_V1, HINT_POLYNOMIALS_V1, PROOF_COEFFICIENTS_V1, ProofCodecErrorV1,
+        T_A1_POLYNOMIALS_V1, T_B_POLYNOMIALS_V1, Z1_POLYNOMIALS_V1, Z3_POLYNOMIALS_V1,
+        Z4_POLYNOMIALS_V1, Z21_POLYNOMIALS_V1,
     },
     compression::{
         CompressionErrorV1, gamma_decompose_v1, make_gamma_hint_v1, power2round_v1,
@@ -41,7 +43,9 @@ use super::{
         flatten_polynomials, lift_short_witness_v1, matrix_vector_product_v1,
         projected_norm_witness_v1,
     },
-    transcript::PresentationTranscriptV1,
+    transcript::{
+        BlindIssuanceRequestTranscriptV1, PresentationTranscriptV1, ProofTranscriptCoreV1,
+    },
 };
 
 const PROJECTION_R_STAGE_V1: &[u8] = b"projection-r-v1";
@@ -54,7 +58,9 @@ const Y4_MESSAGE_START_V1: usize = 4;
 const BETA_MESSAGE_INDEX_V1: usize = 8;
 const G_MESSAGE_START_V1: usize = 9;
 const LINEARIZATION_MESSAGE_INDEX_V1: usize = 11;
+#[cfg_attr(not(test), allow(dead_code))]
 const PROVER_PRECOMPUTED_QUADRATIC_EVALUATIONS_V1: usize = 2;
+#[cfg_attr(not(test), allow(dead_code))]
 const PROVER_QUADRATIC_EVALUATIONS_PER_MASK_RETRY_V1: usize = 3;
 const VERIFIER_QUADRATIC_EVALUATIONS_V1: usize = 3;
 
@@ -176,6 +182,7 @@ impl ProofRejectionBudgetV1 {
         true
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     const fn remaining(&self) -> u32 {
         self.remaining
     }
@@ -266,19 +273,52 @@ pub fn prove_presentation_v1<R: CryptoRng + RngCore>(
     transcript: PresentationTranscriptV1,
     rng: &mut R,
 ) -> Result<BootleLanternPresentationProofV1, PresentationProofErrorV1> {
-    prove_presentation_with_rejection_limit_v1(
+    prove_with_transcript_core_v1(
         relation,
         witness,
-        transcript,
+        transcript.proof_core(),
         rng,
         MAX_PROOF_SAMPLING_ATTEMPTS_V1,
     )
 }
 
+pub(crate) fn prove_blind_issuance_request_v1<R: CryptoRng + RngCore>(
+    relation: &BootleLanternApplicationRelationV1,
+    witness: &BootleLanternPresentationWitnessV1,
+    transcript: BlindIssuanceRequestTranscriptV1,
+    rng: &mut R,
+) -> Result<BootleLanternBlindIssuanceRequestProofV1, PresentationProofErrorV1> {
+    let body = prove_with_transcript_core_v1(
+        relation,
+        witness,
+        transcript.proof_core(),
+        rng,
+        MAX_PROOF_SAMPLING_ATTEMPTS_V1,
+    )?;
+    Ok(BootleLanternBlindIssuanceRequestProofV1::from_validated_body_v1(body))
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 fn prove_presentation_with_rejection_limit_v1<R: CryptoRng + RngCore>(
     relation: &BootleLanternApplicationRelationV1,
     witness: &BootleLanternPresentationWitnessV1,
     transcript: PresentationTranscriptV1,
+    rng: &mut R,
+    rejection_draw_limit: u32,
+) -> Result<BootleLanternPresentationProofV1, PresentationProofErrorV1> {
+    prove_with_transcript_core_v1(
+        relation,
+        witness,
+        transcript.proof_core(),
+        rng,
+        rejection_draw_limit,
+    )
+}
+
+fn prove_with_transcript_core_v1<R: CryptoRng + RngCore>(
+    relation: &BootleLanternApplicationRelationV1,
+    witness: &BootleLanternPresentationWitnessV1,
+    transcript: ProofTranscriptCoreV1,
     rng: &mut R,
     rejection_draw_limit: u32,
 ) -> Result<BootleLanternPresentationProofV1, PresentationProofErrorV1> {
@@ -304,7 +344,7 @@ fn prove_presentation_with_rejection_limit_v1<R: CryptoRng + RngCore>(
             &mut randomness,
             &mut rejection_budget,
         )? {
-            if let Err(_error) = verify_presentation_v1(relation, transcript, &proof) {
+            if let Err(_error) = verify_with_transcript_core_v1(relation, transcript, &proof) {
                 #[cfg(test)]
                 eprintln!("Bootle/Lantern prover self-check detail: {_error:?}");
                 return Err(PresentationProofErrorV1::ProverSelfCheckFailed);
@@ -328,6 +368,22 @@ fn prove_presentation_with_rejection_limit_v1<R: CryptoRng + RngCore>(
 pub fn verify_presentation_v1(
     relation: &BootleLanternApplicationRelationV1,
     transcript: PresentationTranscriptV1,
+    proof: &BootleLanternPresentationProofV1,
+) -> Result<(), PresentationProofErrorV1> {
+    verify_with_transcript_core_v1(relation, transcript.proof_core(), proof)
+}
+
+pub(crate) fn verify_blind_issuance_request_v1(
+    relation: &BootleLanternApplicationRelationV1,
+    transcript: BlindIssuanceRequestTranscriptV1,
+    proof: &BootleLanternBlindIssuanceRequestProofV1,
+) -> Result<(), PresentationProofErrorV1> {
+    verify_with_transcript_core_v1(relation, transcript.proof_core(), proof.validated_body_v1())
+}
+
+fn verify_with_transcript_core_v1(
+    relation: &BootleLanternApplicationRelationV1,
+    transcript: ProofTranscriptCoreV1,
     proof: &BootleLanternPresentationProofV1,
 ) -> Result<(), PresentationProofErrorV1> {
     require_relation_digest(relation, transcript)?;
@@ -408,7 +464,7 @@ pub fn verify_presentation_v1(
 fn prove_attempt(
     relation: &BootleLanternApplicationRelationV1,
     short: &super::toolbox::ShortWitnessV1,
-    transcript: PresentationTranscriptV1,
+    transcript: ProofTranscriptCoreV1,
     matrices: &InternalMatricesV1,
     randomness: &mut ProofRandomnessV1,
     rejection_budget: &mut ProofRejectionBudgetV1,
@@ -616,7 +672,7 @@ fn prove_attempt(
 fn prove_projected_responses(
     relation: &BootleLanternApplicationRelationV1,
     short: &[ProofPolynomialV1; TBOX_M1_V1],
-    transcript: PresentationTranscriptV1,
+    transcript: ProofTranscriptCoreV1,
     matrices: &InternalMatricesV1,
     s2: &[ProofPolynomialV1; TBOX_M2_V1],
     messages: &mut [ProofPolynomialV1; TBOX_LEXT_V1],
@@ -755,7 +811,7 @@ fn prove_projected_responses(
 }
 
 fn derive_projection_matrices(
-    transcript: PresentationTranscriptV1,
+    transcript: ProofTranscriptCoreV1,
     t_b: &[ProofPolynomialV1; TBOX_LEXT_V1],
 ) -> Result<(Box<[i8]>, Box<[i8]>), PresentationProofErrorV1> {
     let projection_commitments = encode_polynomials_v1(&t_b[..BETA_MESSAGE_INDEX_V1 + 1]);
@@ -778,7 +834,7 @@ fn derive_projection_matrices(
 }
 
 fn derive_schwartz_weights(
-    transcript: PresentationTranscriptV1,
+    transcript: ProofTranscriptCoreV1,
     t_b: &[ProofPolynomialV1; TBOX_LEXT_V1],
 ) -> Result<Box<[u64]>, PresentationProofErrorV1> {
     let commitment = encode_polynomials_v1(&t_b[..QUADRATIC_MESSAGE_POLYNOMIALS_V1]);
@@ -793,7 +849,7 @@ fn derive_schwartz_weights(
 }
 
 fn derive_equation_multipliers(
-    transcript: PresentationTranscriptV1,
+    transcript: ProofTranscriptCoreV1,
     t_b: &[ProofPolynomialV1; TBOX_LEXT_V1],
     h: &[ProofPolynomialV1; H_POLYNOMIALS_V1],
     z3: &[ProofPolynomialV1; Z3_POLYNOMIALS_V1],
@@ -1127,7 +1183,7 @@ fn pre_challenge_wire(
 
 fn require_relation_digest(
     relation: &BootleLanternApplicationRelationV1,
-    transcript: PresentationTranscriptV1,
+    transcript: ProofTranscriptCoreV1,
 ) -> Result<(), PresentationProofErrorV1> {
     if transcript.relation_digest() != application_relation_digest_v1(relation) {
         return Err(PresentationProofErrorV1::RelationDigestMismatch);
@@ -1361,10 +1417,11 @@ pub enum PresentationProofErrorV1 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::OnceLock;
+
     use iroha_data_model::privacy::{
         BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
-        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyLifecycleV1,
-        BootleLanternIssuerPolicyV1, BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
+        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyV1,
         IrohaBootleLanternAnoncredStatementV1, PrivacyBootleLanternIssuerPolicyDigestV1,
         PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1, PrivacyParameterDigestV1,
         PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyStatementContextV1,
@@ -1380,6 +1437,11 @@ mod tests {
         BoundPresentationErrorV1,
         codec::{PROOF_BYTES_V1, PROOF_HEADER_BYTES_V1},
         compression::proof_residue_from_centered_v1,
+        issuer::{
+            BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
+            holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_with_rng_v1,
+            issuer_blind_issue_with_rng_v1,
+        },
         params::{
             APPLICATION_MODULUS_V1, CHALLENGE_OMEGA_V1, COMPRESSION_MODULUS_V1, PROOF_MODULUS_V1,
             Z4_INFINITY_NORM_BOUND_V1,
@@ -1388,8 +1450,8 @@ mod tests {
         relation::{compile_application_relation_v1, validate_presentation_witness_v1},
         ring::ApplicationPolynomialV1,
         transcript::{
-            MatrixRoleV1, MatrixSeedV1, PresentationChallengeBindingV1,
-            expand_application_matrix_v1, matrix_seed_v1,
+            BlindIssuanceRequestChallengeBindingV1, MatrixSeedV1, PresentationChallengeBindingV1,
+            matrix_seed_v1,
         },
         verify_bound_presentation_encoded_v1, verify_bound_presentation_v1,
     };
@@ -1525,48 +1587,6 @@ mod tests {
         }
     }
 
-    fn issuer_policy() -> BootleLanternIssuerPolicyV1 {
-        // This algebraic fixture sets B2=A_m, allowing the direct attributes
-        // to serve as s2. It exercises the proof system only; production
-        // issuer key generation and preimage sampling have separate tests.
-        let attributes =
-            expand_application_matrix_v1(matrix_seed(), MatrixRoleV1::ApplicationAttributes)
-                .expect("application attribute matrix");
-        let entries = attributes
-            .entries()
-            .iter()
-            .map(|polynomial| BootleLanternPolynomialV1 {
-                coefficients: polynomial.coefficients().to_vec(),
-            })
-            .collect();
-        let mut policy = BootleLanternIssuerPolicyV1 {
-            issuer_id: PrivacyIssuerIdV1::new(raw(11)),
-            policy_id: PrivacyPolicyIdV1::new(raw(12)),
-            epoch: 1,
-            lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
-            issuer_parameter_id: PrivacyParameterIdV1::new(raw(13)),
-            issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
-            issuer_public_matrix: BootleLanternIssuerPublicMatrixV1 { entries },
-            required_disclosure_bitmap: 0b0000_0010,
-            allowed_values: (0..8)
-                .map(|index| BootleLanternAllowedAttributeValuesV1 {
-                    values: if index == 1 {
-                        vec![BootleLanternAttributeValueV1::new([1; 8])]
-                    } else {
-                        Vec::new()
-                    },
-                })
-                .collect(),
-            record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),
-        };
-        policy.issuer_parameter_digest = policy
-            .computed_issuer_parameter_digest()
-            .expect("issuer parameter digest");
-        policy.record_digest = policy.computed_record_digest().expect("policy digest");
-        policy.validate().expect("valid issuer policy");
-        policy
-    }
-
     fn statement(policy: &BootleLanternIssuerPolicyV1) -> IrohaBootleLanternAnoncredStatementV1 {
         IrohaBootleLanternAnoncredStatementV1 {
             context: statement_context(),
@@ -1583,30 +1603,94 @@ mod tests {
         }
     }
 
+    struct IssuedFixture {
+        policy: BootleLanternIssuerPolicyV1,
+        statement: IrohaBootleLanternAnoncredStatementV1,
+        witness: BootleLanternPresentationWitnessV1,
+    }
+
+    fn issued_fixture() -> &'static IssuedFixture {
+        static FIXTURE: OnceLock<IssuedFixture> = OnceLock::new();
+        FIXTURE.get_or_init(|| {
+            let mut keygen_rng = TestRng::healthy(0x6a09_e667_f3bc_c908);
+            let issuer_key_pair = BootleLanternIssuerKeyPairV1::generate_with_rng_v1(
+                PrivacyParameterIdV1::new(raw(13)),
+                &mut keygen_rng,
+            )
+            .expect("native issuer key generation");
+            let policy = issuer_key_pair
+                .active_policy_v1(BootleLanternIssuerPolicyMetadataV1 {
+                    issuer_id: PrivacyIssuerIdV1::new(raw(11)),
+                    policy_id: PrivacyPolicyIdV1::new(raw(12)),
+                    epoch: 1,
+                    required_disclosure_bitmap: 0b0000_0010,
+                    allowed_values: (0..8)
+                        .map(|index| BootleLanternAllowedAttributeValuesV1 {
+                            values: if index == 1 {
+                                vec![BootleLanternAttributeValueV1::new([1; 8])]
+                            } else {
+                                Vec::new()
+                            },
+                        })
+                        .collect(),
+                })
+                .expect("active native issuer policy");
+            let context = statement_context();
+            let genesis_hash = [0x32; 32];
+            let mut attributes = [[0_u8; 8]; 8];
+            attributes[1] = [1; 8];
+            let mut holder_mask_rng = TestRng::healthy(0xbb67_ae85_84ca_a73b);
+            let mut holder_proof_rng = TestRng::healthy(0x3c6e_f372_fe94_f82b);
+            let (request, state) = holder_prepare_blind_issuance_with_rng_v1(
+                &context,
+                genesis_hash,
+                &policy,
+                attributes,
+                &mut holder_mask_rng,
+                &mut holder_proof_rng,
+            )
+            .expect("holder blind-issuance request");
+            let mut tag_rng = TestRng::healthy(0xa54f_f53a_5f1d_36f1);
+            let mut preimage_rng = TestRng::healthy(0x510e_527f_ade6_82d1);
+            let response = issuer_blind_issue_with_rng_v1(
+                &issuer_key_pair,
+                &context,
+                genesis_hash,
+                &policy,
+                &request,
+                &mut tag_rng,
+                &mut preimage_rng,
+            )
+            .expect("native blind issuance");
+            let credential =
+                holder_finalize_blind_issuance_v1(state, &context, genesis_hash, &policy, response)
+                    .expect("holder issuance finalization");
+            let statement = statement(&policy);
+            let witness = credential
+                .presentation_witness_v1(&statement, &policy, genesis_hash)
+                .expect("issued presentation witness");
+            IssuedFixture {
+                policy,
+                statement,
+                witness,
+            }
+        })
+    }
+
     fn valid_witness() -> BootleLanternPresentationWitnessV1 {
-        let mut attributes = [[0_u8; 8]; 8];
-        attributes[1] = [1; 8];
-        let mut signature_two = [ApplicationPolynomialV1::ZERO; 8];
-        for (output, attribute) in signature_two.iter_mut().zip(attributes) {
-            *output = ApplicationPolynomialV1::from_direct_attribute(attribute);
-        }
-        BootleLanternPresentationWitnessV1 {
-            randomness: [ApplicationPolynomialV1::ZERO; 16],
-            tag: [ApplicationPolynomialV1::ZERO; 8],
-            signature_one: [ApplicationPolynomialV1::ZERO; 8],
-            signature_two,
-            attributes,
-        }
+        issued_fixture().witness.clone()
     }
 
     fn fixture() -> Fixture {
-        let policy = issuer_policy();
-        let statement = statement(&policy);
-        let relation = compile_application_relation_v1(&statement, &policy, matrix_seed())
-            .expect("compiled application relation");
-        let witness = valid_witness();
-        validate_presentation_witness_v1(&relation, &witness).expect("valid presentation witness");
+        let issued = issued_fixture();
+        let policy = issued.policy.clone();
+        let statement = issued.statement.clone();
         let genesis_hash = [0x32; 32];
+        let relation =
+            compile_application_relation_v1(&statement, &policy, matrix_seed(), genesis_hash)
+                .expect("compiled application relation");
+        let witness = issued.witness.clone();
+        validate_presentation_witness_v1(&relation, &witness).expect("valid presentation witness");
         let statement_digest = PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone())
             .digest()
             .expect("canonical typed statement digest");
@@ -1644,6 +1728,50 @@ mod tests {
 
     fn alternate_residue(residue: u64) -> u64 {
         if residue == 0 { 1 } else { 0 }
+    }
+
+    #[test]
+    fn blind_issuance_and_presentation_purposes_derive_distinct_challenges() {
+        let seed = matrix_seed();
+        let relation_digest = [0x95; 32];
+        let presentation = PresentationTranscriptV1::new(
+            PresentationChallengeBindingV1 {
+                parameter_digest: [0x31; 32],
+                genesis_hash: [0x32; 32],
+                statement_digest: [0x33; 32],
+                issuer_policy_record_digest: [0x34; 32],
+                transaction_intent_digest: [0x35; 32],
+            },
+            seed,
+            relation_digest,
+        )
+        .expect("canonical P2 transcript");
+        let blind_issuance = BlindIssuanceRequestTranscriptV1::new(
+            BlindIssuanceRequestChallengeBindingV1 {
+                parameter_digest: [0x31; 32],
+                genesis_hash: [0x32; 32],
+                issuer_profile_digest: [0x33; 32],
+                credential_scope_digest: [0x36; 32],
+                issuer_policy_record_digest: [0x34; 32],
+                masked_target_digest: [0x37; 32],
+                request_nonce: [0x35; 32],
+            },
+            seed,
+            relation_digest,
+        )
+        .expect("canonical P1 transcript");
+        let pre_challenge = b"same canonical fixed-profile proof body";
+        assert_ne!(
+            presentation
+                .proof_core()
+                .derive_final_challenge(pre_challenge)
+                .expect("P2 challenge"),
+            blind_issuance
+                .proof_core()
+                .derive_final_challenge(pre_challenge)
+                .expect("P1 challenge"),
+            "P1 and P2 must not share a Fiat--Shamir challenge namespace"
+        );
     }
 
     fn quadratic_test_variables(
@@ -1704,11 +1832,13 @@ mod tests {
             }))
         });
         let (projection_r, projection_r_prime) =
-            derive_projection_matrices(fixture.transcript, &t_b)
+            derive_projection_matrices(fixture.transcript.proof_core(), &t_b)
                 .expect("transcript-bound projection matrices");
-        let weights = derive_schwartz_weights(fixture.transcript, &t_b).expect("Schwartz weights");
-        let multipliers = derive_equation_multipliers(fixture.transcript, &t_b, &h, &z3, &z4)
-            .expect("ring equation multipliers");
+        let weights = derive_schwartz_weights(fixture.transcript.proof_core(), &t_b)
+            .expect("Schwartz weights");
+        let multipliers =
+            derive_equation_multipliers(fixture.transcript.proof_core(), &t_b, &h, &z3, &z4)
+                .expect("ring equation multipliers");
         QuadraticEquationV1::new(
             &fixture.relation,
             projection_r,

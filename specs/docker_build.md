@@ -43,21 +43,15 @@ The image keeps the `docker` group membership so nested Docker commands (e.g.
 `docker buildx bake`) remain available for CI workflows that mount the host PID
 and socket. Adjust group mappings as needed for your environment.
 
-## Iroha 2 vs Iroha 3 artefacts
+## Canonical Iroha artefacts
 
-The workspace now emits separate binaries per release line to avoid collisions:
-`iroha3`/`iroha3d` (default) and `iroha2`/`iroha2d` (Iroha 2). Use the helpers to
-produce the desired pair:
+The first-release workspace emits one canonical client/daemon pair: `iroha` and
+`irohad`. Run `make build`, or set a deployment profile explicitly with
+`BUILD_PROFILE=deploy bash scripts/build_line.sh`.
 
-- `make build` (or `BUILD_PROFILE=deploy bash scripts/build_line.sh --i3`) for Iroha 3
-- `make build-i2` (or `BUILD_PROFILE=deploy bash scripts/build_line.sh --i2`) for Iroha 2
-
-The selector pins the feature sets (`telemetry` + `schema-endpoint` plus the
-line-specific `build-i{2,3}` flag) so Iroha 2 builds cannot accidentally pick up
-Iroha 3-only defaults.
-
-Release bundles built via `scripts/build_release_bundle.sh` pick the correct binary
-names automatically when `--profile` is set to `iroha2` or `iroha3`.
+Generators, probes, fixture refreshers, and evidence programs are excluded from
+ordinary workspace builds. Invoke those targets explicitly with their documented
+features, including `dev-tools` where required.
 
 ## Runtime Images
 

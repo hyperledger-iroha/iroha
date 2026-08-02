@@ -106,18 +106,13 @@ fn external_crate_can_implement_registry_and_name_standard_launcher() {
 
 #[test]
 fn checked_in_binaries_are_explicitly_adapter_disabled() {
-    for source in [
-        include_str!("../src/bin/irohad.rs"),
-        include_str!("../src/bin/iroha2d.rs"),
-        include_str!("../src/bin/iroha3d.rs"),
-    ] {
-        let compact: String = source
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect();
-        assert!(compact.contains("irohad::main_entry("));
-        assert!(!compact.contains("run_with_runtime_provider_registry"));
-    }
+    let source = include_str!("../src/bin/irohad.rs");
+    let compact: String = source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    assert!(compact.contains("irohad::main_entry("));
+    assert!(!compact.contains("run_with_runtime_provider_registry"));
 }
 
 #[test]

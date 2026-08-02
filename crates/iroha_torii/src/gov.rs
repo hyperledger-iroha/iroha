@@ -108,7 +108,7 @@ pub struct AtWindowDto {
 }
 
 impl norito::core::NoritoSerialize for AtWindowDto {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let tuple = (self.lower, self.upper);
         <(u64, u64) as norito::core::NoritoSerialize>::serialize(&tuple, writer)
     }
@@ -170,7 +170,7 @@ pub struct ProposeDeployContractDto {
 }
 
 impl norito::core::NoritoSerialize for ProposeDeployContractDto {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let value = norito::json::to_value(self)
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         let json = norito::json::to_string(&value)
@@ -217,7 +217,7 @@ pub struct ProposeSccpRouteGovernanceDto {
 }
 
 impl norito::core::NoritoSerialize for ProposeSccpRouteGovernanceDto {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let value = norito::json::to_value(self)
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         let json = norito::json::to_string(&value)
@@ -310,7 +310,7 @@ pub struct ZkBallotDto {
 }
 
 impl norito::core::NoritoSerialize for ZkBallotDto {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let value = norito::json::to_value(self)
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         let json = norito::json::to_string(&value)
@@ -369,7 +369,7 @@ pub struct ParliamentBallotDto {
 }
 
 impl norito::core::NoritoSerialize for ParliamentBallotDto {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let value = norito::json::to_value(self)
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         let json = norito::json::to_string(&value)
@@ -394,7 +394,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for ParliamentBallotDto {
 }
 
 impl norito::core::NoritoSerialize for PlainBallotDto {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let value = norito::json::to_value(self)
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         let json = norito::json::to_string(&value)

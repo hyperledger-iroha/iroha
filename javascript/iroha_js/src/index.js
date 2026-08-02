@@ -90,6 +90,7 @@ export {
   ToriiBrowserStreamGapError,
 } from "./toriiBrowserClient.js";
 export {
+  KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
   KAGEMUSHA_MANIFEST_VERSION,
   KAGEMUSHA_MAX_HOPS,
   KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
@@ -101,6 +102,7 @@ export {
   normalizeKagemushaOperationStatus,
   normalizeKagemushaRedeemRequestV4,
   normalizeKagemushaReadinessV4,
+  normalizeOfflineStatus,
   normalizeKagemushaTopUpRequestV4,
 } from "./kagemushaOffline.js";
 export { NoritoRpcClient, NoritoRpcError } from "./noritoRpcClient.js";
@@ -139,11 +141,11 @@ export {
   verifySm2,
   sm2PublicKeyMultihash,
   buildKaigiRosterJoinProof,
-  PRIVACY_CAPABILITY_VALIDATION_STATUS_V1,
-  PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
+  PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
+  PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
   isPrivacyNativeAvailable,
-  privacyCapabilitiesV1,
+  privacyCompiledProfileCatalogV1,
   SM2_PRIVATE_KEY_LENGTH,
   SM2_PUBLIC_KEY_LENGTH,
   SM2_SIGNATURE_LENGTH,

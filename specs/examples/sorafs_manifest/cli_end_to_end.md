@@ -49,7 +49,7 @@ The command:
 ## Step 2 — Verify outputs with chunk store + PoR rehearsal
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- \
   target/sorafs/docs.car \
   --manifest target/sorafs/docs.manifest \
   --report-out target/sorafs/docs.manifest_report.json \

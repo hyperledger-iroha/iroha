@@ -12,17 +12,13 @@ use ``--allow-framework-python-argv0-rewrite`` only for its structurally exact
 same-framework Python.app executable rewrite. ``--apply`` additionally requires
 root, re-verifies admission under the deployment lock, atomically consumes its
 receipt in the canonical protected replay ledger, and installs
-content-addressed root-owned code.  That exact binary fully qualifies the
-catalog once and publishes its immutable root-owned seal, then validates all
-four configs through the sealed fast path before mutating the old cohort.  The
+content-addressed root-owned code and validates all four configs before
+mutating the old cohort.  The
 receipt consumption is restored if deployment never reaches that first cohort
 mutation.  The rollout replaces all four LaunchDaemons as one cohort, proves
-mandatory offline readiness and advancing consensus, and proves one supervised
-child can restart without replacing its supervisor.  Any failed rollout
-removes only a seal whose returned identity it owns and restores the old
-release/cohort.  If the writer publishes a seal but fails before returning its
-identity, the controller preserves that unattributed seal and its installed
-release for explicit operator recovery.
+ordinary node readiness, exact `is`/`is2` catalog identity, and advancing
+consensus, and proves one supervised child can restart without replacing its
+supervisor. Any failed rollout restores the prior cohort.
 
 The controller never prints config contents, process command lines, HTTP
 bodies, or other runtime signing material.
@@ -49,7 +45,6 @@ import subprocess
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, NoReturn, Optional, Sequence
@@ -64,10 +59,10 @@ except ModuleNotFoundError as error:
 PEER_COUNT = 4
 CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
 CHAIN_DISCRIMINANT = 369
-OFFLINE_ASSET_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
-OFFLINE_ASSET_SCALE = 2
-OFFLINE_CAPABILITY = "cash_handoff_v1"
-OFFLINE_BRIDGE_ABI = 21
+IS_DATASPACE_ID = 6647857470246403404
+IS2_DATASPACE_ID = 8477022798449861195
+IS_ROUTE_ALIAS = "external-poc"
+IS2_ROUTE_ALIAS = "boi-mobile"
 NODE_STORAGE_BUDGET_BYTES = 64 * 1024 * 1024 * 1024
 NODE_STORAGE_BUDGET_POLICY = "bounded-64-gib-per-validator"
 NODE_STORAGE_WEIGHTS = {
@@ -82,14 +77,10 @@ DEFAULT_MAXIMUM_FSYNC_LATENCY_MS = 250
 DEFAULT_HEALTH_TIMEOUT_SECONDS = 240
 RESTART_PROOF_TIMEOUT_SECONDS = 45
 CONFIG_CHECK_TIMEOUT_SECONDS = 180
-# The one-time gate streams the full catalog twice (roughly 18.4 GB today);
-# keep its APFS bound separate from the strict sealed fast-path checks.
-CATALOG_QUALIFICATION_TIMEOUT_SECONDS = 3_600
 MAX_BINARY_BYTES = 2 * 1024 * 1024 * 1024
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_HTTP_BYTES = 4 * 1024 * 1024
-MAX_QUALIFICATION_SEAL_BYTES = 8 * 1024 * 1024
 MAX_PROCESS_ARGUMENT_BYTES = 1024 * 1024
 MAX_PROCESS_ARGUMENTS = 256
 DARWIN_CTL_KERN = 1
@@ -97,7 +88,6 @@ DARWIN_KERN_PROCARGS2 = 49
 MAX_TERMINAL_UNHEALTHY_BYTES = 1024
 MAX_RESTART_LOG_DELTA_BYTES = 8 * 1024 * 1024
 RESTART_LOG_PREFIX_GUARD_BYTES = 4 * 1024
-MAX_RELEASE_FILE_BYTES = 5 * 1024 * 1024 * 1024
 MAX_BUNDLE_BYTES = 64 * 1024 * 1024 * 1024
 SNAPSHOT_LOAD_SUCCESS_MARKER = b"Successfully loaded the state from a snapshot"
 SNAPSHOT_LOAD_FALLBACK_MARKERS = (
@@ -106,29 +96,6 @@ SNAPSHOT_LOAD_FALLBACK_MARKERS = (
     b"Failed to load state snapshot; checking whether Kura can rebuild from an empty state",
     b"Kura retains the configured-primary replay floor; rebuilding state from blocks",
 )
-EXPECTED_RELEASE_FILE_COUNT = 16
-RELEASE_ATTESTATION_FILE_NAME = "release-attestation-v4.norito"
-RELEASE_POLICY_FILE_NAME = "release-policy-v1.norito"
-RELEASE_CATALOG_DIRECTORY_NAME = "catalog"
-EXPECTED_RELEASE_FILE_NAMES = {
-    "cryptographic-review.evidence",
-    "manifest.json",
-    "manifest.norito",
-    "manifest.norito.sha256",
-    "physical-device-benchmark.evidence",
-    "promotion-record-v4.norito",
-    RELEASE_ATTESTATION_FILE_NAME,
-    "step-ep.bootstrap-witness.krv4",
-    "step-ep.params-ipa.krv4",
-    "step-ep.proving-key.krv4",
-    "step-ep.verifying-key.krv4",
-    "step-eq.bootstrap-witness.krv4",
-    "step-eq.params-ipa.krv4",
-    "step-eq.proving-key.krv4",
-    "step-eq.verifying-key.krv4",
-    "topup-finality-roster-v4.norito",
-}
-MINIMUM_RELEASE_WITHDRAWAL_HEIGHT = 1_000_000
 EMPTY_TREE_SHA256 = hashlib.sha256().hexdigest()
 LABELS = tuple(
     f"io.soramitsu.taira.validator-{index}" for index in range(1, PEER_COUNT + 1)
@@ -140,8 +107,6 @@ TOP_LEVEL_NAMES = {
     "base-config.toml",
     "genesis.json",
     "genesis.signed.nrt",
-    "kagemusha",
-    "operator-identity.json",
     "rendered",
     "reset-manifest.json",
     "validator-roster.toml",
@@ -206,15 +171,6 @@ def require_commit(value: object, label: str = "expected source commit") -> str:
     ):
         fail(f"{label} must be one full nonzero lowercase Git object id")
     return value
-
-
-def qualification_seal_path(release_tree_sha256: str) -> Path:
-    """Return the exact root-trusted seal path for one release-tree identity."""
-
-    release_tree_sha256 = require_sha256(
-        release_tree_sha256, "Kagemusha release tree SHA-256"
-    )
-    return INSTALL_ROOT / "seals" / f"kagemusha-v4-{release_tree_sha256}.norito"
 
 
 def _run_bounded_macos_acl_command(
@@ -495,7 +451,6 @@ CONFIG_PROJECTION_FIELDS: dict[tuple[str, ...], dict[str, str]] = {
     },
     ("network",): {"address": "string"},
     ("torii",): {"address": "string"},
-    ("torii", "kagemusha_commands"): {"enabled": "boolean"},
     ("nexus", "storage"): {"local_budget_bytes": "integer"},
     ("nexus", "storage", "disk_budget_weights"): {
         "kura_blocks_bps": "integer",
@@ -503,13 +458,6 @@ CONFIG_PROJECTION_FIELDS: dict[tuple[str, ...], dict[str, str]] = {
         "sorafs_bps": "integer",
         "soranet_spool_bps": "integer",
         "soravpn_spool_bps": "integer",
-    },
-    ("settlement", "offline"): {
-        "enabled": "boolean",
-        "escrow_required": "boolean",
-        "kagemusha_release_policy_path": "string",
-        "kagemusha_artifact_dir": "string",
-        "kagemusha_catalog_qualification_seal_path": "string",
     },
     ("genesis",): {"file": "string"},
 }
@@ -729,62 +677,6 @@ def address_port(value: object, label: str) -> int:
     return port
 
 
-@dataclasses.dataclass(frozen=True)
-class ReleaseTreeSeal:
-    """One post-hash release-tree entry identity used for O(1) cutover checks."""
-
-    relative_path: str
-    identity: tuple[int, ...]
-
-
-def release_tree_snapshot(
-    root: Path, owner_uid: int, owner_gid: int
-) -> tuple[str, tuple[ReleaseTreeSeal, ...]]:
-    """Hash one exact release tree and bind every entry's final stat identity."""
-
-    digest = hashlib.sha256()
-    paths = sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix())
-    seals: list[ReleaseTreeSeal] = [
-        ReleaseTreeSeal(".", metadata_identity(root.lstat()))
-    ]
-    for path in paths:
-        relative_text = path.relative_to(root).as_posix()
-        relative = relative_text.encode()
-        info = path.lstat()
-        if stat.S_ISLNK(info.st_mode):
-            fail(f"release tree contains a symlink: {path}")
-        if stat.S_ISDIR(info.st_mode):
-            info = require_private_entry(path, owner_uid, owner_gid, directory=True)
-            digest.update(b"d\0" + relative + b"\0")
-        else:
-            require_private_entry(path, owner_uid, owner_gid, directory=False)
-            file_sha256, info = sha256_regular(path, MAX_RELEASE_FILE_BYTES)
-            digest.update(b"f\0" + relative + b"\0")
-            digest.update(info.st_size.to_bytes(8, "big"))
-            digest.update(bytes.fromhex(file_sha256))
-        seals.append(ReleaseTreeSeal(relative_text, metadata_identity(info)))
-
-    final_paths = sorted(
-        root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()
-    )
-    if [path.relative_to(root).as_posix() for path in final_paths] != [
-        seal.relative_path for seal in seals[1:]
-    ]:
-        fail("release tree inventory changed while it was hashed")
-    for seal in seals:
-        path = root if seal.relative_path == "." else root / seal.relative_path
-        if metadata_identity(path.lstat()) != seal.identity:
-            fail(f"release tree entry changed while it was hashed: {path}")
-    return digest.hexdigest(), tuple(seals)
-
-
-def release_tree_sha256(root: Path, owner_uid: int, owner_gid: int) -> str:
-    """Hash the release tree using the packager's canonical name/size projection."""
-
-    digest, _ = release_tree_snapshot(root, owner_uid, owner_gid)
-    return digest
-
-
 def require_manifest_hash(
     manifest: dict[str, Any], field: str, path: Path, maximum: int
 ) -> tuple[str, os.stat_result]:
@@ -835,7 +727,6 @@ class BundlePlan:
     manifest_sha256: str
     manifest_identity: tuple[int, ...]
     signed_genesis_identity: tuple[int, ...]
-    release: ReleasePlan
     peers: tuple[PeerPlan, ...]
     bundle_bytes: int
     free_bytes: int
@@ -843,133 +734,14 @@ class BundlePlan:
     fsync_latency_ms: float
 
 
-@dataclasses.dataclass(frozen=True)
-class ReleasePlan:
-    """Receipt-bound release identity and its single-copy cutover seal."""
-
-    source_root: Path
-    installed_root: Path
-    tree_sha256: str
-    tree_seals: tuple[ReleaseTreeSeal, ...]
-    manifest_sha256: str
-    release_policy_sha256: str
-    release_attestation_sha256: str
-    generation: str
-    activation_height: int
-    withdrawal_height: int
-    max_proof_bytes: int
-    asset_scale: int
-
-
-def validate_release(
-    bundle: Path,
-    manifest: dict[str, Any],
-    owner_uid: int,
-    owner_gid: int,
-) -> ReleasePlan:
-    """Authenticate the exact reset-manifest-bound Kagemusha catalog."""
-
-    manifest_sha256 = require_sha256(
-        manifest.get("kagemusha_manifest_sha256"),
-        "reset manifest Kagemusha manifest SHA-256",
-    )
-    policy_sha256 = require_sha256(
-        manifest.get("kagemusha_release_policy_sha256"),
-        "reset manifest Kagemusha release policy SHA-256",
-    )
-    attestation_sha256 = require_sha256(
-        manifest.get("kagemusha_release_attestation_sha256"),
-        "reset manifest Kagemusha release attestation SHA-256",
-    )
-
-    root = bundle / "kagemusha"
-    require_exact_names(
-        root,
-        {RELEASE_CATALOG_DIRECTORY_NAME, RELEASE_POLICY_FILE_NAME},
-        "Kagemusha root",
-    )
-    policy_sha, _ = sha256_regular(root / RELEASE_POLICY_FILE_NAME, 64 * 1024)
-    if policy_sha != policy_sha256:
-        fail("Kagemusha release policy does not match the reset manifest")
-    catalog = root / RELEASE_CATALOG_DIRECTORY_NAME
-    releases = list(catalog.iterdir())
-    if len(releases) != 1 or SHA256_RE.fullmatch(releases[0].name) is None:
-        fail("Kagemusha catalog must contain exactly one manifest-addressed release")
-    release = releases[0]
-    require_private_entry(release, owner_uid, owner_gid, directory=True)
-    entries = list(release.iterdir())
-    if (
-        len(entries) != EXPECTED_RELEASE_FILE_COUNT
-        or {path.name for path in entries} != EXPECTED_RELEASE_FILE_NAMES
-        or any(path.is_dir() for path in entries)
-    ):
-        fail(
-            "Kagemusha release does not contain the exact authenticated "
-            f"{EXPECTED_RELEASE_FILE_COUNT}-file inventory"
-        )
-    manifest_norito_sha, _ = sha256_regular(
-        release / "manifest.norito", MAX_MANIFEST_BYTES
-    )
-    if (
-        manifest_norito_sha != release.name
-        or manifest_norito_sha != manifest_sha256
-    ):
-        fail("Kagemusha manifest identity is not content-addressed")
-    digest_body, _ = read_regular(release / "manifest.norito.sha256", 65)
-    if digest_body != f"{manifest_norito_sha}\n".encode("ascii"):
-        fail("Kagemusha manifest digest sidecar is invalid")
-    release_json_raw, _ = read_regular(release / "manifest.json", MAX_MANIFEST_BYTES)
-    release_json = parse_json_bytes(release_json_raw, "Kagemusha release manifest")
-    attestation_sha, _ = sha256_regular(
-        release / RELEASE_ATTESTATION_FILE_NAME, 2 * 1024 * 1024
-    )
-    withdrawal_height = release_json.get("withdrawal_height")
-    max_proof_bytes = release_json.get("max_proof_bytes")
-    if (
-        release_json.get("chain_id") != CHAIN_ID
-        or release_json.get("asset") != OFFLINE_ASSET_ID
-        or release_json.get("asset_scale") != OFFLINE_ASSET_SCALE
-        or release_json.get("activation_height") != 2
-        or release_json.get("bridge_abi_version") != OFFLINE_BRIDGE_ABI
-        or release_json.get("generation") != "production-gate-real-artifacts-v4"
-        or not isinstance(withdrawal_height, int)
-        or isinstance(withdrawal_height, bool)
-        or withdrawal_height < MINIMUM_RELEASE_WITHDRAWAL_HEIGHT
-        or not isinstance(max_proof_bytes, int)
-        or isinstance(max_proof_bytes, bool)
-        or max_proof_bytes <= 0
-        or release_json.get("release_attestation_sha256") != attestation_sha
-        or attestation_sha != attestation_sha256
-    ):
-        fail("Kagemusha release manifest is not the exact Taira ABI-21/V4 release")
-    actual_tree, tree_seals = release_tree_snapshot(root, owner_uid, owner_gid)
-    if actual_tree != manifest.get("kagemusha_release_tree_sha256"):
-        fail("Kagemusha release tree does not match the reset manifest")
-    return ReleasePlan(
-        source_root=root,
-        installed_root=INSTALL_ROOT / "releases" / actual_tree,
-        tree_sha256=actual_tree,
-        tree_seals=tree_seals,
-        manifest_sha256=manifest_norito_sha,
-        release_policy_sha256=policy_sha,
-        release_attestation_sha256=attestation_sha,
-        generation="production-gate-real-artifacts-v4",
-        activation_height=2,
-        withdrawal_height=withdrawal_height,
-        max_proof_bytes=max_proof_bytes,
-        asset_scale=OFFLINE_ASSET_SCALE,
-    )
-
-
 def validate_config_projection(
     config: dict[str, Any],
     bundle: Path,
-    release_root: Path,
     *,
     torii_port: int,
     p2p_port: int,
 ) -> None:
-    """Require exact public-Taira, storage, port, and mandatory-offline config."""
+    """Require exact public-Taira, storage, port, and genesis configuration."""
 
     if (
         config.get("chain") != CHAIN_ID
@@ -979,21 +751,14 @@ def validate_config_projection(
     network = config.get("network")
     torii = config.get("torii")
     nexus = config.get("nexus")
-    settlement = config.get("settlement")
     genesis = config.get("genesis")
     if not all(
         isinstance(value, dict)
-        for value in (network, torii, nexus, settlement, genesis)
+        for value in (network, torii, nexus, genesis)
     ):
-        fail(
-            "validator config lacks required network/Torii/Nexus/offline/genesis tables"
-        )
+        fail("validator config lacks required network/Torii/Nexus/genesis tables")
     assert isinstance(network, dict) and isinstance(torii, dict)
-    assert (
-        isinstance(nexus, dict)
-        and isinstance(settlement, dict)
-        and isinstance(genesis, dict)
-    )
+    assert isinstance(nexus, dict) and isinstance(genesis, dict)
     if address_port(network.get("address"), "network.address") != p2p_port:
         fail(f"validator config P2P port is not exact {p2p_port}")
     if address_port(torii.get("address"), "torii.address") != torii_port:
@@ -1005,25 +770,6 @@ def validate_config_projection(
         or storage.get("disk_budget_weights") != NODE_STORAGE_WEIGHTS
     ):
         fail("validator config lacks the exact bounded 64 GiB storage policy")
-    offline = settlement.get("offline")
-    commands = torii.get("kagemusha_commands")
-    if (
-        not isinstance(offline, dict)
-        or offline.get("enabled") is not True
-        or offline.get("escrow_required") is not True
-        or not isinstance(commands, dict)
-        or commands.get("enabled") is not True
-    ):
-        fail("validator config does not make offline cash mandatory")
-    if (
-        offline.get("kagemusha_release_policy_path")
-        != str(release_root / RELEASE_POLICY_FILE_NAME)
-        or offline.get("kagemusha_artifact_dir")
-        != str(release_root / RELEASE_CATALOG_DIRECTORY_NAME)
-        or offline.get("kagemusha_catalog_qualification_seal_path")
-        != str(qualification_seal_path(release_root.name))
-    ):
-        fail("validator config does not bind the authenticated Kagemusha catalog")
     if genesis.get("file") != str(bundle / "genesis.signed.nrt"):
         fail("validator config does not bind the reset bundle signed genesis")
 
@@ -1082,30 +828,6 @@ def require_filesystem_headroom(
     return tuple(sorted(free_by_device.items()))
 
 
-def validate_operator_release_identity(raw: bytes, release: ReleasePlan) -> None:
-    """Bind the operator-facing artifact identity to the pinned release."""
-
-    identity = parse_json_bytes(raw, "operator release identity")
-    artifact = identity.get("artifact_set")
-    if (
-        identity.get("cash_handoff_capability") != OFFLINE_CAPABILITY
-        or identity.get("required_bridge_abi_version") != OFFLINE_BRIDGE_ABI
-        or identity.get("asset_definition_id") != OFFLINE_ASSET_ID
-        or identity.get("asset_scale") != OFFLINE_ASSET_SCALE
-        or not isinstance(artifact, dict)
-        or artifact.get("generation") != release.generation
-        or artifact.get("manifest_sha256") != release.manifest_sha256
-        or artifact.get("release_policy_sha256") != release.release_policy_sha256
-        or artifact.get("release_attestation_sha256")
-        != release.release_attestation_sha256
-        or artifact.get("activation_height") != release.activation_height
-        or artifact.get("withdrawal_height") != release.withdrawal_height
-        or artifact.get("max_proof_bytes") != release.max_proof_bytes
-        or artifact.get("asset_scale") != release.asset_scale
-    ):
-        fail("operator release identity does not bind the exact pinned release")
-
-
 def validate_bundle(
     bundle: Path,
     *,
@@ -1148,10 +870,6 @@ def validate_bundle(
         or manifest.get("node_storage_budget_bytes") != NODE_STORAGE_BUDGET_BYTES
         or manifest.get("node_storage_budget_weights") != NODE_STORAGE_WEIGHTS
         or manifest.get("nexus_storage_budget_policy") != NODE_STORAGE_BUDGET_POLICY
-        or manifest.get("offline_release_policy")
-        != "mandatory-authenticated-kagemusha-v4-activation-height-2"
-        or manifest.get("offline_asset_definition_id") != OFFLINE_ASSET_ID
-        or manifest.get("offline_asset_scale") != OFFLINE_ASSET_SCALE
     ):
         fail("reset manifest is not the exact bounded Taira v21 projection")
     if manifest.get("source_commit") != expected_source_commit:
@@ -1176,26 +894,6 @@ def validate_bundle(
         bundle / "base-config.toml",
         MAX_CONFIG_BYTES,
     )
-    operator_raw, _ = read_regular(bundle / "operator-identity.json", 64 * 1024)
-    operator_sha = hashlib.sha256(operator_raw).hexdigest()
-    if operator_sha != manifest.get("operator_identity_sha256"):
-        fail("operator identity does not match the reset manifest")
-    release = validate_release(
-        bundle,
-        manifest,
-        owner_uid,
-        owner_gid,
-    )
-    validate_operator_release_identity(operator_raw, release)
-    if (
-        release.source_root.stat().st_dev
-        != existing_ancestor(release.installed_root).stat().st_dev
-    ):
-        fail(
-            "Kagemusha release source and root-owned release store are on "
-            "different filesystems; one-copy atomic deployment is impossible"
-        )
-
     rendered = bundle / "rendered"
     require_exact_names(rendered, {"genesis.json", *SLUGS}, "rendered validator root")
     rendered_genesis_sha, _ = sha256_regular(
@@ -1241,7 +939,6 @@ def validate_bundle(
         validate_config_projection(
             config,
             bundle,
-            release.installed_root,
             torii_port=torii_port,
             p2p_port=p2p_port,
         )
@@ -1269,7 +966,6 @@ def validate_bundle(
     free_by_device = require_filesystem_headroom(
         [
             bundle,
-            release.installed_root,
             *(peer.storage for peer in peers),
             INSTALL_ROOT / "runtime",
         ],
@@ -1290,7 +986,6 @@ def validate_bundle(
         manifest_sha256=manifest_sha256,
         manifest_identity=metadata_identity(manifest_info),
         signed_genesis_identity=metadata_identity(signed_genesis_info),
-        release=release,
         peers=tuple(peers),
         bundle_bytes=bundle_bytes,
         free_bytes=free_bytes,
@@ -2794,469 +2489,9 @@ def require_mutable_bundle_identities(bundle: BundlePlan, *, phase: str) -> None
 
 
 def require_bundle_runtime_unchanged(bundle: BundlePlan) -> None:
-    """Recheck mutable inputs and the private release before it is moved."""
+    """Recheck all mutable bundle inputs after preflight."""
 
     require_mutable_bundle_identities(bundle, phase="after preflight")
-    current_paths = sorted(
-        bundle.release.source_root.rglob("*"),
-        key=lambda item: item.relative_to(bundle.release.source_root).as_posix(),
-    )
-    expected_paths = [seal.relative_path for seal in bundle.release.tree_seals[1:]]
-    if [
-        path.relative_to(bundle.release.source_root).as_posix()
-        for path in current_paths
-    ] != expected_paths:
-        fail("Kagemusha release inventory changed after preflight")
-    for seal in bundle.release.tree_seals:
-        path = (
-            bundle.release.source_root
-            if seal.relative_path == "."
-            else bundle.release.source_root / seal.relative_path
-        )
-        if metadata_identity(path.lstat()) != seal.identity:
-            fail(
-                f"Kagemusha release entry changed after preflight: {seal.relative_path}"
-            )
-
-
-def require_hardened_release_identity(bundle: BundlePlan) -> None:
-    """Bind the moved release's immutable identity and exact hardened metadata."""
-
-    root = bundle.release.installed_root
-    current_paths = sorted(
-        root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()
-    )
-    expected_paths = [seal.relative_path for seal in bundle.release.tree_seals[1:]]
-    if [path.relative_to(root).as_posix() for path in current_paths] != expected_paths:
-        fail("root-owned Kagemusha release inventory changed")
-    for seal in bundle.release.tree_seals:
-        path = root if seal.relative_path == "." else root / seal.relative_path
-        info = path.lstat()
-        expected = seal.identity
-        expected_type = stat.S_IFMT(expected[2])
-        if expected_type == stat.S_IFDIR:
-            expected_mode = 0o550
-        elif expected_type == stat.S_IFREG:
-            expected_mode = 0o440
-        else:
-            fail(
-                f"Kagemusha release preflight sealed an unsafe type: {seal.relative_path}"
-            )
-        immutable_identity = (
-            info.st_dev,
-            info.st_ino,
-            stat.S_IFMT(info.st_mode),
-            info.st_nlink,
-            info.st_size,
-            info.st_mtime_ns,
-        )
-        expected_identity = (
-            expected[0],
-            expected[1],
-            expected_type,
-            expected[5],
-            expected[6],
-            expected[7],
-        )
-        if immutable_identity != expected_identity:
-            fail(f"root-owned Kagemusha release identity changed: {seal.relative_path}")
-        if (
-            info.st_uid != 0
-            or info.st_gid != bundle.owner_gid
-            or stat.S_IMODE(info.st_mode) != expected_mode
-        ):
-            fail(
-                "root-owned Kagemusha release ownership or mode changed: "
-                f"{seal.relative_path}"
-            )
-
-
-def require_post_qualification_cutover_identity(bundle: BundlePlan) -> None:
-    """Recheck all reset inputs and the hardened release immediately pre-bootout."""
-
-    require_mutable_bundle_identities(bundle, phase="during qualification")
-    require_hardened_release_identity(bundle)
-
-
-def rewrite_release_tree_ownership(
-    root: Path,
-    *,
-    uid: int,
-    gid: int,
-    file_mode: int,
-    directory_mode: int,
-) -> None:
-    """Rewrite one exact release tree without copying its multi-gigabyte files."""
-
-    paths = sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix())
-    files: list[Path] = []
-    directories: list[Path] = [root]
-    for path in paths:
-        info = path.lstat()
-        if stat.S_ISLNK(info.st_mode):
-            fail(f"release tree contains a symlink during ownership rewrite: {path}")
-        if stat.S_ISDIR(info.st_mode):
-            directories.append(path)
-        elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
-            files.append(path)
-        else:
-            fail(
-                f"release tree contains an unsafe entry during ownership rewrite: {path}"
-            )
-    for path in files:
-        descriptor = os.open(
-            path,
-            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
-        )
-        try:
-            os.fchown(descriptor, uid, gid)
-            os.fchmod(descriptor, file_mode)
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-    for path in sorted(directories, key=lambda item: len(item.parts), reverse=True):
-        descriptor = os.open(
-            path,
-            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
-        )
-        try:
-            os.fchown(descriptor, uid, gid)
-            os.fchmod(descriptor, directory_mode)
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-
-
-def require_release_tree_content_seals(
-    root: Path, seals: Sequence[ReleaseTreeSeal]
-) -> None:
-    """Recheck content identities after hardening, ignoring expected metadata changes."""
-
-    paths = sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix())
-    if [path.relative_to(root).as_posix() for path in paths] != [
-        seal.relative_path for seal in seals[1:]
-    ]:
-        fail("Kagemusha release inventory changed during ownership hardening")
-    for seal in seals:
-        path = root if seal.relative_path == "." else root / seal.relative_path
-        info = path.lstat()
-        expected = seal.identity
-        immutable_identity = (
-            info.st_dev,
-            info.st_ino,
-            stat.S_IFMT(info.st_mode),
-            info.st_nlink,
-            info.st_size,
-            info.st_mtime_ns,
-        )
-        expected_identity = (
-            expected[0],
-            expected[1],
-            stat.S_IFMT(expected[2]),
-            expected[5],
-            expected[6],
-            expected[7],
-        )
-        if immutable_identity != expected_identity:
-            fail(
-                "Kagemusha release content changed during ownership hardening: "
-                f"{seal.relative_path}"
-            )
-
-
-def require_restored_release_source_identity(bundle: BundlePlan) -> None:
-    """Require the failed move source to be fully private and inode-identical."""
-
-    root = bundle.release.source_root
-    current_paths = sorted(
-        root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()
-    )
-    expected_paths = [seal.relative_path for seal in bundle.release.tree_seals[1:]]
-    if [path.relative_to(root).as_posix() for path in current_paths] != expected_paths:
-        fail("restored Kagemusha release inventory differs from preflight")
-    for seal in bundle.release.tree_seals:
-        path = root if seal.relative_path == "." else root / seal.relative_path
-        info = path.lstat()
-        expected = seal.identity
-        expected_type = stat.S_IFMT(expected[2])
-        if expected_type == stat.S_IFDIR:
-            expected_mode = 0o700
-        elif expected_type == stat.S_IFREG:
-            expected_mode = 0o600
-        else:
-            fail(
-                "Kagemusha release preflight sealed an unsafe source type: "
-                f"{seal.relative_path}"
-            )
-        immutable_identity = (
-            info.st_dev,
-            info.st_ino,
-            stat.S_IFMT(info.st_mode),
-            info.st_nlink,
-            info.st_size,
-            info.st_mtime_ns,
-        )
-        expected_identity = (
-            expected[0],
-            expected[1],
-            expected_type,
-            expected[5],
-            expected[6],
-            expected[7],
-        )
-        if immutable_identity != expected_identity:
-            fail(
-                "restored Kagemusha release source changed identity: "
-                f"{seal.relative_path}"
-            )
-        if (
-            info.st_uid != bundle.owner_uid
-            or info.st_gid != bundle.owner_gid
-            or stat.S_IMODE(info.st_mode) != expected_mode
-        ):
-            fail(
-                "restored Kagemusha release source is not owner-private: "
-                f"{seal.relative_path}"
-            )
-
-
-def restore_failed_release_move(bundle: BundlePlan) -> None:
-    """Best-effort restore and exact verification after hardening/move failure."""
-
-    source = bundle.release.source_root
-    destination = bundle.release.installed_root
-    errors: list[str] = []
-    source_present = source.exists() or source.is_symlink()
-    destination_present = destination.exists() or destination.is_symlink()
-    if destination_present and not source_present:
-        try:
-            if destination.is_symlink() or not destination.is_dir():
-                fail("failed release move destination is not the sealed directory")
-            os.rename(destination, source)
-        except BaseException:
-            errors.append("rename")
-        else:
-            try:
-                fsync_directory(destination.parent)
-                fsync_directory(source.parent)
-            except BaseException:
-                errors.append("directory-fsync")
-    elif source_present and not destination_present:
-        pass
-    else:
-        errors.append("path-state")
-
-    source_present = source.exists() or source.is_symlink()
-    destination_present = destination.exists() or destination.is_symlink()
-    if source_present and not destination_present and not source.is_symlink():
-        try:
-            rewrite_release_tree_ownership(
-                source,
-                uid=bundle.owner_uid,
-                gid=bundle.owner_gid,
-                file_mode=0o600,
-                directory_mode=0o700,
-            )
-        except BaseException:
-            errors.append("ownership")
-        try:
-            require_restored_release_source_identity(bundle)
-        except BaseException:
-            errors.append("identity")
-    elif "path-state" not in errors:
-        errors.append("path-state")
-    if errors:
-        fail(
-            "Kagemusha release hardening rollback is incomplete "
-            f"({', '.join(errors)})"
-        )
-
-
-def move_release_to_root_store(bundle: BundlePlan) -> Path:
-    """Move and harden the sole release copy in its content-addressed root store."""
-
-    source = bundle.release.source_root
-    destination = bundle.release.installed_root
-    release_store = destination.parent
-    ensure_root_directory(release_store, 0o755)
-    if destination.exists() or destination.is_symlink():
-        fail(f"content-addressed release destination already exists: {destination}")
-    if source.stat().st_dev != release_store.stat().st_dev:
-        fail("Kagemusha release move crossed filesystems")
-    try:
-        rewrite_release_tree_ownership(
-            source,
-            uid=0,
-            gid=bundle.owner_gid,
-            file_mode=0o440,
-            directory_mode=0o550,
-        )
-        require_release_tree_content_seals(source, bundle.release.tree_seals)
-        os.rename(source, destination)
-        destination_info = destination.lstat()
-        expected_root = bundle.release.tree_seals[0].identity
-        if (
-            destination_info.st_dev != expected_root[0]
-            or destination_info.st_ino != expected_root[1]
-        ):
-            fail("Kagemusha release root changed during its atomic move")
-        require_hardened_release_identity(bundle)
-        fsync_directory(source.parent)
-        fsync_directory(release_store)
-    except BaseException as move_error:
-        try:
-            restore_failed_release_move(bundle)
-        except BaseException as restore_error:
-            combined = DeploymentError(
-                "Kagemusha release move failed and its exact hardening rollback "
-                "is incomplete"
-            )
-            if hasattr(combined, "add_note"):
-                combined.add_note(
-                    f"move failure: {type(move_error).__name__}: {move_error}"
-                )
-            raise combined from restore_error
-        raise
-    return destination
-
-
-def restore_release_to_bundle(bundle: BundlePlan) -> None:
-    """Restore the single release copy after a failed cohort rollout."""
-
-    source = bundle.release.installed_root
-    destination = bundle.release.source_root
-    if destination.exists() or destination.is_symlink():
-        fail("cannot restore Kagemusha release over an existing bundle path")
-    if not source.is_dir() or source.is_symlink():
-        fail("root-owned Kagemusha release is unavailable for rollback")
-    os.rename(source, destination)
-    fsync_directory(source.parent)
-    fsync_directory(destination.parent)
-    rewrite_release_tree_ownership(
-        destination,
-        uid=bundle.owner_uid,
-        gid=bundle.owner_gid,
-        file_mode=0o600,
-        directory_mode=0o700,
-    )
-
-
-def prepare_qualification_seal_path(bundle: BundlePlan) -> Path:
-    """Create the exact protected seal parent and require the seal absent."""
-
-    path = qualification_seal_path(bundle.release.tree_sha256)
-    ensure_root_directory(path.parent, 0o755)
-    parent_info = path.parent.lstat()
-    if (
-        stat.S_ISLNK(parent_info.st_mode)
-        or not stat.S_ISDIR(parent_info.st_mode)
-        or parent_info.st_uid != 0
-        or parent_info.st_gid != 0
-        or stat.S_IMODE(parent_info.st_mode) != 0o755
-    ):
-        fail("Kagemusha qualification seal directory is not root:wheel 0755")
-    try:
-        path.lstat()
-    except FileNotFoundError:
-        return path
-    fail(f"refusing to replace a preexisting Kagemusha qualification seal: {path}")
-
-
-def authenticate_qualification_seal(path: Path) -> tuple[int, ...]:
-    """Require one stable, bounded, immutable root-owned qualification seal."""
-
-    descriptor, before = open_regular(path, MAX_QUALIFICATION_SEAL_BYTES)
-    try:
-        if (
-            before.st_size == 0
-            or before.st_uid != 0
-            or before.st_gid != 0
-            or stat.S_IMODE(before.st_mode) != 0o444
-        ):
-            fail("Kagemusha qualification seal is not root:wheel 0444")
-        os.fsync(descriptor)
-        after = os.fstat(descriptor)
-    finally:
-        os.close(descriptor)
-    if metadata_identity(before) != metadata_identity(after):
-        fail("Kagemusha qualification seal changed while authenticated")
-    fsync_directory(path.parent)
-    return metadata_identity(after)
-
-
-def write_catalog_qualification_seal(
-    installed_binary: Path,
-    bundle: BundlePlan,
-    seal_path: Path,
-    *,
-    runner: Callable[..., Any] = subprocess.run,
-) -> tuple[int, ...]:
-    """Run the exact candidate's one-time full catalog qualification gate."""
-
-    if os.geteuid() != 0:
-        fail("Kagemusha catalog qualification requires root")
-    expected_path = qualification_seal_path(bundle.release.tree_sha256)
-    if seal_path != expected_path:
-        fail("Kagemusha qualification seal path is not release-bound")
-    if len(bundle.peers) != PEER_COUNT:
-        fail("catalog qualification requires exactly four peer configs")
-    try:
-        seal_path.lstat()
-    except FileNotFoundError:
-        pass
-    else:
-        fail("Kagemusha qualification seal appeared before candidate execution")
-    validator_one = bundle.peers[0]
-    try:
-        result = runner(
-            [
-                str(installed_binary),
-                "--sora",
-                "--config",
-                str(validator_one.config),
-                "--check-config",
-                "--write-kagemusha-catalog-qualification-seal",
-                str(seal_path),
-            ],
-            check=False,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=CATALOG_QUALIFICATION_TIMEOUT_SECONDS,
-            env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
-        )
-    except subprocess.TimeoutExpired as error:
-        raise DeploymentError(
-            "installed binary catalog qualification timed out"
-        ) from error
-    except OSError as error:
-        raise DeploymentError(
-            "installed binary catalog qualification could not execute"
-        ) from error
-    if result.returncode != 0:
-        fail(
-            "installed binary rejected validator config/genesis/catalog "
-            f"during qualification (status={result.returncode})"
-        )
-    return authenticate_qualification_seal(seal_path)
-
-
-def remove_created_qualification_seal(
-    path: Path, expected_identity: tuple[int, ...]
-) -> None:
-    """Remove only the exact qualification seal created by this rollout."""
-
-    try:
-        current = path.lstat()
-    except FileNotFoundError as error:
-        raise DeploymentError(
-            "created Kagemusha qualification seal disappeared before rollback"
-        ) from error
-    if metadata_identity(current) != expected_identity:
-        fail("created Kagemusha qualification seal changed before rollback")
-    path.unlink()
-    fsync_directory(path.parent)
-    if path.exists() or path.is_symlink():
-        fail("created Kagemusha qualification seal survived rollback")
 
 
 def validate_installed_peer_configs(
@@ -3400,7 +2635,7 @@ def published_source_commit(status: dict[str, Any]) -> str:
 
 @dataclasses.dataclass(frozen=True)
 class PeerSample:
-    """Coherent committed/offline identity observed from one validator."""
+    """Coherent committed and dataspace identity observed from one validator."""
 
     label: str
     height: int
@@ -3409,7 +2644,7 @@ class PeerSample:
     node: str
     build: str
     config: str
-    offline_release: str
+    dataspace_catalog: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -3421,7 +2656,7 @@ class FleetSample:
     context: str
     build: str
     config: str
-    offline_release: str
+    dataspace_catalog: str
     nodes: tuple[str, ...]
 
 
@@ -3605,20 +2840,39 @@ def validate_peer_health(
     getter: HttpGetter = http_json,
     health_getter: HealthGetter = http_ok,
 ) -> PeerSample:
-    """Validate readiness, durable consensus, and offline identity for one peer."""
+    """Validate ordinary readiness, dataspace identity, and durable consensus."""
 
     root = f"http://127.0.0.1:{peer.torii_port}"
     health_getter(f"{root}/health", 2.0)
-    ready = getter(f"{root}/readyz", 2.0)
-    if (
-        ready.get("live") is not True
-        or ready.get("mandatory") is not True
-        or ready.get("ready") is not True
-        or ready.get("cash_handoff_capability") != OFFLINE_CAPABILITY
-        or ready.get("required_bridge_abi_version") != OFFLINE_BRIDGE_ABI
-        or ready.get("blockers") != []
-    ):
-        fail(f"{peer.label} /readyz is not mandatory-offline ready")
+    health_getter(f"{root}/readyz", 2.0)
+
+    lifecycle = getter(f"{root}/v1/nexus/lifecycle", 2.0)
+    lanes = lifecycle.get("lanes")
+    if lifecycle.get("version") != 1 or lifecycle.get("nexus_enabled") is not True:
+        fail(f"{peer.label} Nexus lifecycle identity is invalid")
+    if not isinstance(lanes, list):
+        fail(f"{peer.label} Nexus lifecycle omitted its lane catalog")
+    expected_dataspaces = {
+        IS_ROUTE_ALIAS: IS_DATASPACE_ID,
+        IS2_ROUTE_ALIAS: IS2_DATASPACE_ID,
+    }
+    observed_dataspaces: dict[str, int] = {}
+    for lane in lanes:
+        if not isinstance(lane, dict):
+            fail(f"{peer.label} Nexus lifecycle contains a malformed lane")
+        alias = lane.get("alias")
+        if alias in expected_dataspaces:
+            if alias in observed_dataspaces:
+                fail(f"{peer.label} Nexus lifecycle duplicates {alias}")
+            dataspace_id = lane.get("dataspace_id")
+            if not isinstance(dataspace_id, int) or isinstance(dataspace_id, bool):
+                fail(f"{peer.label} Nexus lifecycle has an invalid {alias} dataspace")
+            observed_dataspaces[alias] = dataspace_id
+    if observed_dataspaces != expected_dataspaces:
+        fail(f"{peer.label} does not expose the exact is/is2 dataspace identities")
+    catalog_hash = lifecycle.get("catalog_hash")
+    if not isinstance(catalog_hash, str) or BLOCK_HASH_RE.fullmatch(catalog_hash) is None:
+        fail(f"{peer.label} Nexus lifecycle omitted a canonical catalog identity")
 
     status = getter(f"{root}/status", 2.0)
     blocks = require_uint(
@@ -3742,42 +2996,6 @@ def validate_peer_health(
     ):
         fail(f"{peer.label} omitted a required reducer fingerprint")
 
-    query = urllib.parse.urlencode({"asset_definition_id": OFFLINE_ASSET_ID})
-    offline = getter(f"{root}/v1/offline/readiness?{query}", 2.0)
-    offline_height = require_uint(
-        offline.get("evaluated_block_height"),
-        f"{peer.label} offline evaluated height",
-        positive=True,
-    )
-    offline_hash = normalized_block_hash(
-        offline.get("evaluated_block_hash"), f"{peer.label} offline evaluated block"
-    )
-    if (
-        offline.get("ready") is not True
-        or offline.get("blockers") != []
-        or offline.get("cash_handoff_capability") != OFFLINE_CAPABILITY
-        or offline.get("required_bridge_abi_version") != OFFLINE_BRIDGE_ABI
-        or offline.get("asset_definition_id") != OFFLINE_ASSET_ID
-        or offline.get("asset_scale") != OFFLINE_ASSET_SCALE
-        or offline_height != committed
-        or offline_hash != block_hash
-    ):
-        fail(f"{peer.label} offline readiness is not bound to its committed block")
-    artifact = offline.get("artifact_set")
-    if (
-        not isinstance(artifact, dict)
-        or artifact.get("generation") != bundle.release.generation
-        or artifact.get("manifest_sha256") != bundle.release.manifest_sha256
-        or artifact.get("release_policy_sha256") != bundle.release.release_policy_sha256
-        or artifact.get("release_attestation_sha256")
-        != bundle.release.release_attestation_sha256
-        or artifact.get("activation_height") != bundle.release.activation_height
-        or artifact.get("withdrawal_height") != bundle.release.withdrawal_height
-        or artifact.get("max_proof_bytes") != bundle.release.max_proof_bytes
-        or artifact.get("asset_scale") != bundle.release.asset_scale
-    ):
-        fail(f"{peer.label} offline release differs from the reset bundle")
-
     canonical = lambda value: json.dumps(
         value, ensure_ascii=True, sort_keys=True, separators=(",", ":")
     )
@@ -3789,7 +3007,9 @@ def validate_peer_health(
         node=canonical(node_fingerprint),
         build=canonical(build_fingerprint),
         config=canonical(config_fingerprint),
-        offline_release=canonical(artifact),
+        dataspace_catalog=canonical(
+            {"catalog_hash": catalog_hash.lower(), "dataspaces": observed_dataspaces}
+        ),
     )
 
 
@@ -3820,7 +3040,7 @@ def capture_fleet(
             "context",
             "build",
             "config",
-            "offline_release",
+            "dataspace_catalog",
         ):
             if getattr(sample, field) != getattr(baseline, field):
                 fail(f"four-validator fleet disagrees on {field}")
@@ -3833,7 +3053,7 @@ def capture_fleet(
         context=baseline.context,
         build=baseline.build,
         config=baseline.config,
-        offline_release=baseline.offline_release,
+        dataspace_catalog=baseline.dataspace_catalog,
         nodes=nodes,
     )
 
@@ -3895,14 +3115,14 @@ def wait_for_advancement(
                 and current.block_hash != previous.block_hash
                 and current.build == previous.build
                 and current.config == previous.config
-                and current.offline_release == previous.offline_release
+                and current.dataspace_catalog == previous.dataspace_catalog
                 and current.nodes == previous.nodes
             ):
                 advanced = True
             else:
                 advanced = False
                 last_error = DeploymentError(
-                    "fleet has not advanced one stable common release"
+                    "fleet has not advanced one stable common build/config/catalog"
                 )
         except (DeploymentError, OSError) as error:
             last_error = error
@@ -4278,19 +3498,6 @@ def apply_reset(
     config_checker: Callable[
         [Path, BundlePlan], None
     ] = validate_installed_peer_configs,
-    cutover_identity_checker: Callable[
-        [BundlePlan], None
-    ] = require_post_qualification_cutover_identity,
-    seal_preparer: Callable[[BundlePlan], Path] = prepare_qualification_seal_path,
-    seal_writer: Callable[
-        [Path, BundlePlan, Path], tuple[int, ...]
-    ] = write_catalog_qualification_seal,
-    seal_authenticator: Callable[
-        [Path], tuple[int, ...]
-    ] = authenticate_qualification_seal,
-    seal_remover: Callable[
-        [Path, tuple[int, ...]], None
-    ] = remove_created_qualification_seal,
 ) -> dict[str, Any]:
     """Validate and install one fresh reset, rolling back every moved component."""
 
@@ -4345,7 +3552,6 @@ def apply_reset(
     require_filesystem_headroom(
         [
             bundle.root,
-            bundle.release.installed_root,
             runtime_root,
             *(peer.storage for peer in bundle.peers),
         ],
@@ -4380,10 +3586,6 @@ def apply_reset(
             fail(f"generated LaunchDaemon label mismatch: {label}")
 
     cohort_mutated = False
-    release_moved = False
-    seal_creation_attempted = False
-    created_seal_identity: Optional[tuple[int, ...]] = None
-    seal_path = qualification_seal_path(bundle.release.tree_sha256)
     guarded_signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
     previous_handlers = {signum: signal.getsignal(signum) for signum in guarded_signals}
 
@@ -4397,20 +3599,7 @@ def apply_reset(
     try:
         # Recheck all four old jobs immediately before the first cohort change.
         require_bundle_runtime_unchanged(bundle)
-        move_release_to_root_store(bundle)
-        release_moved = True
-        # The exact candidate performs the expensive catalog qualification
-        # once; all four ordinary checks below must consume its immutable seal.
-        seal_path = seal_preparer(bundle)
-        seal_creation_attempted = True
-        created_seal_identity = seal_writer(
-            installed_binary,
-            bundle,
-            seal_path,
-        )
         config_checker(installed_binary, bundle)
-        if seal_authenticator(seal_path) != created_seal_identity:
-            fail("Kagemusha qualification seal changed during config checks")
         for snapshot in old_cohort:
             current_body, current_info = read_regular(snapshot.path, MAX_MANIFEST_BYTES)
             if (
@@ -4423,7 +3612,7 @@ def apply_reset(
                     f"old LaunchDaemon changed after dry-run capture: {snapshot.path.name}"
                 )
             verify_restored_snapshot(snapshot, ops)
-        cutover_identity_checker(bundle)
+        require_mutable_bundle_identities(bundle, phase="immediately before cutover")
         # Close the asynchronous-signal window between durable replay
         # consumption and the first external cohort mutation.  Once the first
         # bootout is attempted, its side effects cannot be proven absent, so
@@ -4500,74 +3689,21 @@ def apply_reset(
         )
         restarted = restart_result.fleet
     except BaseException as rollout_error:
-        # A second termination request must not interrupt the rollback itself.
+        # A second termination request must not interrupt cohort rollback.
         for signum in guarded_signals:
             signal.signal(signum, signal.SIG_IGN)
-        if (
-            not release_moved
-            and bundle.release.installed_root.exists()
-            and not bundle.release.source_root.exists()
-        ):
-            # Close the signal-delivery window between a successful rename and
-            # storing the local ``release_moved`` flag.
-            release_moved = True
-        rollback_error: Optional[BaseException] = None
-        unattributed_seal = False
-        if seal_creation_attempted and created_seal_identity is None:
-            try:
-                seal_path.lstat()
-            except FileNotFoundError:
-                pass
-            except OSError as error:
-                unattributed_seal = True
-                rollback_error = DeploymentError(
-                    "qualification-seal absence could not be proven after the "
-                    "writer failed; preserving the installed release because "
-                    "rollback is incomplete"
-                )
-                if hasattr(rollback_error, "add_note"):
-                    rollback_error.add_note(
-                        f"seal inspection failure: {type(error).__name__}: {error}"
-                    )
-            else:
-                unattributed_seal = True
-                rollback_error = DeploymentError(
-                    "qualification writer returned no seal identity after a seal "
-                    "appeared; preserving the unattributed seal and installed "
-                    "release because rollback is incomplete"
-                )
         if cohort_mutated:
             try:
                 rollback_cohort(old_cohort, ops)
-            except BaseException as error:
-                rollback_error = error
-        if rollback_error is None and created_seal_identity is not None:
-            try:
-                seal_remover(seal_path, created_seal_identity)
-            except BaseException as error:
-                rollback_error = error
-        if rollback_error is None and release_moved:
-            try:
-                restore_release_to_bundle(bundle)
-            except BaseException as error:
-                rollback_error = error
-        if rollback_error is not None:
-            if unattributed_seal:
+            except BaseException as rollback_error:
                 combined = DeploymentError(
-                    "Taira reset failed; rollback is incomplete because an "
-                    "unattributed qualification seal must be preserved with its "
-                    "installed release"
+                    "Taira reset failed and the exact four-validator cohort rollback did not complete"
                 )
-            else:
-                combined = DeploymentError(
-                    "Taira reset failed and its exact cohort/release/seal rollback "
-                    "did not complete"
-                )
-            if hasattr(combined, "add_note"):
-                combined.add_note(
-                    f"rollout failure: {type(rollout_error).__name__}: {rollout_error}"
-                )
-            raise combined from rollback_error
+                if hasattr(combined, "add_note"):
+                    combined.add_note(
+                        f"rollout failure: {type(rollout_error).__name__}: {rollout_error}"
+                    )
+                raise combined from rollback_error
         raise
     finally:
         for signum, handler in previous_handlers.items():
@@ -4583,13 +3719,10 @@ def apply_reset(
         "binary": str(installed_binary),
         "binary_sha256": sources.binary_sha256,
         "bundle": str(bundle.root),
+        "dataspace_catalog": restarted.dataspace_catalog,
         "end_block_hash": restarted.block_hash,
         "end_height": restarted.height,
-        "mandatory_offline": True,
         "peer_count": PEER_COUNT,
-        "qualification_seal": str(seal_path),
-        "release": str(bundle.release.installed_root),
-        "release_tree_sha256": bundle.release.tree_sha256,
         "restart_generation": args.restart_generation,
         "restart_duration_ms": restart_result.duration_ms,
         "restart_proof": "passed",
@@ -4736,16 +3869,8 @@ def execute(
             "bundle_bytes": bundle.bundle_bytes,
             "free_bytes": bundle.free_bytes,
             "fsync_latency_ms": round(bundle.fsync_latency_ms, 3),
-            "mandatory_offline": True,
             "mode": "verified-read-only-dry-run",
             "peer_count": PEER_COUNT,
-            "qualification_seal": str(
-                qualification_seal_path(bundle.release.tree_sha256)
-            ),
-            "release_attestation_sha256": (bundle.release.release_attestation_sha256),
-            "release_manifest_sha256": bundle.release.manifest_sha256,
-            "release_policy_sha256": bundle.release.release_policy_sha256,
-            "release_tree_sha256": bundle.release.tree_sha256,
             "restart_generation": args.restart_generation,
             "source_commit": args.expected_source_commit,
             "supervisor_sha256": sources.supervisor_sha256,

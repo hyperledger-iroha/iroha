@@ -1,5 +1,6 @@
 [package]
 name = "xtask"
+autobins = false
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -18,13 +19,26 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 [[bin]]
 name = "torii-mock-harness"
 path = "src/bin/torii_mock_harness.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "control-plane-mock"
 path = "src/bin/control_plane_mock.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "compute_gateway"
+path = "src/bin/compute_gateway.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+required-features = ["dev-tools"]
 
 [features]
 default = []
+dev-tools = []
 vote-tally = ["dep:halo2_proofs"]
 
 [dependencies]

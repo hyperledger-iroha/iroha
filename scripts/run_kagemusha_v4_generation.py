@@ -27,14 +27,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.formal import run_sumeragi_v2_tlapm_guard as resource_guard
-from scripts.kagemusha_staged_resource_guard import (
-    DEFAULT_FOOTPRINT_INTERVAL_SECONDS,
-    DEFAULT_MAX_MEMORY_GIB,
-    DEFAULT_MINIMUM_HEADROOM_GIB,
-    DEFAULT_SAMPLE_INTERVAL_SECONDS,
-    HeavyJobLockUnavailable,
-    run_guarded_command,
-)
 
 
 ABSOLUTE_MAX_MEMORY_BYTES = 64 * 1024 * 1024 * 1024
@@ -1920,82 +1912,24 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
             executable_snapshot.close()
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse the generic staged-resource runner command line."""
-
-    parser = argparse.ArgumentParser(
-        description=(
-            "Run one Kagemusha V4 generation/acceptance command beneath the "
-            "lower of the 64 GiB maximum or half of physical RAM, with "
-            "reserved host headroom."
-        )
-    )
-    parser.add_argument("--report", type=Path, required=True)
-    parser.add_argument(
-        "--max-memory-gib",
-        type=float,
-        default=DEFAULT_MAX_MEMORY_GIB,
-        help=(
-            "requested memory limit; the reviewed absolute maximum is 64 GiB "
-            "and the effective maximum is also capped at half of physical RAM"
-        ),
-    )
-    parser.add_argument(
-        "--minimum-headroom-gib", type=float, default=DEFAULT_MINIMUM_HEADROOM_GIB
-    )
-    parser.add_argument(
-        "--sample-interval-seconds",
-        type=float,
-        default=DEFAULT_SAMPLE_INTERVAL_SECONDS,
-    )
-    parser.add_argument(
-        "--footprint-interval-seconds",
-        type=float,
-        default=DEFAULT_FOOTPRINT_INTERVAL_SECONDS,
-    )
-    parser.add_argument("command", nargs=argparse.REMAINDER)
-    args = parser.parse_args(argv)
-    if args.command and args.command[0] == "--":
-        args.command = args.command[1:]
-    if not args.command:
-        parser.error("a command is required after --")
-    return args
-
-
-def _generic_main(argv: list[str] | None = None) -> int:
-    """Run a generic staged command and return its guarded status."""
-
-    args = parse_args(argv)
-    try:
-        result = run_guarded_command(
-            args.command,
-            report_path=args.report,
-            max_memory_gib=args.max_memory_gib,
-            minimum_headroom_gib=args.minimum_headroom_gib,
-            sample_interval_seconds=args.sample_interval_seconds,
-            footprint_interval_seconds=args.footprint_interval_seconds,
-        )
-    except (
-        HeavyJobLockUnavailable,
-        OSError,
-        RuntimeError,
-        ValueError,
-        subprocess.SubprocessError,
-    ) as error:
-        print(f"Kagemusha V4 resource guard refused to start: {error}", file=sys.stderr)
-        return 2
-    return result.exit_code
-
-
 def main(argv: Sequence[str] | None = None) -> int:
-    """Dispatch to the strict candidate runner or the generic staged guard."""
+    """Dispatch only to the strict max-RSS-or-footprint candidate runner."""
 
     arguments = list(sys.argv[1:] if argv is None else argv)
     option_prefix = (
         arguments[: arguments.index("--")] if "--" in arguments else arguments
     )
-    if "--report" in option_prefix and "--resource-report" not in option_prefix:
-        return _generic_main(arguments)
+    if "--report" in option_prefix:
+        # TODO: Restore generic acceptance supervision only after it uses the
+        # same scoped 250 ms max(RSS, physical-footprint) enforcement as the
+        # strict candidate path. The retired RSS-only path caused host Jetsam.
+        print(
+            "Kagemusha V4 --report mode is retired because its RSS-only "
+            "supervisor cannot bound Darwin physical footprint; use the "
+            "strict --resource-report candidate workflow",
+            file=sys.stderr,
+        )
+        return 2
     return _candidate_main(arguments)
 
 

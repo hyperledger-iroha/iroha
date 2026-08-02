@@ -6,7 +6,7 @@
 //! - AUG:    message hashed-to-curve with `MESSAGE_CONTEXT` as augmentation (`RO_AUG`)
 //!
 //! Build (requires blstrs backend):
-//!   cargo run -p `iroha_crypto` --features "bls bls-backend-blstrs" --bin bls-variant-detect
+//!   cargo run -p `iroha_crypto` --features "dev-tools bls bls-backend-blstrs" --bin bls-variant-detect
 
 #![allow(clippy::print_stdout)]
 

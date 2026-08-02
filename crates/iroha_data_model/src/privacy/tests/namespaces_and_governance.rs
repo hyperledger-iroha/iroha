@@ -853,6 +853,12 @@
             }),
             Err(PrivacyStatementValidationError::NonCanonicalJindoClaimedEvaluation { index: 1 })
         ));
+        assert!(matches!(
+            mutate_jindo_statement(base, limits, |statement| {
+                statement.evaluation_point = PrivacyJindoFieldElementV1::new([u8::MAX; 32]);
+            }),
+            Err(PrivacyStatementValidationError::NonCanonicalJindoEvaluationPoint)
+        ));
 
         assert!(matches!(
             mutate_jindo_statement(base, limits, |statement| {

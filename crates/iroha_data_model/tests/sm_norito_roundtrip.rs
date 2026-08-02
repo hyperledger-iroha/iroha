@@ -21,7 +21,7 @@ mod tests {
     fn sm2_public_key_norito_roundtrip() {
         let pk: PublicKey = SM2_PUB.parse().expect("parse SM2 multihash");
         let mut buf = Vec::new();
-        norito::core::NoritoSerialize::serialize(&pk, &mut buf).expect("serialize sm2 pk");
+        norito::core::serialize_to_buffer(&pk, &mut buf).expect("serialize sm2 pk");
         let (decoded, used) = <PublicKey as norito::core::DecodeFromSlice>::decode_from_slice(&buf)
             .expect("decode sm2 pk");
         assert_eq!(used, buf.len());
@@ -34,7 +34,7 @@ mod tests {
         let signature = Signature::try_from_bytes(&sig_bytes)
             .expect("SM2 fixture signature must pass admission");
         let mut buf = Vec::new();
-        norito::core::NoritoSerialize::serialize(&signature, &mut buf).expect("serialize sm2 sig");
+        norito::core::serialize_to_buffer(&signature, &mut buf).expect("serialize sm2 sig");
         let (decoded, used) = <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&buf)
             .expect("decode sm2 sig");
         assert_eq!(used, buf.len());
@@ -45,7 +45,7 @@ mod tests {
     fn sm3_digest_norito_roundtrip() {
         let digest = Sm3Digest::hash(b"iroha-sm3");
         let mut bare = Vec::new();
-        norito::core::NoritoSerialize::serialize(&digest, &mut bare).expect("serialize sm3 digest");
+        norito::core::serialize_to_buffer(&digest, &mut bare).expect("serialize sm3 digest");
         let (decoded_bare, used) =
             <Sm3Digest as norito::core::DecodeFromSlice>::decode_from_slice(&bare)
                 .expect("decode bare sm3 digest");
@@ -63,8 +63,7 @@ mod tests {
         let pk: PublicKey = SM2_PUB.parse().expect("parse sm2 pk");
         let account_id = AccountId::new(pk.clone());
         let mut buf = Vec::new();
-        norito::core::NoritoSerialize::serialize(&account_id, &mut buf)
-            .expect("serialize AccountId");
+        norito::core::serialize_to_buffer(&account_id, &mut buf).expect("serialize AccountId");
         let (decoded, used) = <AccountId as norito::core::DecodeFromSlice>::decode_from_slice(&buf)
             .expect("decode AccountId");
         assert_eq!(used, buf.len());

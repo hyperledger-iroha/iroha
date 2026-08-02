@@ -106,6 +106,11 @@ use crate::privacy_engines::{
             RESPONSE_NORM_SQUARED_BOUND_V1, SIGNATURE_NORM_SQUARED_BOUND_V1, SOURCE_PROFILE_V1,
         },
         sampling::{BOOTLE_SAMPLING_PROFILE_DESCRIPTOR_V1, bootle_sampling_profile_digest_v1},
+        scope::{
+            BOOTLE_LANTERN_CREDENTIAL_SCOPE_DOMAIN_V1,
+            BOOTLE_LANTERN_SCOPE_APPLICATION_ACCEPTANCE_LIMIT_V1,
+            BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1,
+        },
         transcript::{PUBLIC_PARAMETER_SEED_DOMAIN_V1, public_parameter_seed_v1},
     },
     fcmp_plus_plus::{
@@ -156,7 +161,8 @@ use crate::privacy_engines::{
             ML_KEM_768_PUBLIC_KEY_BYTES_V1, PQ_MASP_AUTHORIZATION_HEADER_BYTES_V1,
             PQ_MASP_AUTHORIZATION_WIRE_KAT_SHA256_V1, PQ_MASP_ENCRYPTED_OUTPUT_BYTES_V1,
             PQ_MASP_ENCRYPTED_OUTPUT_KAT_SHA256_V1, PQ_MASP_MAX_AUTHORIZATION_PROOF_BYTES_V1,
-            PQ_MASP_MAX_STARK_PROOF_BYTES_V1, XCHACHA20_NONCE_BYTES_V1,
+            PQ_MASP_MAX_STARK_PROOF_BYTES_V1, PQ_MASP_WALLET_CIPHERTEXT_SCHEMA_V1,
+            XCHACHA20_NONCE_BYTES_V1,
         },
     },
     proof_managed_note_stark::{
@@ -218,13 +224,17 @@ const ANONYMOUS_PGC_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
     b"iroha-native-rust:clean-room:eprint-2025-884:sections-3-4-6:linear-legality-and-bounded-bootstrap:v1";
 const BOOTLE_LANTERN_PROTOCOL_LABEL_V1: &[u8] = b"iroha-bootle-lantern-anoncred-v1";
 const BOOTLE_LANTERN_PARAMETER_SET_LABEL_V1: &[u8] =
-    b"blns-lantern-lnp22-ring64-p12289-q1125899906843221-v1";
+    b"falcon512-ntru-r512-as-r64-rank8-interleaved";
 const BOOTLE_LANTERN_PROOF_WIRE_LABEL_V1: &[u8] =
     b"ILN1:fixed-70344-byte:51-bit-residues:strict-exact:v1";
 const BOOTLE_LANTERN_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
-    b"iroha-native-rust:clean-room:blns-eprint-2023-560:lazer-10eafeca:lantern-lnp22:figure18-full-centered-makeghint:v1";
-const BOOTLE_LANTERN_RELATION_SCHEMA_V1: &[u8] = b"trusted-policy:B[8x8x64]mod12289|required-disclosures:u8|allowed-values[8][<=32x8]|statement:issuer+policy+epoch+record-digest+issuer-parameter+ordered-disclosures|relation:8x48-ring64-linear|norms:randomness+signature";
-const BOOTLE_LANTERN_TRANSCRIPT_SCHEMA_V1: &[u8] = b"challenge-binding:parameter-digest+genesis-hash+statement-digest+issuer-policy-record-digest+transaction-intent-digest|relation-digest+matrix-seed+public-parameter-seed|challenge-xof:SHAKE256;first32=sequential-rejection-bytes<255,byte%17-8;max-rejected-uniform-draws-per-coefficient=4096;c[32]=0;c[64-i]=-c[i]for-i=1..31;candidate-retry=next-sequential-single-XOF-bytes;max-candidates=4096|eta-check:integer-negacyclic-ring=Z[X]/(X^64+1);k=32;root-degree=64;L1(sigma_-1(c^32)*c^32)<=140^64|framing:u32-be";
+    b"iroha-native-rust:BLNS-specialization-no-main-construction-reduction:eprint-2023-560:lazer-10eafeca4cd53ff4fc54193dce904dbd0026fefd:lantern-lnp22-figure18-full-centered-makeghint:vendored-Unlicense-rust-fn-dsa-workspace-0.3-daf14859b5aa3f8d75c42966ba7de83e6eb59997:portable-safe-rust-no-SIMD:v1";
+const BOOTLE_LANTERN_ISSUER_PARAMETER_SCHEMA_V1: &[u8] = b"Falcon-512:NTRUGen(f,g,F,G):f*G-g*F=12289|public:h=g/f mod(X^512+1,12289)|R512-to-rank8-R64:H_i[j]=h[8*j+i]|policy-matrix:canonical-8x8-one-key-negacyclic-block-embedding|signature:[s1|s2]:s1+h*s2=target|target:t+A_tau*tau+credential-scope|norm2(s1,s2)<=34034726";
+const BOOTLE_LANTERN_RELATION_SCHEMA_V1: &[u8] = b"active-self-digested-policy:H[8x8x64]mod12289-from-one-Falcon-h|required-disclosures:u8|allowed-values[8][<=32x8]|statement:issuer+policy+epoch+record-digest+issuer-parameter+ordered-disclosures|credential-scope:reusable-equation-term|relation:A_r*r+A_tau*tau+A_m*m+scope-s1-H*s2=0:8x48-ring64-linear|norms:randomness<=11881+signature<=34034726";
+const BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1: &[u8] = b"scope-xof:SHAKE256-framed-u32be-uniform-mod12289-accept<61445-max4096-per-coefficient|included:protocol+concrete-profile+version+chain-id+canonical-genesis-hash+parameter-id+parameter-digest+verifier-digest+statement-schema-digest+engine-manifest-digest+issuer-id+policy-id+epoch+policy-record-digest+issuer-parameter-id+issuer-parameter-digest|excluded:action-index+transaction-intent-digest|rotation:every-included-field-invalidates-existing-credential";
+const BOOTLE_LANTERN_BLIND_ISSUANCE_SCHEMA_V1: &[u8] = b"canonical-first-release-only:keygen->holder-sample-r->blind-request-t=A_r*r+A_m*m->P1-proof-of-r,m->issuer-verify-P1->sample-one-512-bit-MSB-first-tau->bounded-Falcon-preimage-for-t+A_tau*tau+scope->holder-finalize->P2-presentation|P1-and-P2-distinct-typed-transcripts-and-wire-wrappers|no-public-direct-or-trusted-issuance-shortcut";
+const BOOTLE_LANTERN_TRANSCRIPT_SCHEMA_V1: &[u8] = b"P1:typed-blind-issuance-binding=parameter-digest+issuer-profile-digest+genesis-hash+credential-scope-digest+issuer-policy-record-digest+masked-target-digest+request-nonce+relation-digest+matrix-seed+public-parameter-seed:no-statement-or-transaction-intent|P2:challenge-binding=parameter-digest+genesis-hash+statement-digest+issuer-policy-record-digest+transaction-intent-digest+relation-digest+matrix-seed+public-parameter-seed|challenge-xof:SHAKE256;first32=sequential-rejection-bytes<255,byte%17-8;max-rejected-uniform-draws-per-coefficient=4096;c[32]=0;c[64-i]=-c[i]for-i=1..31;candidate-retry=next-sequential-single-XOF-bytes;max-candidates=4096|eta-check:integer-negacyclic-ring=Z[X]/(X^64+1);k=32;root-degree=64;L1(sigma_-1(c^32)*c^32)<=140^64|framing:u32-be";
+const BOOTLE_LANTERN_NATIVE_PRODUCER_SCHEMA_V1: &[u8] = b"native-producers:keygen+blind-request/P1+issuer-verify-and-issue+holder-finalize+presentation/P2|fallible-health-checked-distinct-randomness-substreams:keygen,holder-r,P1,issuer-tau,issuer-preimage,P2|bounded-fail-closed-no-fallback|self-check:NTRU+public-key+P1+Falcon-equation+P2";
 const BOOTLE_LANTERN_COMPRESSION_SCHEMA_V1: &[u8] = b"lnp22-figure18:power2round-q-D15:decompose-q-gamma:makeghint-full-canonical-centered-z22:useghint-centered-mod-m:hint-infinity-bound=floor(m/2)";
 const JINDO_PROTOCOL_LABEL_V1: &[u8] = b"iroha-jindo-polynomial-commitment-v0";
 const JINDO_PARAMETER_SET_LABEL_V1: &[u8] = b"jindo-univariate-batch4-degree256-transparent-v1";
@@ -271,15 +281,14 @@ const PQ_MASP_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
 const PQ_MASP_RUNTIME_CONTEXT_SCHEMA_V1: &[u8] = b"stark-public-input:sha256-frame(pq-masp-stark-public-input-with-consensus-binding-v1+canonical-statement+native-consensus-binding-digest32)";
 const PQ_MASP_FRONTIER_SCHEMA_V1: &[u8] = b"namespace:norito|bootstrap-digest:32|root-role:note-commitment-anchor|epoch:u64|root:sha256-depth32|tree-size:u64|frontier[ordered-option<node32>]";
 const PQ_MASP_AUTHORIZATION_SCHEMA_V1: &[u8] = b"authorization-context:pq-masp-stark-v0|message:sha256-domain+statement-digest32+native-consensus-binding-digest32+inner-length-u64be+inner-sha256|authorization-key-digest:statement-bound+derived-from-canonical-pk1952|mldsa65:canonical-pk1952+canonical-signature3309|outer-wire:PQA1+u32be-inner-len+pk+signature+PQS1";
-const PQ_MASP_WALLET_CIPHERTEXT_SCHEMA_V1: &[u8] = b"PQE1|mlkem768-ciphertext1088|nonce24|xchacha20poly1305[PQN1+value-u128le+rho32+rseed32+nullifier-key32+authorization-key-digest32+recipient-id32]|mlkem768-domain-kdf|aad:pool-id+recipient-id+output-commitment+encapsulation-digest";
-const PQ_MASP_VERIFIED_EFFECT_SCHEMA_V1: &[u8] = b"namespace:norito|bootstrap-digest:32|asset-definition-id:norito|anchor:32|anchor-epoch:u64|current-root:32|current-epoch:u64|authorization-key-digest:32|ordered-note-encryption-key-digest:32|validator-derived-successor-frontier|ordered-nullifiers[32]|ordered-output-commitments[32]|ordered-encrypted-outputs|value-balance:direction+u128|expiry-height:u64";
+const PQ_MASP_VERIFIED_EFFECT_SCHEMA_V1: &[u8] = b"namespace:norito|bootstrap-digest:32|asset-definition-id:norito|current-root:32|current-epoch:u64|next-root:32|next-epoch:u64|transition:pq-masp{ordered-nullifiers[32]+ordered-output-commitments[32]+validator-derived-successor-frontier}|value-balance:none";
 const VEGA_PARAMETER_SET_LABEL_V1: &[u8] =
     b"vega-figure9-mdl-age-neutron-nova-spartan-hyrax-t256-v1";
 const VEGA_PROOF_WIRE_LABEL_V1: &[u8] =
     b"norito:vega-figure9-masked-relaxed-fold-spartan-hyrax:strict-exact:v1";
 const VEGA_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
     b"iroha-native-rust:microsoft-vega-prover:c0ee259053cd12eaf43ed71b5cde375452b3ee4d:figure9:v1";
-const VEGA_AUTHORITATIVE_ISSUER_RUNTIME_SCHEMA_V1: &[u8] = b"issuer-governance:record-v1:issuer-id32+epoch-u64be+compressed-p256-33+document-policy+namespace-policy+digest-policy+issuer-auth-policy+device-auth-policy+predecessor-option32+lifecycle+self-digest32|lineage:immutable-append-only+epoch-one-origin+one-step-cas-rotation+terminal-preserving-revocation+bounded-global-and-per-lineage|statement:exact-issuer-id+record-epoch+record-digest+key+all-algorithm-policy|ledger-verifier:current-active-exact-record-before-native-proof";
+const VEGA_AUTHORITATIVE_ISSUER_RUNTIME_SCHEMA_V1: &[u8] = b"issuer-governance:record-v1:issuer-id32+epoch-u64be+compressed-p256-33+document-policy+namespace-policy+digest-policy+issuer-auth-policy+device-auth-policy+predecessor-option32+lifecycle+self-digest32|lineage:immutable-append-only+epoch-one-origin+one-step-cas-rotation+terminal-preserving-revocation+bounded-global-and-per-lineage+permanent-global-p256-key-ownership+retired-p256-key-never-reactivated|statement:exact-issuer-id+record-epoch+record-digest+key+all-algorithm-policy|ledger-verifier:current-active-exact-record-before-native-proof";
 const VEGA_DEVICE_AUTHENTICATION_GOVERNANCE_FRAME_SCHEMA_V1: &[u8] = b"length-framed:domain+frame-version+upstream-commit+chain-id+genesis-hash+action-index+transaction-intent-digest+parameter-id+parameter-digest+verifier-digest+statement-schema-digest+engine-manifest-digest+issuer-id+issuer-record-epoch+issuer-record-digest+document-type+namespace+digest-algorithm+issuer-authentication+device-authentication+issuer-public-key+presentation-date+minimum-age+reader-challenge+session-transcript-digest";
 const VEGA_CANONICAL_MDL_WITNESS_SCHEMA_V1: &[u8] = b"figure9-v1:issuer-sig-structure-exact+embedded-mso-exact+birth-item-exact+birth-random-exact+full-date10+rfc3339-utc-seconds20+signed-not-after-valid-from-full-seconds+presentation-validity-date-granularity+presentation-year-closed+satisfiable-valid-until+age-threshold-closed";
 const VEGA_CANONICAL_SIGNATURE_PREFLIGHT_POLICY_V1: &[u8] = b"native-witness-preflight:issuer-and-device-es256-signatures:p1363-r32s32+canonical-nonzero-scalars+low-s-required+reject-high-s-without-normalization+verify-prehash-before-r-s-inverse:v1";
@@ -522,9 +531,9 @@ pub fn compiled_privacy_profile_v1(
         PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => compiled_ivm_private_note_profile_v1(),
         PrivacyProtocolIdV1::PqMaspStarkV0 => compiled_pq_masp_profile_v1(),
         PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => compiled_zk_x509_profile_v1(),
-        // TODO(privacy-native-engines): remove each fail-closed branch only
-        // after its complete canonical verifier, effect derivation, KATs, and
-        // adversarial tests are compiled into this manifest.
+        // A build that deliberately excludes transparent STARK support must
+        // expose ZK-ACE as unavailable; governance never substitutes an alias,
+        // compatibility verifier, or incomplete implementation.
         #[cfg(not(feature = "zk-stark"))]
         PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => {
             Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
@@ -871,6 +880,16 @@ fn compiled_ivm_private_note_profile_v1_with_randomness_policies(
 
 fn compiled_pq_masp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1>
 {
+    compiled_pq_masp_profile_v1_with_schemas(
+        PQ_MASP_WALLET_CIPHERTEXT_SCHEMA_V1,
+        PQ_MASP_VERIFIED_EFFECT_SCHEMA_V1,
+    )
+}
+
+fn compiled_pq_masp_profile_v1_with_schemas(
+    wallet_ciphertext_schema: &[u8],
+    verified_effect_schema: &[u8],
+) -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     let protocol_id = PrivacyProtocolIdV1::PqMaspStarkV0;
     let profile_digest =
         proof_managed_note_stark_profile_digest_v1(PQ_MASP_STARK_PROFILE_DESCRIPTOR_V1);
@@ -991,8 +1010,8 @@ fn compiled_pq_masp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
             PQ_MASP_RUNTIME_CONTEXT_SCHEMA_V1,
             PQ_MASP_FRONTIER_SCHEMA_V1,
             PQ_MASP_AUTHORIZATION_SCHEMA_V1,
-            PQ_MASP_WALLET_CIPHERTEXT_SCHEMA_V1,
-            PQ_MASP_VERIFIED_EFFECT_SCHEMA_V1,
+            wallet_ciphertext_schema,
+            verified_effect_schema,
             PQ_MASP_ENGINE_DESCRIPTOR_V1,
             TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
             PQ_MASP_HASH_PROFILE_DESCRIPTOR_V1,
@@ -1029,8 +1048,8 @@ fn compiled_pq_masp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
             PQ_MASP_RUNTIME_CONTEXT_SCHEMA_V1,
             PQ_MASP_FRONTIER_SCHEMA_V1,
             PQ_MASP_AUTHORIZATION_SCHEMA_V1,
-            PQ_MASP_WALLET_CIPHERTEXT_SCHEMA_V1,
-            PQ_MASP_VERIFIED_EFFECT_SCHEMA_V1,
+            wallet_ciphertext_schema,
+            verified_effect_schema,
             PQ_MASP_ENGINE_DESCRIPTOR_V1,
             TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
             PQ_MASP_HASH_PROFILE_DESCRIPTOR_V1,
@@ -2168,6 +2187,8 @@ fn bootle_lantern_parameter_digest_v1(
     let challenge_norm_root_degree = [CHALLENGE_NORM_ROOT_DEGREE_V1];
     let challenge_eta = CHALLENGE_ETA_V1.to_be_bytes();
     let challenge_candidate_attempts = MAX_CHALLENGE_CANDIDATE_ATTEMPTS_V1.to_be_bytes();
+    let scope_acceptance_limit = BOOTLE_LANTERN_SCOPE_APPLICATION_ACCEPTANCE_LIMIT_V1.to_be_bytes();
+    let scope_coefficient_attempts = BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1.to_be_bytes();
 
     digest_fields_v1(
         PARAMETER_DIGEST_DOMAIN_V1,
@@ -2175,6 +2196,12 @@ fn bootle_lantern_parameter_digest_v1(
             BOOTLE_LANTERN_PROTOCOL_LABEL_V1,
             BOOTLE_LANTERN_PARAMETER_SET_LABEL_V1,
             SOURCE_PROFILE_V1,
+            BOOTLE_LANTERN_ISSUER_PARAMETER_SCHEMA_V1,
+            BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1,
+            BOOTLE_LANTERN_CREDENTIAL_SCOPE_DOMAIN_V1,
+            &scope_acceptance_limit,
+            &scope_coefficient_attempts,
+            BOOTLE_LANTERN_BLIND_ISSUANCE_SCHEMA_V1,
             PUBLIC_PARAMETER_SEED_DOMAIN_V1,
             public_parameter_seed,
             &ring_degree,
@@ -2231,6 +2258,8 @@ fn compiled_bootle_lantern_profile_material_v1()
     let decomposition_bits = [DECOMPOSITION_BITS_V1];
     let compression_gamma = COMPRESSION_GAMMA_V1.to_be_bytes();
     let compression_modulus = COMPRESSION_MODULUS_V1.to_be_bytes();
+    let scope_acceptance_limit = BOOTLE_LANTERN_SCOPE_APPLICATION_ACCEPTANCE_LIMIT_V1.to_be_bytes();
+    let scope_coefficient_attempts = BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1.to_be_bytes();
     let public_parameter_seed = public_parameter_seed_v1();
     let sampling_profile_digest = bootle_sampling_profile_digest_v1();
     if sampling_profile_digest == [0; 32] {
@@ -2244,6 +2273,7 @@ fn compiled_bootle_lantern_profile_material_v1()
             BOOTLE_LANTERN_PROTOCOL_LABEL_V1,
             BOOTLE_LANTERN_PARAMETER_SET_LABEL_V1,
             SOURCE_PROFILE_V1,
+            BOOTLE_LANTERN_ISSUER_PARAMETER_SCHEMA_V1,
             PUBLIC_PARAMETER_SEED_DOMAIN_V1,
             &public_parameter_seed,
         ],
@@ -2272,6 +2302,7 @@ fn compiled_bootle_lantern_profile_material_v1()
             BOOTLE_LANTERN_PARAMETER_SET_LABEL_V1,
             SOURCE_PROFILE_V1,
             BOOTLE_LANTERN_PROOF_WIRE_LABEL_V1,
+            BOOTLE_LANTERN_ISSUER_PARAMETER_SCHEMA_V1,
             BOOTLE_LANTERN_COMPRESSION_SCHEMA_V1,
             &decomposition_bits,
             &compression_gamma,
@@ -2282,6 +2313,10 @@ fn compiled_bootle_lantern_profile_material_v1()
             PUBLIC_PARAMETER_SEED_DOMAIN_V1,
             &public_parameter_seed,
             BOOTLE_LANTERN_RELATION_SCHEMA_V1,
+            BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1,
+            BOOTLE_LANTERN_CREDENTIAL_SCOPE_DOMAIN_V1,
+            &scope_acceptance_limit,
+            &scope_coefficient_attempts,
             BOOTLE_LANTERN_TRANSCRIPT_SCHEMA_V1,
             BOOTLE_SAMPLING_PROFILE_DESCRIPTOR_V1,
             &sampling_profile_digest,
@@ -2300,9 +2335,16 @@ fn compiled_bootle_lantern_profile_material_v1()
             BOOTLE_LANTERN_PARAMETER_SET_LABEL_V1,
             SOURCE_PROFILE_V1,
             BOOTLE_LANTERN_PROOF_WIRE_LABEL_V1,
+            BOOTLE_LANTERN_ISSUER_PARAMETER_SCHEMA_V1,
             BOOTLE_LANTERN_RELATION_SCHEMA_V1,
+            BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1,
+            BOOTLE_LANTERN_CREDENTIAL_SCOPE_DOMAIN_V1,
+            &scope_acceptance_limit,
+            &scope_coefficient_attempts,
+            BOOTLE_LANTERN_BLIND_ISSUANCE_SCHEMA_V1,
             BOOTLE_LANTERN_TRANSCRIPT_SCHEMA_V1,
             BOOTLE_LANTERN_COMPRESSION_SCHEMA_V1,
+            BOOTLE_LANTERN_NATIVE_PRODUCER_SCHEMA_V1,
             BOOTLE_SAMPLING_PROFILE_DESCRIPTOR_V1,
             &sampling_profile_digest,
             &decomposition_bits,
@@ -3249,6 +3291,59 @@ mod tests {
     }
 
     #[test]
+    fn pq_masp_profile_binds_the_exact_wallet_and_verified_effect_schemas() {
+        assert_eq!(
+            PQ_MASP_WALLET_CIPHERTEXT_SCHEMA_V1,
+            b"typed-output:recipient-id32+encapsulation-digest32+output-commitment32+ciphertext[PQE1+mlkem768-ciphertext1088+nonce24+xchacha20poly1305[PQN1+value-u128be+authorization-key-digest32+recipient-id32+nullifier-key-digest32+rho32+blinding32+memo-digest32]+tag16]|mlkem768-domain-kdf|aad:domain+asset-definition-id-u64be-length+norito+pool-id32+output-commitment32+recipient-id32+encapsulation-digest32"
+        );
+        assert_eq!(
+            PQ_MASP_VERIFIED_EFFECT_SCHEMA_V1,
+            b"namespace:norito|bootstrap-digest:32|asset-definition-id:norito|current-root:32|current-epoch:u64|next-root:32|next-epoch:u64|transition:pq-masp{ordered-nullifiers[32]+ordered-output-commitments[32]+validator-derived-successor-frontier}|value-balance:none"
+        );
+        for stale_field in [
+            b"value-u128le".as_slice(),
+            b"rseed32".as_slice(),
+            b"anchor-epoch".as_slice(),
+            b"ordered-encrypted-outputs".as_slice(),
+            b"expiry-height".as_slice(),
+        ] {
+            assert!(
+                !PQ_MASP_WALLET_CIPHERTEXT_SCHEMA_V1
+                    .windows(stale_field.len())
+                    .any(|window| window == stale_field)
+                    && !PQ_MASP_VERIFIED_EFFECT_SCHEMA_V1
+                        .windows(stale_field.len())
+                        .any(|window| window == stale_field),
+                "stale PQ-MASP profile field survived: {}",
+                String::from_utf8_lossy(stale_field)
+            );
+        }
+
+        let exact = compiled_pq_masp_profile_v1().expect("compiled PQ-MASP profile");
+        for changed in [
+            compiled_pq_masp_profile_v1_with_schemas(
+                b"substituted-wallet-schema",
+                PQ_MASP_VERIFIED_EFFECT_SCHEMA_V1,
+            )
+            .expect("structurally valid wallet-schema substitution"),
+            compiled_pq_masp_profile_v1_with_schemas(
+                PQ_MASP_WALLET_CIPHERTEXT_SCHEMA_V1,
+                b"substituted-verified-effect-schema",
+            )
+            .expect("structurally valid effect-schema substitution"),
+        ] {
+            assert_eq!(changed.parameter_id, exact.parameter_id);
+            assert_eq!(changed.parameter_digest, exact.parameter_digest);
+            assert_ne!(changed.verifier_digest, exact.verifier_digest);
+            assert_eq!(
+                changed.statement_schema_digest,
+                exact.statement_schema_digest
+            );
+            assert_ne!(changed.engine_manifest_digest, exact.engine_manifest_digest);
+        }
+    }
+
+    #[test]
     fn local_compiled_profile_catalog_is_exact12_and_contains_no_governance_state() {
         let catalog = compiled_privacy_profile_catalog_v1().expect("compiled profile catalog");
         assert_eq!(catalog.version, PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1);
@@ -3438,9 +3533,9 @@ mod tests {
                 PrivacyProtocolIdV1::PqMaspStarkV0 => (
                     "10a8697291331061099a6c67eaeac3bc29f77aea951f2f2ad55ca29d0f816951".to_owned(),
                     "120ad9e6f616fdd05168a2dde5608654094a18b97bfc89ebedf86b7fbaf335b8".to_owned(),
-                    "6ca367a4a8be888d99e34f8539635961e055c10c76b8926eb916b58555c0ef37".to_owned(),
+                    "dc7c983c9b683ec2b4efc998408a59afd213272ac37bcee5720cf68a0f4516c9".to_owned(),
                     "4932c64b8f113632ba145e18ca5cc85496fbc96d103b19d712643348f3153727".to_owned(),
-                    "19902ea3ab96385d9d5cd5802bcd7a4b08183fca64b71e6bafd8c92e844dd89e".to_owned(),
+                    "e6cd364435e6ef1d85ef0a825b05cbf48a65ecf10e9f152d68935f84246c9601".to_owned(),
                 ),
                 _ => unreachable!("the test covers only IVM private note and PQ-MASP"),
             };
@@ -3700,6 +3795,57 @@ mod tests {
         assert_eq!(APPLICATION_ROWS_V1, 8);
         assert_eq!(APPLICATION_ROWS_V1, BOOTLE_LANTERN_MODEL_ATTRIBUTE_COUNT_V1);
         assert_eq!(APPLICATION_WITNESS_POLYNOMIALS_V1, 48);
+        assert_eq!(
+            BOOTLE_LANTERN_PARAMETER_SET_LABEL_V1,
+            b"falcon512-ntru-r512-as-r64-rank8-interleaved"
+        );
+        for required in [
+            &b"BLNS-specialization-no-main-construction-reduction"[..],
+            &b"rust-fn-dsa-workspace-0.3-daf14859b5aa3f8d75c42966ba7de83e6eb59997"[..],
+        ] {
+            assert!(
+                BOOTLE_LANTERN_IMPLEMENTATION_PROVENANCE_V1
+                    .windows(required.len())
+                    .any(|window| window == required),
+                "implementation provenance omitted {}",
+                String::from_utf8_lossy(required)
+            );
+        }
+        for (descriptor, required) in [
+            (
+                BOOTLE_LANTERN_ISSUER_PARAMETER_SCHEMA_V1,
+                &b"H_i[j]=h[8*j+i]"[..],
+            ),
+            (
+                BOOTLE_LANTERN_RELATION_SCHEMA_V1,
+                &b"A_r*r+A_tau*tau+A_m*m+scope-s1-H*s2=0"[..],
+            ),
+            (
+                BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1,
+                &b"excluded:action-index+transaction-intent-digest"[..],
+            ),
+            (
+                BOOTLE_LANTERN_BLIND_ISSUANCE_SCHEMA_V1,
+                &b"keygen->holder-sample-r->blind-request"[..],
+            ),
+            (
+                BOOTLE_LANTERN_NATIVE_PRODUCER_SCHEMA_V1,
+                &b"bounded-fail-closed-no-fallback"[..],
+            ),
+        ] {
+            assert!(
+                descriptor
+                    .windows(required.len())
+                    .any(|window| window == required),
+                "compiled descriptor omitted {}",
+                String::from_utf8_lossy(required)
+            );
+        }
+        assert_eq!(
+            BOOTLE_LANTERN_SCOPE_APPLICATION_ACCEPTANCE_LIMIT_V1,
+            BOOTLE_LANTERN_APPLICATION_MODULUS_V1 * 5
+        );
+        assert_eq!(BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1, 4_096);
         assert_eq!(BOOTLE_LANTERN_PROOF_BYTES_V1, 70_344);
         assert!(
             u64::try_from(BOOTLE_LANTERN_PROOF_BYTES_V1).expect("proof size fits u64")
@@ -4099,11 +4245,11 @@ mod tests {
                 hex::encode(first.engine_manifest_digest.as_bytes()),
             ),
             (
-                "46f7ad54bea00ede651f6895b58d166a93865da537d6f7a44888cd68f55bdfae".to_owned(),
-                "929a32210be24aa1f71e801b78b6009d385d9a222c1442a700bf641b63219fbb".to_owned(),
-                "7f52240335ce4bfdb0422f449c639646dd886d1cefa686d59fc035dc10fd810b".to_owned(),
+                "920c5417cbaa3c125c41e031e8fa53d7c201e5b904020d5e03eadde2136fa4de".to_owned(),
+                "6b5afbf974893db00c7def8c28d74789b0f02f3b13bbc38cb5c1459fb12fbaa7".to_owned(),
+                "e334ad9c4ef471b25219e33e86160578e5211e433124380cffedcb2a19db2674".to_owned(),
                 "909f50519c111b8ce1e708a66c4501e8d43773a6cae9f0c79c78143fa397e523".to_owned(),
-                "e3ab9be14be5bc33cf810fcbc5124a6126ab98f43cd23275cb1db53237b52e54".to_owned(),
+                "91d538a2b9905b037adbbc20271ae1fd758a3bca7d53ab1bb35111c79be004d1".to_owned(),
             )
         );
     }
@@ -4361,9 +4507,9 @@ mod tests {
             (
                 "9fa2a07d17989e07bb7ff804bb408e95e127b80ab5e01258b77af9b00c82607d".to_owned(),
                 "cf6bb53805e982444751db072c04d8b52dd9e14712cb90bbf23f68bbf2650c82".to_owned(),
-                "568b14a31a7d3531d9978ca780b792e1134449a48906d598dc1da7a021498cee".to_owned(),
+                "6056ad21ff647212dcc81ff5508e5348400ca734a230073ac6367fa9c7b5ba3f".to_owned(),
                 "f45032acceaf4b65e5afe114ca1f87fde477a73040e07c60a2c99e831f4cdc63".to_owned(),
-                "dc956bd48147c665b35adf727cf6f57f38d6757e6d9bbac097010e202f63418b".to_owned(),
+                "c701b59a7083969770841a85a784608543c61e5849fed0670bfd97c2aa845009".to_owned(),
             )
         );
     }

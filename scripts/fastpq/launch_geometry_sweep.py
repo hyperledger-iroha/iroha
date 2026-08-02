@@ -151,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--bench-prefix",
-        default="cargo run -p fastpq_prover --bin fastpq_metal_bench --features fastpq-gpu --",
+        default="cargo run -p fastpq_prover --bin fastpq_metal_bench --features dev-tools,fastpq-gpu --",
         help="Command prefix used to invoke fastpq_metal_bench (default runs via cargo). "
         "The script appends --rows/--warmups/--iterations/--output automatically.",
     )

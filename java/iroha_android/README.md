@@ -796,7 +796,7 @@ ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSp
 
 Android Foundations pins this workspace to **JDK 21 LTS**. Possible upgrades are only evaluated after
 Oracle’s quarterly CPU releases: stage the candidate by setting `ANDROID_JDK_NEXT=1` in Buildkite
-so the Gradle harness and `scripts/android_fixture_regen.sh` soak the alternate toolchain. Capture
+so the Gradle harness and Android fixture parity checks soak the alternate toolchain. Capture
 the CI logs and record the soak decision in `artifacts/android/fixture_runs/` and `status.md` before
 promoting a new JDK.
 
@@ -875,44 +875,27 @@ when you need an additional, versioned copy for compliance packets.
 
 ### Norito fixture rotation
 
-Android fixtures follow the shared bi-weekly sync with the Rust maintainers and
-carry a 48 hour regeneration SLA whenever discriminants or ABI hashes move.
-Run
+The Rust xtask is the sole owner of the shared Norito RPC fixture corpus. Canonical
+payloads, descriptors, manifests, schema hashes, and compact-hash vectors live in
+`fixtures/norito_rpc`. The files under `java/iroha_android/src/test/resources` are a
+generated Java mirror; Java keeps local `.norito` copies because its parity tests read
+those payload bytes directly. Never edit the mirror or its hashes by hand.
+
+Regenerate and verify the complete owner set from the repository root:
 
 ```bash
-ANDROID_FIXTURE_ROTATION_OWNER="<name>" \
-ANDROID_FIXTURE_CADENCE="twice-weekly-tue-fri-0900utc" \
-make android-fixtures
-make android-fixtures-check
+cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
+cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
+bash ci/check_android_fixtures.sh
 ```
 
-to regenerate fixtures, record the run in
-`artifacts/android/fixture_runs/`, and commit the updated fixtures plus
-`artifacts/android_fixture_regen_state.json`. Tuesday and Friday windows fire at
-09:00 UTC; keep the cadence label set to
-`twice-weekly-tue-fri-0900utc` unless governance explicitly schedules a
-one-off run. When the review requests a fixed identifier, provide
-`ANDROID_FIXTURE_RUN_LABEL=YYYY-MM-DDThhmmssZ`. No-op reviews should add
-`ANDROID_FIXTURE_RUN_NOTE="No upstream discriminator change"` and optionally set
-`ANDROID_FIXTURE_RUN_RESULT_LABEL=noop` so the summary renders with the expected
-suffix.
-
-`make android-fixtures` wraps `scripts/android_fixture_regen.sh`, which writes a
-raw log (`artifacts/android/fixture_runs/<label>-run.log`) and a Markdown
-summary (`<label>-success.md`, `<label>-failure.md`, or the custom suffix when
-`ANDROID_FIXTURE_RUN_RESULT_LABEL` is set). Leave `ANDROID_FIXTURE_CAPTURE_LOG=1`
-and `ANDROID_FIXTURE_CAPTURE_SUMMARY=1` so evidence bundles always have both
-files; override the flags only when running local diagnostics. If no changes
-occur during the scheduled sync, emit a no-op summary in
-`artifacts/android/fixture_runs/` so governance reviewers can confirm the
-cadence was honoured.
-
-`make android-fixtures-check` now routes through `ci/check_android_fixtures.sh`,
-which emits a parity summary JSON under `artifacts/android/parity/<timestamp>/`
-and copies it to `artifacts/android/parity/latest/summary.json` for dashboards
-and release gates; set `ANDROID_PARITY_SUMMARY=<path>` to override the target
-location or `ANDROID_PARITY_PIPELINE_METADATA=<file>` to embed pipeline/test
-metadata in the summary when running under CI.
+`make android-fixtures` is a convenience wrapper around the same xtask owner and
+then runs the Android parity check; `make android-fixtures-check` runs only that
+check. A successful generation updates the canonical directory and every SDK
+mirror together. Commit the complete generated change set, not an Android-only
+subset. The parity wrapper can still write its JSON summary under
+`artifacts/android/parity/` for CI evidence, but that report is not fixture source
+material.
 
 The test harness currently executes the key manager, keystore flows (with the
 Android Keystore fallback backend), Norito codec round-trips that verify typed
@@ -1509,25 +1492,20 @@ that mirrors Torii's `/v1/pipeline/transactions` submission and `/v1/pipeline/tr
 `HttpClientTransportHarnessTests` spin up the server, interact with it via `HttpClientTransport`, and assert on the recorded
 requests/responses, providing end-to-end coverage for retries, headers, and offline queue replays without depending on a real Torii node.
 
-The fixture file under `src/test/resources` documents the expected JSON layout
-for transaction payload parity tests (along with matching `.norito` binaries).
-Regenerate the encoded blobs via the shared Rust exporter so Android stays in
-sync with the canonical Norito toolchain:
+The transaction descriptors, manifest, and matching `.norito` files under
+`src/test/resources` are the generated Java mirror of `fixtures/norito_rpc`.
+Regenerate them only through the canonical Rust owner:
 
 ```bash
-make android-fixtures
-make android-fixtures-check
-# or run the exporter/check directly:
-#   cargo run --manifest-path scripts/export_norito_fixtures/Cargo.toml --release
-#   python3 scripts/check_android_fixtures.py
+cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures
+cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify
+python3 scripts/check_android_fixtures.py
 ```
 
-The command rewrites `transaction_payloads.json`, refreshes the companion
-`.norito` files, and updates `transaction_fixtures.manifest.json` with new
-hashes and provenance metadata (including the asset-metadata and
-`SetParameter` parity vectors that exercise configuration and key/value
-instructions). Always commit the regenerated JSON, `.norito` payloads, and
-manifest together.
+The owner rewrites the canonical corpus first and publishes the Java mirror plus
+the Python and Swift descriptor-only mirrors from the same result. Always commit
+the complete generated set together; never retain an old hash, retired fixture,
+or compatibility-only payload in the Java resource directory.
 
 ## License
 

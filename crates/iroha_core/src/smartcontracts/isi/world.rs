@@ -28330,13 +28330,6 @@ seiyaku GovernanceLifecycle {
                 .expect("register cleanup domain");
 
             let reward_def = AssetDefinitionId::new(domain_id.clone(), "offline".parse().unwrap());
-            let mut metadata = Metadata::default();
-            metadata.insert(
-                iroha_data_model::offline::OFFLINE_ASSET_ENABLED_METADATA_KEY
-                    .parse()
-                    .expect("metadata key"),
-                Json::new(true),
-            );
             Register::asset_definition(NewAssetDefinition {
                 id: reward_def.clone(),
                 name: "offline".to_owned(),
@@ -28345,12 +28338,20 @@ seiyaku GovernanceLifecycle {
                 spec: NumericSpec::integer(),
                 mintable: Mintable::Infinitely,
                 logo: None,
-                metadata,
+                metadata: Metadata::default(),
                 balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
                 confidential_policy: AssetConfidentialPolicy::transparent(),
             })
             .execute(&ALICE_ID, &mut stx)
-            .expect("register cleanup-domain offline asset definition");
+            .expect("register cleanup-domain asset definition");
+            let escrow = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
+                stx.chain_id(),
+                &reward_def,
+            );
+            stx.settlement
+                .offline
+                .escrow_accounts
+                .insert(reward_def.clone(), escrow);
 
             assert!(
                 stx.settlement

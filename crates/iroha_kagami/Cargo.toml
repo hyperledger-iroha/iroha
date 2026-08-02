@@ -1,5 +1,6 @@
 [package]
 name = "iroha_kagami"     # Translates to teacher, the exemplar, the looking glass.
+autobins = false
 
 edition.workspace = true
 version.workspace = true
@@ -52,6 +53,7 @@ base64.workspace = true
 
 [features]
 default = ["bls"]
+dev-tools = []
 bls = ["iroha_crypto/bls"]
 gost = ["iroha_crypto/gost"]
 sm = ["iroha_crypto/sm"]
@@ -70,10 +72,12 @@ path = "src/main.rs"
 [[bin]]
 name = "iroha_onboarding_token_hash"
 path = "src/bin/iroha_onboarding_token_hash.rs"
+required-features = ["dev-tools"]
 
 [[bin]]
 name = "pk3_genesis_binding_verify"
 path = "src/bin/pk3_genesis_binding_verify.rs"
+required-features = ["dev-tools"]
 
 [[example]]
 name = "codec_samples"

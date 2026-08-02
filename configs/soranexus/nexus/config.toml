@@ -88,8 +88,6 @@ governance_tag = "da.taikai.archive"
 
 [genesis]
 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
-# Joining nodes must set the exact expected_hash and enable remote bootstrap explicitly.
-bootstrap_enabled = false
 
 [streaming]
 identity_public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B"

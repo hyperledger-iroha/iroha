@@ -716,6 +716,7 @@ impl PrivacyPgcPoolSnapshotV1 {
     }
 
     /// Return whether an exact historical epoch/root pair remains retained.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) fn contains_retained_root(&self, epoch: u64, root: PrivacyRootV1) -> bool {
         self.retained_roots
@@ -1247,7 +1248,27 @@ pub(crate) fn load_privacy_bootle_lantern_issuer_policy_v1(
 #[derive(Default)]
 struct PrivacyVegaIssuerGovernanceIndexV1 {
     lineages: BTreeMap<PrivacyIssuerIdV1, Vec<PrivacyVegaIssuerRecordV1>>,
+    key_owners: BTreeMap<PrivacyP256PointV1, PrivacyIssuerIdV1>,
     record_count: usize,
+}
+
+/// Bounded facts derived while validating the complete Vega issuer registry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PrivacyVegaIssuerRegistryFactsV1 {
+    record_count: usize,
+    key_owner: Option<PrivacyIssuerIdV1>,
+}
+
+impl PrivacyVegaIssuerRegistryFactsV1 {
+    /// Exact number of persisted Vega issuer revisions.
+    pub(crate) const fn record_count(self) -> usize {
+        self.record_count
+    }
+
+    /// Permanent lineage owner of the candidate issuer key, if registered.
+    pub(crate) const fn key_owner(self) -> Option<PrivacyIssuerIdV1> {
+        self.key_owner
+    }
 }
 
 fn validate_privacy_vega_issuer_lineage_v1(
@@ -1266,6 +1287,7 @@ fn validate_privacy_vega_issuer_lineage_v1(
     records[0].validate_initial().map_err(|error| {
         format!("Vega issuer lineage {issuer_id:?} has invalid origin: {error}")
     })?;
+    let mut seen_keys = BTreeSet::from([records[0].issuer_public_key]);
     for pair in records.windows(2) {
         let result = match pair[1].lifecycle {
             PrivacyVegaIssuerRecordLifecycleV1::Active => {
@@ -1276,6 +1298,13 @@ fn validate_privacy_vega_issuer_lineage_v1(
             }
         };
         result.map_err(|error| format!("Vega issuer lineage {issuer_id:?} is invalid: {error}"))?;
+        if pair[1].issuer_public_key != pair[0].issuer_public_key
+            && !seen_keys.insert(pair[1].issuer_public_key)
+        {
+            return Err(format!(
+                "Vega issuer lineage {issuer_id:?} reactivates a retired P-256 key"
+            ));
+        }
     }
     Ok(())
 }
@@ -1336,6 +1365,13 @@ fn load_privacy_vega_issuer_governance_index_v1(
                 "Vega issuer revision key {issuer_id:?}/{record_epoch} differs from its record"
             ));
         }
+        if let Some(owner) = index.key_owners.insert(record.issuer_public_key, issuer_id)
+            && owner != issuer_id
+        {
+            return Err(format!(
+                "Vega issuer public key is assigned to multiple lineages: {owner:?} and {issuer_id:?}"
+            ));
+        }
         index.lineages.entry(issuer_id).or_default().push(*record);
     }
     for (issuer_id, records) in &index.lineages {
@@ -1349,6 +1385,19 @@ pub(crate) fn privacy_vega_issuer_record_count_v1(
     commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
 ) -> Result<usize, String> {
     Ok(load_privacy_vega_issuer_governance_index_v1(commitments)?.record_count)
+}
+
+/// Validate the complete registry and return its size plus the permanent owner
+/// of `issuer_public_key`, if that key has appeared in any lineage revision.
+pub(crate) fn privacy_vega_issuer_registry_facts_v1(
+    issuer_public_key: PrivacyP256PointV1,
+    commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+) -> Result<PrivacyVegaIssuerRegistryFactsV1, String> {
+    let index = load_privacy_vega_issuer_governance_index_v1(commitments)?;
+    Ok(PrivacyVegaIssuerRegistryFactsV1 {
+        record_count: index.record_count,
+        key_owner: index.key_owners.get(&issuer_public_key).copied(),
+    })
 }
 
 /// Load the current revision of one validated Vega issuer lineage.
@@ -1785,6 +1834,7 @@ pub(crate) fn load_privacy_zk_x509_certificate_policy_v1(
 }
 
 /// Load the current self-chained signed-CRL record for one policy lineage.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn load_privacy_zk_x509_crl_v1(
     trust_anchor_id: PrivacyIssuerIdV1,
     policy_id: PrivacyPolicyIdV1,
@@ -6091,6 +6141,7 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Return the exact X.509 policy namespace and certificate nullifier.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) const fn zk_x509_certificate_identity(
         self,
@@ -6109,6 +6160,7 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Return the Orchard namespace, if this is an Orchard nullifier.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) const fn orchard_namespace(self) -> Option<PrivacyNamespaceV1> {
         match self {
@@ -6122,6 +6174,7 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Return the exact Orchard nullifier bytes, if present.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) const fn orchard_nullifier_bytes(self) -> Option<[u8; 32]> {
         match self {
@@ -6135,6 +6188,7 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Return the proof-managed pool namespace and nullifier, if present.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) const fn proof_managed_identity(
         self,
@@ -6153,6 +6207,7 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Return the exact FCMP++ namespace and typed key image, if present.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) const fn fcmp_identity(self) -> Option<(PrivacyNamespaceV1, PrivacyFcmpKeyImageV1)> {
         match self {
@@ -6196,6 +6251,7 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Ordered bounds covering consumed certificate nullifiers in one X.509 policy.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) fn zk_x509_certificate_nullifier_range(
         namespace: PrivacyNamespaceV1,
@@ -6494,6 +6550,7 @@ impl PrivacyCommitmentKeyV1 {
     }
 
     /// Ordered bounds covering every proof-managed pool configuration.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) fn proof_managed_pool_config_range() -> core::ops::RangeInclusive<Self> {
         let namespace = |protocol_id, pool_id| {
@@ -6625,6 +6682,7 @@ impl PrivacyCommitmentKeyV1 {
     }
 
     /// Return the proof-managed pool namespace, if this key belongs to one.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) const fn proof_managed_namespace(self) -> Option<PrivacyNamespaceV1> {
         match self {
@@ -9627,18 +9685,17 @@ mod tests {
 
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::privacy::{
-        BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
-        BOOTLE_LANTERN_RING_DEGREE_V1, BootleLanternAllowedAttributeValuesV1,
-        BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPublicMatrixV1,
-        BootleLanternPolynomialV1, PrivacyActiveLifecycleV1, PrivacyAttributeDigestV1,
-        PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyCertificateKeyDigestV1,
-        PrivacyChallengeV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
-        PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1, PrivacyIssuerRegistryPolicyNamespaceV1,
-        PrivacyNamespaceScopeV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
-        PrivacyParameterNamespaceV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-        PrivacyPoolNamespaceV1, PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1,
-        PrivacyRetiredLifecycleV1, PrivacyRootV1, PrivacyStatementContextV1,
-        PrivacyStatementSchemaDigestV1, PrivacySuspendedLifecycleV1,
+        BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_RING_DEGREE_V1,
+        BootleLanternAllowedAttributeValuesV1, BootleLanternIssuerPolicyLifecycleV1,
+        BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1, PrivacyActiveLifecycleV1,
+        PrivacyAttributeDigestV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+        PrivacyCertificateKeyDigestV1, PrivacyChallengeV1, PrivacyCommitmentV1,
+        PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1,
+        PrivacyIssuerRegistryPolicyNamespaceV1, PrivacyNamespaceScopeV1, PrivacyParameterDigestV1,
+        PrivacyParameterIdV1, PrivacyParameterNamespaceV1, PrivacyPolicyDigestV1,
+        PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProposedLifecycleV1,
+        PrivacyProtocolLifecycleV1, PrivacyRetiredLifecycleV1, PrivacyRootV1,
+        PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1, PrivacySuspendedLifecycleV1,
         PrivacyTransactionIntentDigestV1, PrivacyTrustAnchorNamespaceV1,
         PrivacyTrustAnchorPolicyNamespaceV1, PrivacyVegaIssuerRecordDigestV1,
         PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
@@ -9729,17 +9786,22 @@ mod tests {
         epoch: u64,
         lifecycle: BootleLanternIssuerPolicyLifecycleV1,
     ) -> BootleLanternIssuerPolicyV1 {
-        let matrix_entry_count =
-            BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1;
-        let mut issuer_public_matrix = BootleLanternIssuerPublicMatrixV1 {
-            entries: vec![
-                BootleLanternPolynomialV1 {
-                    coefficients: vec![0; BOOTLE_LANTERN_RING_DEGREE_V1],
-                };
-                matrix_entry_count
-            ],
-        };
-        issuer_public_matrix.entries[0].coefficients[0] = 1;
+        let fixture_seed = usize::from(issuer_byte) + usize::from(policy_byte);
+        let first_column = core::array::from_fn(|block| BootleLanternPolynomialV1 {
+            coefficients: (0..BOOTLE_LANTERN_RING_DEGREE_V1)
+                .map(|coefficient| {
+                    u16::try_from(
+                        (fixture_seed + block * BOOTLE_LANTERN_RING_DEGREE_V1 + coefficient)
+                            % 12_288
+                            + 1,
+                    )
+                    .expect("fixture residue fits u16")
+                })
+                .collect(),
+        });
+        let issuer_public_matrix =
+            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+                .expect("canonical degree-512 multiplication matrix");
         let mut policy = BootleLanternIssuerPolicyV1 {
             issuer_id: PrivacyIssuerIdV1::new(nonzero(issuer_byte)),
             policy_id: PrivacyPolicyIdV1::new(nonzero(policy_byte)),
@@ -13173,6 +13235,78 @@ mod tests {
                 .expect("canonical Vega issuer"),
             record
         );
+        let registry_facts =
+            privacy_vega_issuer_registry_facts_v1(record.issuer_public_key, &commitments.view())
+                .expect("canonical Vega issuer registry facts");
+        assert_eq!(registry_facts.record_count(), 1);
+        assert_eq!(registry_facts.key_owner(), Some(issuer_id));
+
+        let alias_issuer_id = PrivacyIssuerIdV1::new(nonzero(0xCF));
+        let alias = PrivacyVegaIssuerRecordV1::new(
+            alias_issuer_id,
+            1,
+            record.issuer_public_key,
+            record.document_type,
+            record.namespace,
+            record.digest_algorithm,
+            record.issuer_authentication_algorithm,
+            record.device_authentication_algorithm,
+            None,
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        )
+        .expect("self-consistent cross-lineage key alias");
+        let alias_key = PrivacyCommitmentKeyV1::vega_issuer_revision(alias_issuer_id, 1)
+            .expect("canonical alias revision key");
+        let mut aliased = Storage::new();
+        aliased.insert(
+            key,
+            PrivacyStateItemRecordV1::vega_issuer_governance(record, 7)
+                .expect("canonical Vega governance provenance"),
+        );
+        aliased.insert(
+            alias_key,
+            PrivacyStateItemRecordV1::vega_issuer_governance(alias, 8)
+                .expect("intrinsically valid alias provenance"),
+        );
+        let alias_error = privacy_vega_issuer_record_count_v1(&aliased.view())
+            .expect_err("one P-256 key cannot own multiple issuer identities");
+        assert!(
+            alias_error.contains("assigned to multiple lineages"),
+            "unexpected alias rejection: {alias_error}"
+        );
+
+        let rotated = vega_issuer_record(
+            issuer_id,
+            2,
+            2,
+            Some(record.record_digest),
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        );
+        let reactivated = vega_issuer_record(
+            issuer_id,
+            3,
+            1,
+            Some(rotated.record_digest),
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        );
+        let mut reused = Storage::new();
+        for (revision, height) in [(record, 7), (rotated, 8), (reactivated, 9)] {
+            reused.insert(
+                PrivacyCommitmentKeyV1::vega_issuer_revision(
+                    revision.issuer_id,
+                    revision.record_epoch,
+                )
+                .expect("canonical reused-key revision key"),
+                PrivacyStateItemRecordV1::vega_issuer_governance(revision, height)
+                    .expect("intrinsically valid reused-key provenance"),
+            );
+        }
+        let reuse_error = privacy_vega_issuer_record_count_v1(&reused.view())
+            .expect_err("a Vega lineage cannot reactivate a retired issuer key");
+        assert!(
+            reuse_error.contains("reactivates a retired P-256 key"),
+            "unexpected key-reactivation rejection: {reuse_error}"
+        );
 
         let mut wrong_role = Storage::new();
         wrong_role.insert(
@@ -13399,7 +13533,7 @@ mod tests {
             let record = vega_issuer_record(
                 issuer_id,
                 1,
-                1,
+                index,
                 None,
                 PrivacyVegaIssuerRecordLifecycleV1::Active,
             );
@@ -13420,7 +13554,7 @@ mod tests {
         let over_record = vega_issuer_record(
             over_issuer,
             1,
-            1,
+            over_index,
             None,
             PrivacyVegaIssuerRecordLifecycleV1::Active,
         );

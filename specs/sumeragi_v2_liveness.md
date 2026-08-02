@@ -1976,11 +1976,14 @@ A production run cannot be started by invoking the candidate runner directly.
 The release operator first authenticates an out-of-tree copy of
 `bootstrap_sumeragi_v2_release.py`, the protected Python, Git, OpenSSH
 `ssh-keygen`, and Bash executables, the manifest and identity helpers, the SSH
-allowed-signers and revocation policies, and every expected SHA-256 digest and
-signer fingerprint. The protected interpreter must start in isolated, no-site
-mode; the evidence parent must already be owner-owned mode `0700`, and the
-requested evidence child must not exist. The complete invocation passes those
-protected paths and digests explicitly, for example:
+allowed-signers and revocation policies, the receipt validator's localnet
+manifest support module, and every expected SHA-256 digest and signer
+fingerprint. The bootstrap archives that support module as the receipt
+validator's exact sibling so the validator can load it without consulting the
+working directory or `PYTHONPATH`. The protected interpreter must start in
+isolated, no-site mode; the evidence parent must already be owner-owned mode
+`0700`, and the requested evidence child must not exist. The complete
+invocation passes those protected paths and digests explicitly, for example:
 
 ```bash
 /protected/python3 -I -S /protected/bootstrap_sumeragi_v2_release.py \
@@ -1997,6 +2000,8 @@ protected paths and digests explicitly, for example:
   --expected-identity-verifier-sha256 <sha256> \
   --receipt-validator /protected/write_sumeragi_v2_release_receipt.py \
   --expected-receipt-validator-sha256 <sha256> \
+  --receipt-validator-support /protected/sumeragi_v2_localnet_manifest.py \
+  --expected-receipt-validator-support-sha256 <sha256> \
   --runner-tool-manifest /protected/runner-tools.json \
   --expected-runner-tool-manifest-sha256 <sha256> \
   --bash-bin /protected/bash --expected-bash-sha256 <sha256> \

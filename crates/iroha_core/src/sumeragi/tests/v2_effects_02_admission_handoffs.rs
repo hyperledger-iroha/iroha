@@ -948,7 +948,7 @@
             self.pending_fetches.insert(
                 id,
                 PendingFetch {
-                    task: BodyFetchTask::for_test(
+                    task: BodyFetchTask::ordinary_for_test(
                         id.get(),
                         tag(0),
                         fixture.manifest.clone(),

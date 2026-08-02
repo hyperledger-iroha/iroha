@@ -314,7 +314,7 @@ run_portable_gate() {
   fi
   if maybe_prepare_portable_assets; then
     run_step "portable inrou smoke" \
-      "env -u LOG_FORMAT IROHA_INROU_PORTABLE_KERNEL_IMAGE=$(shell_quote "$IROHA_INROU_PORTABLE_KERNEL_IMAGE") IROHA_INROU_PORTABLE_ROOTFS_IMAGE=$(shell_quote "$IROHA_INROU_PORTABLE_ROOTFS_IMAGE") IROHA_INROU_PORTABLE_INITRD_IMAGE=$(shell_quote "${IROHA_INROU_PORTABLE_INITRD_IMAGE:-}") cargo run -p xtask --bin xtask -- soracloud-inrou-smoke portable"
+      "env -u LOG_FORMAT IROHA_INROU_PORTABLE_KERNEL_IMAGE=$(shell_quote "$IROHA_INROU_PORTABLE_KERNEL_IMAGE") IROHA_INROU_PORTABLE_ROOTFS_IMAGE=$(shell_quote "$IROHA_INROU_PORTABLE_ROOTFS_IMAGE") IROHA_INROU_PORTABLE_INITRD_IMAGE=$(shell_quote "${IROHA_INROU_PORTABLE_INITRD_IMAGE:-}") cargo run -p xtask --features dev-tools --bin xtask -- soracloud-inrou-smoke portable"
   else
     block_step "portable inrou smoke" "Portable guest assets are missing; run scripts/ci/prepare_inrou_portable_guest_assets.py --print-env or pass --prepare-portable-assets."
   fi
@@ -341,7 +341,7 @@ run_mixed_host_gate() {
     return
   fi
   run_step "mixed-host inrou smoke" \
-    "env -u LOG_FORMAT cargo run -p xtask --bin xtask -- soracloud-inrou-smoke mixed-host --inventory $(shell_quote "$MIXED_HOST_INVENTORY")"
+    "env -u LOG_FORMAT cargo run -p xtask --features dev-tools --bin xtask -- soracloud-inrou-smoke mixed-host --inventory $(shell_quote "$MIXED_HOST_INVENTORY")"
 }
 
 run_observability_gate() {

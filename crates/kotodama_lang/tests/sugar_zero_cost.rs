@@ -128,6 +128,7 @@ fn function_tail_matches_explicit_return() {
         }
     "#;
 
+    assert_ir_equivalent(tail, explicit, "function tail expression");
     assert_executable_equivalent(tail, explicit, "function tail expression");
 }
 
@@ -220,5 +221,6 @@ fn exhaustive_option_match_matches_eager_unwrap_or() {
         }
     "#;
 
+    assert_ir_equivalent(matched, explicit, "exhaustive Option match");
     assert_executable_equivalent(matched, explicit, "exhaustive Option match");
 }

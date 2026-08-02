@@ -116,7 +116,10 @@ mod borrowed_norito {
             T::schema_hash()
         }
 
-        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
             self.0.serialize(writer)
         }
 
@@ -137,7 +140,10 @@ mod borrowed_norito {
             <std::vec::Vec<T>>::schema_hash()
         }
 
-        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
             self.0.serialize(writer)
         }
 
@@ -185,7 +191,7 @@ impl norito::core::NoritoSerialize for ProviderAdvertSignaturePayloadViewV1<'_> 
         ProviderAdvertSignaturePayloadV1::schema_hash()
     }
 
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
 
@@ -1783,9 +1789,7 @@ mod tests {
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
         let mut bytes = Vec::new();
-        value
-            .serialize(&mut bytes)
-            .expect("serialize explicit layout");
+        norito::core::serialize_to_buffer(value, &mut bytes).expect("serialize explicit layout");
         bytes
     }
 

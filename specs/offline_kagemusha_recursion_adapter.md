@@ -430,7 +430,7 @@ release evidence:
 
 ```text
 cargo build --release -p iroha_core \
-  --features kagemusha-generation-memory-lab \
+  --features kagemusha-generation-memory-lab,dev-tools \
   --bin kagemusha_recursive_spend_v4_memory_benchmark --jobs 1
 
 python3 scripts/run_kagemusha_v4_generation_benchmark.py \
@@ -528,22 +528,12 @@ The bridge's bounded V4 ingestion authenticates headers, descriptors, framed
 and payload hashes, inline circuit-parameter identities, and the exact
 eight-role order before atomically installing a generation. Successful
 installation can permit construction of an authenticated backend, but it never
-authorizes proof admission by itself. Torii exposes that distinction through a
-required nullable `artifact_set` and `proof_backend_available`. The artifact
-set binds generation, manifest, release-policy and release-attestation digests,
-issuance window, proof-pair bound, and asset scale to both exact recursive
-verifier records. A null set requires both records and backend construction to
-be unavailable with exactly one `recursive_v4_registry_unavailable` or
-`recursive_v4_registry_malformed` blocker; a non-null set forbids both.
-
-Lineage admission is selected by the exact authenticated release rather than a
-process-wide flag. `recursive_lineage_supported` is true only when the non-null
-artifact set, distinct active Eq/Ep records, and production backend are all
-present; `recursive_lineage_unavailable` is its exact inverse. `ready` is true
-only when every typed blocker is absent. Symbol presence or partial artifact
-ingestion remains insufficient: transaction admission also authenticates the
-release-qualified consensus records, immutable startup catalog, and consensus
-release record.
+enables offline support or changes node readiness. Lineage admission for a
+specific online top-up or redemption command is selected by that command's
+exact authenticated release rather than a process-wide flag. Transaction
+admission authenticates the release-qualified consensus records, any configured
+local release cache, and the consensus release record. Missing command material
+cannot block startup, `/health`, `/readyz`, or wallet/device peer handoff.
 
 ## Branch-bound recipient and change proofs
 

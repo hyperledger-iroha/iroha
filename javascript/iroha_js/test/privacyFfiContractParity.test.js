@@ -38,15 +38,16 @@ test("JavaScript, Python, and the Rust data model pin one canonical protocol ord
   }
 });
 
-test("native SDK capability archives use the typed snapshot instead of free-form rows", () => {
+test("native SDK metadata archives use the typed compiled catalog, never a synthetic live snapshot", () => {
   for (const path of [
     "crates/connect_norito_bridge/src/lib.rs",
     "crates/iroha_js_host/src/lib.rs",
     "python/iroha_python/iroha_python_rs/src/lib.rs",
   ]) {
     const rust = source(path);
-    assert.match(rust, /PrivacyCapabilitySnapshotV1/);
+    assert.match(rust, /PrivacyCompiledProfileCatalogV1/);
     assert.match(rust, /PrivacyProtocolIdV1::ALL/);
+    assert.doesNotMatch(rust, /committed_privacy_capability_snapshot_v1/);
     assert.doesNotMatch(rust, /struct PrivacyAlgorithmEntry/);
     assert.doesNotMatch(rust, /struct PrivacyCapabilitiesV1/);
   }

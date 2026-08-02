@@ -183,6 +183,7 @@ pub fn compile_application_relation_v1(
     statement: &IrohaBootleLanternAnoncredStatementV1,
     policy: &BootleLanternIssuerPolicyV1,
     matrix_seed: MatrixSeedV1,
+    canonical_genesis_hash: [u8; 32],
 ) -> Result<BootleLanternApplicationRelationV1, RelationErrorV1> {
     policy
         .validate()
@@ -208,6 +209,15 @@ pub fn compile_application_relation_v1(
     if statement.context.parameter_digest.as_bytes() != matrix_seed.parameter_digest() {
         return Err(RelationErrorV1::MatrixParameterDigestMismatch);
     }
+    let credential_scope = super::scope::BootleLanternCredentialScopeV1::new(
+        &statement.context,
+        canonical_genesis_hash,
+        policy,
+    )
+    .map_err(|_| RelationErrorV1::InvalidCredentialScope)?;
+    let credential_scope_term = credential_scope
+        .application_term()
+        .map_err(|_| RelationErrorV1::InvalidCredentialScope)?;
 
     let mut disclosed_attributes = [None; ATTRIBUTE_POLYNOMIALS_V1];
     let mut disclosure_bitmap = 0_u8;
@@ -256,7 +266,7 @@ pub fn compile_application_relation_v1(
         ApplicationPolynomialV1::ZERO;
         APPLICATION_ROWS_V1 * APPLICATION_WITNESS_POLYNOMIALS_V1
     ];
-    let mut public_offset = [ApplicationPolynomialV1::ZERO; APPLICATION_ROWS_V1];
+    let mut public_offset = credential_scope_term;
     let minus_one = ApplicationPolynomialV1::constant(super::params::APPLICATION_MODULUS_V1 - 1)
         .map_err(|_| RelationErrorV1::InternalInvariant)?;
 
@@ -304,6 +314,46 @@ pub fn compile_application_relation_v1(
         public_offset,
         disclosure_bitmap,
         disclosed_attributes,
+    })
+}
+
+/// Compile the holder's blind-issuance request relation
+/// `A_r*r + A_m*m - t = 0` into the fixed 8-by-48 proof shape.
+pub(crate) fn compile_blind_issuance_request_relation_v1(
+    matrix_seed: MatrixSeedV1,
+    target: &[ApplicationPolynomialV1; APPLICATION_ROWS_V1],
+) -> Result<BootleLanternApplicationRelationV1, RelationErrorV1> {
+    let ar = expand_application_matrix_v1(matrix_seed, MatrixRoleV1::ApplicationRandomness)
+        .map_err(|_| RelationErrorV1::MatrixExpansion)?;
+    let am = expand_application_matrix_v1(matrix_seed, MatrixRoleV1::ApplicationAttributes)
+        .map_err(|_| RelationErrorV1::MatrixExpansion)?;
+    let mut matrix = vec![
+        ApplicationPolynomialV1::ZERO;
+        APPLICATION_ROWS_V1 * APPLICATION_WITNESS_POLYNOMIALS_V1
+    ];
+    for row in 0..APPLICATION_ROWS_V1 {
+        for column in 0..RANDOMNESS_POLYNOMIALS_V1 {
+            matrix[matrix_index(row, RANDOMNESS_START_V1 + column)] = *ar
+                .get(
+                    u16::try_from(row).expect("row fits u16"),
+                    u16::try_from(column).expect("column fits u16"),
+                )
+                .ok_or(RelationErrorV1::InternalInvariant)?;
+        }
+        for column in 0..ATTRIBUTE_POLYNOMIALS_V1 {
+            matrix[matrix_index(row, ATTRIBUTE_START_V1 + column)] = *am
+                .get(
+                    u16::try_from(row).expect("row fits u16"),
+                    u16::try_from(column).expect("column fits u16"),
+                )
+                .ok_or(RelationErrorV1::InternalInvariant)?;
+        }
+    }
+    Ok(BootleLanternApplicationRelationV1 {
+        matrix: matrix.into_boxed_slice(),
+        public_offset: target.map(ApplicationPolynomialV1::negate),
+        disclosure_bitmap: 0,
+        disclosed_attributes: [None; ATTRIBUTE_POLYNOMIALS_V1],
     })
 }
 
@@ -457,6 +507,9 @@ pub enum RelationErrorV1 {
     /// Matrix seed was not for the statement's global parameter manifest.
     #[error("Bootle/Lantern matrix seed parameter digest mismatch")]
     MatrixParameterDigestMismatch,
+    /// Reusable chain/governance scope could not be bound into the relation.
+    #[error("Bootle/Lantern credential scope is invalid")]
+    InvalidCredentialScope,
     /// Disclosure index was outside the fixed eight attributes.
     #[error("Bootle/Lantern disclosure index is outside 0..8")]
     DisclosureIndexOutOfRange,
@@ -509,24 +562,37 @@ pub enum RelationErrorV1 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::OnceLock;
+
     use iroha_data_model::privacy::{
         BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
-        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyLifecycleV1,
-        BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
-        PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1,
-        PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
-        PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
-        PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+        BootleLanternDisclosedAttributeV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+        PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1, PrivacyParameterDigestV1,
+        PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyStatementContextV1,
+        PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
+    use rand_08::{SeedableRng as _, rngs::StdRng};
 
     use super::*;
+    use crate::privacy_engines::bootle_lantern::{
+        issuer::{
+            BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
+            holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_with_rng_v1,
+            issuer_blind_issue_with_rng_v1,
+        },
+        transcript::matrix_seed_v1,
+    };
 
     fn raw(seed: u8) -> [u8; 32] {
         [seed; 32]
     }
 
     fn matrix_seed() -> MatrixSeedV1 {
-        MatrixSeedV1::new([0x31; 32], [0x72; 32]).expect("seed")
+        matrix_seed_v1([0x31; 32]).expect("seed")
+    }
+
+    const fn genesis_hash() -> [u8; 32] {
+        [0x32; 32]
     }
 
     fn context() -> PrivacyStatementContextV1 {
@@ -540,44 +606,6 @@ mod tests {
             statement_schema_digest: PrivacyStatementSchemaDigestV1::new(raw(5)),
             engine_manifest_digest: PrivacyEngineManifestDigestV1::new(raw(6)),
         }
-    }
-
-    fn policy() -> BootleLanternIssuerPolicyV1 {
-        let am = expand_application_matrix_v1(matrix_seed(), MatrixRoleV1::ApplicationAttributes)
-            .expect("matrix");
-        let entries = am
-            .entries()
-            .iter()
-            .map(|polynomial| BootleLanternPolynomialV1 {
-                coefficients: polynomial.coefficients().to_vec(),
-            })
-            .collect();
-        let mut policy = BootleLanternIssuerPolicyV1 {
-            issuer_id: PrivacyIssuerIdV1::new(raw(11)),
-            policy_id: PrivacyPolicyIdV1::new(raw(12)),
-            epoch: 1,
-            lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
-            issuer_parameter_id: PrivacyParameterIdV1::new(raw(13)),
-            issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
-            issuer_public_matrix: BootleLanternIssuerPublicMatrixV1 { entries },
-            required_disclosure_bitmap: 0b0000_0010,
-            allowed_values: (0..ATTRIBUTE_POLYNOMIALS_V1)
-                .map(|index| BootleLanternAllowedAttributeValuesV1 {
-                    values: if index == 1 {
-                        vec![BootleLanternAttributeValueV1::new([1; 8])]
-                    } else {
-                        Vec::new()
-                    },
-                })
-                .collect(),
-            record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),
-        };
-        policy.issuer_parameter_digest = policy
-            .computed_issuer_parameter_digest()
-            .expect("issuer parameter digest");
-        policy.record_digest = policy.computed_record_digest().expect("policy digest");
-        policy.validate().expect("valid policy");
-        policy
     }
 
     fn statement(policy: &BootleLanternIssuerPolicyV1) -> IrohaBootleLanternAnoncredStatementV1 {
@@ -596,20 +624,84 @@ mod tests {
         }
     }
 
+    struct IssuedFixture {
+        policy: BootleLanternIssuerPolicyV1,
+        witness: BootleLanternPresentationWitnessV1,
+    }
+
+    fn issued_fixture() -> &'static IssuedFixture {
+        static FIXTURE: OnceLock<IssuedFixture> = OnceLock::new();
+        FIXTURE.get_or_init(|| {
+            let mut keygen_rng = StdRng::from_seed([0x11; 32]);
+            let issuer_key_pair = BootleLanternIssuerKeyPairV1::generate_with_rng_v1(
+                PrivacyParameterIdV1::new(raw(13)),
+                &mut keygen_rng,
+            )
+            .expect("native issuer key generation");
+            let policy = issuer_key_pair
+                .active_policy_v1(BootleLanternIssuerPolicyMetadataV1 {
+                    issuer_id: PrivacyIssuerIdV1::new(raw(11)),
+                    policy_id: PrivacyPolicyIdV1::new(raw(12)),
+                    epoch: 1,
+                    required_disclosure_bitmap: 0b0000_0010,
+                    allowed_values: (0..ATTRIBUTE_POLYNOMIALS_V1)
+                        .map(|index| BootleLanternAllowedAttributeValuesV1 {
+                            values: if index == 1 {
+                                vec![BootleLanternAttributeValueV1::new([1; 8])]
+                            } else {
+                                Vec::new()
+                            },
+                        })
+                        .collect(),
+                })
+                .expect("active native issuer policy");
+            let context = context();
+            let mut attributes = [[0_u8; 8]; ATTRIBUTE_POLYNOMIALS_V1];
+            attributes[1] = [1; 8];
+            let mut holder_mask_rng = StdRng::from_seed([0x12; 32]);
+            let mut holder_proof_rng = StdRng::from_seed([0x13; 32]);
+            let (request, state) = holder_prepare_blind_issuance_with_rng_v1(
+                &context,
+                genesis_hash(),
+                &policy,
+                attributes,
+                &mut holder_mask_rng,
+                &mut holder_proof_rng,
+            )
+            .expect("holder blind-issuance request");
+            let mut tag_rng = StdRng::from_seed([0x14; 32]);
+            let mut preimage_rng = StdRng::from_seed([0x15; 32]);
+            let response = issuer_blind_issue_with_rng_v1(
+                &issuer_key_pair,
+                &context,
+                genesis_hash(),
+                &policy,
+                &request,
+                &mut tag_rng,
+                &mut preimage_rng,
+            )
+            .expect("native blind issuance");
+            let credential = holder_finalize_blind_issuance_v1(
+                state,
+                &context,
+                genesis_hash(),
+                &policy,
+                response,
+            )
+            .expect("holder issuance finalization");
+            let witness = credential
+                .presentation_witness_v1(&statement(&policy), &policy, genesis_hash())
+                .expect("issued presentation witness");
+            IssuedFixture { policy, witness }
+        })
+    }
+
+    fn policy() -> BootleLanternIssuerPolicyV1 {
+        issued_fixture().policy.clone()
+    }
+
     fn valid_witness() -> BootleLanternPresentationWitnessV1 {
-        let mut attributes = [[0_u8; 8]; ATTRIBUTE_POLYNOMIALS_V1];
-        attributes[1] = [1; 8];
-        let mut signature_two = [ApplicationPolynomialV1::ZERO; SIGNATURE_HALF_POLYNOMIALS_V1];
-        for (output, attribute) in signature_two.iter_mut().zip(attributes) {
-            *output = ApplicationPolynomialV1::from_direct_attribute(attribute);
-        }
-        BootleLanternPresentationWitnessV1 {
-            randomness: [ApplicationPolynomialV1::ZERO; RANDOMNESS_POLYNOMIALS_V1],
-            tag: [ApplicationPolynomialV1::ZERO; TAG_POLYNOMIALS_V1],
-            signature_one: [ApplicationPolynomialV1::ZERO; SIGNATURE_HALF_POLYNOMIALS_V1],
-            signature_two,
-            attributes,
-        }
+        issued_fixture().witness.clone()
     }
 
     fn redigest(policy: &mut BootleLanternIssuerPolicyV1) {
@@ -620,8 +712,13 @@ mod tests {
     #[test]
     fn canonical_relation_has_exact_shape_zeroed_public_column_and_offset() {
         let policy = policy();
-        let relation = compile_application_relation_v1(&statement(&policy), &policy, matrix_seed())
-            .expect("relation");
+        let relation = compile_application_relation_v1(
+            &statement(&policy),
+            &policy,
+            matrix_seed(),
+            genesis_hash(),
+        )
+        .expect("relation");
         assert_eq!(relation.rows(), 8);
         assert_eq!(relation.columns(), 48);
         assert_eq!(relation.disclosure_bitmap(), 0b10);
@@ -695,7 +792,7 @@ mod tests {
 
         for (changed, expected) in variants {
             assert_eq!(
-                compile_application_relation_v1(&changed, &policy, matrix_seed()),
+                compile_application_relation_v1(&changed, &policy, matrix_seed(), genesis_hash()),
                 Err(expected)
             );
         }
@@ -707,14 +804,14 @@ mod tests {
         let mut changed = statement(&policy);
         changed.disclosures.clear();
         assert_eq!(
-            compile_application_relation_v1(&changed, &policy, matrix_seed()),
+            compile_application_relation_v1(&changed, &policy, matrix_seed(), genesis_hash()),
             Err(RelationErrorV1::MissingRequiredDisclosure { index: 1 })
         );
 
         changed = statement(&policy);
         changed.disclosures[0].value = BootleLanternAttributeValueV1::new([2; 8]);
         assert_eq!(
-            compile_application_relation_v1(&changed, &policy, matrix_seed()),
+            compile_application_relation_v1(&changed, &policy, matrix_seed(), genesis_hash()),
             Err(RelationErrorV1::DisclosedValueNotAllowed { index: 1 })
         );
 
@@ -722,7 +819,8 @@ mod tests {
             compile_application_relation_v1(
                 &statement(&policy),
                 &policy,
-                MatrixSeedV1::new([0x32; 32], [0x72; 32]).expect("seed")
+                MatrixSeedV1::new([0x32; 32], [0x72; 32]).expect("seed"),
+                genesis_hash(),
             ),
             Err(RelationErrorV1::MatrixParameterDigestMismatch)
         );
@@ -734,7 +832,8 @@ mod tests {
             compile_application_relation_v1(
                 &statement(&invalid_policy),
                 &invalid_policy,
-                matrix_seed()
+                matrix_seed(),
+                genesis_hash(),
             ),
             Err(RelationErrorV1::InvalidIssuerPolicy)
         );
@@ -743,8 +842,13 @@ mod tests {
     #[test]
     fn witness_disclosure_binary_and_norm_attacks_fail_before_equations() {
         let policy = policy();
-        let relation = compile_application_relation_v1(&statement(&policy), &policy, matrix_seed())
-            .expect("relation");
+        let relation = compile_application_relation_v1(
+            &statement(&policy),
+            &policy,
+            matrix_seed(),
+            genesis_hash(),
+        )
+        .expect("relation");
 
         let mut changed = valid_witness();
         changed.attributes[1][0] ^= 1;
@@ -778,8 +882,13 @@ mod tests {
     #[test]
     fn mutating_each_witness_family_breaks_the_application_equation() {
         let policy = policy();
-        let relation = compile_application_relation_v1(&statement(&policy), &policy, matrix_seed())
-            .expect("relation");
+        let relation = compile_application_relation_v1(
+            &statement(&policy),
+            &policy,
+            matrix_seed(),
+            genesis_hash(),
+        )
+        .expect("relation");
         let one = ApplicationPolynomialV1::constant(1).expect("one");
 
         let mut variants = Vec::new();

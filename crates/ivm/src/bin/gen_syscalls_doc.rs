@@ -1,8 +1,8 @@
 //! Generate or check the generated syscall list section in `docs/syscalls.md`.
 //! Usage:
-//!   cargo run -p ivm --bin gen_syscalls_doc -- --write
-//!   cargo run -p ivm --bin gen_syscalls_doc -- --check
-//!   cargo run -p ivm --bin gen_syscalls_doc -- --write --root /tmp/ivm-doc-stage
+//!   cargo run -p ivm --features dev-tools --bin gen_syscalls_doc -- --write
+//!   cargo run -p ivm --features dev-tools --bin gen_syscalls_doc -- --check
+//!   cargo run -p ivm --features dev-tools --bin gen_syscalls_doc -- --write --root /tmp/ivm-doc-stage
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -928,7 +928,8 @@ fn main() {
     let abi_src_dir = options.root.join("crates/ivm_abi/src");
     let code_path = abi_src_dir.join("syscalls_doc_gen.rs");
     let gas_code_path = abi_src_dir.join("gas_spec.rs");
-    let regenerate_command = "cargo run --locked -p ivm --bin gen_syscalls_doc -- --write";
+    let regenerate_command =
+        "cargo run --locked -p ivm --features dev-tools --bin gen_syscalls_doc -- --write";
     let outputs = prepare_exact_outputs([
         (code_path, generated_docs_code),
         (gas_code_path, generated_gas_code),

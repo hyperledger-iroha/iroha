@@ -19,7 +19,10 @@ pub use facade::{
     prove_pq_masp_v1, prove_pq_masp_v1_with_rng, verify_pq_masp_v1,
 };
 #[cfg(feature = "privacy-release-evidence")]
-pub(crate) use fixture::{pq_masp_release_fixture_v1, pq_masp_release_invalid_path_fixture_v1};
+pub(crate) use fixture::{
+    pq_masp_release_fixture_v1, pq_masp_release_invalid_path_fixture_v1,
+    pq_masp_release_successor_replay_fixture_v1,
+};
 pub use relation::{
     PQ_MASP_INPUT_BOUND_V1, PQ_MASP_OUTPUT_BOUND_V1, PQ_MASP_TREE_DEPTH_V1, PqMaspInputWitnessV1,
     PqMaspNotePlaintextV1, PqMaspOutputWitnessV1, PqMaspRelationErrorV1, PqMaspWitnessV1,

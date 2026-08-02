@@ -39,8 +39,9 @@ public final class VerifyingKeyInstructionUtilsTests {
     deprecationHeightMismatchThrows();
     noritoStatusParserRejectsNonExactLabels();
     inlineKeyCommitmentMustMatchSerializationBackend();
-    pendingCatalogLabelsRemainFailClosed();
-    adversarialPendingAliasesStayUnsupported();
+    protocolAndRetiredCatalogAliasesAreUnsupported();
+    catalogClassifierAcceptsOnlyExactProductionLabels();
+    adversarialAliasSplicesStayUnsupported();
     registerAndUpdateRejectUnsupportedProductionBackends();
     registerAndUpdateRejectNoncanonicalRecordFields();
     registerAndUpdateRejectBlankNames();
@@ -317,7 +318,7 @@ public final class VerifyingKeyInstructionUtilsTests {
         "update builder must reject a record from another engine");
   }
 
-  private static void pendingCatalogLabelsRemainFailClosed() {
+  private static void protocolAndRetiredCatalogAliasesAreUnsupported() {
     for (final String label :
         new String[] {
           "halo2-ipa-orchard",
@@ -336,13 +337,26 @@ public final class VerifyingKeyInstructionUtilsTests {
           "zk-x509",
           "sis-with-hints"
         }) {
-      assert VerifyingKeyBackendTag.fromCatalogLabel(label).isPendingProductionBackend();
-      assert VerifyingKeyBackendTag.isPendingProductionBackendLabel(label);
+      assert VerifyingKeyBackendTag.CatalogBackendTag.UNSUPPORTED
+          == VerifyingKeyBackendTag.fromCatalogLabel(label);
       assert !VerifyingKeyBackendTag.isProductionVerifyBackendLabel(label);
     }
   }
 
-  private static void adversarialPendingAliasesStayUnsupported() {
+  private static void catalogClassifierAcceptsOnlyExactProductionLabels() {
+    for (final String label :
+        new String[] {"halo2-ipa-pasta", "stark", "halo2/ipa", "stark/fri"}) {
+      assert VerifyingKeyBackendTag.CatalogBackendTag.PRODUCTION
+          == VerifyingKeyBackendTag.fromCatalogLabel(label);
+    }
+    for (final String label :
+        new String[] {"HALO2/IPA", " halo2/ipa", "halo2/ipa ", "Stark"}) {
+      assert VerifyingKeyBackendTag.CatalogBackendTag.UNSUPPORTED
+          == VerifyingKeyBackendTag.fromCatalogLabel(label);
+    }
+  }
+
+  private static void adversarialAliasSplicesStayUnsupported() {
     for (final String label :
         new String[] {
           "halo2/ipa/orchard/dev-fixture",
@@ -352,8 +366,8 @@ public final class VerifyingKeyInstructionUtilsTests {
           "groth16/bls12-377/../../prod",
           "post-quantum-masp/audit-claimed"
         }) {
-      assert !VerifyingKeyBackendTag.fromCatalogLabel(label).isPendingProductionBackend();
-      assert !VerifyingKeyBackendTag.isPendingProductionBackendLabel(label);
+      assert VerifyingKeyBackendTag.CatalogBackendTag.UNSUPPORTED
+          == VerifyingKeyBackendTag.fromCatalogLabel(label);
       assertThrows(
           IllegalArgumentException.class,
           () -> VerifyingKeyBackendTag.parse(label),

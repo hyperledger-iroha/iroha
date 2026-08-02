@@ -16,8 +16,8 @@ from iroha_python.crypto import (
     GOST_3410_2012_512_PARAMSET_A_ALGORITHM,
     GOST_3410_2012_512_PARAMSET_B_ALGORITHM,
     ML_DSA_ALGORITHM,
-    PRIVACY_CAPABILITY_VALIDATION_STATUS_V1,
-    PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
+    PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
+    PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
     PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
     SECP256K1_ALGORITHM,
     SM2_ALGORITHM,
@@ -32,7 +32,7 @@ from iroha_python.crypto import (
     parse_public_key_multihash,
     is_privacy_native_available,
     privacy_bridge_abi_version,
-    privacy_capabilities_v1,
+    privacy_compiled_profile_catalog_v1,
     private_key_multihash,
     public_key_multihash,
     sign,
@@ -153,26 +153,61 @@ def test_lane_privacy_attachment_normalizer_requires_every_declared_field() -> N
             )
 
 
+def test_proof_box_size_helper_tracks_compact_prefix_transitions() -> None:
+    prefix_width = crypto_module._norito_compact_len_prefix_bytes_v1
+    assert prefix_width(127) == 1
+    assert prefix_width(128) == 2
+    assert prefix_width(16_383) == 2
+    assert prefix_width(16_384) == 3
+
+    encoded_len = crypto_module._proof_box_canonical_encoded_len_v1
+    # The proof member includes its eight-byte V1 sequence count, so its
+    # compact framing crosses the same boundaries at proof lengths 120 and
+    # 16_376 respectively.
+    assert encoded_len("a", 120) - encoded_len("a", 119) == 2
+    assert encoded_len("a", 16_376) - encoded_len("a", 16_375) == 2
+
+
+@pytest.mark.parametrize("boundary", (128, 16_384))
+def test_proof_box_size_helper_rejects_negative_lengths_at_prefix_boundaries(
+    boundary: int,
+) -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        crypto_module._proof_box_canonical_encoded_len_v1("a", -boundary)
+
+
+def test_proof_box_max_helper_is_exact_at_closed_64_mib_limit() -> None:
+    backend = "halo2/ipa::transfer_v1"
+    maximum = crypto_module._proof_box_max_proof_bytes_v1(backend)
+    encoded_len = crypto_module._proof_box_canonical_encoded_len_v1
+    assert maximum == 64 * 1024 * 1024 - 36
+    assert encoded_len(backend, maximum) == 64 * 1024 * 1024
+    assert encoded_len(backend, maximum + 1) > 64 * 1024 * 1024
+
+
 def test_supported_crypto_algorithms_include_all_rust_signature_suites() -> None:
     assert supported_crypto_algorithms() == SUPPORTED_CRYPTO_ALGORITHMS
     assert tuple(SUPPORTED_CRYPTO_ALGORITHMS) == EXPECTED_ALGORITHMS
 
 
 def test_privacy_native_archive_cap_is_stable() -> None:
-    assert PRIVACY_NATIVE_ARCHIVE_MAX_BYTES == 256 * 1024
+    assert PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES == 256 * 1024
 
 
 def test_privacy_native_archive_cap_is_reexported_from_package_root() -> None:
     import iroha_python
 
-    assert iroha_python.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES == PRIVACY_NATIVE_ARCHIVE_MAX_BYTES
     assert (
-        iroha_python.PRIVACY_CAPABILITY_VALIDATION_STATUS_V1
-        == PRIVACY_CAPABILITY_VALIDATION_STATUS_V1
+        iroha_python.PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES
+        == PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES
     )
-    assert "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES" in iroha_python.__all__
-    assert "PRIVACY_CAPABILITY_VALIDATION_STATUS_V1" in iroha_python.__all__
-    assert dict(PRIVACY_CAPABILITY_VALIDATION_STATUS_V1) == {
+    assert (
+        iroha_python.PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1
+        == PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1
+    )
+    assert "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES" in iroha_python.__all__
+    assert "PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1" in iroha_python.__all__
+    assert dict(PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1) == {
         "VALID": 0,
         "NULL_POINTER": 1,
         "EMPTY": 2,
@@ -181,9 +216,13 @@ def test_privacy_native_archive_cap_is_reexported_from_package_root() -> None:
         "SCHEMA_MISMATCH": 5,
         "NON_CANONICAL": 6,
         "MALFORMED_ARCHIVE": 7,
-        "INVALID_SNAPSHOT": 8,
+        "INVALID_CATALOG": 8,
     }
     for retired in (
+        "privacy_capabilities_v1",
+        "privacy_validate_capabilities_v1",
+        "PRIVACY_CAPABILITY_VALIDATION_STATUS_V1",
+        "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES",
         "PRIVACY_FFI_STATUS_ERROR",
         "privacy_proof_request_v1",
         "privacy_build_proof_v1",
@@ -441,7 +480,7 @@ def test_native_verify_rejects_empty_and_all_zero_signatures_before_backend() ->
         assert not verify_ed25519(keypair.public_key, message, bytes(malformed))
 
 
-def _privacy_capability_archive() -> bytes:
+def _privacy_compiled_profile_catalog_archive() -> bytes:
     frame = bytearray(43)
     frame[0:4] = b"NRT0"
     frame[6:22] = bytes([0x50]) * 16
@@ -451,19 +490,19 @@ def _privacy_capability_archive() -> bytes:
     return bytes(frame)
 
 
-_DEFAULT_CAPABILITY_ARCHIVE = object()
+_DEFAULT_COMPILED_CATALOG_ARCHIVE = object()
 
 
-class _CapabilityNative:
+class _CompiledCatalogNative:
     def __init__(
         self,
-        archive: object = _DEFAULT_CAPABILITY_ARCHIVE,
+        archive: object = _DEFAULT_COMPILED_CATALOG_ARCHIVE,
         *,
         abi: object = PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
     ) -> None:
         self.archive = (
-            _privacy_capability_archive()
-            if archive is _DEFAULT_CAPABILITY_ARCHIVE
+            _privacy_compiled_profile_catalog_archive()
+            if archive is _DEFAULT_COMPILED_CATALOG_ARCHIVE
             else archive
         )
         self.abi = abi
@@ -471,27 +510,33 @@ class _CapabilityNative:
     def privacy_bridge_abi_version(self) -> object:
         return self.abi
 
-    def privacy_capabilities_v1(self) -> object:
+    def privacy_compiled_profile_catalog_v1(self) -> object:
         return self.archive
 
-    def privacy_validate_capabilities_v1(self, archive: bytes) -> int:
+    def privacy_validate_compiled_profile_catalog_v1(self, archive: bytes) -> int:
         return (
-            PRIVACY_CAPABILITY_VALIDATION_STATUS_V1["VALID"]
-            if archive == _privacy_capability_archive()
-            else PRIVACY_CAPABILITY_VALIDATION_STATUS_V1["MALFORMED_ARCHIVE"]
+            PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1["VALID"]
+            if archive == _privacy_compiled_profile_catalog_archive()
+            else PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1["MALFORMED_ARCHIVE"]
         )
 
 
-def test_privacy_native_capability_surface_is_minimal(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_privacy_native_compiled_catalog_surface_is_minimal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import iroha_python
 
-    monkeypatch.setattr(crypto_module, "_crypto", _CapabilityNative())
+    monkeypatch.setattr(crypto_module, "_crypto", _CompiledCatalogNative())
     assert is_privacy_native_available()
     assert privacy_bridge_abi_version() == PRIVACY_REQUIRED_BRIDGE_ABI_VERSION
-    assert privacy_capabilities_v1() == _privacy_capability_archive()
+    assert privacy_compiled_profile_catalog_v1() == _privacy_compiled_profile_catalog_archive()
 
     for surface in (crypto_module, iroha_python):
         for retired in (
+            "privacy_capabilities_v1",
+            "privacy_validate_capabilities_v1",
+            "PRIVACY_CAPABILITY_VALIDATION_STATUS_V1",
+            "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES",
             "privacy_proof_request_v1",
             "privacy_build_proof_v1",
             "privacy_verify_proof_v1",
@@ -505,30 +550,30 @@ def test_privacy_native_availability_rejects_missing_stale_and_malformed_bridges
 ) -> None:
     for native in (
         object(),
-        _CapabilityNative(abi=PRIVACY_REQUIRED_BRIDGE_ABI_VERSION - 1),
-        _CapabilityNative(abi=PRIVACY_REQUIRED_BRIDGE_ABI_VERSION + 1),
-        _CapabilityNative(abi=True),
-        _CapabilityNative(abi="21"),
-        _CapabilityNative(archive=b""),
-        _CapabilityNative(archive=b"not-norito"),
+        _CompiledCatalogNative(abi=PRIVACY_REQUIRED_BRIDGE_ABI_VERSION - 1),
+        _CompiledCatalogNative(abi=PRIVACY_REQUIRED_BRIDGE_ABI_VERSION + 1),
+        _CompiledCatalogNative(abi=True),
+        _CompiledCatalogNative(abi="21"),
+        _CompiledCatalogNative(archive=b""),
+        _CompiledCatalogNative(archive=b"not-norito"),
     ):
         monkeypatch.setattr(crypto_module, "_crypto", native)
         assert not is_privacy_native_available()
 
-    missing_validator = _CapabilityNative()
-    missing_validator.privacy_validate_capabilities_v1 = None  # type: ignore[method-assign]
+    missing_validator = _CompiledCatalogNative()
+    missing_validator.privacy_validate_compiled_profile_catalog_v1 = None  # type: ignore[method-assign]
     monkeypatch.setattr(crypto_module, "_crypto", missing_validator)
     assert not is_privacy_native_available()
 
 
-def test_privacy_capability_archive_rejects_adversarial_native_outputs(
+def test_privacy_compiled_profile_catalog_archive_rejects_adversarial_native_outputs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    bad_magic = bytearray(_privacy_capability_archive())
+    bad_magic = bytearray(_privacy_compiled_profile_catalog_archive())
     bad_magic[0] ^= 0xFF
-    wrong_schema = bytearray(_privacy_capability_archive())
+    wrong_schema = bytearray(_privacy_compiled_profile_catalog_archive())
     wrong_schema[6:22] = bytes([0x42]) * 16
-    bad_crc = bytearray(_privacy_capability_archive())
+    bad_crc = bytearray(_privacy_compiled_profile_catalog_archive())
     bad_crc[31] ^= 0x01
 
     for output in (
@@ -541,31 +586,33 @@ def test_privacy_capability_archive_rejects_adversarial_native_outputs(
         bytes(wrong_schema),
         bytes(bad_crc),
     ):
-        monkeypatch.setattr(crypto_module, "_crypto", _CapabilityNative(output))
+        monkeypatch.setattr(crypto_module, "_crypto", _CompiledCatalogNative(output))
         with pytest.raises((RuntimeError, TypeError)):
-            privacy_capabilities_v1()
+            privacy_compiled_profile_catalog_v1()
         assert not is_privacy_native_available()
 
 
-def test_privacy_capability_archive_is_defensively_copied(
+def test_privacy_compiled_profile_catalog_archive_is_defensively_copied(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    native_archive = bytearray(_privacy_capability_archive())
-    monkeypatch.setattr(crypto_module, "_crypto", _CapabilityNative(native_archive))
-    returned = privacy_capabilities_v1()
+    native_archive = bytearray(_privacy_compiled_profile_catalog_archive())
+    monkeypatch.setattr(crypto_module, "_crypto", _CompiledCatalogNative(native_archive))
+    returned = privacy_compiled_profile_catalog_v1()
     native_archive[0] ^= 0xFF
-    assert returned == _privacy_capability_archive()
+    assert returned == _privacy_compiled_profile_catalog_archive()
 
 
-def test_privacy_capability_native_exceptions_are_sanitized(
+def test_privacy_compiled_catalog_native_exceptions_are_sanitized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class LeakingNative(_CapabilityNative):
-        def privacy_capabilities_v1(self) -> object:
+    class LeakingNative(_CompiledCatalogNative):
+        def privacy_compiled_profile_catalog_v1(self) -> object:
             raise RuntimeError("secret native implementation detail")
 
     monkeypatch.setattr(crypto_module, "_crypto", LeakingNative())
-    with pytest.raises(RuntimeError, match="native privacy_capabilities_v1 failed") as error:
-        privacy_capabilities_v1()
+    with pytest.raises(
+        RuntimeError, match="native privacy_compiled_profile_catalog_v1 failed"
+    ) as error:
+        privacy_compiled_profile_catalog_v1()
     assert "secret native implementation detail" not in str(error.value)
     assert error.value.__cause__ is None

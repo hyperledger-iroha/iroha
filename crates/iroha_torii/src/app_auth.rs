@@ -737,7 +737,9 @@ where
         HasProjection<PredicateMarker> + HasProjection<SelectorMarker, AtomType = ()> + Send + Sync,
     Q: norito::codec::Encode,
 {
-    use iroha_core::smartcontracts::isi::query::{QueryLimits, ValidQueryRequest};
+    use iroha_core::smartcontracts::isi::query::{
+        QueryLimits, validate_fresh_query_for_client_world_parts,
+    };
 
     let payload = norito::codec::Encode::encode(&query);
     let qbox: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<Q::Item>::new(
@@ -750,15 +752,8 @@ where
     let limits = QueryLimits::new(crate::routing::app_query_limits().max_fetch_size);
     let world = state.world_view();
     let latest_block = state.latest_block_header_fast();
-    ValidQueryRequest::validate_for_client_world_parts(
-        request,
-        authority,
-        &world,
-        latest_block,
-        limits,
-    )
-    .map(|_| ())
-    .map_err(crate::Error::Query)
+    validate_fresh_query_for_client_world_parts(request, authority, &world, latest_block, limits)
+        .map_err(crate::Error::Query)
 }
 
 pub(crate) fn verify_canonical_body_request(

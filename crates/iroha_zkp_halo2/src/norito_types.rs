@@ -70,7 +70,7 @@ impl IpaParams {
         let mut out = Vec::new();
         let flags = norito::core::default_encode_flags();
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
-        norito::core::NoritoSerialize::serialize(self, &mut out)
+        norito::core::serialize_to_buffer(self, &mut out)
             .expect("IpaParams Norito serialization failed");
         out
     }
@@ -113,7 +113,7 @@ impl IpaProofData {
         let mut out = Vec::new();
         let flags = norito::core::default_encode_flags();
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
-        norito::core::NoritoSerialize::serialize(self, &mut out)
+        norito::core::serialize_to_buffer(self, &mut out)
             .expect("IpaProofData Norito serialization failed");
         out
     }
@@ -164,7 +164,7 @@ impl PolyOpenPublic {
         let mut out = Vec::new();
         let flags = norito::core::default_encode_flags();
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
-        norito::core::NoritoSerialize::serialize(self, &mut out)
+        norito::core::serialize_to_buffer(self, &mut out)
             .expect("PolyOpenPublic Norito serialization failed");
         out
     }
@@ -193,7 +193,7 @@ where
     // also rejects alternate byte representations before the exact-slice
     // boundary compares `used` with the caller-provided length.
     let mut canonical = Vec::new();
-    value.serialize(&mut canonical)?;
+    norito::core::serialize_to_buffer(&value, &mut canonical)?;
     if bytes.get(..canonical.len()) != Some(canonical.as_slice()) {
         return Err(norito::Error::NonCanonicalEncoding);
     }

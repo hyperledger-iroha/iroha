@@ -19,10 +19,10 @@ from scripts.sumeragi_v2_prebuilt_bundle import (
 
 SOURCE_MANIFEST = "a" * 64
 RELATIVE_BINARIES = (
-    ("irohad", "release/iroha3d", "default"),
+    ("irohad", "release/irohad", "default"),
     (
         "irohad_message_control",
-        "message-control/release/iroha3d",
+        "message-control/release/irohad",
         "message-control",
     ),
     ("iroha", "release/iroha", "default"),
@@ -207,7 +207,7 @@ def test_validate_rejects_mutated_or_non_private_artifacts(
     repo = Path(fixture["repo"])
     bundle = Path(fixture["bundle"])
     manifest_sha256 = str(fixture["manifest_sha256"])
-    binary = bundle / "release" / "iroha3d"
+    binary = bundle / "release" / "irohad"
     release_dir = binary.parent
     bundle.chmod(0o700)
     release_dir.chmod(0o700)
@@ -273,7 +273,7 @@ def test_validate_rejects_wrong_published_modes(
     targets = {
         "bundle": bundle,
         "nested_directory": bundle / "release",
-        "binary": bundle / "release" / "iroha3d",
+        "binary": bundle / "release" / "irohad",
         "manifest": bundle / ".sumeragi-v2-prebuilt-binaries.tsv",
     }
     targets[artifact].chmod(0o700)
@@ -295,7 +295,7 @@ def test_validate_rejects_symlinked_expected_directory(tmp_path: Path) -> None:
     bundle.chmod(0o700)
     message_control.chmod(0o700)
     release.chmod(0o700)
-    (release / "iroha3d").unlink()
+    (release / "irohad").unlink()
     release.rmdir()
     release.symlink_to(bundle / "release", target_is_directory=True)
     message_control.chmod(0o500)
@@ -473,7 +473,7 @@ def test_create_rejects_malformed_or_non_private_tool_stdout(
 
 def test_create_rejects_symlinked_build_output(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
-    output = Path(fixture["default_cache"]) / "release" / "iroha3d"
+    output = Path(fixture["default_cache"]) / "release" / "irohad"
     output.unlink()
     output.symlink_to(Path(fixture["repo"]) / "Cargo.lock")
 

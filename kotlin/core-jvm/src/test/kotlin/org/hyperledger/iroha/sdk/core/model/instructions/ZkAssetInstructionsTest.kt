@@ -673,16 +673,23 @@ class ProofAttachmentTest {
             maximum,
             ProofAttachment.canonicalProofBoxEncodedLength(
                 backendBytes,
-                maximum - 32L - backendBytes,
+                maximum - 23L,
             ),
         )
         assertEquals(
             maximum + 1L,
             ProofAttachment.canonicalProofBoxEncodedLength(
                 backendBytes,
-                maximum - 31L - backendBytes,
+                maximum - 22L,
             ),
         )
+        assertEquals(137L, ProofAttachment.canonicalProofBoxEncodedLength(126L, 0L))
+        assertEquals(139L, ProofAttachment.canonicalProofBoxEncodedLength(127L, 0L))
+        assertEquals(141L, ProofAttachment.canonicalProofBoxEncodedLength(128L, 0L))
+        assertEquals(131L, ProofAttachment.canonicalProofBoxEncodedLength(1L, 119L))
+        assertEquals(133L, ProofAttachment.canonicalProofBoxEncodedLength(1L, 120L))
+        assertEquals(16_388L, ProofAttachment.canonicalProofBoxEncodedLength(1L, 16_375L))
+        assertEquals(16_390L, ProofAttachment.canonicalProofBoxEncodedLength(1L, 16_376L))
         assertFailsWith<IllegalArgumentException> {
             ProofAttachment.canonicalProofBoxEncodedLength(Long.MAX_VALUE, 1L)
         }

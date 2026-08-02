@@ -151,11 +151,13 @@ proof, `validatePdpCommitmentChallenge(...)` or
 ## Offline cash SDK boundary
 
 The JavaScript package exposes the four stable Kagemusha Torii routes through
-`getKagemushaReadinessV4`, `submitKagemushaTopUpV4`,
+`getOfflineCapability`, `submitKagemushaTopUpV4`,
 `submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Readiness is
-accepted only for bridge ABI 21, a maximum of eight hops, and the authenticated
-manifest-V4 Eq/Ep verifier pair. ABI-19 and V3 responses are rejected rather
-than upgraded.
+an asset-neutral protocol capability compiled into every deployment. Discovery
+accepts only the exact `cash_handoff_v1`, bridge ABI 21, eight-hop universal
+`OfflineStatus` with `mandatory: false`, `ready: true`, and empty asset and
+blocker lists. The deprecated `getKagemushaReadinessV4(asset)` shim ignores its
+selector and sends the same query-free request.
 
 This is deliberately a transport-only boundary. Command helpers require an
 externally produced `{ version: 4, operationId, norito }` archive and never
@@ -170,9 +172,13 @@ boundaries.
 
 ## Native Privacy Bridge
 
-The first-release native surface is capability-only:
-`isPrivacyNativeAvailable()` and `privacyCapabilitiesV1()`. The latter returns
-the canonical Norito `PrivacyCapabilitySnapshotV1` archive. The generic
+The first-release native metadata surface is
+`isPrivacyNativeAvailable()` and `privacyCompiledProfileCatalogV1()`. The
+latter returns this binary's canonical Norito
+`PrivacyCompiledProfileCatalogV1` archive. It intentionally contains no
+committed height, consensus policy, activation, or readiness projection; read
+those authoritative values from Torii's live `PrivacyCapabilitySnapshotV1`
+endpoint. The generic
 request/build/verify dispatcher and its free-form algorithm aliases do not
 exist; proving is exposed only by protocol-specific typed APIs.
 
@@ -3045,8 +3051,10 @@ const transferTx = buildZkTransferTransaction({
 `ProofAttachmentInput` requires the exact `{ backend, name }`
 `verifyingKeyRef` shape; string shorthands, aliases, and embedded key bytes are
 not accepted. Both id fields use the Rust portable registry grammar. Complete
-ProofBox size is capped at 64 MiB, including its fixed overhead and UTF-8
-backend label. Optional `verifyingKeyCommitment` and `envelopeHash` digests must
+ProofBox size is capped at 64 MiB, including the UTF-8 backend label, exact
+canonical compact-length prefixes, and fixed V1 vector count. Prefix-width
+transitions are charged exactly. Optional
+`verifyingKeyCommitment` and `envelopeHash` digests must
 be non-zero, and `envelopeHash` must equal the typed BLAKE2b-256 hash of the
 proof bytes. Lane Merkle inputs require a complete 1–255-level path; raw
 32-byte siblings are converted to canonical prehashed `HashOf` bytes before

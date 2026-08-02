@@ -44,7 +44,6 @@ use iroha_data_model::offline::{
 pub use iroha_data_model::offline::{KagemushaPastaPublicLayoutV4, KagemushaStepCircuitParamsV4};
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
-use std::io::Read as _;
 use std::sync::Arc;
 
 use ff::{Field as _, PrimeField};
@@ -2105,6 +2104,7 @@ impl KagemushaUniversalProtocolTargetV1 {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(not(test), allow(dead_code))]
 struct KagemushaProtocolBootstrapCircuit<F>
 where
     F: halo2_base::utils::ScalarField,
@@ -5788,6 +5788,7 @@ pub(crate) struct KagemushaLoadedProvingKeyV4<C: CurveAffine> {
     pub(crate) key: halo2_proofs::plonk::ProvingKey<C>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn load_kagemusha_eq_proving_key_from_source_v4(
     source: &dyn super::kagemusha_artifact_source_v4::KagemushaAuthenticatedArtifactSourceV4,
     circuit_params: &KagemushaStepCircuitParamsV4,
@@ -5845,6 +5846,7 @@ pub(crate) fn load_kagemusha_eq_proving_key_from_source_v4(
     Ok(KagemushaLoadedProvingKeyV4 { key })
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn load_kagemusha_ep_proving_key_from_source_v4(
     source: &dyn super::kagemusha_artifact_source_v4::KagemushaAuthenticatedArtifactSourceV4,
     circuit_params: &KagemushaStepCircuitParamsV4,

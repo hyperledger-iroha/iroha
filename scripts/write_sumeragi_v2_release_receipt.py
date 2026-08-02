@@ -8,6 +8,7 @@ import base64
 import csv
 from dataclasses import dataclass
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -24,16 +25,27 @@ import tempfile
 import time
 from typing import Any
 
+
+_LOCALNET_MANIFEST_MODULE_PATH = Path(__file__).resolve(strict=True).with_name(
+    "sumeragi_v2_localnet_manifest.py"
+)
+_LOCALNET_MANIFEST_SPEC = importlib.util.spec_from_file_location(
+    "_sumeragi_v2_release_localnet_manifest",
+    _LOCALNET_MANIFEST_MODULE_PATH,
+)
+if _LOCALNET_MANIFEST_SPEC is None or _LOCALNET_MANIFEST_SPEC.loader is None:
+    raise RuntimeError("could not load the adjacent localnet manifest validator")
+_LOCALNET_MANIFEST_MODULE = importlib.util.module_from_spec(
+    _LOCALNET_MANIFEST_SPEC
+)
+_PREVIOUS_DONT_WRITE_BYTECODE = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
 try:
-    from sumeragi_v2_localnet_manifest import (
-        LocalnetManifestError,
-        canonical_localnet_manifest,
-    )
-except ModuleNotFoundError:
-    from scripts.sumeragi_v2_localnet_manifest import (
-        LocalnetManifestError,
-        canonical_localnet_manifest,
-    )
+    _LOCALNET_MANIFEST_SPEC.loader.exec_module(_LOCALNET_MANIFEST_MODULE)
+finally:
+    sys.dont_write_bytecode = _PREVIOUS_DONT_WRITE_BYTECODE
+LocalnetManifestError = _LOCALNET_MANIFEST_MODULE.LocalnetManifestError
+canonical_localnet_manifest = _LOCALNET_MANIFEST_MODULE.canonical_localnet_manifest
 
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
@@ -91,10 +103,10 @@ _PREBUILT_MANIFEST_NAME = ".sumeragi-v2-prebuilt-binaries.tsv"
 _PREBUILT_INVOCATION_RE = re.compile(r"invocation\.[A-Za-z0-9]+")
 _PREBUILT_TRIPLE_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_.]+)+")
 _PREBUILT_BINARY_SPECS = (
-    ("irohad", "release/iroha3d"),
+    ("irohad", "release/irohad"),
     (
         "irohad_message_control",
-        "message-control/release/iroha3d",
+        "message-control/release/irohad",
     ),
     ("iroha", "release/iroha"),
     ("kagami", "release/kagami"),
@@ -127,7 +139,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "8cfc4849cccede44b70644cc536e8a7298eb70495b193adba24f05a28201a3fd"
+    "98f0a450fd0c25c890d77e3f5c0d13faca76ff3227797962c5dd33e5a29cd2f7"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -139,6 +151,10 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
     "manifest_helper": ("compute-manifest.py", _SIGNATURE_DATA_MODE),
     "python": ("python3", _SIGNATURE_TOOL_MODE),
     "receipt_validator": ("validate-receipt.py", _SIGNATURE_DATA_MODE),
+    "receipt_validator_support": (
+        "sumeragi_v2_localnet_manifest.py",
+        _SIGNATURE_DATA_MODE,
+    ),
     "revocation": ("bootstrap-revocation", _SIGNATURE_DATA_MODE),
     "runner_tool_manifest": ("runner-tool-manifest.json", _SIGNATURE_DATA_MODE),
     "ssh_keygen": ("ssh-keygen", _SIGNATURE_TOOL_MODE),
@@ -4802,7 +4818,7 @@ def _prebuilt_binary_bundle(
     )
     _prebuilt_directory_inventory(
         bundle_dir / "release",
-        {"iroha3d", "iroha", "kagami"},
+        {"irohad", "iroha", "kagami"},
         "prebuilt release directory",
     )
     _prebuilt_directory_inventory(
@@ -4812,7 +4828,7 @@ def _prebuilt_binary_bundle(
     )
     _prebuilt_directory_inventory(
         bundle_dir / "message-control" / "release",
-        {"iroha3d"},
+        {"irohad"},
         "prebuilt message-control release directory",
     )
 
@@ -5376,9 +5392,9 @@ def _seed_run_logs(
     source_bound_root = repo_root / "target" / "sumeragi-v2-release" / manifest
     cargo_target_dir = source_bound_root / "test-suite"
     program_target_dir = prebuilt_bundle_dir
-    irohad = program_target_dir / "release" / "iroha3d"
+    irohad = program_target_dir / "release" / "irohad"
     message_control_irohad = (
-        program_target_dir / "message-control" / "release" / "iroha3d"
+        program_target_dir / "message-control" / "release" / "irohad"
     )
     iroha = program_target_dir / "release" / "iroha"
     kagami = program_target_dir / "release" / "kagami"
@@ -7339,7 +7355,7 @@ def _snapshot_receipt_inputs(
     )
     _prebuilt_directory_inventory(
         prebuilt_root / "release",
-        {"iroha3d", "iroha", "kagami"},
+        {"irohad", "iroha", "kagami"},
         "aggregate prebuilt release directory",
     )
     _prebuilt_directory_inventory(
@@ -7349,7 +7365,7 @@ def _snapshot_receipt_inputs(
     )
     _prebuilt_directory_inventory(
         prebuilt_root / "message-control" / "release",
-        {"iroha3d"},
+        {"irohad"},
         "aggregate prebuilt message-control release directory",
     )
 

@@ -146,9 +146,9 @@ pub const fn cli_binary_name() -> &'static str {
 /// Return the daemon binary name for the current platform.
 pub const fn irohad_binary_name() -> &'static str {
     if cfg!(windows) {
-        "iroha3d.exe"
+        "irohad.exe"
     } else {
-        "iroha3d"
+        "irohad"
     }
 }
 

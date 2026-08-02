@@ -1,7 +1,7 @@
 package org.hyperledger.iroha.android.tx;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -13,6 +13,7 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -42,12 +43,12 @@ import org.junit.Test;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
- * Validates the Norito fixture manifest emitted by {@code scripts/export_norito_fixtures}.
+ * Validates the Norito fixture manifest emitted by the canonical Rust owner, {@code cargo run -p
+ * xtask --features dev-tools --bin xtask -- norito-rpc-fixtures}.
  *
  * <p>The manifest advertises deterministic hashes, base64 payloads, and encoded blob lengths used
  * by downstream Android fixtures. This test ensures the entries stay in sync with the checked-in
@@ -56,9 +57,25 @@ import static org.junit.Assert.fail;
 public final class TransactionFixtureManifestTests {
 
   private static final Pattern HEX_64 = Pattern.compile("^[0-9a-fA-F]{64}$");
+  private static final Pattern FIXTURE_NAME = Pattern.compile("^[a-z0-9][a-z0-9_-]*$");
   private static final String HASH_ALGORITHM = "BLAKE2B-256";
-  private static final String PAYLOAD_SCHEMA = "iroha.android.transaction.Payload.v1";
   private static final String SIGNED_SCHEMA = "iroha.transaction.SignedTransaction.v1";
+  private static final Set<String> MANIFEST_FIELDS = fieldSet("fixtures");
+  private static final Set<String> FIXTURE_FIELDS =
+      fieldSet(
+          "name",
+          "authority",
+          "chain",
+          "creation_time_ms",
+          "encoded_file",
+          "encoded_len",
+          "signed_len",
+          "payload_base64",
+          "payload_hash",
+          "signed_base64",
+          "signed_hash",
+          "nonce",
+          "time_to_live_ms");
   private static final byte VERSION_BYTE = 0x01;
   private static final NoritoJavaCodecAdapter PAYLOAD_CODEC = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
   private static final TypeAdapter<String> STRING_ADAPTER = NoritoAdapters.stringAdapter();
@@ -104,10 +121,103 @@ public final class TransactionFixtureManifestTests {
   }
 
   @Test
-  public void validateManifestSchema() throws Exception {
+  public void validateManifestUsesClosedSchema() throws Exception {
     final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
     final Map<String, Object> manifest = loadManifest(manifestPath);
-    assertSchemaMatches(manifest);
+    assertManifestShape(manifest, manifestPath);
+    assertEquals(MANIFEST_FIELDS, manifest.keySet());
+  }
+
+  @Test
+  public void rejectLegacyManifestRootFields() throws Exception {
+    final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
+    final Map<String, Object> manifest = loadManifest(manifestPath);
+    for (final String legacyField : Arrays.asList("schema", "signing_key")) {
+      final Map<String, Object> mutated = new LinkedHashMap<>(manifest);
+      mutated.put(legacyField, Collections.emptyMap());
+      assertManifestShapeRejected(mutated, manifestPath, legacyField);
+    }
+  }
+
+  @Test
+  public void rejectMissingAndUnexpectedManifestFields() throws Exception {
+    final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
+    final Map<String, Object> manifest = loadManifest(manifestPath);
+
+    final Map<String, Object> missingRoot = new LinkedHashMap<>(manifest);
+    missingRoot.remove("fixtures");
+    assertManifestShapeRejected(missingRoot, manifestPath, "missing=[fixtures]");
+
+    final Map<String, Object> unexpectedRoot = new LinkedHashMap<>(manifest);
+    unexpectedRoot.put("unexpected", true);
+    assertManifestShapeRejected(unexpectedRoot, manifestPath, "unexpected=[unexpected]");
+
+    final List<Object> fixtures = asList(manifest.get("fixtures"), "fixtures");
+    final Map<String, Object> missingFixture =
+        new LinkedHashMap<>(asMap(fixtures.get(0), "fixture"));
+    missingFixture.remove("signed_hash");
+    final Map<String, Object> missingFixtureManifest = new LinkedHashMap<>(manifest);
+    final List<Object> missingFixtureEntries = new ArrayList<>(fixtures);
+    missingFixtureEntries.set(0, missingFixture);
+    missingFixtureManifest.put("fixtures", missingFixtureEntries);
+    assertManifestShapeRejected(missingFixtureManifest, manifestPath, "missing=[signed_hash]");
+
+    final Map<String, Object> unexpectedFixture =
+        new LinkedHashMap<>(asMap(fixtures.get(0), "fixture"));
+    unexpectedFixture.put("encoded", unexpectedFixture.get("payload_base64"));
+    final Map<String, Object> unexpectedFixtureManifest = new LinkedHashMap<>(manifest);
+    final List<Object> unexpectedFixtureEntries = new ArrayList<>(fixtures);
+    unexpectedFixtureEntries.set(0, unexpectedFixture);
+    unexpectedFixtureManifest.put("fixtures", unexpectedFixtureEntries);
+    assertManifestShapeRejected(unexpectedFixtureManifest, manifestPath, "unexpected=[encoded]");
+  }
+
+  @Test
+  public void rejectDuplicateJsonObjectKeys() {
+    for (final String json :
+        Arrays.asList(
+            "{\"fixtures\":[],\"fixtures\":[]}",
+            "{\"fixtures\":[{\"name\":\"alpha\",\"name\":\"beta\"}]}")) {
+      try {
+        SimpleJson.parse(json);
+        fail("Duplicate JSON object keys must fail closed");
+      } catch (final IllegalStateException expected) {
+        assertTrue(expected.getMessage().contains("Duplicate JSON object key"));
+      }
+    }
+  }
+
+  @Test
+  public void rejectRenamedEncodedFile() throws Exception {
+    final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
+    final Map<String, Object> manifest = loadManifest(manifestPath);
+    final List<Object> fixtures = asList(manifest.get("fixtures"), "fixtures");
+    final Map<String, Object> renamed =
+        new LinkedHashMap<>(asMap(fixtures.get(0), "fixture"));
+    renamed.put("encoded_file", "renamed.norito");
+    assertFixtureMutationRejected(manifest, fixtures, renamed, manifestPath, "must be exactly");
+  }
+
+  @Test
+  public void rejectEncodedFilePathTraversal() throws Exception {
+    final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
+    final Map<String, Object> manifest = loadManifest(manifestPath);
+    final List<Object> fixtures = asList(manifest.get("fixtures"), "fixtures");
+    final Map<String, Object> original = asMap(fixtures.get(0), "fixture");
+    final String name = requireString(original.get("name"), "fixture.name");
+    for (final String encodedFile :
+        Arrays.asList("../" + name + ".norito", "nested/" + name + ".norito")) {
+      final Map<String, Object> traversing = new LinkedHashMap<>(original);
+      traversing.put("encoded_file", encodedFile);
+      assertFixtureMutationRejected(
+          manifest, fixtures, traversing, manifestPath, "must be exactly");
+    }
+
+    final Map<String, Object> unsafeName = new LinkedHashMap<>(original);
+    unsafeName.put("name", "../escape");
+    unsafeName.put("encoded_file", "../escape.norito");
+    assertFixtureMutationRejected(
+        manifest, fixtures, unsafeName, manifestPath, "portable lowercase identifier");
   }
 
   @Test
@@ -208,8 +318,7 @@ public final class TransactionFixtureManifestTests {
     canonicalChecked = 0;
     final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
     final Map<String, Object> manifest = loadManifest(manifestPath);
-    assertSchemaMatches(manifest);
-    final Optional<SigningKey> manifestSigningKey = parseSigningKey(manifest);
+    assertManifestShape(manifest, manifestPath);
 
     final Object fixturesValue = manifest.get("fixtures");
     final List<Object> fixtures = asList(fixturesValue, "fixtures");
@@ -231,7 +340,7 @@ public final class TransactionFixtureManifestTests {
         manifestNames);
 
     for (Object entry : fixtures) {
-      validateFixture(entry, manifestPath, payloadFixtures, manifestSigningKey);
+      validateFixture(entry, manifestPath, payloadFixtures);
     }
 
     assertEquals(
@@ -292,8 +401,7 @@ public final class TransactionFixtureManifestTests {
   private static void validateFixture(
       final Object entry,
       final Path manifestPath,
-      final Map<String, TransactionPayloadFixtures.Fixture> payloadFixtures,
-      final Optional<SigningKey> manifestSigningKey)
+      final Map<String, TransactionPayloadFixtures.Fixture> payloadFixtures)
       throws Exception {
     final Map<String, Object> map = asMap(entry, "fixture");
     final String name = requireString(map.get("name"), "fixture.name");
@@ -312,12 +420,15 @@ public final class TransactionFixtureManifestTests {
     final String payloadHash = requireString(map.get("payload_hash"), name + ".payload_hash");
     final String signedHash = requireString(map.get("signed_hash"), name + ".signed_hash");
 
-    final Path baseDir = manifestPath != null ? manifestPath.getParent() : null;
-    final Path encodedPath = (baseDir == null)
-        ? Paths.get(encodedFile)
-        : baseDir.resolve(encodedFile).normalize();
-    if (!Files.exists(encodedPath)) {
+    final Path encodedPath = resolveEncodedPath(manifestPath, name, encodedFile);
+    if (Files.isSymbolicLink(encodedPath) || !Files.isRegularFile(encodedPath)) {
       throw new IllegalStateException(name + ": encoded file not found: " + encodedPath);
+    }
+    final Path fixtureRoot = manifestPath.toAbsolutePath().normalize().getParent().toRealPath();
+    final Path realEncodedPath = encodedPath.toRealPath();
+    if (!Objects.equals(realEncodedPath.getParent(), fixtureRoot)) {
+      throw new IllegalStateException(
+          name + ": encoded file must be a direct child of the fixture directory");
     }
     final byte[] encodedBytes = Files.readAllBytes(encodedPath);
     assertEquals(
@@ -347,51 +458,39 @@ public final class TransactionFixtureManifestTests {
         name + ": payload hash mismatch (expected " + payloadHash + ", computed " + computedPayloadHash + ")",
         payloadHash,
         computedPayloadHash);
-    if ("ivm_transfer".equals(name)) {
-      try {
-        SignedTransactionHasher.hashCanonicalHex(signedBytes);
-        fail(name + ": legacy gasless signed transaction must not be admitted");
-      } catch (final IllegalArgumentException expected) {
-        // Historical fixture bytes remain available for decode-only compatibility.
-      }
-    } else {
-      final String computedSignedHash = SignedTransactionHasher.hashCanonicalHex(signedBytes);
-      assertEquals(
-          name + ": signed hash mismatch (expected " + signedHash + ", computed " + computedSignedHash + ")",
-          signedHash,
-          computedSignedHash);
-    }
+    final String computedSignedHash = SignedTransactionHasher.hashCanonicalHex(signedBytes);
+    assertEquals(
+        name + ": signed hash mismatch (expected " + signedHash + ", computed " + computedSignedHash + ")",
+        signedHash,
+        computedSignedHash);
 
     final TransactionPayloadFixtures.Fixture payloadFixture = payloadFixtures.get(name);
-    if (payloadFixture != null) {
-      payloadFixture.encoded().ifPresent(encoded -> {
-        assertEquals(
-            name + ": manifest payload mismatch vs transaction_payloads entry",
-            payloadBase64,
-            encoded);
-      });
-      if (payloadFixture.isDecodable()) {
-        final TransactionPayload payload = payloadFixture.toPayload();
-        assertEquals(
-            name + ": chain mismatch vs transaction_payloads",
-            chain,
-            payload.chainId());
-        assertEquals(
-            name + ": authority mismatch vs transaction_payloads",
-            normalizeAuthority(authority),
-            normalizeAuthority(payload.authority()));
-        assertEquals(
-            name + ": creation_time_ms mismatch vs transaction_payloads",
-            creationTimeMs,
-            payloadFixture.creationTimeMs());
-        assertTrue(
-            name + ": TTL mismatch vs transaction_payloads",
-            optionalLongEquals(payload.timeToLiveMs(), ttl));
-        assertTrue(
-            name + ": nonce mismatch vs transaction_payloads",
-            optionalLongEquals(payload.nonce(), nonce));
-      }
+    if (payloadFixture == null) {
+      throw new IllegalStateException(name + ": transaction_payloads entry is missing");
     }
+    assertEquals(
+        name + ": manifest payload mismatch vs transaction_payloads entry",
+        payloadBase64,
+        payloadFixture.payloadBase64());
+    final TransactionPayload payload = payloadFixture.toPayload();
+    assertEquals(
+        name + ": chain mismatch vs transaction_payloads",
+        chain,
+        payload.chainId());
+    assertEquals(
+        name + ": authority mismatch vs transaction_payloads",
+        normalizeAuthority(authority),
+        normalizeAuthority(payload.authority()));
+    assertEquals(
+        name + ": creation_time_ms mismatch vs transaction_payloads",
+        creationTimeMs,
+        payloadFixture.creationTimeMs());
+    assertTrue(
+        name + ": TTL mismatch vs transaction_payloads",
+        optionalLongEquals(payload.timeToLiveMs(), ttl));
+    assertTrue(
+        name + ": nonce mismatch vs transaction_payloads",
+        optionalLongEquals(payload.nonce(), nonce));
 
     validateCanonicalCodec(
         name,
@@ -402,7 +501,7 @@ public final class TransactionFixtureManifestTests {
         creationTimeMs,
         ttl,
         nonce,
-        resolveSigningKey(manifestSigningKey, authority, name));
+        deriveSigningKey(authority, name));
   }
 
   private static byte[] decodeBase64(final String value, final String fieldName) {
@@ -450,55 +549,116 @@ public final class TransactionFixtureManifestTests {
 
   private static Map<String, Object> loadManifest(final Path manifestPath) throws Exception {
     final String json = new String(Files.readAllBytes(manifestPath), StandardCharsets.UTF_8);
-    return asMap(SimpleJson.parse(json), "manifest");
+    final Map<String, Object> manifest = asMap(SimpleJson.parse(json), "manifest");
+    assertManifestShape(manifest, manifestPath);
+    return manifest;
   }
 
-  private static void assertSchemaMatches(final Map<String, Object> manifest) {
-    if (!manifest.containsKey("schema")) {
+  private static void assertManifestShape(
+      final Map<String, Object> manifest, final Path manifestPath) {
+    requireExactFields(manifest, MANIFEST_FIELDS, "manifest");
+    final List<Object> fixtures = asList(manifest.get("fixtures"), "fixtures");
+    if (fixtures.isEmpty()) {
+      throw new IllegalStateException("Manifest must contain at least one fixture");
+    }
+    for (int index = 0; index < fixtures.size(); index++) {
+      final String field = "fixtures[" + index + "]";
+      final Map<String, Object> fixture = asMap(fixtures.get(index), field);
+      requireExactFields(fixture, FIXTURE_FIELDS, field);
+      final String name = requireString(fixture.get("name"), field + ".name");
+      final String encodedFile =
+          requireString(fixture.get("encoded_file"), field + ".encoded_file");
+      resolveEncodedPath(manifestPath, name, encodedFile);
+    }
+  }
+
+  private static void assertManifestShapeRejected(
+      final Map<String, Object> manifest,
+      final Path manifestPath,
+      final String expectedMessage) {
+    try {
+      assertManifestShape(manifest, manifestPath);
+      fail("Invalid manifest shape must fail closed");
+    } catch (final IllegalStateException expected) {
+      assertTrue(
+          "Unexpected validation error: " + expected.getMessage(),
+          expected.getMessage().contains(expectedMessage));
+    }
+  }
+
+  private static void assertFixtureMutationRejected(
+      final Map<String, Object> manifest,
+      final List<Object> fixtures,
+      final Map<String, Object> mutatedFixture,
+      final Path manifestPath,
+      final String expectedMessage) {
+    final Map<String, Object> mutatedManifest = new LinkedHashMap<>(manifest);
+    final List<Object> mutatedFixtures = new ArrayList<>(fixtures);
+    mutatedFixtures.set(0, mutatedFixture);
+    mutatedManifest.put("fixtures", mutatedFixtures);
+    assertManifestShapeRejected(mutatedManifest, manifestPath, expectedMessage);
+  }
+
+  private static Set<String> fieldSet(final String... fields) {
+    return Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList(fields)));
+  }
+
+  private static void requireExactFields(
+      final Map<String, Object> object, final Set<String> expected, final String field) {
+    if (object.keySet().equals(expected)) {
       return;
     }
-    final Map<String, Object> schema = asMap(manifest.get("schema"), "schema");
-    assertEquals(
-        "schema.payload mismatch",
-        PAYLOAD_SCHEMA,
-        requireString(schema.get("payload"), "schema.payload"));
-    assertEquals(
-        "schema.signed mismatch",
-        SIGNED_SCHEMA,
-        requireString(schema.get("signed"), "schema.signed"));
+    final Set<String> missing = new LinkedHashSet<>(expected);
+    missing.removeAll(object.keySet());
+    final Set<String> unexpected = new LinkedHashSet<>(object.keySet());
+    unexpected.removeAll(expected);
+    throw new IllegalStateException(
+        field
+            + " fields must be exactly "
+            + expected
+            + " (missing="
+            + missing
+            + ", unexpected="
+            + unexpected
+            + ")");
   }
 
-  private static Optional<SigningKey> parseSigningKey(final Map<String, Object> manifest) {
-    if (!manifest.containsKey("signing_key")) {
-      return Optional.empty();
-    }
-    final Map<String, Object> signingKey = asMap(manifest.get("signing_key"), "signing_key");
-    final String algorithm =
-        requireString(signingKey.get("algorithm"), "signing_key.algorithm").toLowerCase();
-    if (!"ed25519".equals(algorithm)) {
-      throw new IllegalStateException("Unsupported signing key algorithm: " + algorithm);
-    }
-    final String publicKeyHex =
-        requireString(signingKey.get("public_key_hex"), "signing_key.public_key_hex");
-    final byte[] publicKey = hexToBytes(publicKeyHex, "signing_key.public_key_hex");
-    if (publicKey.length != 32) {
+  private static Path resolveEncodedPath(
+      final Path manifestPath, final String name, final String encodedFile) {
+    if (!FIXTURE_NAME.matcher(name).matches()) {
       throw new IllegalStateException(
-          "signing_key.public_key_hex must be 32 bytes (found " + publicKey.length + ")");
+          "fixture name must be a portable lowercase identifier: " + name);
     }
-    if (signingKey.containsKey("seed_hex")) {
-      final String seedHex = requireString(signingKey.get("seed_hex"), "signing_key.seed_hex");
-      hexToBytes(seedHex, "signing_key.seed_hex");
+    final String expected = name + ".norito";
+    if (!expected.equals(encodedFile)) {
+      throw new IllegalStateException(
+          name
+              + ": encoded_file must be exactly '"
+              + expected
+              + "' (found '"
+              + encodedFile
+              + "')");
     }
-    return Optional.of(new SigningKey(publicKey));
+    final Path relative = Paths.get(encodedFile);
+    if (relative.isAbsolute()
+        || relative.getNameCount() != 1
+        || !encodedFile.equals(relative.getFileName().toString())) {
+      throw new IllegalStateException(name + ": encoded_file must be a safe direct-child path");
+    }
+    final Path absoluteManifest = manifestPath.toAbsolutePath().normalize();
+    final Path fixtureRoot = absoluteManifest.getParent();
+    if (fixtureRoot == null) {
+      throw new IllegalStateException("Manifest path must have a parent directory");
+    }
+    final Path resolved = fixtureRoot.resolve(relative).normalize();
+    if (!resolved.startsWith(fixtureRoot) || !Objects.equals(resolved.getParent(), fixtureRoot)) {
+      throw new IllegalStateException(name + ": encoded_file escapes the fixture directory");
+    }
+    return resolved;
   }
 
-  private static SigningKey resolveSigningKey(
-      final Optional<SigningKey> manifestSigningKey,
-      final String authority,
-      final String fixtureName) {
-    if (manifestSigningKey.isPresent()) {
-      return manifestSigningKey.get();
-    }
+  private static SigningKey deriveSigningKey(
+      final String authority, final String fixtureName) {
     final String accountLiteral = normalizeAuthority(authority);
     try {
       final AccountAddress accountAddress = AccountAddress.fromI105(accountLiteral, null);
@@ -622,27 +782,16 @@ public final class TransactionFixtureManifestTests {
     } else {
       throw new IllegalStateException(name + ": unknown independently decoded executable type");
     }
-    if ("ivm_transfer".equals(name)) {
-      assertTrue(name + ": legacy executable must remain IVM", payload.executable().isIvm());
-      assertNull(name + ": legacy fixture must remain gasless", payload.feePayment().gasLimit());
-      try {
-        PAYLOAD_CODEC.encodeTransaction(payload);
-        fail(name + ": gasless IVM payload must not be re-encoded");
-      } catch (final Exception expected) {
-        // Historical wire data remains decodable but cannot enter a new signing flow.
-      }
-    } else {
-      final byte[] reencoded;
-      try {
-        reencoded = PAYLOAD_CODEC.encodeTransaction(payload);
-      } catch (final Exception ex) {
-        throw new IllegalStateException(name + ": failed to re-encode payload", ex);
-      }
-      assertArrayEquals(
-          name + ": payload bytes differ after Android re-encoding",
-          payloadBytes,
-          reencoded);
+    final byte[] reencoded;
+    try {
+      reencoded = PAYLOAD_CODEC.encodeTransaction(payload);
+    } catch (final Exception ex) {
+      throw new IllegalStateException(name + ": failed to re-encode payload", ex);
     }
+    assertArrayEquals(
+        name + ": payload bytes differ after Android re-encoding",
+        payloadBytes,
+        reencoded);
 
     final SignedParts signedParts = decodeSignedParts(name, signedBytes);
     assertArrayEquals(
@@ -652,16 +801,6 @@ public final class TransactionFixtureManifestTests {
     verifySignature(name, signingKey, payloadBytes, signedParts.signature());
     final SignedTransaction signed =
         new SignedTransaction(payloadBytes, signedParts.signature(), new byte[0], SIGNED_SCHEMA);
-    if ("ivm_transfer".equals(name)) {
-      try {
-        SignedTransactionEncoder.encode(signed);
-        fail(name + ": legacy gasless payload must not be signed again");
-      } catch (final Exception expected) {
-        // Historical signed bytes remain verifiable without reopening the signing path.
-      }
-      canonicalChecked++;
-      return;
-    }
     final byte[] encodedSigned;
     try {
       encodedSigned = SignedTransactionEncoder.encode(signed);
@@ -1869,26 +2008,6 @@ public final class TransactionFixtureManifestTests {
     } catch (final IllegalStateException expected) {
       assertTrue(expected.getMessage().contains("time_to_live_ms"));
     }
-  }
-
-  private static byte[] hexToBytes(final String hex, final String field) {
-    if (hex == null) {
-      throw new IllegalArgumentException(field + " must not be null");
-    }
-    final String normalized = hex.trim();
-    if (normalized.length() % 2 != 0) {
-      throw new IllegalArgumentException(field + " must have even length");
-    }
-    final byte[] out = new byte[normalized.length() / 2];
-    for (int i = 0; i < out.length; i++) {
-      final int hi = Character.digit(normalized.charAt(i * 2), 16);
-      final int lo = Character.digit(normalized.charAt(i * 2 + 1), 16);
-      if (hi < 0 || lo < 0) {
-        throw new IllegalArgumentException(field + " has invalid hex");
-      }
-      out[i] = (byte) ((hi << 4) | lo);
-    }
-    return out;
   }
 
 }

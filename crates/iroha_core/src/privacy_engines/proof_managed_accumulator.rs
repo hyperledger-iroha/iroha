@@ -173,6 +173,26 @@ fn frontier_parts_v1(
     }
 }
 
+/// Return the unique depth-32 authentication path for the sole leaf in a
+/// canonical proof-managed frontier.
+///
+/// The helper is crate-private and exists for non-shipping native release
+/// fixtures. Keeping it beside `NoteTreeNodeV1::empty_leaf` prevents those
+/// fixtures from carrying a second copy of the consensus empty-node schedule.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) fn canonical_single_leaf_authentication_path_v1() -> [[u8; 32]; TREE_DEPTH_V1 as usize] {
+    let mut empty = NoteTreeNodeV1::empty_leaf();
+    core::array::from_fn(|level| {
+        let sibling = empty.0;
+        empty = NoteTreeNodeV1::combine(
+            Level::from(u8::try_from(level).expect("depth-32 level fits u8")),
+            &empty,
+            &empty,
+        );
+        sibling
+    })
+}
+
 /// Construct the unique frontier for a complete ordered genesis set.
 ///
 /// # Errors

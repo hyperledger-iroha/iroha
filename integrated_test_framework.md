@@ -83,7 +83,7 @@ Note on API: In this codebase, Torii is an HTTP/WebSocket API (Axum). Tests shou
 ## Testus Localnet Runbook
 
 - Regenerate the Testus profile bundle after profile changes:
-  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo run -p xtask --bin xtask -- kagami-profiles --profile iroha3-testus`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo run -p xtask --features dev-tools --bin xtask -- kagami-profiles --profile iroha3-testus`
 - Build required localnet binaries once:
   - `cargo build -p iroha_kagami --bin kagami`
   - `cargo build -p irohad --bin irohad`

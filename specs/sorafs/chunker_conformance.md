@@ -24,7 +24,7 @@ Any SIMD acceleration must produce identical boundaries and digests.
 
 ## Fixture Bundle
 
-`cargo run --locked -p sorafs_chunker --bin export_vectors` regenerates the
+`cargo run --locked -p sorafs_chunker --features dev-tools --bin export_vectors` regenerates the
 fixtures and emits the following files under `fixtures/sorafs_chunker/`:
 
 - `sf1_profile_v1.{json,rs,ts,go}` — canonical chunk boundaries for Rust,
@@ -47,7 +47,7 @@ unchanged. Signature envelopes are append-only and deduplicated per signer.
 To add a council signature:
 
 ```bash
-cargo run --locked -p sorafs_chunker --bin export_vectors \
+cargo run --locked -p sorafs_chunker --features dev-tools --bin export_vectors \
   --signing-key=<ed25519-private-key-hex> \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```

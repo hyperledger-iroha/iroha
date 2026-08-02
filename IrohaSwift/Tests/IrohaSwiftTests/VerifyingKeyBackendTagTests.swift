@@ -146,7 +146,7 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
         }
     }
 
-    func testPendingProductionCatalogLabelsRemainFailClosed() {
+    func testProtocolAndRetiredCatalogAliasesAreUnsupported() {
         for label in [
             "halo2-ipa-orchard",
             "groth16-bls12-377",
@@ -162,15 +162,25 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             "vega-existing-credential-zk",
             "silent-threshold-anoncred",
             "zk-x509",
+            "sis-hints-anoncred-pq-v0",
             "sis-with-hints"
         ] {
-            XCTAssertTrue(VerifierBackendCatalogTag(catalogLabel: label).isPendingProductionBackend)
-            XCTAssertTrue(VerifyingKeyBackendTag.isPendingProductionBackendLabel(label))
+            XCTAssertEqual(VerifierBackendCatalogTag(catalogLabel: label), .unsupported)
             XCTAssertFalse(VerifyingKeyBackendTag.isProductionVerifyBackendLabel(label))
+            XCTAssertNil(VerifyingKeyBackendTag(canonicalLabel: label))
         }
     }
 
-    func testAdversarialPendingAliasSplicesStayUnsupported() {
+    func testCatalogClassifierAcceptsOnlyExactProductionLabels() {
+        for label in ["halo2-ipa-pasta", "stark", "halo2/ipa", "stark/fri"] {
+            XCTAssertEqual(VerifierBackendCatalogTag(catalogLabel: label), .production)
+        }
+        for label in ["HALO2/IPA", " halo2/ipa", "halo2/ipa ", "Stark"] {
+            XCTAssertEqual(VerifierBackendCatalogTag(catalogLabel: label), .unsupported)
+        }
+    }
+
+    func testAdversarialAliasSplicesStayUnsupported() {
         for label in [
             "halo2/ipa/orchard/dev-fixture",
             "stark/fri/miden/claimed-production",
@@ -179,8 +189,7 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             "groth16/bls12-377/../../prod",
             "post-quantum-masp/audit-claimed"
         ] {
-            XCTAssertFalse(VerifierBackendCatalogTag(catalogLabel: label).isPendingProductionBackend)
-            XCTAssertFalse(VerifyingKeyBackendTag.isPendingProductionBackendLabel(label))
+            XCTAssertEqual(VerifierBackendCatalogTag(catalogLabel: label), .unsupported)
             XCTAssertNil(VerifyingKeyBackendTag(canonicalLabel: label))
         }
     }

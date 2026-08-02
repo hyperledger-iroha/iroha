@@ -88,7 +88,7 @@ bash ci/check_sumeragi_v2_multilane_release_inventory.sh
 # Every real-network leg in this parent shell must fail rather than translate a
 # socket/sandbox denial into a successful developer skip.
 export IROHA_TEST_REQUIRE_NETWORK=1
-unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami
+unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_irohad CARGO_BIN_EXE_kagami
 unset TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA CARGO_BIN_EXE_iroha
 unset TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO
 unset IROHA_TEST_SKIP_BUILD IROHA_TEST_ALLOW_REENTRANT_BUILD
@@ -2934,8 +2934,8 @@ run_corridor_leg \
 # byte reproducible by its Rust owner before any downstream SDK consumes it.
 run_corridor_leg \
   native-amx-rust-fixture-check command 0 \
-  "cargo run --locked --offline -p iroha_data_model --bin sumeragi_v2_wire_fixtures -- --check" \
-  run_cargo run --locked --offline -p iroha_data_model \
+  "cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures -- --check" \
+  run_cargo run --locked --offline -p iroha_data_model --features dev-tools \
     --bin sumeragi_v2_wire_fixtures -- --check
 
 # Execute every maintained consumer of the Rust-owned grouped Native AMX V2

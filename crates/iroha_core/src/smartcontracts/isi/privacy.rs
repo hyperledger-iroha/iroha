@@ -80,14 +80,15 @@ use crate::{
         PrivacyProofManagedAccumulatorStateV1, PrivacyProofManagedPoolAccumulatorStateV1,
         PrivacyProofManagedPoolSnapshotV1, PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1,
         PrivacyRootKeyV1, PrivacyRootProvenanceV1, PrivacyRootRetentionAnchorV1,
-        PrivacyStateItemRecordV1, compute_privacy_pgc_account_state_root_v1,
-        load_privacy_bootle_lantern_issuer_policy_v1, load_privacy_orchard_pool_snapshot_v1,
-        load_privacy_pgc_pool_snapshot_v1, load_privacy_proof_managed_pool_snapshot_v1,
-        load_privacy_vega_issuer_v1, load_privacy_zk_ace_policy_v1,
-        load_privacy_zk_ams_registry_snapshot_v1, load_privacy_zk_x509_authoritative_state_v1,
-        load_privacy_zk_x509_certificate_policy_v1, load_privacy_zk_x509_trust_anchor_v1,
-        plan_privacy_root_history_update_v1, privacy_bootle_lantern_issuer_policy_count_v1,
-        privacy_vega_issuer_record_count_v1, privacy_zk_ace_policy_count_v1,
+        PrivacyStateItemRecordV1, PrivacyVegaIssuerRegistryFactsV1,
+        compute_privacy_pgc_account_state_root_v1, load_privacy_bootle_lantern_issuer_policy_v1,
+        load_privacy_orchard_pool_snapshot_v1, load_privacy_pgc_pool_snapshot_v1,
+        load_privacy_proof_managed_pool_snapshot_v1, load_privacy_vega_issuer_v1,
+        load_privacy_zk_ace_policy_v1, load_privacy_zk_ams_registry_snapshot_v1,
+        load_privacy_zk_x509_authoritative_state_v1, load_privacy_zk_x509_certificate_policy_v1,
+        load_privacy_zk_x509_trust_anchor_v1, plan_privacy_root_history_update_v1,
+        privacy_bootle_lantern_issuer_policy_count_v1, privacy_vega_issuer_record_count_v1,
+        privacy_vega_issuer_registry_facts_v1, privacy_zk_ace_policy_count_v1,
         privacy_zk_x509_ca_namespace_v1, privacy_zk_x509_crl_lineage_count_v1,
         privacy_zk_x509_governance_record_counts_v1, proof_managed_pool_root_role_v1,
         validate_privacy_zk_x509_policy_revocation_dependencies_v1,
@@ -3289,6 +3290,35 @@ fn vega_issuer_lineage_revision_count_v1(
     Ok(count)
 }
 
+fn validate_vega_issuer_candidate_key_v1(
+    record: &PrivacyVegaIssuerRecordV1,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<PrivacyVegaIssuerRegistryFactsV1, Error> {
+    CompressedPointV1::from_slice(record.issuer_public_key.as_bytes()).map_err(|error| {
+        invalid_privacy_parameter(format!(
+            "Vega issuer revision has an invalid P-256 key: {error}"
+        ))
+    })?;
+    let facts = privacy_vega_issuer_registry_facts_v1(
+        record.issuer_public_key,
+        &state_transaction.world.privacy_commitments,
+    )
+    .map_err(|error| {
+        Error::InvariantViolation(
+            format!("persisted Vega issuer registry is invalid: {error}").into(),
+        )
+    })?;
+    if facts
+        .key_owner()
+        .is_some_and(|owner| owner != record.issuer_id)
+    {
+        return Err(invalid_privacy_parameter(
+            "Vega issuer public key is permanently owned by another issuer lineage",
+        ));
+    }
+    Ok(facts)
+}
+
 impl Execute for RegisterPrivacyVegaIssuerV1 {
     fn execute(
         self,
@@ -3310,20 +3340,9 @@ impl Execute for RegisterPrivacyVegaIssuerV1 {
         self.record.validate_initial().map_err(|error| {
             invalid_privacy_parameter(format!("Vega issuer registration rejected: {error}"))
         })?;
-        CompressedPointV1::from_slice(self.record.issuer_public_key.as_bytes()).map_err(
-            |error| {
-                invalid_privacy_parameter(format!(
-                    "Vega issuer registration has an invalid P-256 key: {error}"
-                ))
-            },
-        )?;
-        let record_count =
-            privacy_vega_issuer_record_count_v1(&state_transaction.world.privacy_commitments)
-                .map_err(|error| {
-                    Error::InvariantViolation(
-                        format!("persisted Vega issuer registry is invalid: {error}").into(),
-                    )
-                })?;
+        let registry_facts =
+            validate_vega_issuer_candidate_key_v1(&self.record, state_transaction)?;
+        let record_count = registry_facts.record_count();
         if record_count >= VEGA_MAX_ISSUER_RECORDS_V1 {
             return Err(invalid_privacy_parameter(format!(
                 "Vega issuer registry is full at {} revisions",
@@ -3376,13 +3395,9 @@ impl Execute for RotatePrivacyVegaIssuerV1 {
                 "Vega expected current issuer-record digest must be non-zero",
             ));
         }
-        let record_count =
-            privacy_vega_issuer_record_count_v1(&state_transaction.world.privacy_commitments)
-                .map_err(|error| {
-                    Error::InvariantViolation(
-                        format!("persisted Vega issuer registry is invalid: {error}").into(),
-                    )
-                })?;
+        let registry_facts =
+            validate_vega_issuer_candidate_key_v1(&self.successor, state_transaction)?;
+        let record_count = registry_facts.record_count();
         if record_count >= VEGA_MAX_ISSUER_RECORDS_V1 {
             return Err(invalid_privacy_parameter(format!(
                 "Vega issuer registry is full at {} revisions",
@@ -3414,6 +3429,13 @@ impl Execute for RotatePrivacyVegaIssuerV1 {
         if current.record_digest != self.expected_current_record_digest {
             return Err(invalid_privacy_parameter(
                 "Vega issuer rotation expected a stale or substituted current record",
+            ));
+        }
+        if self.successor.issuer_public_key != current.issuer_public_key
+            && registry_facts.key_owner() == Some(self.successor.issuer_id)
+        {
+            return Err(invalid_privacy_parameter(
+                "Vega issuer rotation cannot reactivate a retired P-256 key",
             ));
         }
         validate_vega_issuer_rotation_v1(&current, &self.successor).map_err(|error| {
@@ -3470,13 +3492,9 @@ impl Execute for RevokePrivacyVegaIssuerV1 {
                 "Vega expected current issuer-record digest must be non-zero",
             ));
         }
-        let record_count =
-            privacy_vega_issuer_record_count_v1(&state_transaction.world.privacy_commitments)
-                .map_err(|error| {
-                    Error::InvariantViolation(
-                        format!("persisted Vega issuer registry is invalid: {error}").into(),
-                    )
-                })?;
+        let registry_facts =
+            validate_vega_issuer_candidate_key_v1(&self.successor, state_transaction)?;
+        let record_count = registry_facts.record_count();
         if record_count >= VEGA_MAX_ISSUER_RECORDS_V1 {
             return Err(invalid_privacy_parameter(format!(
                 "Vega issuer registry is full at {} revisions",
@@ -5916,9 +5934,9 @@ mod tests {
         prelude::Mint,
         privacy::{
             AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
-            BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
-            BOOTLE_LANTERN_RING_DEGREE_V1, BootleLanternAllowedAttributeValuesV1,
-            BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1, PrivacyActiveLifecycleV1,
+            BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_RING_DEGREE_V1,
+            BootleLanternAllowedAttributeValuesV1, BootleLanternIssuerPublicMatrixV1,
+            BootleLanternPolynomialV1, PrivacyActiveLifecycleV1,
             PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyCommitmentV1,
             PrivacyConsensusLimitsV1, PrivacyCredentialDocumentTypeV1, PrivacyEngineIdV1,
             PrivacyIssuerIdV1, PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyNamespaceScopeV1,
@@ -6369,21 +6387,25 @@ mod tests {
         state
     }
 
+    fn bootle_lantern_public_matrix(seed: usize) -> BootleLanternIssuerPublicMatrixV1 {
+        let first_column = core::array::from_fn(|block| BootleLanternPolynomialV1 {
+            coefficients: (0..BOOTLE_LANTERN_RING_DEGREE_V1)
+                .map(|coefficient| {
+                    u16::try_from(
+                        (seed + block * BOOTLE_LANTERN_RING_DEGREE_V1 + coefficient) % 12_288 + 1,
+                    )
+                    .expect("fixture residue fits u16")
+                })
+                .collect(),
+        });
+        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+            .expect("canonical degree-512 multiplication matrix")
+    }
+
     fn bootle_lantern_policy(
         epoch: u64,
         lifecycle: BootleLanternIssuerPolicyLifecycleV1,
     ) -> BootleLanternIssuerPolicyV1 {
-        let matrix_entry_count =
-            BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1;
-        let mut issuer_public_matrix = BootleLanternIssuerPublicMatrixV1 {
-            entries: vec![
-                BootleLanternPolynomialV1 {
-                    coefficients: vec![0; BOOTLE_LANTERN_RING_DEGREE_V1],
-                };
-                matrix_entry_count
-            ],
-        };
-        issuer_public_matrix.entries[0].coefficients[0] = 1;
         let mut policy = BootleLanternIssuerPolicyV1 {
             issuer_id: PrivacyIssuerIdV1::new([0xB1; 32]),
             policy_id: PrivacyPolicyIdV1::new([0xB2; 32]),
@@ -6391,7 +6413,7 @@ mod tests {
             lifecycle,
             issuer_parameter_id: PrivacyParameterIdV1::new([0xB3; 32]),
             issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
-            issuer_public_matrix,
+            issuer_public_matrix: bootle_lantern_public_matrix(1),
             required_disclosure_bitmap: 0,
             allowed_values: vec![
                 BootleLanternAllowedAttributeValuesV1 { values: Vec::new() };
@@ -6447,6 +6469,7 @@ mod tests {
             .expect("fixture epoch advances");
         successor.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Active;
         successor.issuer_parameter_id.0[0] ^= 1;
+        successor.issuer_public_matrix = bootle_lantern_public_matrix(701);
         successor.issuer_parameter_digest = successor
             .computed_issuer_parameter_digest()
             .expect("rotated issuer matrix");
@@ -8396,6 +8419,322 @@ mod tests {
             3
         );
         assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
+    }
+
+    #[test]
+    fn vega_governance_permanently_owns_keys_and_rejects_off_curve_rotations() {
+        let state = state_with_exact_vega_activation();
+        let header = test_header();
+        let header_hash = header.hash();
+        let mut block = state.block(header);
+        let first_issuer = PrivacyIssuerIdV1::new([0xD4; 32]);
+        let second_issuer = PrivacyIssuerIdV1::new([0xD5; 32]);
+        let first = vega_issuer_record(
+            first_issuer,
+            1,
+            2,
+            None,
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        );
+        let second = vega_issuer_record(
+            second_issuer,
+            1,
+            3,
+            None,
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        );
+        {
+            let mut transaction = block.transaction();
+            grant_governance(&mut transaction);
+            RegisterPrivacyVegaIssuerV1::new(first)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("register first unique Vega key owner");
+            transaction.apply();
+        }
+        {
+            let mut transaction = block.transaction();
+            RegisterPrivacyVegaIssuerV1::new(second)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("register second unique Vega key owner");
+            transaction.apply();
+        }
+        block
+            .commit()
+            .expect("commit both canonical Vega key owners");
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(TEST_BLOCK_HEIGHT + 1).expect("successor height"),
+            Some(header_hash),
+            None,
+            None,
+            1_800_000_000_001,
+            0,
+        ));
+        {
+            let transaction = block.transaction();
+            assert_eq!(
+                privacy_vega_issuer_record_count_v1(&transaction.world.privacy_commitments)
+                    .expect("committed Vega key-owner registry"),
+                2
+            );
+            assert_eq!(
+                load_privacy_vega_issuer_v1(first_issuer, &transaction.world.privacy_commitments,)
+                    .expect("committed first key owner"),
+                first
+            );
+            assert_eq!(
+                load_privacy_vega_issuer_v1(second_issuer, &transaction.world.privacy_commitments,)
+                    .expect("committed second key owner"),
+                second
+            );
+        }
+
+        let alias_issuer = PrivacyIssuerIdV1::new([0xD6; 32]);
+        let alias = PrivacyVegaIssuerRecordV1::new(
+            alias_issuer,
+            1,
+            first.issuer_public_key,
+            first.document_type,
+            first.namespace,
+            first.digest_algorithm,
+            first.issuer_authentication_algorithm,
+            first.device_authentication_algorithm,
+            None,
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        )
+        .expect("self-consistent cross-lineage key alias");
+        {
+            let mut transaction = block.transaction();
+            let budget_before = transaction.privacy_budget_for_testing();
+            let error = RegisterPrivacyVegaIssuerV1::new(alias)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("a Vega key cannot be registered under another issuer id");
+            assert!(
+                smart_contract_parameter_message(&error).contains("permanently owned"),
+                "{error:?}"
+            );
+            assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
+        }
+
+        let cross_lineage_rotation = PrivacyVegaIssuerRecordV1::new(
+            first_issuer,
+            2,
+            second.issuer_public_key,
+            first.document_type,
+            first.namespace,
+            first.digest_algorithm,
+            first.issuer_authentication_algorithm,
+            first.device_authentication_algorithm,
+            Some(first.record_digest),
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        )
+        .expect("self-consistent cross-lineage key rotation");
+        {
+            let mut transaction = block.transaction();
+            let budget_before = transaction.privacy_budget_for_testing();
+            let error = RotatePrivacyVegaIssuerV1::new(first.record_digest, cross_lineage_rotation)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("a rotation cannot adopt another Vega lineage's key");
+            assert!(
+                smart_contract_parameter_message(&error).contains("permanently owned"),
+                "{error:?}"
+            );
+            assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
+        }
+
+        let mut off_curve_key = [u8::MAX; 33];
+        off_curve_key[0] = 0x02;
+        let off_curve_rotation = PrivacyVegaIssuerRecordV1::new(
+            first_issuer,
+            2,
+            iroha_data_model::privacy::PrivacyP256PointV1::new(off_curve_key),
+            first.document_type,
+            first.namespace,
+            first.digest_algorithm,
+            first.issuer_authentication_algorithm,
+            first.device_authentication_algorithm,
+            Some(first.record_digest),
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        )
+        .expect("wire-shaped off-curve Vega successor");
+        {
+            let mut transaction = block.transaction();
+            let budget_before = transaction.privacy_budget_for_testing();
+            let error = RotatePrivacyVegaIssuerV1::new(first.record_digest, off_curve_rotation)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("off-curve Vega rotation key must reject before storage");
+            assert!(
+                smart_contract_parameter_message(&error).contains("invalid P-256 key"),
+                "{error:?}"
+            );
+            assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
+        }
+
+        let transaction = block.transaction();
+        assert_eq!(
+            privacy_vega_issuer_record_count_v1(&transaction.world.privacy_commitments)
+                .expect("failed key substitutions preserve the registry"),
+            2
+        );
+        assert_eq!(
+            load_privacy_vega_issuer_v1(first_issuer, &transaction.world.privacy_commitments,)
+                .expect("first issuer remains at its origin"),
+            first
+        );
+        assert_eq!(
+            load_privacy_vega_issuer_v1(second_issuer, &transaction.world.privacy_commitments,)
+                .expect("second issuer remains at its origin"),
+            second
+        );
+    }
+
+    #[test]
+    fn vega_governance_does_not_reassign_retired_or_revoked_keys() {
+        let state = state_with_exact_vega_activation();
+        let header = test_header();
+        let header_hash = header.hash();
+        let mut block = state.block(header);
+        let issuer_id = PrivacyIssuerIdV1::new([0xD7; 32]);
+        let origin = vega_issuer_record(
+            issuer_id,
+            1,
+            5,
+            None,
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        );
+        {
+            let mut transaction = block.transaction();
+            grant_governance(&mut transaction);
+            RegisterPrivacyVegaIssuerV1::new(origin)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("register Vega origin before historical-key probes");
+            transaction.apply();
+        }
+
+        let rotated = vega_issuer_record(
+            issuer_id,
+            2,
+            6,
+            Some(origin.record_digest),
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        );
+        {
+            let mut transaction = block.transaction();
+            RotatePrivacyVegaIssuerV1::new(origin.record_digest, rotated)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("retire the origin key with a canonical rotation");
+            transaction.apply();
+        }
+        block
+            .commit()
+            .expect("commit the origin and canonical Vega key rotation");
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(TEST_BLOCK_HEIGHT + 1).expect("successor height"),
+            Some(header_hash),
+            None,
+            None,
+            1_800_000_000_001,
+            0,
+        ));
+        {
+            let transaction = block.transaction();
+            assert_eq!(
+                privacy_vega_issuer_record_count_v1(&transaction.world.privacy_commitments)
+                    .expect("committed Vega rotation lineage"),
+                2
+            );
+            assert_eq!(
+                load_privacy_vega_issuer_v1(issuer_id, &transaction.world.privacy_commitments)
+                    .expect("committed Vega rotation"),
+                rotated
+            );
+        }
+
+        let retired_key_alias = vega_issuer_record(
+            PrivacyIssuerIdV1::new([0xD8; 32]),
+            1,
+            5,
+            None,
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        );
+        {
+            let mut transaction = block.transaction();
+            let budget_before = transaction.privacy_budget_for_testing();
+            let error = RegisterPrivacyVegaIssuerV1::new(retired_key_alias)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("a retired Vega key cannot acquire a new issuer identity");
+            assert!(
+                smart_contract_parameter_message(&error).contains("permanently owned"),
+                "{error:?}"
+            );
+            assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
+        }
+
+        let reactivated = vega_issuer_record(
+            issuer_id,
+            3,
+            5,
+            Some(rotated.record_digest),
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        );
+        {
+            let mut transaction = block.transaction();
+            let budget_before = transaction.privacy_budget_for_testing();
+            let error = RotatePrivacyVegaIssuerV1::new(rotated.record_digest, reactivated)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("a Vega rotation cannot reactivate its retired origin key");
+            assert!(
+                smart_contract_parameter_message(&error).contains("reactivate a retired"),
+                "{error:?}"
+            );
+            assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
+        }
+
+        let revoked = vega_issuer_record(
+            issuer_id,
+            3,
+            6,
+            Some(rotated.record_digest),
+            PrivacyVegaIssuerRecordLifecycleV1::Revoked,
+        );
+        {
+            let mut transaction = block.transaction();
+            RevokePrivacyVegaIssuerV1::new(rotated.record_digest, revoked)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("canonically revoke the rotated Vega key");
+            transaction.apply();
+        }
+
+        let revoked_key_alias = vega_issuer_record(
+            PrivacyIssuerIdV1::new([0xD9; 32]),
+            1,
+            6,
+            None,
+            PrivacyVegaIssuerRecordLifecycleV1::Active,
+        );
+        {
+            let mut transaction = block.transaction();
+            let budget_before = transaction.privacy_budget_for_testing();
+            let error = RegisterPrivacyVegaIssuerV1::new(revoked_key_alias)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("a revoked Vega key cannot acquire a new issuer identity");
+            assert!(
+                smart_contract_parameter_message(&error).contains("permanently owned"),
+                "{error:?}"
+            );
+            assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
+        }
+
+        let transaction = block.transaction();
+        assert_eq!(
+            privacy_vega_issuer_record_count_v1(&transaction.world.privacy_commitments)
+                .expect("rejected historical aliases preserve the registry"),
+            3
+        );
+        assert_eq!(
+            load_privacy_vega_issuer_v1(issuer_id, &transaction.world.privacy_commitments)
+                .expect("canonical revocation remains current"),
+            revoked
+        );
     }
 
     #[test]

@@ -67,7 +67,6 @@ impl_decode_from_slice_via_archived! {
 // Proof-related
 impl_decode_from_slice_via_archived! {
     crate::proof::ProofId,
-    crate::proof::ProofAttachmentList,
     crate::proof::ProofRecord,
     crate::nexus::LanePrivacyProof,
     crate::nexus::LanePrivacyWitness,

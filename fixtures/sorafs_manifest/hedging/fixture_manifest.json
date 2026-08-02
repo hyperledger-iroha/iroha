@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "fixture_family": "sorafs_hedging_billing",
-  "generator": "cargo run -p sorafs_manifest --bin generate_hedging_fixtures",
+  "generator": "cargo run -p sorafs_manifest --features dev-tools --bin generate_hedging_fixtures",
   "validation_scope": "generated_bytes_required",
   "fixtures": [
     {

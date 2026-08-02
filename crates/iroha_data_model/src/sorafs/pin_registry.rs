@@ -86,7 +86,7 @@ impl TryFrom<Vec<u8>> for ManifestRootCid {
 }
 
 impl norito::NoritoSerialize for ManifestRootCid {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::NoritoSerialize::serialize(&self.0, writer)
     }
 

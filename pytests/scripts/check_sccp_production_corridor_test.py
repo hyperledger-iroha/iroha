@@ -146,7 +146,10 @@ def test_runner_rejects_noncanonical_phase_selection(bad: str) -> None:
 
 def test_evidence_phase_builds_and_uses_production_validator() -> None:
     trace = dry_run("evidence-scripts").stdout
-    assert "cargo build --locked -p iroha_sccp --bin sccp_release_evidence" in trace
+    assert (
+        "cargo build --locked -p iroha_sccp --features dev-tools "
+        "--bin sccp_release_evidence"
+    ) in trace
     assert "pytests/scripts/sccp_release_tooling_test.py" in trace
     assert "pytests/scripts/sccp_release_fixture_reseal_test.py" in trace
     assert "scripts/sccp_release_fixture.py" in trace
@@ -160,7 +163,8 @@ def test_rust_phase_tests_production_validator_without_fixture_feature() -> None
     trace = dry_run("rust-sccp").stdout
     assert "cargo test --locked -p iroha_sccp -- --nocapture" in trace
     assert (
-        "cargo test --locked -p iroha_sccp --bin sccp_release_evidence -- --nocapture"
+        "cargo test --locked -p iroha_sccp --features dev-tools "
+        "--bin sccp_release_evidence -- --nocapture"
         in trace
     )
     assert "test-fixtures" not in trace

@@ -412,7 +412,7 @@ Implemented:
 - `fixtures/sorafs_manifest/orderbook/` contains deterministic `.to` and JSON
   commentary fixtures for orders, cancellations, trades, settlement channels,
   and settlement receipts; regenerate them with
-  `cargo run -p sorafs_manifest --bin generate_orderbook_fixtures`.
+  `cargo run -p sorafs_manifest --features dev-tools --bin generate_orderbook_fixtures`.
 - `crates/sorafs_manifest/tests/orderbook_fixtures.rs` round-trips the
   committed orderbook fixtures and checks JSON `norito_bytes_hex` commentary
   against the canonical bytes.

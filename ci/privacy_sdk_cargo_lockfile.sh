@@ -872,8 +872,9 @@ if project != root and root not in project.parents:
 
 allowed_path = root / ".cargo/config.toml"
 allowed_configuration = {
-    "build": {"jobs": 1},
-    "env": {"RUST_TEST_THREADS": {"value": "1", "force": False}},
+    "alias": {
+        "xtask": "run --package xtask --features dev-tools --bin xtask --",
+    },
 }
 observed_allowed = False
 directory = project
@@ -915,8 +916,8 @@ while True:
             )
         if configuration != allowed_configuration:
             raise SystemExit(
-                "error: repository Cargo configuration may only pin build.jobs=1 "
-                "and the non-forced RUST_TEST_THREADS default"
+                "error: repository Cargo configuration may only define the "
+                "approved xtask alias and must not impose global parallelism"
             )
     if directory.parent == directory:
         break

@@ -623,7 +623,9 @@ BY CommandSuccessorsRetainCausalOrigin, SMTT(300)
        InstallLockedFetchSuccessors, InstallLockedFetchSuccessor,
        InstallCommitSignSuccessors, InstallCommitSignSuccessor,
        InstallProposalSuccessor, AsyncCandidateFrom,
-       AsyncCandidateAtConsumerWithOrigin,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateSuccessorSemanticPhase,
+       AsyncCandidateSuccessorProposalRound,
        AsyncCandidateWithIdentityAndOrigin, SequenceSet
 
 AdequateLeaderFixedCrossChildLifecycleCutCarryThisStep(parent) ==
@@ -821,7 +823,9 @@ BY CommandSuccessorsHaveBoundedLength, SMTT(600)
        InstallLockedFetchSuccessors, InstallLockedFetchSuccessor,
        InstallCommitSignSuccessors, InstallCommitSignSuccessor,
        InstallProposalSuccessor, AsyncCandidateFrom,
-       AsyncCandidateAtConsumerWithOrigin,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateSuccessorSemanticPhase,
+       AsyncCandidateSuccessorProposalRound,
        AsyncCandidateWithIdentityAndOrigin,
        SequenceSet, AsyncCandidateSet
 

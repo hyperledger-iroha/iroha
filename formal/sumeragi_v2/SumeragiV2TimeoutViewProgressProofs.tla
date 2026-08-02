@@ -462,30 +462,35 @@ TimeoutFixedPacketLiveOwners(packet) ==
 TimeoutFixedPacketCoveredCandidateIdentities(packet) ==
   TimeoutFixedPacketLiveCandidateIdentities(packet)
     \cup
-  {record.identity.payload.causalOrigin:
-     record \in AsyncCandidateServiceTombstones,
-     record.identity.payload.causalOrigin
-       \in TimeoutFixedPacketCandidateCarrier(packet)}
+  {record.causalOrigin:
+     record \in
+       {tombstone \in AsyncCandidateServiceTombstones:
+          tombstone.causalOrigin
+            \in TimeoutFixedPacketCandidateCarrier(packet)}}
     \cup
   {record.origin:
-     record \in AsyncCandidateLifecycleAdmissions,
-     record.origin \in TimeoutFixedPacketCandidateCarrier(packet)}
+     record \in
+       {admission \in AsyncCandidateLifecycleAdmissions:
+          admission.origin \in TimeoutFixedPacketCandidateCarrier(packet)}}
 
 TimeoutFixedPacketCoveredServeIdentities(packet) ==
   TimeoutFixedPacketLiveServeIdentities(packet)
     \cup
   {reservation.identity:
-     reservation \in asyncServeReservations,
-     reservation.identity \in TimeoutFixedPacketServeCarrier(packet)}
+     reservation \in
+       {owned \in asyncServeReservations:
+          owned.identity \in TimeoutFixedPacketServeCarrier(packet)}}
     \cup
   {tombstone.identity:
-     tombstone \in asyncServeTombstones,
-     tombstone.identity \in TimeoutFixedPacketServeCarrier(packet)}
+     tombstone \in
+       {terminal \in asyncServeTombstones:
+          terminal.identity \in TimeoutFixedPacketServeCarrier(packet)}}
     \cup
   UNION {
     {tombstone.identity:
-       tombstone \in reservation.rollbackTombstones,
-       tombstone.identity \in TimeoutFixedPacketServeCarrier(packet)}:
+       tombstone \in
+         {rollback \in reservation.rollbackTombstones:
+            rollback.identity \in TimeoutFixedPacketServeCarrier(packet)}}:
     reservation \in asyncServeReservations}
 
 TimeoutFixedPacketCoveredOwners(packet) ==
@@ -753,19 +758,19 @@ TimeoutFixedClockLifecyclePhysicalKernelProperties(specification) ==
   /\ TimeoutFixedClockServeLifecycleKernelProperty(specification)
 
 THEOREM AsyncSpecProvidesTimeoutFixedPacketCandidateFairness ==
-  \A initialContext,
-     source \in AsyncCurrentResponsiveVoters,
-     sourceView \in Views,
-     clockValue, deadlineValue \in Nat,
-     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier,
-     packet, known, budget:
-    /\ AsyncSpecAt(initialContext)
-    /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
-         source, sourceView, clockValue, deadlineValue,
-         sourceRank, packet, known, budget)
-    /\ HistoricalDiscoveryPacketCandidateOwners(packet) # {}
-    => WF_AsyncAllVars(
-         HistoricalDiscoveryPacketCandidateDebtFairAction(packet))
+  \A packet, known, budget:
+    \A initialContext \in ContextRecords,
+       source \in AsyncCurrentResponsiveVoters,
+       sourceView \in Views,
+       clockValue, deadlineValue \in Nat,
+       sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+      /\ AsyncSpecAt(initialContext)
+      /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
+           source, sourceView, clockValue, deadlineValue,
+           sourceRank, packet, known, budget)
+      /\ HistoricalDiscoveryPacketCandidateOwners(packet) # {}
+      => WF_AsyncAllVars(
+           HistoricalDiscoveryPacketCandidateDebtFairAction(packet))
 BY AsyncSpecAlwaysStrongTypeInvariant,
    HistoricalDiscoveryLiveCandidateDebtHasExactFairOwner,
    Isa, PTL
@@ -773,21 +778,21 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
        AsyncSpecAt, AsyncFairnessAt
 
 THEOREM AsyncSpecProvidesTimeoutFixedPacketHistoricalServeFairness ==
-  \A initialContext,
-     source \in AsyncCurrentResponsiveVoters,
-     sourceView \in Views,
-     clockValue, deadlineValue \in Nat,
-     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier,
-     packet, known, budget:
-    /\ AsyncSpecAt(initialContext)
-    /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
-         source, sourceView, clockValue, deadlineValue,
-         sourceRank, packet, known, budget)
-    /\ HistoricalDiscoveryPacketServeOwners(packet) # {}
-    /\ HistoricalRecoveryTarget(packet.item.envelope.recipient)
-    => WF_AsyncAllVars(
-         PostGstServiceHistoricalRecoveryIoWorker(
-           packet.item.envelope.recipient))
+  \A packet, known, budget:
+    \A initialContext \in ContextRecords,
+       source \in AsyncCurrentResponsiveVoters,
+       sourceView \in Views,
+       clockValue, deadlineValue \in Nat,
+       sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+      /\ AsyncSpecAt(initialContext)
+      /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
+           source, sourceView, clockValue, deadlineValue,
+           sourceRank, packet, known, budget)
+      /\ HistoricalDiscoveryPacketServeOwners(packet) # {}
+      /\ HistoricalRecoveryTarget(packet.item.envelope.recipient)
+      => WF_AsyncAllVars(
+           PostGstServiceHistoricalRecoveryIoWorker(
+             packet.item.envelope.recipient))
 BY AsyncSpecAlwaysStrongTypeInvariant,
    HistoricalDiscoveryLiveServeDebtHasExactFairOwner,
    Isa, PTL
@@ -795,21 +800,21 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
        AsyncSpecAt, AsyncFairnessAt
 
 THEOREM AsyncSpecProvidesTimeoutFixedPacketOrdinaryServeFairness ==
-  \A initialContext,
-     source \in AsyncCurrentResponsiveVoters,
-     sourceView \in Views,
-     clockValue, deadlineValue \in Nat,
-     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier,
-     packet, known, budget:
-    /\ AsyncSpecAt(initialContext)
-    /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
-         source, sourceView, clockValue, deadlineValue,
-         sourceRank, packet, known, budget)
-    /\ HistoricalDiscoveryPacketServeOwners(packet) # {}
-    /\ packet.item.envelope.recipient
-         \in AsyncArchiveIoServiceNodes
-    => WF_AsyncAllVars(
-         PostGstServiceIoWorker(packet.item.envelope.recipient))
+  \A packet, known, budget:
+    \A initialContext \in ContextRecords,
+       source \in AsyncCurrentResponsiveVoters,
+       sourceView \in Views,
+       clockValue, deadlineValue \in Nat,
+       sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
+      /\ AsyncSpecAt(initialContext)
+      /\ TimeoutFixedClockLifecycleEpisodeAtBudget(
+           source, sourceView, clockValue, deadlineValue,
+           sourceRank, packet, known, budget)
+      /\ HistoricalDiscoveryPacketServeOwners(packet) # {}
+      /\ packet.item.envelope.recipient
+           \in AsyncArchiveIoServiceNodes
+      => WF_AsyncAllVars(
+           PostGstServiceIoWorker(packet.item.envelope.recipient))
 BY AsyncSpecAlwaysStrongTypeInvariant,
    HistoricalDiscoveryLiveServeDebtHasExactFairOwner,
    Isa, PTL
@@ -1260,7 +1265,7 @@ BY HistoricalDiscoveryTimedOwnerModeCannotIncreaseAfterGst,
        AsyncRunnerStep, AsyncNonRunnerStep, AsyncAllVars
 
 THEOREM AsyncSpecProvidesTimeoutDueNodeModeFairness ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      source \in AsyncCurrentResponsiveVoters,
      sourceView \in Views,
      clockValue, deadlineValue \in Nat,
@@ -1285,7 +1290,7 @@ BY AsyncSpecAlwaysUsesFixedResponsiveVoters, PTL, Isa
        AsyncSpecAt, AsyncFairnessAt
 
 THEOREM AsyncSpecProvidesTimeoutDueIoModeFairness ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      source \in AsyncCurrentResponsiveVoters,
      sourceView \in Views,
      clockValue, deadlineValue \in Nat,
@@ -1310,7 +1315,7 @@ BY AsyncSpecAlwaysUsesFixedResponsiveVoters, PTL, Isa
        AsyncSpecAt, AsyncFairnessAt
 
 THEOREM AsyncSpecTimeoutDueNodeModeMakesProgress ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      source \in AsyncCurrentResponsiveVoters,
      sourceView \in Views,
      clockValue, deadlineValue \in Nat,
@@ -1397,7 +1402,7 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM AsyncSpecTimeoutDueIoModeMakesProgress ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      source \in AsyncCurrentResponsiveVoters,
      sourceView \in Views,
      clockValue, deadlineValue \in Nat,
@@ -1480,12 +1485,12 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM AsyncSpecTimeoutDueNodeOwnerReachesRankGoal ==
-  \A initialContext,
-     source \in AsyncCurrentResponsiveVoters,
-     sourceView \in Views,
-     clockValue, deadlineValue \in Nat,
-     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier,
-     owner:
+  \A owner:
+    \A initialContext \in ContextRecords,
+       source \in AsyncCurrentResponsiveVoters,
+       sourceView \in Views,
+       clockValue, deadlineValue \in Nat,
+       sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
     AsyncSpecAt(initialContext)
       => ((/\ TimeoutFixedClockBlockedAtRank(
                 source, sourceView, clockValue, deadlineValue,
@@ -1552,12 +1557,12 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM AsyncSpecTimeoutDueIoOwnerReachesRankGoal ==
-  \A initialContext,
-     source \in AsyncCurrentResponsiveVoters,
-     sourceView \in Views,
-     clockValue, deadlineValue \in Nat,
-     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier,
-     owner:
+  \A owner:
+    \A initialContext \in ContextRecords,
+       source \in AsyncCurrentResponsiveVoters,
+       sourceView \in Views,
+       clockValue, deadlineValue \in Nat,
+       sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
     AsyncSpecAt(initialContext)
       => ((/\ TimeoutFixedClockBlockedAtRank(
                 source, sourceView, clockValue, deadlineValue,
@@ -1715,7 +1720,7 @@ BY TimeoutFixedClockConcreteLexCertificateStrictlyDescends,
        AsyncRunnerStep, AsyncNonRunnerStep, AsyncAllVars
 
 THEOREM AsyncSpecTimeoutFixedClockTickReachesRankGoal ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      source \in AsyncCurrentResponsiveVoters,
      sourceView \in Views,
      clockValue, deadlineValue \in Nat,
@@ -2765,7 +2770,7 @@ BY ENABLEDaxioms
    DEF TimeoutDeferredRuntimeActionOwner
 
 THEOREM AsyncSpecProvidesTimeoutRuntimeRunNodeFairness ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      source \in AsyncCurrentResponsiveVoters,
      sourceView \in Views:
     /\ AsyncSpecAt(initialContext)
@@ -2839,10 +2844,11 @@ TimeoutFrozenRuntimeLifecyclePhysicalCut(source, ownerOrdinal) ==
 
 TimeoutOlderLifecycleOriginsBelow(source, ownerOrdinal, physicalCut) ==
   {record.origin:
-     record \in AsyncCandidateLifecycleAdmissions,
-     /\ record.node = source
-     /\ record.ordinal < ownerOrdinal
-     /\ record.sourcePhysicalOrdinal < physicalCut}
+     record \in
+       {owned \in AsyncCandidateLifecycleAdmissions:
+          /\ owned.node = source
+          /\ owned.ordinal < ownerOrdinal
+          /\ owned.sourcePhysicalOrdinal < physicalCut}}
 
 TimeoutFrozenRuntimeLifecycleSnapshot(
     mode, source, sourceView,
@@ -2960,7 +2966,7 @@ TimeoutFrozenOlderProducerIngressRank(
     <<TimeoutFrozenOlderCandidateWorkBudget(
         source, ownerOrdinal, physicalCut, predecessorOrigins),
       AsyncFrozenLeaderWireIngressDependencyRank(
-        source, ownerOrdinal - 1, physicalCut, "Logical")>>>
+        source, ownerOrdinal - 1, physicalCut, "Logical")>>>>
 
 TimeoutFrozenOlderProducerEpisodeRank(
     source, ownerOrdinal, physicalCut, predecessorOrigins) ==
@@ -3037,7 +3043,7 @@ THEOREM TimeoutRuntimeModeOwnerHasExactFrozenLifecycleSnapshot ==
           ownerOrigin \in AsyncCandidateCausalOriginSet,
           ownerOrdinal \in Nat \ {0},
           physicalCut \in Nat,
-          predecessorOrigins:
+          predecessorOrigins \in SUBSET AsyncCandidateCausalOriginSet:
          TimeoutFrozenRuntimeLifecycleSnapshot(
            mode, source, sourceView,
            ownerContext, ownerOrigin, ownerOrdinal,
@@ -3066,7 +3072,7 @@ THEOREM TimeoutFrozenOlderCandidateWorkBudgetIsNatural ==
      ownerOrigin \in AsyncCandidateCausalOriginSet,
      ownerOrdinal \in Nat \ {0},
      physicalCut \in Nat,
-     predecessorOrigins:
+     predecessorOrigins \in SUBSET AsyncCandidateCausalOriginSet:
     /\ AsyncStrongTypeInvariant
     /\ TimeoutFrozenRuntimeLifecyclePending(
          mode, source, sourceView,
@@ -3101,7 +3107,7 @@ THEOREM TimeoutFrozenOlderProducerEpisodeRankIsInCarrier ==
      ownerOrigin \in AsyncCandidateCausalOriginSet,
      ownerOrdinal \in Nat \ {0},
      physicalCut \in Nat,
-     predecessorOrigins:
+     predecessorOrigins \in SUBSET AsyncCandidateCausalOriginSet:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ TimeoutFrozenRuntimeLifecyclePending(
@@ -3569,7 +3575,7 @@ TimeoutFrozenOlderCandidatePrefixClosureProperty(specification) ==
           ownerOrigin \in AsyncCandidateCausalOriginSet,
           ownerOrdinal \in Nat \ {0},
           physicalCut \in Nat,
-          predecessorOrigins:
+          predecessorOrigins \in SUBSET AsyncCandidateCausalOriginSet:
          TimeoutFrozenRuntimeLifecycleSnapshot(
            mode, source, sourceView,
            ownerContext, ownerOrigin, ownerOrdinal,
@@ -3607,7 +3613,7 @@ THEOREM TimeoutFrozenOlderProducerDrainCertificateExcludesBlockers ==
      ownerOrigin \in AsyncCandidateCausalOriginSet,
      ownerOrdinal \in Nat \ {0},
      physicalCut \in Nat,
-     predecessorOrigins:
+     predecessorOrigins \in SUBSET AsyncCandidateCausalOriginSet:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ TimeoutFrozenRuntimeLifecycleOwner(
@@ -3665,7 +3671,7 @@ THEOREM TimeoutFrozenOlderProducerDrainCertificatePersists ==
      ownerOrigin \in AsyncCandidateCausalOriginSet,
      ownerOrdinal \in Nat \ {0},
      physicalCut \in Nat,
-     predecessorOrigins:
+     predecessorOrigins \in SUBSET AsyncCandidateCausalOriginSet:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateServiceLifecycleInvariant
@@ -3781,7 +3787,7 @@ TimeoutFrozenEarlierServePrefixClosureProperty(specification) ==
           ownerOrigin \in AsyncCandidateCausalOriginSet,
           ownerOrdinal \in Nat \ {0},
           physicalCut \in Nat,
-          predecessorOrigins:
+          predecessorOrigins \in SUBSET AsyncCandidateCausalOriginSet:
          TimeoutFrozenEarlierServePrefixPending(
            mode, source, sourceView,
            ownerContext, ownerOrigin, ownerOrdinal,
@@ -5194,11 +5200,11 @@ TimeoutEarlierServeExactTicketConvergenceProperty(specification) ==
 
 THEOREM TimeoutEarlierServeConcreteOwnerUsesAsyncFairness ==
   \A initialContext, source, ownerKind:
-    /\ source \in AsyncCurrentResponsiveVoters
-    /\ ownerKind \in TimeoutEarlierServeConcreteFairOwnerKinds
-    => AsyncLiveSpecAt(initialContext)
-         => WF_AsyncAllVars(
-              TimeoutEarlierServeConcreteFairAction(source, ownerKind))
+    (/\ source \in AsyncCurrentResponsiveVoters
+     /\ ownerKind \in TimeoutEarlierServeConcreteFairOwnerKinds)
+      => (AsyncLiveSpecAt(initialContext)
+            => WF_AsyncAllVars(
+                 TimeoutEarlierServeConcreteFairAction(source, ownerKind)))
 BY AsyncSpecAlwaysUsesFixedResponsiveVoters, Isa, PTL
    DEF TimeoutEarlierServeConcreteFairOwnerKinds,
        TimeoutEarlierServeConcreteFairAction,
@@ -5411,7 +5417,7 @@ TimeoutFixedOwnerLaterServeInterleavingProperty(specification) ==
           ownerOrigin \in AsyncCandidateCausalOriginSet,
           ownerOrdinal \in Nat \ {0},
           physicalCut \in Nat,
-          predecessorOrigins:
+          predecessorOrigins \in SUBSET AsyncCandidateCausalOriginSet:
          /\ \A identity:
               \A rank \in Nat:
                 [](TimeoutFixedOwnerLaterServeTicketAtRuntimeRank(
@@ -5440,7 +5446,7 @@ THEOREM TimeoutLaterServeTicketFairOccurrenceInterleavesExactRuntimeEpisode ==
      ownerOrigin \in AsyncCandidateCausalOriginSet,
      ownerOrdinal \in Nat \ {0},
      physicalCut \in Nat,
-     predecessorOrigins:
+     predecessorOrigins \in SUBSET AsyncCandidateCausalOriginSet:
     \A identity:
       \A rank \in Nat:
         /\ AsyncStrongTypeInvariant
@@ -5483,7 +5489,7 @@ THEOREM TimeoutFixedOwnerLaterServeTicketEnablesExactRuntimeEpisode ==
      ownerOrigin \in AsyncCandidateCausalOriginSet,
      ownerOrdinal \in Nat \ {0},
      physicalCut \in Nat,
-     predecessorOrigins:
+     predecessorOrigins \in SUBSET AsyncCandidateCausalOriginSet:
     \A identity:
       \A rank \in Nat:
         /\ AsyncStrongTypeInvariant
@@ -5638,8 +5644,8 @@ BY NatLessThanWellFounded, WFLexPairOrdering
 THEOREM TimeoutPriorityClearRunNodeStrictlyReachesModeAction ==
   \A mode, source, sourceView,
      ownerContext, ownerOrigin, ownerOrdinal,
-     physicalCut, predecessorOrigins,
-     rank \in TimeoutRuntimePriorityClearRankCarrier:
+     physicalCut, predecessorOrigins:
+    \A rank \in TimeoutRuntimePriorityClearRankCarrier:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ TimeoutRuntimePriorityClearAtRank(
@@ -5710,8 +5716,8 @@ BY AsyncLaterServeTicketInterleavesOlderRuntimeEpisode,
 THEOREM TimeoutPriorityClearRankCellIsSafe ==
   \A mode, source, sourceView,
      ownerContext, ownerOrigin, ownerOrdinal,
-     physicalCut, predecessorOrigins,
-     rank \in TimeoutRuntimePriorityClearRankCarrier:
+     physicalCut, predecessorOrigins:
+    \A rank \in TimeoutRuntimePriorityClearRankCarrier:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ TimeoutRuntimePriorityClearAtRank(
@@ -5766,7 +5772,7 @@ BY TimeoutFrozenOlderPredecessorSetCannotBeReplenished,
        SetLessThan, LexPairOrdering, OpToRel
 
 THEOREM TimeoutPriorityClearSuffixReachesModeAction ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      mode \in TimeoutRuntimeModeCarrier,
      source \in AsyncCurrentResponsiveVoters,
      sourceView \in Views,
@@ -5774,7 +5780,7 @@ THEOREM TimeoutPriorityClearSuffixReachesModeAction ==
      ownerOrigin \in AsyncCandidateCausalOriginSet,
      ownerOrdinal \in Nat \ {0},
      physicalCut \in Nat,
-     predecessorOrigins:
+     predecessorOrigins \in SUBSET AsyncCandidateCausalOriginSet:
     /\ AsyncLiveSpecAt(initialContext)
     /\ TimeoutFixedOwnerPriorityTicketNonReplenishmentProperty(
          AsyncLiveSpecAt(initialContext))
@@ -5865,7 +5871,7 @@ BY TimeoutModeFairOccurrenceReachesExactReducerEndpoint,
        AsyncAllVars
 
 THEOREM TimeoutPriorityClearSuffixConsumesExactModeAction ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      mode \in TimeoutRuntimeModeCarrier,
      source \in AsyncCurrentResponsiveVoters,
      sourceView \in Views,
@@ -5873,7 +5879,7 @@ THEOREM TimeoutPriorityClearSuffixConsumesExactModeAction ==
      ownerOrigin \in AsyncCandidateCausalOriginSet,
      ownerOrdinal \in Nat \ {0},
      physicalCut \in Nat,
-     predecessorOrigins:
+     predecessorOrigins \in SUBSET AsyncCandidateCausalOriginSet:
     /\ AsyncLiveSpecAt(initialContext)
     /\ TimeoutFixedOwnerPriorityTicketNonReplenishmentProperty(
          AsyncLiveSpecAt(initialContext))
@@ -6184,7 +6190,7 @@ TargetPersistDecisionCommand(target, command) ==
 THEOREM ExecuteExactCurrentViewTimeoutDeliveryRecordsExactReceipt ==
   \A vote \in TimeoutVoteRecordSet,
      recipient \in AsyncCurrentResponsiveVoters,
-     command:
+     command \in AsyncCandidateSet:
     /\ AsyncStrongTypeInvariant
     /\ vote.signer \in AsyncCurrentResponsiveVoters
     /\ vote \in timeoutIntents
@@ -9279,7 +9285,7 @@ BY HistoricalDiscoveryFixedClockIngressStrictlyDescends,
        AsyncAllVars
 
 THEOREM AsyncSpecProvidesTimeoutFixedClockPacketConcreteActionFairness ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      source \in AsyncCurrentResponsiveVoters,
      sourceView \in Views,
      clockValue, deadlineValue \in Nat,
@@ -10052,20 +10058,21 @@ BY NatLessThanWellFounded, Isa
        TimeoutPhysicalControlLifecycleStageCarrier
 
 THEOREM TimeoutPhysicalControlSnapshotPinsPastPhysicalCut ==
-  \A item \in AsyncNetworkItems, snapshot:
-    /\ AsyncStrongTypeInvariant
-    /\ ExactDecisionTargetNeutralSnapshotActive(snapshot, asyncNow)
-    /\ TimeoutPhysicalControlItem(item)
-    /\ [AsyncNext]_AsyncAllVars
-    => /\ TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot) \in Nat
-       /\ TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot)
-            <= AsyncNextIngressPhysicalOrdinal(
-                 item.envelope.recipient)
-       /\ TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot)
-            <= AsyncNextIngressPhysicalOrdinal(
-                 item.envelope.recipient)'
-       /\ TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot)'
-            = TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot)
+  \A snapshot:
+    \A item \in AsyncNetworkItems:
+      /\ AsyncStrongTypeInvariant
+      /\ ExactDecisionTargetNeutralSnapshotActive(snapshot, asyncNow)
+      /\ TimeoutPhysicalControlItem(item)
+      /\ [AsyncNext]_AsyncAllVars
+      => /\ TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot) \in Nat
+         /\ TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot)
+              <= AsyncNextIngressPhysicalOrdinal(
+                   item.envelope.recipient)
+         /\ TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot)
+              <= AsyncNextIngressPhysicalOrdinal(
+                   item.envelope.recipient)'
+         /\ TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot)'
+              = TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot)
 BY ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent,
    ExactDecisionTargetNeutralFrozenSnapshotCarriersArePrimeInvariant,
    IsaT(120)
@@ -10078,12 +10085,12 @@ BY ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent,
 \* frontier therefore freezes the physical cut of the competing leader-wire
 \* producer lifecycles directly, before the control item enters ingress.
 THEOREM TimeoutPhysicalControlPacketSnapshotCapturesPhysicalCut ==
-  \A item \in AsyncNetworkItems,
-     snapshot, clockValue:
-    TimeoutPhysicalControlPacketSnapshotAtCut(
-      item, snapshot, clockValue)
-      => TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot)
-           = AsyncNextIngressPhysicalOrdinal(item.envelope.recipient)
+  \A snapshot, clockValue:
+    \A item \in AsyncNetworkItems:
+      TimeoutPhysicalControlPacketSnapshotAtCut(
+        item, snapshot, clockValue)
+        => TimeoutPhysicalControlFrozenPhysicalCut(item, snapshot)
+             = AsyncNextIngressPhysicalOrdinal(item.envelope.recipient)
 BY Isa
    DEF TimeoutPhysicalControlPacketSnapshotAtCut,
        TimeoutPhysicalControlFrozenSnapshot,
@@ -10105,22 +10112,23 @@ BY ExactDecisionTargetNeutralPacketDependencyRankForSnapshotInCarrier,
    DEF TimeoutPhysicalControlPacketDependencyRank
 
 THEOREM TimeoutPhysicalControlProducerEpisodeRankUsesFrozenPastCut ==
-  \A item \in AsyncNetworkItems, snapshot:
-    /\ AsyncStrongTypeInvariant
-    /\ ExactDecisionTargetNeutralSnapshotActive(snapshot, asyncNow)
-    /\ TimeoutPhysicalControlItem(item)
-    => /\ TimeoutPhysicalControlFrozenProoflessProducerRank(item, snapshot)
-             \in ExactDecisionTargetNeutralProoflessProducerCarrier
-       /\ TimeoutPhysicalControlFrozenCausalEpisodeRank(item, snapshot)
-             \in AsyncCausalEpisodeStructuralRankCarrier
-       /\ TimeoutPhysicalControlFrozenComposedCausalEpisodeRank(
-             item, snapshot)
-             \in ExactDecisionTargetNeutralComposedCausalEpisodeCarrier
-       /\ TimeoutPhysicalControlFrozenProducerEpisodeRank(snapshot)
-             \in ExactDecisionTargetNeutralProducerEpisodeCarrier
-       /\ IsWellFoundedOn(
-            ExactDecisionTargetNeutralProducerEpisodeOrdering,
-            ExactDecisionTargetNeutralProducerEpisodeCarrier)
+  \A snapshot:
+    \A item \in AsyncNetworkItems:
+      /\ AsyncStrongTypeInvariant
+      /\ ExactDecisionTargetNeutralSnapshotActive(snapshot, asyncNow)
+      /\ TimeoutPhysicalControlItem(item)
+      => /\ TimeoutPhysicalControlFrozenProoflessProducerRank(item, snapshot)
+               \in ExactDecisionTargetNeutralProoflessProducerCarrier
+         /\ TimeoutPhysicalControlFrozenCausalEpisodeRank(item, snapshot)
+               \in AsyncCausalEpisodeStructuralRankCarrier
+         /\ TimeoutPhysicalControlFrozenComposedCausalEpisodeRank(
+               item, snapshot)
+               \in ExactDecisionTargetNeutralComposedCausalEpisodeCarrier
+         /\ TimeoutPhysicalControlFrozenProducerEpisodeRank(snapshot)
+               \in ExactDecisionTargetNeutralProducerEpisodeCarrier
+         /\ IsWellFoundedOn(
+              ExactDecisionTargetNeutralProducerEpisodeOrdering,
+              ExactDecisionTargetNeutralProducerEpisodeCarrier)
 BY ExactDecisionTargetNeutralEpisodeRankIsInCarrier,
    ExactDecisionTargetNeutralProoflessProducerOrderingIsWellFounded,
    ExactDecisionTargetNeutralComposedCausalEpisodeOrderingIsWellFounded,
@@ -10229,17 +10237,18 @@ BY SMT
        AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant
 
 THEOREM TimeoutPhysicalControlTickLowersRetainedClockRank ==
-  \A item, rank \in Nat:
-    /\ TimeoutPhysicalControlRetainedClockAtRank(item, rank)
-    /\ AsyncTick
-    => \/ TimeoutPhysicalControlGoal(item)'
-       \/ TimeoutPhysicalControlPacketOwner(item)'
-       \/ TimeoutPhysicalControlIngressOwner(item)'
-       \/ TimeoutPhysicalControlRetainedDueOwner(item)'
-       \/ \E lowerRank \in SetLessThan(
-              rank, OpToRel(<, Nat), Nat):
-            TimeoutPhysicalControlRetainedClockAtRank(
-              item, lowerRank)'
+  \A item:
+    \A rank \in Nat:
+      /\ TimeoutPhysicalControlRetainedClockAtRank(item, rank)
+      /\ AsyncTick
+      => \/ TimeoutPhysicalControlGoal(item)'
+         \/ TimeoutPhysicalControlPacketOwner(item)'
+         \/ TimeoutPhysicalControlIngressOwner(item)'
+         \/ TimeoutPhysicalControlRetainedDueOwner(item)'
+         \/ \E lowerRank \in SetLessThan(
+                rank, OpToRel(<, Nat), Nat):
+              TimeoutPhysicalControlRetainedClockAtRank(
+                item, lowerRank)'
 BY SMT
    DEF TimeoutPhysicalControlRetainedClockAtRank,
        TimeoutPhysicalControlRetainedDueOwner,
@@ -10250,7 +10259,7 @@ BY SMT
        AsyncTick, AsyncNonClockVars
 
 THEOREM TimeoutPhysicalControlRetransmissionCreatesExactPacket ==
-  \A node \in ValidatorIds, item:
+  \A node \in ValidatorIds, item \in AsyncNetworkItems:
     /\ TimeoutPhysicalControlRetainedDueOwner(item)
     /\ item.source = node
     /\ UNCHANGED vars

@@ -25,7 +25,7 @@ object-returning APIs).
 Regenerate after PDP schema changes:
 
 ```sh
-cargo run --locked -p sorafs_manifest --bin generate_pdp_fixtures
+cargo run --locked -p sorafs_manifest --features dev-tools --bin generate_pdp_fixtures
 ```
 
 Validate the positive bundle:

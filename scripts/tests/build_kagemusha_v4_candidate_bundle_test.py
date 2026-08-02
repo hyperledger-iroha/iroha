@@ -162,7 +162,10 @@ class SealedCandidateBuildTests(unittest.TestCase):
             command[command.index("--target-dir") + 1],
             str(self.target_dir),
         )
-        self.assertIn(builder.SEALED_FEATURE, command)
+        features = set(command[command.index("--features") + 1].split(","))
+        self.assertEqual(features, set(builder.CANDIDATE_BUILD_FEATURES))
+        self.assertIn("iroha_core/dev-tools", features)
+        self.assertIn(f"iroha_core/{builder.SEALED_FEATURE}", features)
         self.assertIn("--message-format=json-render-diagnostics", command)
         self.assertNotIn("CARGO_BUILD_TARGET", environment)
         self.assertNotIn("CARGO_BUILD_RUSTC", environment)

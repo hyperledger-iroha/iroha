@@ -72,7 +72,7 @@ is shipped from the `sorafs_car` crate so CAR, fetch, and chunk-store tooling
 stay in lockstep. Example:
 
 ```
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- \
   --profile=sorafs.sf1@1.0.0 \
   --json-out=chunk_report.json \
   payload.tar
@@ -84,7 +84,7 @@ Ingest a payload, emit a CAR plan report, and persist both the main summary,
 the PoR tree, and sampled proofs in JSON:
 
 ```
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- \
   --profile=sorafs.sf1@1.0.0 \
   --json-out=chunk_report.json \
   --chunk-dir-out=chunk_payloads \
@@ -110,7 +110,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
 List the registered chunker profiles:
 
 ```
-cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
+cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_manifest_chunk_store -- --list-profiles
 ```
 
 Reassemble a payload from multiple local providers using the multi-source fetch

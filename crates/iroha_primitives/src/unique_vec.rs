@@ -6,7 +6,7 @@
 //! discarding any duplicates in the provided list.
 
 use core::borrow::Borrow;
-use std::{io::Write, vec::Vec};
+use std::vec::Vec;
 
 use derive_more::{AsRef, Deref};
 use iroha_schema::IntoSchema;
@@ -133,7 +133,7 @@ impl<'ve, T: PartialEq> IntoIterator for &'ve UniqueVec<T> {
 }
 
 impl<T: NoritoSerialize> NoritoSerialize for UniqueVec<T> {
-    fn serialize<W: Write>(&self, writer: W) -> Result<(), ncore::Error> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
     }
 }

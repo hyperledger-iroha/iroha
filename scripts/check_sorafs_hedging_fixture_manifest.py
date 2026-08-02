@@ -464,7 +464,10 @@ def validate_manifest(manifest: dict[str, Any], errors: list[str]) -> list[dict[
     if manifest.get("validation_scope") != EXPECTED_SCOPE:
         errors.append(f"validation_scope must be `{EXPECTED_SCOPE}`")
     generator = manifest.get("generator")
-    if generator != "cargo run -p sorafs_manifest --bin generate_hedging_fixtures":
+    if generator != (
+        "cargo run -p sorafs_manifest --features dev-tools "
+        "--bin generate_hedging_fixtures"
+    ):
         errors.append("generator must be the checked-in hedging fixture command")
 
     raw_entries = manifest.get("fixtures")

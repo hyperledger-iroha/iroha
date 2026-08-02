@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
 from pathlib import Path
 import stat
-import tempfile
-from typing import Any
+import subprocess
+from typing import Any, Callable
 
 
 PROFILE_RELATIVE_PATH = Path("crates/iroha_core/src/privacy_engines/zk_x509/profile.rs")
@@ -27,6 +28,7 @@ RESOURCE_NORITO_RELATIVE_PATH = Path(
     "fixtures/privacy/zk_x509_native_resource_v1.norito"
 )
 RESOURCE_JSON_RELATIVE_PATH = Path("fixtures/privacy/zk_x509_native_resource_v1.json")
+EXACT12_RELATIVE_PATH = Path("fixtures/privacy/exact12_v1.tsv")
 
 KAT_BYTES_PIN = "ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1"
 KAT_SHA256_PIN = "ZK_X509_RELEASE_KAT_EXPECTED_PROOF_SHA256_V1"
@@ -50,8 +52,28 @@ EXPECTED_SCHEMA_VERSION = 1
 EXPECTED_STAGE_COUNT = 48
 MAX_EXPECTATION_ARTIFACT_BYTES = 1024 * 1024 * 1024
 MAX_RESOURCE_ARTIFACT_BYTES = 64 * 1024
+MAX_EXACT12_BYTES = 64 * 1024
 MAX_SOURCE_BYTES = 16 * 1024 * 1024
+MAX_INSTALL_MANIFEST_BYTES = 1024 * 1024
+MAX_NATIVE_VERIFIER_BYTES = 1024 * 1024 * 1024
+MAX_CARGO_LOCK_BYTES = 128 * 1024 * 1024
 MAX_KAT_PROOF_BYTES = 8_212_538
+NATIVE_VALIDATION_MODE = "validate-captured-fixtures"
+TRANSACTION_RELATIVE_PATH = Path(".taira-privacy-native-install-v1")
+TRANSACTION_CLEANUP_RELATIVE_PATH = Path(
+    ".taira-privacy-native-install-cleanup-v1"
+)
+TRANSACTION_STATE_NAME = "state-v1.json"
+TRANSACTION_READY_NAME = "READY"
+TRANSACTION_SOURCE_BLOBS = (
+    "profile.original",
+    "readiness.original",
+)
+TRANSACTION_ALLOWED_NAMES = frozenset(
+    (TRANSACTION_STATE_NAME, TRANSACTION_READY_NAME, *TRANSACTION_SOURCE_BLOBS)
+)
+TRANSACTION_SCHEMA_VERSION = 1
+MAX_TRANSACTION_STATE_BYTES = 64 * 1024
 HASH_FRAME_DOMAIN = b"iroha.zk-x509.sha256.frame.v1"
 RESOURCE_CERTIFICATE_DOMAIN = b"iroha.zk-x509.native-resource-certificate.payload.v1"
 RESOURCE_CERTIFICATE_FIELD_COUNT = 60
@@ -153,16 +175,27 @@ def _outside_repository(path: Path, repository: Path, label: str) -> Path:
     raise InstallError(f"{label} must be outside the source checkout")
 
 
-def _stable_regular_bytes(path: Path, label: str, maximum_bytes: int) -> bytes:
+def _stable_regular_bytes(
+    path: Path,
+    label: str,
+    maximum_bytes: int,
+    *,
+    expected_links: int = 1,
+) -> bytes:
     before = path.lstat()
     if (
         not stat.S_ISREG(before.st_mode)
-        or before.st_nlink != 1
+        or before.st_nlink != expected_links
         or before.st_size <= 0
         or before.st_size > maximum_bytes
     ):
+        if expected_links == 1:
+            raise InstallError(
+                f"{label} must be one non-empty, bounded, singly linked regular file"
+            )
         raise InstallError(
-            f"{label} must be one non-empty, bounded, singly linked regular file"
+            f"{label} must be one non-empty, bounded regular file with exactly "
+            f"{expected_links} links"
         )
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags)
@@ -200,6 +233,253 @@ def _stable_regular_bytes(path: Path, label: str, maximum_bytes: int) -> bytes:
         return b"".join(chunks)
     finally:
         os.close(descriptor)
+
+
+def _stable_executable_sha256(path: Path, label: str, maximum_bytes: int) -> str:
+    before = path.lstat()
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_size <= 0
+        or before.st_size > maximum_bytes
+        or before.st_mode & 0o111 == 0
+    ):
+        raise InstallError(
+            f"{label} must be one non-empty, bounded, singly linked executable file"
+        )
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        identity_fields = (
+            "st_dev",
+            "st_ino",
+            "st_mode",
+            "st_nlink",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+        )
+        if any(
+            getattr(opened, field) != getattr(before, field)
+            for field in identity_fields
+        ):
+            raise InstallError(f"{label} changed before it was opened")
+        digest = hashlib.sha256()
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                raise InstallError(f"{label} ended before its declared length")
+            digest.update(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise InstallError(f"{label} grew while it was hashed")
+        after = os.fstat(descriptor)
+        if any(
+            getattr(after, field) != getattr(before, field)
+            for field in identity_fields
+        ):
+            raise InstallError(f"{label} changed while it was hashed")
+        return digest.hexdigest()
+    finally:
+        os.close(descriptor)
+
+
+def _canonical_sha256(value: str, label: str) -> str:
+    if (
+        len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+        or value == "0" * 64
+    ):
+        raise InstallError(f"{label} must be one nonzero lowercase SHA-256 digest")
+    return value
+
+
+def _canonical_commit(value: str, label: str) -> str:
+    if (
+        len(value) != 40
+        or any(character not in "0123456789abcdef" for character in value)
+        or value == "0" * 40
+    ):
+        raise InstallError(f"{label} must be one nonzero lowercase full Git commit")
+    return value
+
+
+def _canonical_signer_principal(value: str, label: str) -> str:
+    alphanumeric = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    allowed = alphanumeric + "._@+-"
+    if (
+        not 1 <= len(value) <= 128
+        or value[0] not in alphanumeric
+        or value[-1] not in alphanumeric
+        or any(character not in allowed for character in value)
+    ):
+        raise InstallError(
+            f"{label} must be one bounded canonical ASCII SSH signer principal"
+        )
+    return value
+
+
+def _canonical_ssh_fingerprint(value: str, label: str) -> str:
+    prefix = "SHA256:"
+    if not value.startswith(prefix) or len(value) != len(prefix) + 43:
+        raise InstallError(f"{label} must be one OpenSSH SHA256 fingerprint")
+    encoded = value[len(prefix) :]
+    if any(
+        character
+        not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/"
+        for character in encoded
+    ):
+        raise InstallError(f"{label} must be one OpenSSH SHA256 fingerprint")
+    try:
+        decoded = base64.b64decode(encoded + "=", validate=True)
+    except ValueError as error:
+        raise InstallError(f"{label} must be one OpenSSH SHA256 fingerprint") from error
+    if (
+        len(decoded) != 32
+        or decoded == b"\0" * 32
+        or base64.b64encode(decoded).decode("ascii").rstrip("=") != encoded
+    ):
+        raise InstallError(
+            f"{label} must be one nonzero canonical OpenSSH SHA256 fingerprint"
+        )
+    return value
+
+
+def _authenticated_origins(
+    *,
+    iroha_source_commit: str,
+    iroha_signer_principal: str,
+    iroha_signer_fingerprint: str,
+    iroha_allowed_signers_sha256: str,
+    validator_source_commit: str,
+    validator_signer_principal: str,
+    validator_signer_fingerprint: str,
+    validator_allowed_signers_sha256: str,
+    validator_source_tree_sha256: str,
+    bootstrap_source_tree_sha256: str,
+    cargo_lock_sha256: str,
+    rust_toolchain_tree_sha256: str,
+) -> dict[str, object]:
+    return {
+        "iroha_source": {
+            "commit": _canonical_commit(iroha_source_commit, "Iroha source commit"),
+            "signature_format": "ssh",
+            "signer_principal": _canonical_signer_principal(
+                iroha_signer_principal, "Iroha signer principal"
+            ),
+            "signer_fingerprint": _canonical_ssh_fingerprint(
+                iroha_signer_fingerprint, "Iroha signer fingerprint"
+            ),
+            "allowed_signers_sha256": _canonical_sha256(
+                iroha_allowed_signers_sha256, "Iroha allowed-signers SHA-256"
+            ),
+        },
+        "validator_source": {
+            "commit": _canonical_commit(
+                validator_source_commit, "validator source commit"
+            ),
+            "signature_format": "ssh",
+            "signer_principal": _canonical_signer_principal(
+                validator_signer_principal, "validator signer principal"
+            ),
+            "signer_fingerprint": _canonical_ssh_fingerprint(
+                validator_signer_fingerprint, "validator signer fingerprint"
+            ),
+            "allowed_signers_sha256": _canonical_sha256(
+                validator_allowed_signers_sha256,
+                "validator allowed-signers SHA-256",
+            ),
+            "source_tree_sha256": _canonical_sha256(
+                validator_source_tree_sha256, "validator source-tree SHA-256"
+            ),
+        },
+        "build_inputs": {
+            "bootstrap_source_tree_sha256": _canonical_sha256(
+                bootstrap_source_tree_sha256, "bootstrap source-tree SHA-256"
+            ),
+            "cargo_lock_sha256": _canonical_sha256(
+                cargo_lock_sha256, "Cargo.lock SHA-256"
+            ),
+        },
+        "rust_toolchain": {
+            "release": EXPECTED_ENVIRONMENT["rustc_release"],
+            "host": EXPECTED_ENVIRONMENT["rustc_host"],
+            "compiler_commit": EXPECTED_ENVIRONMENT["rustc_commit_hash"],
+            "tree_sha256": _canonical_sha256(
+                rust_toolchain_tree_sha256, "Rust toolchain tree SHA-256"
+            ),
+        },
+    }
+
+
+def _run_native_fixture_validation(
+    *,
+    native_verifier: Path,
+    native_verifier_sha256: str,
+    exact12_matrix: Path,
+    captured_expectations_norito: Path,
+    captured_expectations_json: Path,
+    captured_resource_norito: Path,
+    captured_resource_json: Path,
+) -> None:
+    expected_verifier_sha256 = _canonical_sha256(
+        native_verifier_sha256, "native verifier SHA-256"
+    )
+    if (
+        _stable_executable_sha256(
+            native_verifier,
+            "native capture verifier",
+            MAX_NATIVE_VERIFIER_BYTES,
+        )
+        != expected_verifier_sha256
+    ):
+        raise InstallError("native capture verifier does not match its attested SHA-256")
+    command = [
+        str(native_verifier),
+        NATIVE_VALIDATION_MODE,
+        "--exact12-matrix",
+        str(exact12_matrix),
+        "--expectations-norito",
+        str(captured_expectations_norito),
+        "--expectations-json",
+        str(captured_expectations_json),
+        "--x509-resource-norito",
+        str(captured_resource_norito),
+        "--x509-resource-json",
+        str(captured_resource_json),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env={},
+        )
+    except OSError as error:
+        raise InstallError(f"cannot execute native capture verifier: {error}") from error
+    if completed.returncode != 0:
+        diagnostic = completed.stderr.strip()
+        if len(diagnostic) > 4096:
+            diagnostic = diagnostic[-4096:]
+        suffix = f": {diagnostic}" if diagnostic else ""
+        raise InstallError(
+            f"native typed capture validation failed with code {completed.returncode}{suffix}"
+        )
+    if (
+        _stable_executable_sha256(
+            native_verifier,
+            "native capture verifier after validation",
+            MAX_NATIVE_VERIFIER_BYTES,
+        )
+        != expected_verifier_sha256
+    ):
+        raise InstallError("native capture verifier changed during validation")
 
 
 def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -559,23 +839,6 @@ def _create_new_file(path: Path, encoded: bytes, mode: int) -> None:
         raise
 
 
-def _temporary_file(path: Path, encoded: bytes, mode: int, label: str) -> Path:
-    descriptor, raw_path = tempfile.mkstemp(
-        prefix=f".{path.name}.{label}.", dir=path.parent
-    )
-    temporary = Path(raw_path)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(encoded)
-            stream.flush()
-            os.fchmod(stream.fileno(), mode)
-            os.fsync(stream.fileno())
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-    return temporary
-
-
 def _sync_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
@@ -584,46 +847,679 @@ def _sync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+Failpoint = Callable[[str], None]
+
+
+def _trip_failpoint(failpoint: Failpoint, phase: str) -> None:
+    if failpoint is not None:
+        failpoint(phase)
+
+
+def _replacement_temporary_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}.taira-privacy-native-install-v1.tmp")
+
+
+def _atomic_create_new(
+    path: Path,
+    encoded: bytes,
+    mode: int,
+    label: str,
+    *,
+    failpoint: Failpoint = None,
+    temporary_phase: str | None = None,
+    published_phase: str | None = None,
+) -> None:
+    temporary = _replacement_temporary_path(path)
+    if os.path.lexists(path) or os.path.lexists(temporary):
+        raise InstallError(f"{label} target or transaction temporary already exists")
+    _create_new_file(temporary, encoded, mode)
+    _sync_directory(path.parent)
+    if temporary_phase is not None:
+        _trip_failpoint(failpoint, temporary_phase)
+    os.link(temporary, path, follow_symlinks=False)
+    _sync_directory(path.parent)
+    if published_phase is not None:
+        _trip_failpoint(failpoint, published_phase)
+    temporary.unlink()
+    _sync_directory(path.parent)
+
+
+def _atomic_replace(
+    path: Path,
+    encoded: bytes,
+    mode: int,
+    label: str,
+    *,
+    failpoint: Failpoint = None,
+    temporary_phase: str | None = None,
+) -> None:
+    temporary = _replacement_temporary_path(path)
+    if os.path.lexists(temporary):
+        raise InstallError(f"{label} transaction temporary already exists")
+    _create_new_file(temporary, encoded, mode)
+    _sync_directory(path.parent)
+    if temporary_phase is not None:
+        _trip_failpoint(failpoint, temporary_phase)
+    os.replace(temporary, path)
+    _sync_directory(path.parent)
+
+
+def _canonical_json_document(payload: dict[str, object]) -> bytes:
+    return (
+        json.dumps(payload, indent=2, sort_keys=True, separators=(",", ": "))
+        + "\n"
+    ).encode()
+
+
+def _transaction_paths(repository: Path) -> tuple[Path, Path]:
+    return (
+        repository / TRANSACTION_RELATIVE_PATH,
+        repository / TRANSACTION_CLEANUP_RELATIVE_PATH,
+    )
+
+
+def _validate_transaction_directory(path: Path, label: str) -> None:
+    metadata = path.lstat()
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+        or path.resolve(strict=True) != path
+    ):
+        raise InstallError(f"{label} must be one canonical mode-0700 directory")
+
+
+def _discard_transaction_directory(path: Path, label: str) -> None:
+    _validate_transaction_directory(path, label)
+    entries = list(path.iterdir())
+    unexpected = sorted(
+        entry.name for entry in entries if entry.name not in TRANSACTION_ALLOWED_NAMES
+    )
+    if unexpected:
+        raise InstallError(
+            f"{label} contains unexpected entries: {', '.join(unexpected)}"
+        )
+    for entry in entries:
+        metadata = entry.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise InstallError(f"{label} entry {entry.name} is not a regular file")
+    for entry in entries:
+        entry.unlink()
+    path.rmdir()
+    _sync_directory(path.parent)
+
+
+def _finalize_transaction_directory(repository: Path) -> None:
+    transaction, cleanup = _transaction_paths(repository)
+    if os.path.lexists(cleanup):
+        raise InstallError("transaction cleanup tombstone already exists")
+    os.rename(transaction, cleanup)
+    _sync_directory(repository)
+    _discard_transaction_directory(cleanup, "transaction cleanup tombstone")
+
+
+def _transaction_source_entry(
+    *,
+    relative_path: Path,
+    original_blob: str,
+    original: bytes,
+    installed: bytes,
+    mode: int,
+) -> dict[str, object]:
+    return {
+        "path": relative_path.as_posix(),
+        "original_blob": original_blob,
+        "original_bytes": len(original),
+        "original_sha256": _sha256(original),
+        "installed_bytes": len(installed),
+        "installed_sha256": _sha256(installed),
+        "mode": mode,
+    }
+
+
+def _build_transaction_state(
+    *,
+    repository: Path,
+    profile_bytes: bytes,
+    patched_profile: bytes,
+    profile_mode: int,
+    readiness_bytes: bytes,
+    patched_readiness: bytes,
+    readiness_mode: int,
+    targets: tuple[Path, Path, Path, Path],
+    captured: tuple[bytes, bytes, bytes, bytes],
+    manifest_path: Path,
+    manifest_encoded: bytes,
+) -> dict[str, object]:
+    return {
+        "schema_version": TRANSACTION_SCHEMA_VERSION,
+        "manifest_path": str(manifest_path),
+        "sources": {
+            "profile": _transaction_source_entry(
+                relative_path=PROFILE_RELATIVE_PATH,
+                original_blob=TRANSACTION_SOURCE_BLOBS[0],
+                original=profile_bytes,
+                installed=patched_profile,
+                mode=profile_mode,
+            ),
+            "readiness": _transaction_source_entry(
+                relative_path=READINESS_RELATIVE_PATH,
+                original_blob=TRANSACTION_SOURCE_BLOBS[1],
+                original=readiness_bytes,
+                installed=patched_readiness,
+                mode=readiness_mode,
+            ),
+        },
+        "fixtures": [
+            {
+                "path": target.relative_to(repository).as_posix(),
+                "bytes": len(encoded),
+                "sha256": _sha256(encoded),
+                "mode": 0o444,
+            }
+            for target, encoded in zip(targets, captured)
+        ],
+        "manifest": {
+            "bytes": len(manifest_encoded),
+            "sha256": _sha256(manifest_encoded),
+            "mode": 0o600,
+        },
+    }
+
+
+def _transaction_entry(
+    value: Any,
+    *,
+    label: str,
+    expected_path: str,
+    expected_mode: int | None,
+    expected_blob: str | None = None,
+) -> dict[str, Any]:
+    expected_keys = {"path", "bytes", "sha256", "mode"}
+    if expected_blob is not None:
+        expected_keys = {
+            "path",
+            "original_blob",
+            "original_bytes",
+            "original_sha256",
+            "installed_bytes",
+            "installed_sha256",
+            "mode",
+        }
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        raise InstallError(f"{label} has noncanonical transaction fields")
+    if value["path"] != expected_path or type(value["path"]) is not str:
+        raise InstallError(f"{label}.path is not the fixed transaction path")
+    mode = _uint(value["mode"], 16, f"{label}.mode")
+    if mode > 0o777 or (expected_mode is not None and mode != expected_mode):
+        raise InstallError(f"{label}.mode is not a valid fixed transaction mode")
+    if expected_blob is None:
+        if _uint(value["bytes"], 64, f"{label}.bytes") == 0:
+            raise InstallError(f"{label}.bytes must be nonzero")
+        _canonical_sha256(value["sha256"], f"{label}.sha256")
+    else:
+        if value["original_blob"] != expected_blob:
+            raise InstallError(f"{label}.original_blob is not canonical")
+        for field in ("original_bytes", "installed_bytes"):
+            if _uint(value[field], 64, f"{label}.{field}") == 0:
+                raise InstallError(f"{label}.{field} must be nonzero")
+        for field in ("original_sha256", "installed_sha256"):
+            _canonical_sha256(value[field], f"{label}.{field}")
+    return value
+
+
+def _load_transaction_state(
+    *,
+    repository: Path,
+    transaction: Path,
+    targets: tuple[Path, Path, Path, Path],
+) -> tuple[dict[str, Any], tuple[bytes, bytes], Path]:
+    state_bytes = _stable_regular_bytes(
+        transaction / TRANSACTION_STATE_NAME,
+        "transaction state",
+        MAX_TRANSACTION_STATE_BYTES,
+    )
+    ready = _stable_regular_bytes(
+        transaction / TRANSACTION_READY_NAME,
+        "transaction ready marker",
+        128,
+    )
+    if ready != f"{_sha256(state_bytes)}\n".encode():
+        raise InstallError("transaction ready marker does not authenticate its state")
+    payload = _strict_json(state_bytes, "transaction state")
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema_version",
+        "manifest_path",
+        "sources",
+        "fixtures",
+        "manifest",
+    }:
+        raise InstallError("transaction state has noncanonical top-level fields")
+    if _uint(payload["schema_version"], 16, "transaction schema_version") != 1:
+        raise InstallError("transaction state schema is not exactly v1")
+    raw_manifest_path = payload["manifest_path"]
+    if type(raw_manifest_path) is not str:
+        raise InstallError("transaction manifest path is not a string")
+    transaction_manifest_path = Path(raw_manifest_path)
+    if (
+        not transaction_manifest_path.is_absolute()
+        or Path(os.path.normpath(raw_manifest_path)) != transaction_manifest_path
+    ):
+        raise InstallError("transaction manifest path is not canonical and absolute")
+    try:
+        transaction_manifest_path.relative_to(repository)
+    except ValueError:
+        pass
+    else:
+        raise InstallError("transaction manifest path must remain outside the checkout")
+    if transaction_manifest_path.parent.exists() and (
+        transaction_manifest_path.parent.resolve(strict=True)
+        != transaction_manifest_path.parent
+    ):
+        raise InstallError("transaction manifest parent is no longer canonical")
+    if _canonical_json_document(payload) != state_bytes:
+        raise InstallError("transaction state is not canonical JSON")
+
+    sources = payload["sources"]
+    if not isinstance(sources, dict) or set(sources) != {"profile", "readiness"}:
+        raise InstallError("transaction sources are not the exact fixed pair")
+    source_entries = (
+        _transaction_entry(
+            sources["profile"],
+            label="transaction profile source",
+            expected_path=PROFILE_RELATIVE_PATH.as_posix(),
+            expected_mode=None,
+            expected_blob=TRANSACTION_SOURCE_BLOBS[0],
+        ),
+        _transaction_entry(
+            sources["readiness"],
+            label="transaction readiness source",
+            expected_path=READINESS_RELATIVE_PATH.as_posix(),
+            expected_mode=None,
+            expected_blob=TRANSACTION_SOURCE_BLOBS[1],
+        ),
+    )
+    originals: list[bytes] = []
+    for entry, blob_name, label in zip(
+        source_entries,
+        TRANSACTION_SOURCE_BLOBS,
+        ("profile rollback source", "readiness rollback source"),
+    ):
+        original = _stable_regular_bytes(
+            transaction / blob_name, label, MAX_SOURCE_BYTES
+        )
+        if (
+            len(original) != entry["original_bytes"]
+            or _sha256(original) != entry["original_sha256"]
+        ):
+            raise InstallError(f"{label} does not match transaction state")
+        originals.append(original)
+
+    fixtures = payload["fixtures"]
+    if not isinstance(fixtures, list) or len(fixtures) != len(targets):
+        raise InstallError("transaction fixtures are not the exact four-file closure")
+    for index, (entry, target) in enumerate(zip(fixtures, targets)):
+        _transaction_entry(
+            entry,
+            label=f"transaction fixture {index}",
+            expected_path=target.relative_to(repository).as_posix(),
+            expected_mode=0o444,
+        )
+    manifest = payload["manifest"]
+    if not isinstance(manifest, dict) or set(manifest) != {"bytes", "sha256", "mode"}:
+        raise InstallError("transaction manifest entry has noncanonical fields")
+    if (
+        _uint(manifest["bytes"], 64, "transaction manifest bytes") == 0
+        or _uint(manifest["mode"], 16, "transaction manifest mode") != 0o600
+    ):
+        raise InstallError("transaction manifest size or mode is invalid")
+    _canonical_sha256(manifest["sha256"], "transaction manifest SHA-256")
+    return payload, (originals[0], originals[1]), transaction_manifest_path
+
+
+def _prepare_transaction(
+    *,
+    repository: Path,
+    state: dict[str, object],
+    profile_bytes: bytes,
+    readiness_bytes: bytes,
+) -> None:
+    transaction, cleanup = _transaction_paths(repository)
+    if os.path.lexists(transaction) or os.path.lexists(cleanup):
+        raise InstallError("transaction path was not recovered before preparation")
+    os.mkdir(transaction, 0o700)
+    os.chmod(transaction, 0o700)
+    _sync_directory(repository)
+    try:
+        _create_new_file(
+            transaction / TRANSACTION_SOURCE_BLOBS[0], profile_bytes, 0o600
+        )
+        _create_new_file(
+            transaction / TRANSACTION_SOURCE_BLOBS[1], readiness_bytes, 0o600
+        )
+        state_bytes = _canonical_json_document(state)
+        if len(state_bytes) > MAX_TRANSACTION_STATE_BYTES:
+            raise InstallError("transaction state exceeds its fixed size bound")
+        _create_new_file(transaction / TRANSACTION_STATE_NAME, state_bytes, 0o600)
+        _sync_directory(transaction)
+        _create_new_file(
+            transaction / TRANSACTION_READY_NAME,
+            f"{_sha256(state_bytes)}\n".encode(),
+            0o600,
+        )
+        _sync_directory(transaction)
+        _sync_directory(repository)
+    except BaseException:
+        if not os.path.lexists(transaction / TRANSACTION_READY_NAME):
+            _discard_transaction_directory(
+                transaction, "incomplete installation transaction"
+            )
+        raise
+
+
+def _file_matches_transaction_entry(
+    path: Path,
+    entry: dict[str, Any],
+    *,
+    label: str,
+    maximum_bytes: int,
+    digest_field: str = "sha256",
+    bytes_field: str = "bytes",
+    expected_links: int = 1,
+) -> bool:
+    if not os.path.lexists(path):
+        return False
+    encoded = _stable_regular_bytes(
+        path, label, maximum_bytes, expected_links=expected_links
+    )
+    mode = stat.S_IMODE(path.stat().st_mode)
+    return (
+        len(encoded) == entry[bytes_field]
+        and _sha256(encoded) == entry[digest_field]
+        and mode == entry["mode"]
+    )
+
+
+def _reconcile_transaction_temporary(
+    path: Path,
+    entry: dict[str, Any],
+    *,
+    label: str,
+    maximum_bytes: int,
+    digest_field: str = "sha256",
+    bytes_field: str = "bytes",
+) -> None:
+    temporary = _replacement_temporary_path(path)
+    if not os.path.lexists(temporary):
+        return
+    temporary_metadata = temporary.lstat()
+    if not stat.S_ISREG(temporary_metadata.st_mode):
+        raise InstallError(f"{label} temporary is not a regular file")
+
+    if os.path.lexists(path):
+        path_metadata = path.lstat()
+        if (
+            stat.S_ISREG(path_metadata.st_mode)
+            and (path_metadata.st_dev, path_metadata.st_ino)
+            == (temporary_metadata.st_dev, temporary_metadata.st_ino)
+        ):
+            if temporary_metadata.st_nlink != 2 or path_metadata.st_nlink != 2:
+                raise InstallError(
+                    f"{label} published temporary has an unexpected link count"
+                )
+            if not _file_matches_transaction_entry(
+                path,
+                entry,
+                label=f"{label} published temporary",
+                maximum_bytes=maximum_bytes,
+                digest_field=digest_field,
+                bytes_field=bytes_field,
+                expected_links=2,
+            ):
+                raise InstallError(
+                    f"{label} published temporary differs from transaction state"
+                )
+            temporary.unlink()
+            _sync_directory(path.parent)
+            return
+
+    if not _file_matches_transaction_entry(
+        temporary,
+        entry,
+        label=f"{label} unpublished temporary",
+        maximum_bytes=maximum_bytes,
+        digest_field=digest_field,
+        bytes_field=bytes_field,
+    ):
+        raise InstallError(f"{label} temporary differs from transaction state")
+    temporary.unlink()
+    _sync_directory(path.parent)
+
+
+def _remove_uncommitted_fixture(
+    path: Path,
+    entry: dict[str, Any],
+    *,
+    label: str,
+    maximum_bytes: int,
+) -> None:
+    if not os.path.lexists(path):
+        return
+    if not _file_matches_transaction_entry(
+        path, entry, label=label, maximum_bytes=maximum_bytes
+    ):
+        raise InstallError(f"{label} differs from the uncommitted transaction")
+    path.unlink()
+    _sync_directory(path.parent)
+
+
+def _recover_transaction(
+    *,
+    repository: Path,
+    manifest_path: Path,
+    profile_path: Path,
+    readiness_path: Path,
+    targets: tuple[Path, Path, Path, Path],
+    maximums: tuple[int, int, int, int],
+    failpoint: Failpoint,
+) -> str | None:
+    transaction, cleanup = _transaction_paths(repository)
+    if os.path.lexists(cleanup):
+        _discard_transaction_directory(cleanup, "transaction cleanup tombstone")
+    temporary_paths = tuple(
+        _replacement_temporary_path(path)
+        for path in (*targets, profile_path, readiness_path, manifest_path)
+    )
+    if not os.path.lexists(transaction):
+        leftover = next((path for path in temporary_paths if os.path.lexists(path)), None)
+        if leftover is not None:
+            raise InstallError(f"orphaned installation temporary exists: {leftover}")
+        return None
+    _validate_transaction_directory(transaction, "installation transaction")
+    ready_path = transaction / TRANSACTION_READY_NAME
+    if not os.path.lexists(ready_path):
+        if any(os.path.lexists(path) for path in (*targets, manifest_path, *temporary_paths)):
+            raise InstallError(
+                "incomplete transaction journal coexists with installation mutations"
+            )
+        _discard_transaction_directory(transaction, "incomplete installation transaction")
+        return "discarded"
+
+    state, originals, transaction_manifest_path = _load_transaction_state(
+        repository=repository,
+        transaction=transaction,
+        targets=targets,
+    )
+    sources = state["sources"]
+    fixtures = state["fixtures"]
+    manifest = state["manifest"]
+    if (
+        not isinstance(sources, dict)
+        or not isinstance(fixtures, list)
+        or not isinstance(manifest, dict)
+    ):
+        raise InstallError("validated transaction state lost its typed structure")
+
+    transaction_manifest_temporary = _replacement_temporary_path(
+        transaction_manifest_path
+    )
+    invocation_manifest_temporary = _replacement_temporary_path(manifest_path)
+    if (
+        invocation_manifest_temporary != transaction_manifest_temporary
+        and os.path.lexists(invocation_manifest_temporary)
+    ):
+        raise InstallError(
+            "new invocation manifest temporary is not owned by the durable transaction"
+        )
+    for label, path, entry in (
+        ("profile source", profile_path, sources["profile"]),
+        ("readiness source", readiness_path, sources["readiness"]),
+    ):
+        _reconcile_transaction_temporary(
+            path,
+            entry,
+            label=label,
+            maximum_bytes=MAX_SOURCE_BYTES,
+            digest_field="installed_sha256",
+            bytes_field="installed_bytes",
+        )
+    for index, (path, entry, maximum) in enumerate(
+        zip(targets, fixtures, maximums)
+    ):
+        _reconcile_transaction_temporary(
+            path,
+            entry,
+            label=f"fixture {index}",
+            maximum_bytes=maximum,
+        )
+    _reconcile_transaction_temporary(
+        transaction_manifest_path,
+        manifest,
+        label="installation manifest",
+        maximum_bytes=MAX_INSTALL_MANIFEST_BYTES,
+    )
+    if os.path.lexists(transaction_manifest_path):
+        if not _file_matches_transaction_entry(
+            transaction_manifest_path,
+            manifest,
+            label="committed installation manifest",
+            maximum_bytes=MAX_INSTALL_MANIFEST_BYTES,
+        ):
+            raise InstallError("installation commit marker differs from transaction state")
+        for label, path, entry in (
+            ("committed profile source", profile_path, sources["profile"]),
+            ("committed readiness source", readiness_path, sources["readiness"]),
+        ):
+            if not _file_matches_transaction_entry(
+                path,
+                entry,
+                label=label,
+                maximum_bytes=MAX_SOURCE_BYTES,
+                digest_field="installed_sha256",
+                bytes_field="installed_bytes",
+            ):
+                raise InstallError(f"{label} differs from committed transaction state")
+        for index, (path, entry, maximum) in enumerate(
+            zip(targets, fixtures, maximums)
+        ):
+            if not _file_matches_transaction_entry(
+                path,
+                entry,
+                label=f"committed fixture {index}",
+                maximum_bytes=maximum,
+            ):
+                raise InstallError(
+                    f"committed fixture {index} differs from transaction state"
+                )
+        committed_temporaries = (
+            *temporary_paths[:-1],
+            transaction_manifest_temporary,
+        )
+        if any(os.path.lexists(path) for path in committed_temporaries):
+            raise InstallError("committed transaction retains an installation temporary")
+        _trip_failpoint(failpoint, "recovery_commit_validated")
+        _finalize_transaction_directory(repository)
+        return "committed"
+
+    for label, path, entry, original in (
+        ("profile source", profile_path, sources["profile"], originals[0]),
+        ("readiness source", readiness_path, sources["readiness"], originals[1]),
+    ):
+        current = _stable_regular_bytes(path, label, MAX_SOURCE_BYTES)
+        current_mode = stat.S_IMODE(path.stat().st_mode)
+        current_is_original = (
+            len(current) == entry["original_bytes"]
+            and _sha256(current) == entry["original_sha256"]
+        )
+        current_is_installed = (
+            len(current) == entry["installed_bytes"]
+            and _sha256(current) == entry["installed_sha256"]
+        )
+        if not current_is_original and not current_is_installed:
+            raise InstallError(f"{label} differs from both transaction states")
+        if not current_is_original or current_mode != entry["mode"]:
+            _atomic_replace(path, original, entry["mode"], f"rollback {label}")
+        _trip_failpoint(failpoint, f"recovery_{label.replace(' ', '_')}_restored")
+
+    for index, (path, entry, maximum) in enumerate(
+        zip(targets, fixtures, maximums)
+    ):
+        _remove_uncommitted_fixture(
+            path,
+            entry,
+            label=f"uncommitted fixture {index}",
+            maximum_bytes=maximum,
+        )
+        _trip_failpoint(failpoint, f"recovery_fixture_{index}_removed")
+    if any(
+        os.path.lexists(_replacement_temporary_path(path))
+        for path in (*targets, profile_path, readiness_path, transaction_manifest_path)
+    ):
+        raise InstallError("rollback retained an installation temporary")
+    _trip_failpoint(failpoint, "recovery_rollback_complete")
+    _finalize_transaction_directory(repository)
+    return "rolled_back"
+
+
 def install(
     *,
     repository: Path,
+    native_verifier: Path,
+    native_verifier_sha256: str,
+    exact12_matrix: Path,
     captured_expectations_norito: Path,
     captured_expectations_json: Path,
     captured_resource_norito: Path,
     captured_resource_json: Path,
     manifest_path: Path,
+    authenticated_iroha_source_commit: str,
+    authenticated_iroha_signer_principal: str,
+    authenticated_iroha_signer_fingerprint: str,
+    authenticated_iroha_allowed_signers_sha256: str,
+    authenticated_validator_source_commit: str,
+    authenticated_validator_signer_principal: str,
+    authenticated_validator_signer_fingerprint: str,
+    authenticated_validator_allowed_signers_sha256: str,
+    authenticated_validator_source_tree_sha256: str,
+    authenticated_bootstrap_source_tree_sha256: str,
+    authenticated_cargo_lock_sha256: str,
+    authenticated_rust_toolchain_tree_sha256: str,
+    _failpoint: Failpoint = None,
 ) -> dict[str, object]:
     """Validate and atomically install the first-release native fixture set."""
 
     profile_path = repository / PROFILE_RELATIVE_PATH
     readiness_path = repository / READINESS_RELATIVE_PATH
+    canonical_exact12_path = repository / EXACT12_RELATIVE_PATH
+    if exact12_matrix != canonical_exact12_path:
+        raise InstallError(
+            "exact12 matrix must be the canonical first-release repository fixture"
+        )
     targets = (
         repository / EXPECTATIONS_NORITO_RELATIVE_PATH,
         repository / EXPECTATIONS_JSON_RELATIVE_PATH,
         repository / RESOURCE_NORITO_RELATIVE_PATH,
         repository / RESOURCE_JSON_RELATIVE_PATH,
     )
-    for parent, label in (
-        (profile_path.parent, "ZK-X509 profile parent"),
-        (readiness_path.parent, "readiness-certificate parent"),
-        (targets[0].parent, "privacy fixture parent"),
-        (manifest_path.parent, "installation manifest parent"),
-    ):
-        if parent.resolve(strict=True) != parent:
-            raise InstallError(f"{label} must use its canonical physical path")
-    for target in (*targets, manifest_path):
-        if os.path.lexists(target):
-            raise InstallError(f"one-shot installation target already exists: {target}")
-
-    capture_paths = (
-        captured_expectations_norito,
-        captured_expectations_json,
-        captured_resource_norito,
-        captured_resource_json,
-    )
-    identities = [(path.lstat().st_dev, path.lstat().st_ino) for path in capture_paths]
-    if len(set(identities)) != len(identities):
-        raise InstallError("captured fixture paths must not alias any inode")
     maximums = (
         MAX_EXPECTATION_ARTIFACT_BYTES,
         MAX_EXPECTATION_ARTIFACT_BYTES,
@@ -636,9 +1532,66 @@ def install(
         "captured X.509 resource Norito",
         "captured X.509 resource JSON",
     )
+    for parent, label in (
+        (profile_path.parent, "ZK-X509 profile parent"),
+        (readiness_path.parent, "readiness-certificate parent"),
+        (targets[0].parent, "privacy fixture parent"),
+        (manifest_path.parent, "installation manifest parent"),
+    ):
+        if parent.resolve(strict=True) != parent:
+            raise InstallError(f"{label} must use its canonical physical path")
+    _recover_transaction(
+        repository=repository,
+        manifest_path=manifest_path,
+        profile_path=profile_path,
+        readiness_path=readiness_path,
+        targets=targets,
+        maximums=maximums,
+        failpoint=_failpoint,
+    )
+    for target in (*targets, manifest_path):
+        if os.path.lexists(target):
+            raise InstallError(f"one-shot installation target already exists: {target}")
+
+    authenticated_origins = _authenticated_origins(
+        iroha_source_commit=authenticated_iroha_source_commit,
+        iroha_signer_principal=authenticated_iroha_signer_principal,
+        iroha_signer_fingerprint=authenticated_iroha_signer_fingerprint,
+        iroha_allowed_signers_sha256=authenticated_iroha_allowed_signers_sha256,
+        validator_source_commit=authenticated_validator_source_commit,
+        validator_signer_principal=authenticated_validator_signer_principal,
+        validator_signer_fingerprint=authenticated_validator_signer_fingerprint,
+        validator_allowed_signers_sha256=(
+            authenticated_validator_allowed_signers_sha256
+        ),
+        validator_source_tree_sha256=authenticated_validator_source_tree_sha256,
+        bootstrap_source_tree_sha256=authenticated_bootstrap_source_tree_sha256,
+        cargo_lock_sha256=authenticated_cargo_lock_sha256,
+        rust_toolchain_tree_sha256=authenticated_rust_toolchain_tree_sha256,
+    )
+    cargo_lock_path = repository / "Cargo.lock"
+    cargo_lock_bytes = _stable_regular_bytes(
+        cargo_lock_path, "authenticated Cargo.lock", MAX_CARGO_LOCK_BYTES
+    )
+    if _sha256(cargo_lock_bytes) != authenticated_cargo_lock_sha256:
+        raise InstallError("Cargo.lock does not match its authenticated origin digest")
+
+    capture_paths = (
+        captured_expectations_norito,
+        captured_expectations_json,
+        captured_resource_norito,
+        captured_resource_json,
+    )
+    validation_paths = (*capture_paths, exact12_matrix, native_verifier)
+    identities = [(path.lstat().st_dev, path.lstat().st_ino) for path in validation_paths]
+    if len(set(identities)) != len(identities):
+        raise InstallError("native validation inputs must not alias any inode")
     captured = tuple(
         _stable_regular_bytes(path, label, maximum)
         for path, label, maximum in zip(capture_paths, labels, maximums)
+    )
+    exact12_bytes = _stable_regular_bytes(
+        exact12_matrix, "exact12 matrix", MAX_EXACT12_BYTES
     )
     expectations_norito, expectations_json, resource_norito, resource_json = captured
     _validate_expectations_json(expectations_json)
@@ -653,6 +1606,29 @@ def install(
     )
     if _sha256(resource_norito) == _sha256(resource_json):
         raise InstallError("Norito and JSON resource-certificate digests must differ")
+
+    _run_native_fixture_validation(
+        native_verifier=native_verifier,
+        native_verifier_sha256=native_verifier_sha256,
+        exact12_matrix=exact12_matrix,
+        captured_expectations_norito=captured_expectations_norito,
+        captured_expectations_json=captured_expectations_json,
+        captured_resource_norito=captured_resource_norito,
+        captured_resource_json=captured_resource_json,
+    )
+    captured_after_validation = tuple(
+        _stable_regular_bytes(path, label, maximum)
+        for path, label, maximum in zip(capture_paths, labels, maximums)
+    )
+    if captured_after_validation != captured:
+        raise InstallError("captured fixture bytes changed during native validation")
+    if (
+        _stable_regular_bytes(
+            exact12_matrix, "exact12 matrix after native validation", MAX_EXACT12_BYTES
+        )
+        != exact12_bytes
+    ):
+        raise InstallError("exact12 matrix changed during native validation")
 
     profile_bytes = _stable_regular_bytes(
         profile_path, "ZK-X509 profile source", MAX_SOURCE_BYTES
@@ -704,30 +1680,105 @@ def install(
         resource_values["certificate_sha256"],
     )
 
+    patched_profile_bytes = patched_profile.encode()
+    patched_readiness_bytes = patched_readiness.encode()
     profile_mode = stat.S_IMODE(profile_path.stat().st_mode)
     readiness_mode = stat.S_IMODE(readiness_path.stat().st_mode)
-    next_profile = _temporary_file(
-        profile_path, patched_profile.encode(), profile_mode, "next"
+    manifest: dict[str, object] = {
+        "schema_version": 1,
+        "authenticated_origins": authenticated_origins,
+        "installation_transaction": {
+            "schema_version": TRANSACTION_SCHEMA_VERSION,
+            "commit_marker": "manifest-created-last",
+        },
+        "native_capture_validation": {
+            "mode": NATIVE_VALIDATION_MODE,
+            "verifier_sha256": native_verifier_sha256,
+            "exact12_path": EXACT12_RELATIVE_PATH.as_posix(),
+            "exact12_sha256": _sha256(exact12_bytes),
+        },
+        "profile_source": PROFILE_RELATIVE_PATH.as_posix(),
+        "readiness_certificate_source": READINESS_RELATIVE_PATH.as_posix(),
+        "expectations_norito": {
+            "path": EXPECTATIONS_NORITO_RELATIVE_PATH.as_posix(),
+            "sha256": expectation_norito_sha256,
+        },
+        "expectations_json": {
+            "path": EXPECTATIONS_JSON_RELATIVE_PATH.as_posix(),
+            "sha256": expectation_json_sha256,
+        },
+        "x509_resource_norito": {
+            "path": RESOURCE_NORITO_RELATIVE_PATH.as_posix(),
+            "sha256": _sha256(resource_norito),
+        },
+        "x509_resource_json": {
+            "path": RESOURCE_JSON_RELATIVE_PATH.as_posix(),
+            "sha256": _sha256(resource_json),
+        },
+        "x509_resource_certificate": resource_values,
+        "observation_pins": OBSERVATION_PINS,
+        "pin_constants": {
+            "kat_bytes": KAT_BYTES_PIN,
+            "kat_sha256": KAT_SHA256_PIN,
+            "expectations_norito": EXPECTATIONS_NORITO_PIN,
+            "expectations_json": EXPECTATIONS_JSON_PIN,
+            "resource_certificate_sha256": RESOURCE_CERTIFICATE_PIN,
+        },
+    }
+    manifest_encoded = _canonical_json_document(manifest)
+    if len(manifest_encoded) > MAX_INSTALL_MANIFEST_BYTES:
+        raise InstallError("installation manifest exceeds its fixed size bound")
+    if (
+        _stable_regular_bytes(
+            profile_path,
+            "ZK-X509 profile source before transaction",
+            MAX_SOURCE_BYTES,
+        )
+        != profile_bytes
+        or _stable_regular_bytes(
+            readiness_path,
+            "X.509 readiness source before transaction",
+            MAX_SOURCE_BYTES,
+        )
+        != readiness_bytes
+    ):
+        raise InstallError("X.509 source changed before transaction preparation")
+    state = _build_transaction_state(
+        repository=repository,
+        profile_bytes=profile_bytes,
+        patched_profile=patched_profile_bytes,
+        profile_mode=profile_mode,
+        readiness_bytes=readiness_bytes,
+        patched_readiness=patched_readiness_bytes,
+        readiness_mode=readiness_mode,
+        targets=targets,
+        captured=captured,
+        manifest_path=manifest_path,
+        manifest_encoded=manifest_encoded,
     )
-    next_readiness = _temporary_file(
-        readiness_path, patched_readiness.encode(), readiness_mode, "next"
+    _prepare_transaction(
+        repository=repository,
+        state=state,
+        profile_bytes=profile_bytes,
+        readiness_bytes=readiness_bytes,
     )
-    old_profile = _temporary_file(profile_path, profile_bytes, profile_mode, "rollback")
-    old_readiness = _temporary_file(
-        readiness_path, readiness_bytes, readiness_mode, "rollback"
-    )
-    installed: list[Path] = []
-    profile_replaced = False
-    readiness_replaced = False
+    _trip_failpoint(_failpoint, "journal_ready")
     try:
-        for target, encoded in zip(targets, captured):
-            _create_new_file(target, encoded, 0o444)
-            installed.append(target)
-        for target, expected, maximum, label in zip(
-            targets, captured, maximums, labels
+        for index, (target, encoded, maximum, label) in enumerate(
+            zip(targets, captured, maximums, labels)
         ):
-            if _stable_regular_bytes(target, f"installed {label}", maximum) != expected:
+            _atomic_create_new(
+                target,
+                encoded,
+                0o444,
+                f"installed {label}",
+                failpoint=_failpoint,
+                temporary_phase=f"fixture_{index}_temporary_durable",
+                published_phase=f"fixture_{index}_published",
+            )
+            if _stable_regular_bytes(target, f"installed {label}", maximum) != encoded:
                 raise InstallError(f"installed {label} differs from captured bytes")
+            _trip_failpoint(_failpoint, f"fixture_{index}_installed")
         if (
             _stable_regular_bytes(
                 profile_path,
@@ -743,61 +1794,51 @@ def install(
             != readiness_bytes
         ):
             raise InstallError(
-                "X.509 source changed after bootstrap pins were validated"
+                "X.509 source changed after the transaction became durable"
             )
-        os.replace(next_profile, profile_path)
-        profile_replaced = True
-        os.replace(next_readiness, readiness_path)
-        readiness_replaced = True
-        manifest: dict[str, object] = {
-            "schema_version": 1,
-            "profile_source": PROFILE_RELATIVE_PATH.as_posix(),
-            "readiness_certificate_source": READINESS_RELATIVE_PATH.as_posix(),
-            "expectations_norito": {
-                "path": EXPECTATIONS_NORITO_RELATIVE_PATH.as_posix(),
-                "sha256": expectation_norito_sha256,
-            },
-            "expectations_json": {
-                "path": EXPECTATIONS_JSON_RELATIVE_PATH.as_posix(),
-                "sha256": expectation_json_sha256,
-            },
-            "x509_resource_norito": {
-                "path": RESOURCE_NORITO_RELATIVE_PATH.as_posix(),
-                "sha256": _sha256(resource_norito),
-            },
-            "x509_resource_json": {
-                "path": RESOURCE_JSON_RELATIVE_PATH.as_posix(),
-                "sha256": _sha256(resource_json),
-            },
-            "x509_resource_certificate": resource_values,
-            "observation_pins": OBSERVATION_PINS,
-            "pin_constants": {
-                "kat_bytes": KAT_BYTES_PIN,
-                "kat_sha256": KAT_SHA256_PIN,
-                "expectations_norito": EXPECTATIONS_NORITO_PIN,
-                "expectations_json": EXPECTATIONS_JSON_PIN,
-                "resource_certificate_sha256": RESOURCE_CERTIFICATE_PIN,
-            },
-        }
-        manifest_encoded = (
-            json.dumps(manifest, indent=2, sort_keys=True, separators=(",", ": "))
-            + "\n"
-        ).encode()
-        _create_new_file(manifest_path, manifest_encoded, 0o600)
-        for parent in {profile_path.parent, readiness_path.parent, targets[0].parent}:
-            _sync_directory(parent)
+        _atomic_replace(
+            profile_path,
+            patched_profile_bytes,
+            profile_mode,
+            "ZK-X509 profile source",
+            failpoint=_failpoint,
+            temporary_phase="profile_temporary_durable",
+        )
+        _trip_failpoint(_failpoint, "profile_installed")
+        _atomic_replace(
+            readiness_path,
+            patched_readiness_bytes,
+            readiness_mode,
+            "X.509 readiness source",
+            failpoint=_failpoint,
+            temporary_phase="readiness_temporary_durable",
+        )
+        _trip_failpoint(_failpoint, "readiness_installed")
+        _atomic_create_new(
+            manifest_path,
+            manifest_encoded,
+            0o600,
+            "installation commit manifest",
+            failpoint=_failpoint,
+            temporary_phase="manifest_temporary_durable",
+            published_phase="manifest_published",
+        )
+        _trip_failpoint(_failpoint, "manifest_committed")
+        _trip_failpoint(_failpoint, "before_transaction_cleanup")
+        _finalize_transaction_directory(repository)
     except BaseException:
-        if profile_replaced:
-            os.replace(old_profile, profile_path)
-        if readiness_replaced:
-            os.replace(old_readiness, readiness_path)
-        for installed_path in reversed(installed):
-            installed_path.unlink(missing_ok=True)
-        manifest_path.unlink(missing_ok=True)
+        recovery = _recover_transaction(
+            repository=repository,
+            manifest_path=manifest_path,
+            profile_path=profile_path,
+            readiness_path=readiness_path,
+            targets=targets,
+            maximums=maximums,
+            failpoint=None,
+        )
+        if recovery == "committed":
+            return manifest
         raise
-    finally:
-        for temporary in (next_profile, next_readiness, old_profile, old_readiness):
-            temporary.unlink(missing_ok=True)
 
     return manifest
 
@@ -810,11 +1851,40 @@ def _parse_arguments() -> argparse.Namespace:
         )
     )
     parser.add_argument("--repo", required=True)
+    parser.add_argument("--native-verifier", required=True)
+    parser.add_argument("--native-verifier-sha256", required=True)
+    parser.add_argument("--exact12-matrix", required=True)
     parser.add_argument("--captured-norito", required=True)
     parser.add_argument("--captured-json", required=True)
     parser.add_argument("--captured-x509-resource-norito", required=True)
     parser.add_argument("--captured-x509-resource-json", required=True)
     parser.add_argument("--manifest-out", required=True)
+    parser.add_argument("--authenticated-iroha-source-commit", required=True)
+    parser.add_argument("--authenticated-iroha-signer-principal", required=True)
+    parser.add_argument("--authenticated-iroha-signer-fingerprint", required=True)
+    parser.add_argument(
+        "--authenticated-iroha-allowed-signers-sha256", required=True
+    )
+    parser.add_argument("--authenticated-validator-source-commit", required=True)
+    parser.add_argument(
+        "--authenticated-validator-signer-principal", required=True
+    )
+    parser.add_argument(
+        "--authenticated-validator-signer-fingerprint", required=True
+    )
+    parser.add_argument(
+        "--authenticated-validator-allowed-signers-sha256", required=True
+    )
+    parser.add_argument(
+        "--authenticated-validator-source-tree-sha256", required=True
+    )
+    parser.add_argument(
+        "--authenticated-bootstrap-source-tree-sha256", required=True
+    )
+    parser.add_argument("--authenticated-cargo-lock-sha256", required=True)
+    parser.add_argument(
+        "--authenticated-rust-toolchain-tree-sha256", required=True
+    )
     return parser.parse_args()
 
 
@@ -824,6 +1894,20 @@ def main() -> int:
     arguments = _parse_arguments()
     try:
         repository = _canonical_existing_directory(arguments.repo, "repository")
+        native_verifier = _outside_repository(
+            Path(arguments.native_verifier), repository, "native capture verifier"
+        )
+        exact12_path = Path(arguments.exact12_matrix)
+        if not exact12_path.is_absolute():
+            raise InstallError("exact12 matrix must be an absolute path")
+        canonical_exact12_path = exact12_path.resolve(strict=True)
+        if (
+            canonical_exact12_path != exact12_path
+            or canonical_exact12_path != repository / EXACT12_RELATIVE_PATH
+        ):
+            raise InstallError(
+                "exact12 matrix must be the canonical first-release repository fixture"
+            )
         captures = [
             _outside_repository(Path(raw), repository, label)
             for raw, label in (
@@ -854,11 +1938,50 @@ def main() -> int:
             raise InstallError("installation manifest must be outside the checkout")
         manifest = install(
             repository=repository,
+            native_verifier=native_verifier,
+            native_verifier_sha256=arguments.native_verifier_sha256,
+            exact12_matrix=canonical_exact12_path,
             captured_expectations_norito=captures[0],
             captured_expectations_json=captures[1],
             captured_resource_norito=captures[2],
             captured_resource_json=captures[3],
             manifest_path=manifest_path,
+            authenticated_iroha_source_commit=(
+                arguments.authenticated_iroha_source_commit
+            ),
+            authenticated_iroha_signer_principal=(
+                arguments.authenticated_iroha_signer_principal
+            ),
+            authenticated_iroha_signer_fingerprint=(
+                arguments.authenticated_iroha_signer_fingerprint
+            ),
+            authenticated_iroha_allowed_signers_sha256=(
+                arguments.authenticated_iroha_allowed_signers_sha256
+            ),
+            authenticated_validator_source_commit=(
+                arguments.authenticated_validator_source_commit
+            ),
+            authenticated_validator_signer_principal=(
+                arguments.authenticated_validator_signer_principal
+            ),
+            authenticated_validator_signer_fingerprint=(
+                arguments.authenticated_validator_signer_fingerprint
+            ),
+            authenticated_validator_allowed_signers_sha256=(
+                arguments.authenticated_validator_allowed_signers_sha256
+            ),
+            authenticated_validator_source_tree_sha256=(
+                arguments.authenticated_validator_source_tree_sha256
+            ),
+            authenticated_bootstrap_source_tree_sha256=(
+                arguments.authenticated_bootstrap_source_tree_sha256
+            ),
+            authenticated_cargo_lock_sha256=(
+                arguments.authenticated_cargo_lock_sha256
+            ),
+            authenticated_rust_toolchain_tree_sha256=(
+                arguments.authenticated_rust_toolchain_tree_sha256
+            ),
         )
     except (InstallError, OSError) as error:
         print(f"Taira privacy fixture installation failed: {error}", file=os.sys.stderr)

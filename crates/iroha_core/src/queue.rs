@@ -993,6 +993,7 @@ pub struct LaneQueueReservationReplaySummary {
 /// for restart classification, including when journal compaction has flattened the original
 /// atomic `PutBatch` frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct LaneQueueReservationGroupIdentityV1 {
     /// Coordinator lane that owns the group.
     pub(crate) lane_id: LaneId,
@@ -1013,6 +1014,7 @@ pub(crate) struct LaneQueueReservationGroupIdentityV1 {
 }
 
 impl LaneQueueReservationGroupIdentityV1 {
+    #[cfg_attr(not(test), allow(dead_code))]
     fn from_key(key: &LaneQueueReservationKeyV2) -> Self {
         Self {
             lane_id: key.lane_id,
@@ -1033,6 +1035,7 @@ impl LaneQueueReservationGroupIdentityV1 {
 /// key. A classifier therefore never needs to consult mutable queue indexes after taking a
 /// snapshot.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct LaneQueueReservationReconciliationRecordV1 {
     /// Exact durable reservation identity.
     pub(crate) key: LaneQueueReservationKeyV2,
@@ -1048,6 +1051,7 @@ pub(crate) struct LaneQueueReservationReconciliationRecordV1 {
 
 /// Complete FIFO-ordered membership of one exact autonomous proposal slot.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct LaneQueueReservationReconciliationGroupV1 {
     /// Exact lifecycle and proposal-slot identity.
     pub(crate) identity: LaneQueueReservationGroupIdentityV1,
@@ -1057,6 +1061,7 @@ pub(crate) struct LaneQueueReservationReconciliationGroupV1 {
 
 /// Immutable, self-contained queue input for restart reservation classification.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct LaneQueueReservationReconciliationSnapshotV1 {
     /// Every live reservation in original durable global FIFO order.
     pub(crate) ordered_records: Vec<LaneQueueReservationReconciliationRecordV1>,
@@ -2910,7 +2915,7 @@ impl Queue {
             .into_iter()
             .flat_map(|signed| signed.attachments().into_iter())
             .into_iter()
-            .flat_map(|list| list.0.iter())
+            .flat_map(|list| list.as_slice().iter())
             .filter_map(|attachment| attachment.lane_privacy.clone())
             .collect()
     }
@@ -4492,6 +4497,7 @@ impl Queue {
         keys
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn reconciliation_record_from_durable_claim(
         record: &LaneQueueReservationRecordV5,
         claim: &QueuePlanDurableClaimIndexEntry,
@@ -4568,6 +4574,7 @@ impl Queue {
     /// # Errors
     /// Returns a typed durability, journal-installation, record, claim, FIFO, or group-consistency
     /// error instead of exposing a partial snapshot.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn lane_reservation_reconciliation_snapshot(
         &self,
     ) -> Result<LaneQueueReservationReconciliationSnapshotV1, LaneQueueReservationError> {
@@ -12602,6 +12609,7 @@ impl Queue {
         status::set_tx_queue_pressure(self.pressure_snapshot());
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn push_queued_hash(&self, hash: SignedTxHash, enqueued_at_ms: u64) -> bool {
         if let Err(error) = self.ensure_fifo_order_locked(hash, None) {
             warn!(tx = %hash, %error, "failed to allocate queue FIFO order identity");
@@ -16530,7 +16538,8 @@ pub mod tests {
                 }),
             }),
         };
-        let attachments = ProofAttachmentList(vec![proof_attachment]);
+        let attachments = ProofAttachmentList::try_from(vec![proof_attachment])
+            .expect("one attachment is a valid bounded proof list");
         let confidential_tx = accepted_tx_with_attachments(
             confidential_id,
             &confidential_keypair,

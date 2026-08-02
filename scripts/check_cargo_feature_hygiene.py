@@ -83,18 +83,10 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "proofs-full": ("proofs-halo2", "proofs-stark"),
     },
     "irohad": {
-        "default": ("daemon-i3",),
-        "daemon-i2": ("daemon-common",),
-        "daemon-i3": ("daemon-common",),
-        "build-i2": ("daemon-i2",),
-        "build-i3": ("daemon-i3",),
+        "default": ("daemon",),
     },
     "iroha_cli": {
-        "default": ("cli-i3",),
-        "cli-i2": ("cli-common",),
-        "cli-i3": ("cli-common",),
-        "build-i2": ("cli-i2",),
-        "build-i3": ("cli-i3",),
+        "default": ("cli",),
     },
 }
 

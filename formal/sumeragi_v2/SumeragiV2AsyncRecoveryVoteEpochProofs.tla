@@ -19,32 +19,6 @@ scheduler high-watermarks remain retained.  This is separate from the
 durable leader-wire and Candidate-continuation Dormant states.
 ***************************************************************************)
 
-AsyncRecoveryExecutionInvariant ==
-  asyncRecoveryPhase = "Replaying" =>
-    /\ asyncOutstandingTags[asyncRecoveryNode] = {}
-    /\ AsyncServeIngressLifecycleOwnerIdentities(
-         asyncRecoveryNode) = {}
-    /\ SequenceHasUniqueValues(asyncRecoveryReplayQueue)
-    /\ SequenceSet(asyncRecoveryReplayQueue) \cap
-         ResponsiveReplayScheduledCandidates(asyncRecoveryNode) = {}
-
-(***************************************************************************
-Every restart authority remains the exact node/context/view/subject
-projection of a live historical PrepareQC source.  This is not a new durable
-write: responsive crash registration projects the pre-existing durable lock,
-and the transition removes the projection when that source is decided or
-superseded.  The separate handoff predicate below removes it only after the
-exact current-generation FetchBody owner is present in scheduler state.
-***************************************************************************)
-
-HistoricalLockRestartAuthoritySourceRetentionInvariant ==
-  \A authority \in asyncHistoricalLockRestartAuthorities:
-    HistoricalLockRestartAuthoritySource(authority)
-AsyncGstRecoveryPhaseInvariant ==
-  gst =>
-    asyncRecoveryPhase
-      \notin {"RestartRequired", "ReplayRequired", "Replaying"}
-
 THEOREM AsyncInitEstablishesSerializedBusyKernelInvariant ==
   \A initialContext:
     AsyncInitAt(initialContext) => AsyncSerializedBusyKernelInvariant
@@ -1081,23 +1055,6 @@ BY FS_CardinalityType, Isa
    DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
        AsyncOrdinaryIngressCarrierOwnershipInvariant
 
-AsyncStrongTypeInvariant ==
-  /\ StrongInductiveInvariant
-  /\ AsyncSchedulerTypeInvariant
-  /\ AsyncServiceActivationPairInvariant
-  /\ AsyncControlServiceStateTypeInvariant
-  /\ AsyncCandidateLifecycleSchedulerCoverageInvariant
-  /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
-  /\ AsyncLeaderWireIngressCarrierOwnershipInvariant
-  /\ AsyncOrdinaryIngressCarrierOwnershipInvariant
-  /\ ReceivedTimeoutVotePoolInvariant
-  /\ AsyncRecoveryTypeInvariant
-  /\ AsyncRestartAuthorityInvariant
-  /\ AsyncRecoveryExecutionInvariant
-  /\ AsyncHistoricalLockRestartAuthorityTypeInvariant
-  /\ HistoricalLockRestartAuthoritySourceRetentionInvariant
-  /\ AsyncGstRecoveryPhaseInvariant
-  /\ AsyncSerializedBusyKernelInvariant
 
 THEOREM AsyncStrongTypeProjectsAsyncType ==
   AsyncStrongTypeInvariant => AsyncTypeInvariant
@@ -4318,7 +4275,11 @@ PROOF
       BY <2>1, SMT DEF AsyncCandidateTyped, AsyncCandidateSet
     <2> QED BY <2>1, <2>2
        DEF RetainedBodyRebindCandidate, CausalCandidate,
-           AsyncCandidateFrom, AsyncCandidateWithIdentity
+           AsyncCandidateFrom,
+           AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+           AsyncCandidateSuccessorSemanticPhase,
+           AsyncCandidateSuccessorProposalRound,
+           AsyncCandidateWithIdentityAndOrigin
   <1> QED BY <1>1
 
 THEOREM DeliverProposalSchedulesRetainedBodyRebind ==

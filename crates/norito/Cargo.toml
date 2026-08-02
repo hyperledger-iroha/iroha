@@ -1,5 +1,6 @@
 [package]
 name = "norito"
+autobins = false
 autotests = false
 edition.workspace = true
 version.workspace = true
@@ -150,8 +151,10 @@ name = "dump_tape"
 [[bin]]
 name = "norito_regen_goldens"
 path = "src/bin/norito_regen_goldens.rs"
+required-features = ["dev-tools"]
 [features]
 default = ["node-codec"]
+dev-tools = []
 # Minimum currently compilable codec surface. `json` remains here until the
 # existing unconditional JSON helpers are made feature-independent.
 base-codec = ["json", "strict-safe"]

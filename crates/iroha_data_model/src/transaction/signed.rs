@@ -1819,8 +1819,7 @@ where
     let mut bytes = Vec::with_capacity(1 + value.encoded_len_hint().unwrap_or(0));
     bytes.push(version);
     let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    value
-        .serialize(&mut bytes)
+    norito::core::serialize_to_buffer(value, &mut bytes)
         .expect("versioned transaction encoding should not fail");
     bytes
 }
@@ -2081,10 +2080,10 @@ impl norito::json::JsonDeserialize for ExecutionStep {
 struct ExternalEntrypointRef<'a>(&'a SignedTransaction);
 
 impl norito::core::NoritoSerialize for ExternalEntrypointRef<'_> {
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&0_u32, &mut writer)?;
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        norito::core::NoritoSerialize::serialize(&0_u32, writer)?;
         let mut tmp = norito::core::DeriveSmallBuf::new();
-        norito::core::write_len_prefixed(&mut writer, self.0.payload(), &mut tmp)?;
+        norito::core::write_len_prefixed(writer, self.0.payload(), &mut tmp)?;
         Ok(())
     }
 
@@ -5518,12 +5517,14 @@ mod attachments_tests {
                 .unwrap();
         let authority = AccountId::new(iroha_crypto::PublicKey::from(private_key.clone()));
 
-        let attachments =
-            crate::proof::ProofAttachmentList(vec![crate::proof::ProofAttachment::new_ref(
+        let attachments = crate::proof::ProofAttachmentList::try_from(vec![
+            crate::proof::ProofAttachment::new_ref(
                 "halo2/ipa".into(),
                 crate::proof::ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
                 crate::proof::VerifyingKeyId::new("halo2/ipa", "vk_1"),
-            )]);
+            ),
+        ])
+        .expect("one attachment is a valid bounded proof list");
 
         let tx: SignedTransaction = TransactionBuilder::new(
             chain,
@@ -5544,13 +5545,16 @@ mod attachments_tests {
 
         let original_hash = decoded.hash();
         let mut tampered = decoded;
-        tampered.payload.attachments = Some(crate::proof::ProofAttachmentList(vec![
-            crate::proof::ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                crate::proof::ProofBox::new("halo2/ipa".into(), vec![9, 9, 9]),
-                crate::proof::VerifyingKeyId::new("halo2/ipa", "vk_1"),
-            ),
-        ]));
+        tampered.payload.attachments = Some(
+            crate::proof::ProofAttachmentList::try_from(vec![
+                crate::proof::ProofAttachment::new_ref(
+                    "halo2/ipa".into(),
+                    crate::proof::ProofBox::new("halo2/ipa".into(), vec![9, 9, 9]),
+                    crate::proof::VerifyingKeyId::new("halo2/ipa", "vk_1"),
+                ),
+            ])
+            .expect("one attachment is a valid bounded proof list"),
+        );
         assert_ne!(
             tampered.hash(),
             original_hash,

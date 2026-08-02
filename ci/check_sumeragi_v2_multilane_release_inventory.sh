@@ -581,8 +581,8 @@ for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
 fixture_check = """\
 run_corridor_leg \\
   native-amx-rust-fixture-check command 0 \\
-  "cargo run --locked --offline -p iroha_data_model --bin sumeragi_v2_wire_fixtures -- --check" \\
-  run_cargo run --locked --offline -p iroha_data_model \\
+  "cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures -- --check" \\
+  run_cargo run --locked --offline -p iroha_data_model --features dev-tools \\
     --bin sumeragi_v2_wire_fixtures -- --check"""
 if source.count(fixture_check) != 1:
     reject(
@@ -882,14 +882,14 @@ for script in (
 
 prebuilt_shell = sources["scripts/sumeragi_v2_prebuilt_bundle.sh"]
 publish_block = '''\
-  export TEST_NETWORK_BIN_IROHAD="${IROHA_TEST_TARGET_DIR}/release/iroha3d"
-  export TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="${IROHA_TEST_TARGET_DIR}/message-control/release/iroha3d"
+  export TEST_NETWORK_BIN_IROHAD="${IROHA_TEST_TARGET_DIR}/release/irohad"
+  export TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="${IROHA_TEST_TARGET_DIR}/message-control/release/irohad"
   export TEST_NETWORK_BIN_IROHA="${IROHA_TEST_TARGET_DIR}/release/iroha"
   export KAGAMI_BIN="${IROHA_TEST_TARGET_DIR}/release/kagami"'''
 if prebuilt_shell.count(publish_block) != 1:
     reject("shared prebuild helper must publish the four exact manifest paths once")
 for command in (
-    "run_cargo build --locked --offline --release -p irohad --bin iroha3d",
+    "run_cargo build --locked --offline --release -p irohad --bin irohad",
     "run_cargo build --locked --offline --release -p iroha_cli --bin iroha",
     "run_cargo build --locked --offline --release -p iroha_kagami --bin kagami",
 ):
@@ -898,7 +898,7 @@ for command in (
 if prebuilt_shell.splitlines().count(
     "        --features test-network-message-control || exit $?"
 ) != 1:
-    reject("shared prebuild helper must build exactly one message-control iroha3d")
+    reject("shared prebuild helper must build exactly one message-control irohad")
 for token in (
     "unset IROHA_TEST_TARGET_DIR",
     "command cargo --version",
@@ -914,8 +914,8 @@ for token in (
     "_BINARY_MODE = 0o500",
     "_MANIFEST_MODE = 0o400",
     "_DIRECTORY_MODE = 0o500",
-    '"release/iroha3d"',
-    '"message-control/release/iroha3d"',
+    '"release/irohad"',
+    '"message-control/release/irohad"',
     '"release/iroha"',
     '"release/kagami"',
     '"cargo_version_sha256"',

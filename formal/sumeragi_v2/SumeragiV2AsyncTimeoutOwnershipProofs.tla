@@ -828,10 +828,10 @@ ExactTimeoutInstallCandidate(command) ==
 
 THEOREM TimeoutFormingCommandCreatesExactInstallAuthority ==
   \A command:
-    /\ \/ /\ ExecuteSignTimeout(command)
-              /\ SignTimeoutFormsTC(command)
-           \/ /\ ExecuteCoreDelivery(command)
-              /\ DeliverTimeoutFormsTC(command)
+    /\ (\/ /\ ExecuteSignTimeout(command)
+             /\ SignTimeoutFormsTC(command)
+        \/ /\ ExecuteCoreDelivery(command)
+             /\ DeliverTimeoutFormsTC(command))
     /\ AppendCausalSuccessors(command)
     => LET tc == ExactFormedTcForTimeoutCommand(command)
            candidate == ExactTimeoutInstallCandidate(command)

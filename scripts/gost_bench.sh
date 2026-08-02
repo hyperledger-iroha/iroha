@@ -59,4 +59,4 @@ if [[ "$write_baseline" == yes ]]; then
     summary_args+=(--write-baseline "$baseline")
 fi
 
-cargo run -p iroha_crypto --bin gost_perf_check --features gost -- "${summary_args[@]}"
+cargo run -p iroha_crypto --bin gost_perf_check --features dev-tools,gost -- "${summary_args[@]}"

@@ -17,6 +17,7 @@ export type JsonValue =
 export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 21;
 export const KAGEMUSHA_MANIFEST_VERSION: 4;
 export const KAGEMUSHA_MAX_HOPS: 8;
+export const KAGEMUSHA_CASH_HANDOFF_CAPABILITY: "cash_handoff_v1";
 export const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES: 524288;
 export const KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES: 50331648;
 
@@ -58,24 +59,18 @@ export interface KagemushaAuthenticatedArtifactSetV4 {
   readonly asset_scale: number;
 }
 
-export interface KagemushaReadinessV4 {
+export interface OfflineStatus {
+  readonly mandatory: false;
+  readonly cash_handoff_capability: "cash_handoff_v1";
   readonly required_bridge_abi_version: 21;
   readonly max_hops: 8;
-  readonly asset_definition_id: string;
-  readonly asset_scale: number | null;
-  readonly evaluated_block_height: number;
-  readonly evaluated_block_hash: string;
-  readonly active_transfer_verifier: KagemushaActiveVerifier | null;
-  readonly active_topup_shield_verifier: KagemushaActiveVerifier | null;
-  readonly active_unshield_verifier: KagemushaActiveVerifier | null;
-  readonly active_recursive_step_eq_verifier: KagemushaActiveVerifier | null;
-  readonly active_recursive_step_ep_verifier: KagemushaActiveVerifier | null;
-  readonly artifact_set: KagemushaAuthenticatedArtifactSetV4 | null;
-  readonly proof_backend_available: boolean;
-  readonly recursive_lineage_supported: boolean;
-  readonly ready: boolean;
-  readonly blockers: readonly KagemushaReadinessBlocker[];
+  readonly ready: true;
+  readonly assets: readonly [];
+  readonly blockers: readonly [];
 }
+
+/** @deprecated Use OfflineStatus. Offline capability is asset-neutral. */
+export type KagemushaReadinessV4 = OfflineStatus;
 
 export type KagemushaOperationKind = Readonly<{
   kind: "top_up" | "redeem";
@@ -135,9 +130,13 @@ export function normalizeKagemushaRedeemRequestV4(
   value: KagemushaNoritoRequestV4,
   context?: string,
 ): KagemushaNoritoRequestV4;
+export function normalizeOfflineStatus(
+  payload: Record<string, unknown>,
+): OfflineStatus;
+/** @deprecated Use normalizeOfflineStatus(payload). */
 export function normalizeKagemushaReadinessV4(
   payload: Record<string, unknown>,
-  requestedAssetSelector: string,
+  requestedAssetSelector?: string,
 ): KagemushaReadinessV4;
 export function normalizeKagemushaOperationReference(
   payload: Record<string, unknown>,
@@ -3947,8 +3946,8 @@ type NoritoRuntimeNamespaceExport =
 
 type CryptoRuntimeNamespaceExport =
     "CRYPTO_ALGORITHMS"
-  | "PRIVACY_CAPABILITY_VALIDATION_STATUS_V1"
-  | "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES"
+  | "PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1"
+  | "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES"
   | "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION"
   | "SM2_DEFAULT_DISTINGUISHED_ID"
   | "SM2_PRIVATE_KEY_LENGTH"
@@ -3975,7 +3974,7 @@ type CryptoRuntimeNamespaceExport =
   | "loadSm2KeyPair"
   | "normalizeCryptoAlgorithm"
   | "normalizeRecoveryPhrase"
-  | "privacyCapabilitiesV1"
+  | "privacyCompiledProfileCatalogV1"
   | "privateKeyMultihash"
   | "publicKeyFromPrivate"
   | "publicKeyMultihash"
@@ -10213,6 +10212,10 @@ export declare class ToriiBrowserClient {
     accountId: string,
     options?: ToriiBrowserRequestOptions,
   ): Promise<unknown>;
+  getOfflineCapability(
+    options?: { signal?: AbortSignal },
+  ): Promise<OfflineStatus>;
+  /** @deprecated Use getOfflineCapability(). */
   getKagemushaReadinessV4(
     assetDefinitionId: string,
     options?: { signal?: AbortSignal },
@@ -10536,6 +10539,10 @@ export interface ValidationFeePolicyProofCatchUpV1
 
 export declare class ToriiClient {
   constructor(baseUrl: string, options?: ToriiClientOptions);
+  getOfflineCapability(
+    options?: { signal?: AbortSignal },
+  ): Promise<OfflineStatus>;
+  /** @deprecated Use getOfflineCapability(). */
   getKagemushaReadinessV4(
     assetDefinitionId: string,
     options?: { signal?: AbortSignal },
@@ -11949,8 +11956,8 @@ export function deriveConfidentialNullifierV2(input: {
   rho?: ArrayBufferView | ArrayBuffer | Buffer;
 }): { nullifier: Buffer; nullifierHex: string };
 
-export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: number;
-export const PRIVACY_CAPABILITY_VALIDATION_STATUS_V1: Readonly<{
+export const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES: number;
+export const PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1: Readonly<{
   VALID: 0;
   NULL_POINTER: 1;
   EMPTY: 2;
@@ -11959,10 +11966,11 @@ export const PRIVACY_CAPABILITY_VALIDATION_STATUS_V1: Readonly<{
   SCHEMA_MISMATCH: 5;
   NON_CANONICAL: 6;
   MALFORMED_ARCHIVE: 7;
-  INVALID_SNAPSHOT: 8;
+  INVALID_CATALOG: 8;
 }>;
 export function isPrivacyNativeAvailable(): boolean;
-export function privacyCapabilitiesV1(): Buffer;
+/** Return this binary's local compiled-profile catalog; use Torii for live activation/readiness. */
+export function privacyCompiledProfileCatalogV1(): Buffer;
 
 export interface Sm2Fixture {
   distid: string;

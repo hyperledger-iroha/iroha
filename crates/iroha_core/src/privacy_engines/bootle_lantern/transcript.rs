@@ -31,6 +31,8 @@ pub const PUBLIC_PARAMETER_SEED_DOMAIN_V1: &[u8] =
 const PRESENTATION_CHALLENGE_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.presentation-challenge.v1";
 const PRESENTATION_STAGE_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.presentation-stage.v1";
+const BLIND_ISSUANCE_REQUEST_PURPOSE_DOMAIN_V1: &[u8] =
+    b"iroha.privacy.bootle-lantern.blind-issuance-request-proof.v1";
 const APPLICATION_ACCEPTANCE_LIMIT_V1: u16 = 61_445;
 const PROOF_ACCEPTANCE_LIMIT_V1: u64 = 70_931_694_131_122_923;
 const MAX_STAGED_UNIFORM_POLYNOMIALS_V1: usize = 4;
@@ -516,6 +518,66 @@ impl PresentationChallengeBindingV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PresentationTranscriptV1 {
     binding: PresentationChallengeBindingV1,
+    core: ProofTranscriptCoreV1,
+}
+
+/// Honest public binding for a holder's blind-issuance proof of knowledge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlindIssuanceRequestChallengeBindingV1 {
+    /// Governed parameter-manifest digest used to expand `A_r` and `A_m`.
+    pub parameter_digest: [u8; 32],
+    /// Exact chain genesis hash selected for the reusable credential scope.
+    pub genesis_hash: [u8; 32],
+    /// Digest of the complete concrete issuer implementation profile.
+    pub issuer_profile_digest: [u8; 32],
+    /// Digest of the reusable governed credential scope.
+    pub credential_scope_digest: [u8; 32],
+    /// Trusted active issuer-policy record digest.
+    pub issuer_policy_record_digest: [u8; 32],
+    /// Digest of the eight-polynomial masked target `t`.
+    pub masked_target_digest: [u8; 32],
+    /// Fresh holder request nonce, unrelated to any transaction intent.
+    pub request_nonce: [u8; 32],
+}
+
+impl BlindIssuanceRequestChallengeBindingV1 {
+    fn validate(self) -> Result<(), TranscriptErrorV1> {
+        for (field, digest) in [
+            ("parameter_digest", self.parameter_digest),
+            ("genesis_hash", self.genesis_hash),
+            ("issuer_profile_digest", self.issuer_profile_digest),
+            ("credential_scope_digest", self.credential_scope_digest),
+            (
+                "issuer_policy_record_digest",
+                self.issuer_policy_record_digest,
+            ),
+            ("masked_target_digest", self.masked_target_digest),
+            ("request_nonce", self.request_nonce),
+        ] {
+            if digest == [0; 32] {
+                return Err(TranscriptErrorV1::ZeroDigest { field });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Distinct P1 transcript; it has no statement or transaction-intent field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlindIssuanceRequestTranscriptV1 {
+    binding: BlindIssuanceRequestChallengeBindingV1,
+    core: ProofTranscriptCoreV1,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TranscriptBindingV1 {
+    Presentation(PresentationChallengeBindingV1),
+    BlindIssuanceRequest(BlindIssuanceRequestChallengeBindingV1),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProofTranscriptCoreV1 {
+    binding: TranscriptBindingV1,
     matrix_seed: MatrixSeedV1,
     relation_digest: [u8; 32],
 }
@@ -543,8 +605,11 @@ impl PresentationTranscriptV1 {
         }
         Ok(Self {
             binding,
-            matrix_seed,
-            relation_digest,
+            core: ProofTranscriptCoreV1 {
+                binding: TranscriptBindingV1::Presentation(binding),
+                matrix_seed,
+                relation_digest,
+            },
         })
     }
 
@@ -557,12 +622,63 @@ impl PresentationTranscriptV1 {
     /// Return the transparent matrix seed.
     #[must_use]
     pub const fn matrix_seed(&self) -> MatrixSeedV1 {
-        self.matrix_seed
+        self.core.matrix_seed
     }
 
     /// Return the exact compiled-relation digest.
     #[must_use]
     pub const fn relation_digest(&self) -> [u8; 32] {
+        self.core.relation_digest
+    }
+
+    pub(crate) const fn proof_core(&self) -> ProofTranscriptCoreV1 {
+        self.core
+    }
+}
+
+impl BlindIssuanceRequestTranscriptV1 {
+    /// Construct a fully bound P1 transcript with honest issuance fields.
+    pub fn new(
+        binding: BlindIssuanceRequestChallengeBindingV1,
+        matrix_seed: MatrixSeedV1,
+        relation_digest: [u8; 32],
+    ) -> Result<Self, TranscriptErrorV1> {
+        binding.validate()?;
+        if relation_digest == [0; 32] {
+            return Err(TranscriptErrorV1::ZeroDigest {
+                field: "relation_digest",
+            });
+        }
+        if binding.parameter_digest != *matrix_seed.parameter_digest() {
+            return Err(TranscriptErrorV1::MatrixParameterBindingMismatch);
+        }
+        Ok(Self {
+            binding,
+            core: ProofTranscriptCoreV1 {
+                binding: TranscriptBindingV1::BlindIssuanceRequest(binding),
+                matrix_seed,
+                relation_digest,
+            },
+        })
+    }
+
+    /// Return the exact P1 public binding.
+    #[must_use]
+    pub const fn binding(&self) -> BlindIssuanceRequestChallengeBindingV1 {
+        self.binding
+    }
+
+    pub(crate) const fn proof_core(&self) -> ProofTranscriptCoreV1 {
+        self.core
+    }
+}
+
+impl ProofTranscriptCoreV1 {
+    pub(crate) const fn matrix_seed(&self) -> MatrixSeedV1 {
+        self.matrix_seed
+    }
+
+    pub(crate) const fn relation_digest(&self) -> [u8; 32] {
         self.relation_digest
     }
 
@@ -571,6 +687,7 @@ impl PresentationTranscriptV1 {
     /// # Errors
     ///
     /// Rejects an empty stage tag or a field whose length cannot be encoded.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn derive_bytes(
         &self,
         stage: &[u8],
@@ -583,11 +700,7 @@ impl PresentationTranscriptV1 {
         let mut state = Shake256::default();
         absorb_frame_checked(&mut state, PRESENTATION_STAGE_DOMAIN_V1)?;
         absorb_frame_checked(&mut state, stage)?;
-        absorb_frame_checked(&mut state, &self.binding.parameter_digest)?;
-        absorb_frame_checked(&mut state, &self.binding.genesis_hash)?;
-        absorb_frame_checked(&mut state, &self.binding.statement_digest)?;
-        absorb_frame_checked(&mut state, &self.binding.issuer_policy_record_digest)?;
-        absorb_frame_checked(&mut state, &self.binding.transaction_intent_digest)?;
+        absorb_transcript_binding_v1(&mut state, self.binding)?;
         absorb_frame_checked(&mut state, self.matrix_seed.parameter_digest())?;
         absorb_frame_checked(&mut state, self.matrix_seed.public_parameter_seed())?;
         absorb_frame_checked(&mut state, &self.relation_digest)?;
@@ -750,7 +863,7 @@ impl PresentationTranscriptV1 {
             &self.relation_digest,
             pre_challenge_commitments,
         ];
-        derive_presentation_challenge_from_components_v1(self.binding, &commitment_components)
+        derive_challenge_from_transcript_binding_v1(self.binding, &commitment_components)
     }
 }
 
@@ -770,7 +883,7 @@ fn fixed_capacity_vec_v1<T>(
 }
 
 fn absorb_stage_prefix(
-    transcript: &PresentationTranscriptV1,
+    transcript: &ProofTranscriptCoreV1,
     state: &mut Shake256,
     stage: &[u8],
     components: &[&[u8]],
@@ -780,11 +893,7 @@ fn absorb_stage_prefix(
     }
     absorb_frame_checked(state, PRESENTATION_STAGE_DOMAIN_V1)?;
     absorb_frame_checked(state, stage)?;
-    absorb_frame_checked(state, &transcript.binding.parameter_digest)?;
-    absorb_frame_checked(state, &transcript.binding.genesis_hash)?;
-    absorb_frame_checked(state, &transcript.binding.statement_digest)?;
-    absorb_frame_checked(state, &transcript.binding.issuer_policy_record_digest)?;
-    absorb_frame_checked(state, &transcript.binding.transaction_intent_digest)?;
+    absorb_transcript_binding_v1(state, transcript.binding)?;
     absorb_frame_checked(state, transcript.matrix_seed.parameter_digest())?;
     absorb_frame_checked(state, transcript.matrix_seed.public_parameter_seed())?;
     absorb_frame_checked(state, &transcript.relation_digest)?;
@@ -793,6 +902,32 @@ fn absorb_stage_prefix(
     absorb_frame_checked(state, &component_count.to_be_bytes())?;
     for component in components {
         absorb_frame_checked(state, component)?;
+    }
+    Ok(())
+}
+
+fn absorb_transcript_binding_v1(
+    state: &mut Shake256,
+    binding: TranscriptBindingV1,
+) -> Result<(), TranscriptErrorV1> {
+    match binding {
+        TranscriptBindingV1::Presentation(binding) => {
+            absorb_frame_checked(state, &binding.parameter_digest)?;
+            absorb_frame_checked(state, &binding.genesis_hash)?;
+            absorb_frame_checked(state, &binding.statement_digest)?;
+            absorb_frame_checked(state, &binding.issuer_policy_record_digest)?;
+            absorb_frame_checked(state, &binding.transaction_intent_digest)?;
+        }
+        TranscriptBindingV1::BlindIssuanceRequest(binding) => {
+            absorb_frame_checked(state, BLIND_ISSUANCE_REQUEST_PURPOSE_DOMAIN_V1)?;
+            absorb_frame_checked(state, &binding.parameter_digest)?;
+            absorb_frame_checked(state, &binding.genesis_hash)?;
+            absorb_frame_checked(state, &binding.issuer_profile_digest)?;
+            absorb_frame_checked(state, &binding.credential_scope_digest)?;
+            absorb_frame_checked(state, &binding.issuer_policy_record_digest)?;
+            absorb_frame_checked(state, &binding.masked_target_digest)?;
+            absorb_frame_checked(state, &binding.request_nonce)?;
+        }
     }
     Ok(())
 }
@@ -934,6 +1069,7 @@ pub(crate) fn challenge_eta_is_valid_v1(challenge: ProofPolynomialV1) -> bool {
 /// Rejects a zero binding digest, empty commitment wire, a commitment wire
 /// whose length cannot be represented in the canonical frame, or fixed-work
 /// candidate rejection exhaustion.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn derive_presentation_challenge_v1(
     binding: PresentationChallengeBindingV1,
     pre_challenge_commitments: &[u8],
@@ -944,18 +1080,25 @@ pub(crate) fn derive_presentation_challenge_v1(
     derive_presentation_challenge_from_components_v1(binding, &[pre_challenge_commitments])
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn derive_presentation_challenge_from_components_v1(
     binding: PresentationChallengeBindingV1,
     pre_challenge_commitment_components: &[&[u8]],
 ) -> Result<ProofPolynomialV1, TranscriptErrorV1> {
     binding.validate()?;
+    derive_challenge_from_transcript_binding_v1(
+        TranscriptBindingV1::Presentation(binding),
+        pre_challenge_commitment_components,
+    )
+}
+
+fn derive_challenge_from_transcript_binding_v1(
+    binding: TranscriptBindingV1,
+    pre_challenge_commitment_components: &[&[u8]],
+) -> Result<ProofPolynomialV1, TranscriptErrorV1> {
     let mut state = Shake256::default();
     absorb_frame_checked(&mut state, PRESENTATION_CHALLENGE_DOMAIN_V1)?;
-    absorb_frame_checked(&mut state, &binding.parameter_digest)?;
-    absorb_frame_checked(&mut state, &binding.genesis_hash)?;
-    absorb_frame_checked(&mut state, &binding.statement_digest)?;
-    absorb_frame_checked(&mut state, &binding.issuer_policy_record_digest)?;
-    absorb_frame_checked(&mut state, &binding.transaction_intent_digest)?;
+    absorb_transcript_binding_v1(&mut state, binding)?;
     absorb_concatenated_frame_checked(&mut state, pre_challenge_commitment_components)?;
     let mut reader = state.finalize_xof();
 
@@ -1536,21 +1679,18 @@ mod tests {
     #[test]
     fn staged_transcript_is_framed_deterministic_and_fully_bound() {
         let transcript = presentation_transcript();
+        let core = transcript.proof_core();
         let mut first = [0_u8; 64];
         let mut second = [0_u8; 64];
-        transcript
-            .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut first)
+        core.derive_bytes(b"stage-a", &[b"ab", b"c"], &mut first)
             .expect("stage");
-        transcript
-            .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
+        core.derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
             .expect("stage");
         assert_eq!(first, second);
-        transcript
-            .derive_bytes(b"stage-a", &[b"a", b"bc"], &mut second)
+        core.derive_bytes(b"stage-a", &[b"a", b"bc"], &mut second)
             .expect("stage");
         assert_ne!(first, second);
-        transcript
-            .derive_bytes(b"stage-b", &[b"ab", b"c"], &mut second)
+        core.derive_bytes(b"stage-b", &[b"ab", b"c"], &mut second)
             .expect("stage");
         assert_ne!(first, second);
 
@@ -1560,6 +1700,7 @@ mod tests {
             PresentationTranscriptV1::new(changed_binding, presentation_seed(), [0x95; 32])
                 .expect("binding");
         changed
+            .proof_core()
             .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
             .expect("stage");
         assert_ne!(first, second);
@@ -1567,6 +1708,7 @@ mod tests {
         let changed = PresentationTranscriptV1::new(binding(), presentation_seed(), [0x94; 32])
             .expect("relation binding");
         changed
+            .proof_core()
             .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
             .expect("stage");
         assert_ne!(first, second);
@@ -1575,22 +1717,22 @@ mod tests {
     #[test]
     fn staged_uniform_and_ternary_expansion_is_canonical_and_random_access() {
         let transcript = presentation_transcript();
-        let first = transcript
+        let core = transcript.proof_core();
+        let first = core
             .derive_ternary_row(b"projection", &[b"commitment"], 17, 1_024)
             .expect("row");
-        let second = transcript
+        let second = core
             .derive_ternary_row(b"projection", &[b"commitment"], 17, 1_024)
             .expect("row");
         assert_eq!(first, second);
         assert!(first.iter().all(|value| (-1..=1).contains(value)));
         assert_ne!(
             first,
-            transcript
-                .derive_ternary_row(b"projection", &[b"commitment"], 18, 1_024)
+            core.derive_ternary_row(b"projection", &[b"commitment"], 18, 1_024)
                 .expect("row")
         );
 
-        let polynomials = transcript
+        let polynomials = core
             .derive_uniform_polynomials(b"weights", &[b"commitment"], 4)
             .expect("uniform polynomials");
         assert_eq!(polynomials.len(), 4);
@@ -1602,12 +1744,11 @@ mod tests {
         }));
         assert_eq!(
             polynomials,
-            transcript
-                .derive_uniform_polynomials(b"weights", &[b"commitment"], 4)
+            core.derive_uniform_polynomials(b"weights", &[b"commitment"], 4)
                 .expect("uniform polynomials")
         );
 
-        let scalars = transcript
+        let scalars = core
             .derive_uniform_scalars(b"weights", &[b"commitment"], 257)
             .expect("uniform scalars");
         assert_eq!(scalars.len(), 257);
@@ -1618,8 +1759,7 @@ mod tests {
         );
         assert_eq!(
             scalars,
-            transcript
-                .derive_uniform_scalars(b"weights", &[b"commitment"], 257)
+            core.derive_uniform_scalars(b"weights", &[b"commitment"], 257)
                 .expect("uniform scalars")
         );
         assert_ne!(scalars[0], polynomials[0].coefficients()[0]);
@@ -1642,19 +1782,25 @@ mod tests {
             })
         );
         assert_eq!(
-            presentation_transcript().derive_bytes(b"", &[], &mut [0_u8; 1]),
+            presentation_transcript()
+                .proof_core()
+                .derive_bytes(b"", &[], &mut [0_u8; 1]),
             Err(TranscriptErrorV1::EmptyStageTag)
         );
         assert_eq!(
-            presentation_transcript().derive_ternary_row(b"r", &[], 0, 0),
+            presentation_transcript()
+                .proof_core()
+                .derive_ternary_row(b"r", &[], 0, 0),
             Err(TranscriptErrorV1::EmptyProjectionRow)
         );
         assert_eq!(
-            presentation_transcript().derive_final_challenge(b""),
+            presentation_transcript()
+                .proof_core()
+                .derive_final_challenge(b""),
             Err(TranscriptErrorV1::EmptyPreChallengeCommitments)
         );
         assert_eq!(
-            presentation_transcript().derive_ternary_row(
+            presentation_transcript().proof_core().derive_ternary_row(
                 b"r",
                 &[],
                 0,
@@ -1665,21 +1811,25 @@ mod tests {
             })
         );
         assert_eq!(
-            presentation_transcript().derive_uniform_polynomials(
-                b"uniform-polynomials",
-                &[],
-                MAX_STAGED_UNIFORM_POLYNOMIALS_V1 + 1
-            ),
+            presentation_transcript()
+                .proof_core()
+                .derive_uniform_polynomials(
+                    b"uniform-polynomials",
+                    &[],
+                    MAX_STAGED_UNIFORM_POLYNOMIALS_V1 + 1,
+                ),
             Err(TranscriptErrorV1::FixedProfileCapacityExceeded {
                 field: "uniform_polynomials"
             })
         );
         assert_eq!(
-            presentation_transcript().derive_uniform_scalars(
-                b"uniform-scalars",
-                &[],
-                MAX_STAGED_UNIFORM_SCALARS_V1 + 1
-            ),
+            presentation_transcript()
+                .proof_core()
+                .derive_uniform_scalars(
+                    b"uniform-scalars",
+                    &[],
+                    MAX_STAGED_UNIFORM_SCALARS_V1 + 1,
+                ),
             Err(TranscriptErrorV1::FixedProfileCapacityExceeded {
                 field: "uniform_scalars"
             })

@@ -167,7 +167,7 @@ pub(crate) fn parse_generation_options(
                 let value = args
                     .next()
                     .ok_or_else(|| "--root requires a directory path".to_owned())?;
-                if value.is_empty() || value.starts_with("--") {
+                if value.is_empty() || value.starts_with('-') {
                     return Err("--root requires a non-empty directory path".to_owned());
                 }
                 root = Some(PathBuf::from(value));
@@ -423,6 +423,7 @@ mod tests {
                 "--root".to_owned(),
                 "--check".to_owned(),
             ],
+            vec!["--write".to_owned(), "--root".to_owned(), "-h".to_owned()],
             vec![
                 "--write".to_owned(),
                 "--root".to_owned(),

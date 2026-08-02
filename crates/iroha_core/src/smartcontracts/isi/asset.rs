@@ -274,6 +274,7 @@ pub mod isi {
         /// This validates the complete post-credit balance before mutation and assigns that
         /// precomputed value. It does not emit an `Added` event; callers remain responsible for
         /// balance-change event emission.
+        #[cfg_attr(not(test), allow(dead_code))]
         pub(crate) fn deposit_numeric_asset_exact(
             &mut self,
             id: &AssetId,
@@ -1334,6 +1335,61 @@ pub mod isi {
         ExplicitBilateral,
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum NumericAssetTransferAuthorityPolicy {
+        UserSource,
+        ProtocolAuthorized,
+    }
+
+    fn ensure_user_numeric_asset_source_authority(
+        state_transaction: &StateTransaction<'_, '_>,
+        authority: &AccountId,
+        source_id: &AssetId,
+    ) -> Result<(), Error> {
+        if source_id.account() == authority {
+            return Ok(());
+        }
+
+        let exact_asset: Permission =
+            iroha_executor_data_model::permission::asset::CanTransferAsset {
+                asset: source_id.clone(),
+            }
+            .into();
+        let exact_definition: Permission =
+            iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
+                asset_definition: source_id.definition().clone(),
+            }
+            .into();
+        let has_required_permission =
+            |actual: &Permission| actual == &exact_asset || actual == &exact_definition;
+
+        let has_direct = state_transaction
+            .world
+            .account_permissions_iter(authority)
+            .is_ok_and(|permissions| permissions.into_iter().any(has_required_permission));
+        let has_role = state_transaction
+            .world
+            .account_roles_iter(authority)
+            .any(|role_id| {
+                state_transaction
+                    .world
+                    .roles
+                    .get(role_id)
+                    .is_some_and(|role| role.permissions().any(has_required_permission))
+            });
+        if has_direct || has_role {
+            return Ok(());
+        }
+
+        Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "account {authority} lacks authority to transfer source asset {source_id}; require source ownership or an exact CanTransferAsset/CanTransferAssetWithDefinition permission"
+            )
+            .into(),
+        )
+        .into())
+    }
+
     fn sccp_registry_references_custody_asset(
         registry: &iroha_data_model::bridge::SccpRegistryV1,
         asset_id: &AssetId,
@@ -1435,6 +1491,7 @@ pub mod isi {
                 event_destination_id,
                 amount,
                 NumericAssetTransferScopePolicy::Ambient,
+                NumericAssetTransferAuthorityPolicy::UserSource,
             )
         }
 
@@ -1452,6 +1509,7 @@ pub mod isi {
                 event_destination_id,
                 amount,
                 NumericAssetTransferScopePolicy::ExplicitBilateral,
+                NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
             )
         }
 
@@ -1462,6 +1520,7 @@ pub mod isi {
             event_destination_id: AssetId,
             amount: Quantity,
             scope_policy: NumericAssetTransferScopePolicy,
+            authority_policy: NumericAssetTransferAuthorityPolicy,
         ) -> Result<Self, Error> {
             // Reject no-op transfers before account admission, control usage, transcripts,
             // balances, or events can be staged.
@@ -1476,6 +1535,16 @@ pub mod isi {
                 event_source_id.definition(),
                 "transfer",
             )?;
+            if authority_policy == NumericAssetTransferAuthorityPolicy::UserSource {
+                let resolved_source_id = state_transaction
+                    .world
+                    .resolve_asset_id_for_current_scope(&event_source_id)?;
+                ensure_user_numeric_asset_source_authority(
+                    state_transaction,
+                    authority,
+                    &resolved_source_id,
+                )?;
+            }
             let control_update = prepare_outbound_asset_transfer_control_update(
                 state_transaction,
                 &event_source_id,
@@ -2182,6 +2251,13 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            let quantity = self.object().clone();
+            if quantity.is_zero() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "asset mint amount must be non-zero".into(),
+                )
+                .into());
+            }
             let asset_id = self.destination().clone();
             ensure_global_asset_write_on_authoritative_route(
                 state_transaction,
@@ -2192,7 +2268,6 @@ pub mod isi {
                 .world
                 .resolve_asset_id_for_current_scope(&asset_id)?;
 
-            let quantity = self.object().clone();
             let _created = ensure_receiving_account(
                 authority,
                 asset_id.account(),
@@ -3007,6 +3082,8 @@ pub mod query {
     };
     use norito::json::Value;
 
+    #[cfg(test)]
+    use super::isi::execute_user_numeric_asset_transfer;
     use super::*;
     use crate::{
         smartcontracts::{ValidQuery, ValidSingularQuery},
@@ -4283,6 +4360,240 @@ pub mod query {
             let state = State::new(world, kura, query_store);
 
             (state, asset_definition_id, source_asset_id)
+        }
+
+        #[test]
+        fn user_transfer_rejects_third_party_source_before_mutation() {
+            let (state, asset_definition_id, source_asset_id) =
+                build_asset_transfer_control_test_state(10);
+            let destination_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xA1);
+            let event_count = stx.world.internal_event_buf.len();
+
+            let error = execute_user_numeric_asset_transfer(
+                &mut stx,
+                &BOB_ID,
+                source_asset_id.clone(),
+                BOB_ID.clone(),
+                Quantity::one(),
+            )
+            .expect_err("an authority without an exact grant must not debit another account");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("lacks authority to transfer source asset"),
+                "unexpected authorization error: {error}"
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &source_asset_id),
+                Quantity::from(10_u32)
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Quantity::zero()
+            );
+            assert_eq!(
+                stx.world.internal_event_buf.len(),
+                event_count,
+                "authorization denial must precede event staging"
+            );
+        }
+
+        #[test]
+        fn user_transfer_accepts_exact_direct_asset_permission() {
+            let (state, asset_definition_id, source_asset_id) =
+                build_asset_transfer_control_test_state(10);
+            let destination_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xA2);
+            stx.world.add_account_permission(
+                &BOB_ID,
+                Permission::from(
+                    iroha_executor_data_model::permission::asset::CanTransferAsset {
+                        asset: source_asset_id.clone(),
+                    },
+                ),
+            );
+
+            execute_user_numeric_asset_transfer(
+                &mut stx,
+                &BOB_ID,
+                source_asset_id.clone(),
+                BOB_ID.clone(),
+                Quantity::from(3_u32),
+            )
+            .expect("the exact direct asset permission must authorize the debit");
+
+            assert_eq!(
+                asset_balance_or_zero(&stx, &source_asset_id),
+                Quantity::from(7_u32)
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Quantity::from(3_u32)
+            );
+        }
+
+        #[test]
+        fn user_transfer_accepts_exact_definition_permission_from_assigned_role() {
+            let (state, asset_definition_id, source_asset_id) =
+                build_asset_transfer_control_test_state(10);
+            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xA3);
+            let role_id: RoleId = "asset_transfer_delegate".parse().expect("valid role id");
+            let role = Role::new(role_id.clone(), BOB_ID.clone())
+                .add_permission(Permission::from(
+                    iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
+                        asset_definition: asset_definition_id,
+                    },
+                ))
+                .build(&BOB_ID);
+            stx.world.roles.insert(role_id.clone(), role);
+            stx.world.account_roles.insert(
+                crate::role::RoleIdWithOwner::new(BOB_ID.clone(), role_id),
+                (),
+            );
+
+            execute_user_numeric_asset_transfer(
+                &mut stx,
+                &BOB_ID,
+                source_asset_id.clone(),
+                BOB_ID.clone(),
+                Quantity::from(4_u32),
+            )
+            .expect("the exact definition permission inherited from a role must authorize");
+
+            assert_eq!(
+                asset_balance_or_zero(&stx, &source_asset_id),
+                Quantity::from(6_u32)
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Quantity::from(4_u32)
+            );
+        }
+
+        #[test]
+        fn user_transfer_rejects_same_name_permissions_with_wrong_payloads() {
+            let (state, asset_definition_id, source_asset_id) =
+                build_asset_transfer_control_test_state(10);
+            let destination_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xA4);
+            stx.world.add_account_permission(
+                &BOB_ID,
+                Permission::new("CanTransferAsset".into(), Json::new(())),
+            );
+            let role_id: RoleId = "malformed_asset_transfer_delegate"
+                .parse()
+                .expect("valid role id");
+            let role = Role::new(role_id.clone(), BOB_ID.clone())
+                .add_permission(Permission::new(
+                    "CanTransferAssetWithDefinition".into(),
+                    Json::new("all"),
+                ))
+                .build(&BOB_ID);
+            stx.world.roles.insert(role_id.clone(), role);
+            stx.world.account_roles.insert(
+                crate::role::RoleIdWithOwner::new(BOB_ID.clone(), role_id),
+                (),
+            );
+
+            execute_user_numeric_asset_transfer(
+                &mut stx,
+                &BOB_ID,
+                source_asset_id.clone(),
+                BOB_ID.clone(),
+                Quantity::one(),
+            )
+            .expect_err("permission names without exact typed payloads must not authorize");
+
+            assert_eq!(
+                asset_balance_or_zero(&stx, &source_asset_id),
+                Quantity::from(10_u32)
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Quantity::zero()
+            );
+        }
+
+        #[test]
+        fn zero_mint_rejects_before_account_admission_and_preserves_once_budget() {
+            let domain_id = DomainId::try_new("mint_budget", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let definition_id =
+                AssetDefinitionId::new(domain_id, "voucher".parse().expect("asset name"));
+            let definition = AssetDefinition::numeric(definition_id.clone())
+                .with_name("voucher".to_owned())
+                .mintable_once()
+                .build(&ALICE_ID);
+            let world = World::with(
+                [domain],
+                [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+                [definition],
+            );
+            let state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            let destination_id = AssetId::new(definition_id.clone(), BOB_ID.clone());
+            let event_count = stx.world.internal_event_buf.len();
+
+            let error = Mint::asset_quantity(Quantity::zero(), destination_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("a zero mint must be rejected before consuming issuance budget");
+
+            assert!(
+                error.to_string().contains("mint amount must be non-zero"),
+                "unexpected zero-mint error: {error}"
+            );
+            assert!(
+                stx.world.account(&BOB_ID).is_err(),
+                "zero mint must not create the destination account"
+            );
+            assert!(stx.world.assets.get(&destination_id).is_none());
+            let definition = stx
+                .world
+                .asset_definition(&definition_id)
+                .expect("definition remains registered");
+            assert_eq!(definition.mintable(), Mintable::Once);
+            assert_eq!(definition.total_quantity(), &Quantity::zero());
+            assert_eq!(
+                stx.world.internal_event_buf.len(),
+                event_count,
+                "zero mint must not stage events"
+            );
+
+            let valid_destination = AssetId::new(definition_id.clone(), ALICE_ID.clone());
+            Mint::asset_quantity(Quantity::one(), valid_destination.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("the preserved once budget must permit one non-zero mint");
+            let definition = stx
+                .world
+                .asset_definition(&definition_id)
+                .expect("definition remains registered");
+            assert_eq!(definition.mintable(), Mintable::Not);
+            assert_eq!(definition.total_quantity(), &Quantity::one());
+            assert_eq!(
+                asset_balance_or_zero(&stx, &valid_destination),
+                Quantity::one()
+            );
         }
 
         #[test]
@@ -5691,7 +6002,7 @@ pub mod query {
         }
 
         #[test]
-        fn transfer_rejects_metadata_derived_offline_escrow_source() {
+        fn transfer_rejects_deterministically_derived_offline_escrow_source() {
             let chain_id: iroha_data_model::ChainId = "testnet".parse().expect("chain id");
             let domain_id: DomainId =
                 DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -5706,18 +6017,12 @@ pub mod query {
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let escrow_account_model = build_account_in_domain(&escrow_account, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let mut asset_def = {
+            let asset_def = {
                 let __asset_definition_id = asset_def_id.clone();
                 AssetDefinition::numeric(__asset_definition_id.clone())
                     .with_name(__asset_definition_id.name().to_string())
             }
             .build(&ALICE_ID);
-            asset_def.metadata_mut().insert(
-                iroha_data_model::offline::OFFLINE_ASSET_ENABLED_METADATA_KEY
-                    .parse()
-                    .expect("metadata key"),
-                Json::from(norito::json!(true)),
-            );
             let escrow_asset_id = AssetId::new(asset_def_id.clone(), escrow_account.clone());
             let escrow_asset = Asset::new(escrow_asset_id.clone(), Quantity::from(10_u32));
             let world = World::with_assets(
@@ -5742,7 +6047,7 @@ pub mod query {
 
             let err = Transfer::asset_quantity(escrow_asset_id.clone(), 1_u32, BOB_ID.clone())
                 .execute(&escrow_account, &mut stx)
-                .expect_err("metadata-derived escrow source must be rejected");
+                .expect_err("deterministically derived escrow source must be rejected");
             assert!(
                 err.to_string().contains("offline escrow account"),
                 "unexpected error: {err}"

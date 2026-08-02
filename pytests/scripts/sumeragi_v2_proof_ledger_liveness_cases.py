@@ -69,10 +69,14 @@ def test_service_rank_record_binders_cannot_be_grouped_into_rank_carrier(
 
 
 def copy_async_liveness_shard_fixture(tmp_path: Path, module) -> Path:
-    """Copy the virtual async proof facade and every physical proof shard."""
+    """Copy the async base provider, virtual facade, and every proof shard."""
 
     formal_dir = tmp_path / "formal"
     formal_dir.mkdir()
+    shutil.copy2(
+        module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla",
+        formal_dir / "SumeragiV2AsyncNetwork.tla",
+    )
     modules = (
         module.ASYNC_LIVENESS_FACADE,
         *(name for name, _ in module.ASYNC_LIVENESS_SHARDS),
@@ -87,10 +91,14 @@ def async_liveness_symbol_path(
     module,
     symbol: str,
 ) -> Path:
-    """Resolve one virtual-façade symbol to its unique physical proof shard."""
+    """Resolve one async-family symbol to its unique physical provider."""
 
     providers = []
-    for name, _ in module.ASYNC_LIVENESS_SHARDS:
+    modules = (
+        "SumeragiV2AsyncNetwork",
+        *(name for name, _ in module.ASYNC_LIVENESS_SHARDS),
+    )
+    for name in modules:
         path = formal_dir / f"{name}.tla"
         source = path.read_text(encoding="utf-8")
         if (
@@ -618,7 +626,7 @@ def test_async_service_activation_pair_proof_mutations_fail_closed(
 ) -> None:
     module = load_checker()
     formal_dir = copy_async_liveness_shard_fixture(tmp_path, module)
-    path = formal_dir / "SumeragiV2AsyncRecoveryVoteEpochProofs.tla"
+    path = async_liveness_symbol_path(formal_dir, module, symbol)
     source = path.read_text(encoding="utf-8")
     mutator = mutate_tla_operator if kind == "operator" else mutate_tla_theorem
     path.write_text(mutator(source, symbol, old, new), encoding="utf-8")

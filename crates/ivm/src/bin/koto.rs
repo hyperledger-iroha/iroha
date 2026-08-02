@@ -666,15 +666,23 @@ fn format_sources(args: Vec<String>) -> Result<(), String> {
 
 fn parse_format_sources_args(args: Vec<String>) -> Result<(bool, Vec<PathBuf>), String> {
     let mut check_only = false;
+    let mut check_seen = false;
     let mut positional_only = false;
     let mut inputs = Vec::new();
     for argument in args {
         match argument.as_str() {
             "--" if !positional_only => positional_only = true,
-            "--check" if !positional_only => check_only = true,
+            "--check" if !positional_only && !check_seen => {
+                check_only = true;
+                check_seen = true;
+            }
+            "--check" if !positional_only => {
+                return Err("fmt option `--check` was supplied more than once".to_owned());
+            }
             flag if !positional_only && flag.starts_with('-') => {
                 return Err(format!("unknown fmt option `{flag}`"));
             }
+            "" => return Err("fmt input path must not be empty".to_owned()),
             _ => inputs.push(PathBuf::from(argument)),
         }
     }
@@ -2549,6 +2557,18 @@ mod tests {
         let error = parse_format_sources_args(vec!["--write".to_owned(), "demo.ko".to_owned()])
             .expect_err("unknown formatter flags must not become file paths");
         assert!(error.contains("unknown fmt option"));
+
+        let error = parse_format_sources_args(vec![
+            "--check".to_owned(),
+            "--check".to_owned(),
+            "demo.ko".to_owned(),
+        ])
+        .expect_err("duplicate formatter options must fail closed");
+        assert!(error.contains("more than once"));
+
+        let error = parse_format_sources_args(vec![String::new()])
+            .expect_err("empty formatter paths must fail closed");
+        assert!(error.contains("must not be empty"));
 
         let (check_only, inputs) = parse_format_sources_args(vec![
             "--check".to_owned(),

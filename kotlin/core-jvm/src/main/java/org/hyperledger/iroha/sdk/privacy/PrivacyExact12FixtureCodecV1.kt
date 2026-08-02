@@ -295,9 +295,11 @@ object PrivacyExact12FixtureCodecV1 {
         candidate: ByteArray,
         expectedCanonicalArchive: ByteArray,
     ): PrivacyExact12FixtureBundleV1 {
-        decodeCanonical(expectedCanonicalArchive)
-        val decoded = decodeCanonical(candidate)
-        require(candidate.contentEquals(expectedCanonicalArchive)) {
+        val candidateSnapshot = candidate.copyOf()
+        val expectedSnapshot = expectedCanonicalArchive.copyOf()
+        decodeCanonical(expectedSnapshot)
+        val decoded = decodeCanonical(candidateSnapshot)
+        require(candidateSnapshot.contentEquals(expectedSnapshot)) {
             "exact-12 fixture differs from the supplied canonical archive"
         }
         return decoded

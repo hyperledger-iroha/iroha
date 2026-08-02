@@ -1273,7 +1273,9 @@ PROOF
            DEF CommandSuccessors, PersistDecisionRecoverySuccessor,
                PersistDecisionRecoveryKind, PersistDecisionBody,
                PersistDecisionValidationHeld, PersistDecisionRequest,
-               AsyncCandidateAtConsumer, AsyncCandidateWithIdentity
+               AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+               AsyncCandidateSuccessorProposalRound,
+               AsyncCandidateWithIdentityAndOrigin
       <3> QED BY <2>3, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
                      <3>7, SMT
     <2>4. CASE command.kind \in
@@ -1309,18 +1311,21 @@ PROOF
       <3>7. CASE command.kind = "PersistInstallTC"
         <4>1. ProgressCommitSource(InstallProposalSuccessor(command))
           BY DEF InstallProposalSuccessor, ProgressCommitSource,
-                 AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+                 AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+                 AsyncCandidateWithIdentityAndOrigin,
                  NoItemCandidate, AsyncCandidate
         <4>2. ProgressCommitSource(InstallCommitSignSuccessor(command))
           BY CompletionCandidateHasProgressCommitSource
              DEF InstallCommitSignSuccessor,
-                 AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+                 AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+                 AsyncCandidateWithIdentityAndOrigin,
                  NoItemCandidate,
                  AsyncCandidate
         <4>2a. ProgressCommitSource(InstallLockedFetchSuccessor(command))
           BY CompletionCandidateHasProgressCommitSource
              DEF InstallLockedFetchSuccessor,
-                 AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+                 AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+                 AsyncCandidateWithIdentityAndOrigin,
                  NoItemCandidate,
                  AsyncCandidate
         <4>3. CASE /\ InstallResultingLockedPrepareQCs(command) = {}

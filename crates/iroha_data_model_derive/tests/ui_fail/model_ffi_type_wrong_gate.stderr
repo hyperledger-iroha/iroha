@@ -1,0 +1,5 @@
+error: `ffi_type` on a model item must be gated by `any(feature = "ffi_export", feature = "ffi_import")`
+ --> tests/ui_fail/model_ffi_type_wrong_gate.rs:4:16
+  |
+4 |     #[cfg_attr(feature = "std", ffi_type)]
+  |                ^^^^^^^^^^^^^^^

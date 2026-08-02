@@ -1,9 +1,6 @@
-# Keep plain `cargo test` stable on WSL and memory-constrained VMs. Cargo and
-# libtest otherwise default to the logical CPU count, which can fan out into
-# many rustc processes or hundreds of runtime test threads before failures
-# degrade into recoverable per-test errors.
-[build]
-jobs = 1
+# Use Cargo's native jobserver and libtest defaults for ordinary development.
+# Memory-constrained evidence and packaging lanes set explicit local limits in
+# their own scripts instead of serializing every workspace build and test.
 
-[env]
-RUST_TEST_THREADS = { value = "1", force = false }
+[alias]
+xtask = "run --package xtask --features dev-tools --bin xtask --"

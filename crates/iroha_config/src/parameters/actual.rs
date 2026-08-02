@@ -611,14 +611,72 @@ impl Root {
         }
     }
 
-    /// Apply Nexus storage budgets to component-level caps.
+    /// Apply an operator-configured Nexus storage budget to component-level caps.
     ///
-    /// This is a best-effort configuration pass that only affects Nexus-enabled nodes.
+    /// When the aggregate budget is omitted, `irohad` derives a filesystem-aware budget at
+    /// runtime and applies it with [`Self::apply_derived_storage_budget`].
     pub fn apply_storage_budget(&mut self) {
         if !self.nexus.enabled {
             return;
         }
 
+        self.apply_storage_memory_budget();
+        let Some(max_disk) = self
+            .nexus
+            .storage
+            .local_budget_bytes
+            .map(|budget| budget.get())
+        else {
+            return;
+        };
+        debug_assert!(max_disk > 0, "parsed storage budgets are non-zero");
+        self.nexus.storage.effective_local_budget_bytes = Some(Bytes(max_disk));
+        let derived_caps = derive_global_nexus_storage_component_caps(
+            max_disk,
+            self.nexus.storage.disk_budget_weights,
+        );
+        self.apply_storage_component_caps(derived_caps);
+    }
+
+    /// Apply a runtime-derived, filesystem-aware Nexus storage budget.
+    ///
+    /// `irohad` computes these groups from live storage roots without persisting them back to the
+    /// operator configuration. The effective aggregate is recomputed from the groups here so a
+    /// caller cannot supply inconsistent aggregate metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the group list is empty or its checked aggregate exceeds `u64`.
+    pub fn apply_derived_storage_budget(
+        &mut self,
+        filesystem_budgets: &[NexusStorageFilesystemBudget],
+    ) -> core::result::Result<NonZeroU64, NexusStorageBudgetApplicationError> {
+        let aggregate_budget_bytes =
+            filesystem_budgets
+                .iter()
+                .try_fold(0_u64, |aggregate, filesystem| {
+                    aggregate
+                        .checked_add(filesystem.budget_bytes.get())
+                        .ok_or(NexusStorageBudgetApplicationError::AggregateOverflow)
+                })?;
+        let aggregate_budget_bytes = NonZeroU64::new(aggregate_budget_bytes)
+            .ok_or(NexusStorageBudgetApplicationError::NoFilesystemBudgets)?;
+
+        if !self.nexus.enabled {
+            return Ok(aggregate_budget_bytes);
+        }
+
+        self.apply_storage_memory_budget();
+        self.nexus.storage.effective_local_budget_bytes = Some(Bytes(aggregate_budget_bytes.get()));
+        let derived_caps = derive_filesystem_nexus_storage_component_caps(
+            filesystem_budgets,
+            self.nexus.storage.disk_budget_weights,
+        );
+        self.apply_storage_component_caps(derived_caps);
+        Ok(aggregate_budget_bytes)
+    }
+
+    fn apply_storage_memory_budget(&mut self) {
         let max_wsv_mem = self.nexus.storage.max_wsv_memory_bytes.get();
         if max_wsv_mem > 0 {
             self.tiered_state.hot_retained_bytes =
@@ -634,37 +692,15 @@ impl Root {
                 ));
             }
         }
+    }
 
+    fn apply_storage_component_caps(&mut self, derived_caps: NexusStorageComponentCaps) {
         let configured_caps = if let Some(caps) = self.nexus.storage.configured_component_caps {
             caps
         } else {
             let caps = NexusStorageConfiguredComponentCaps::capture(self);
             self.nexus.storage.configured_component_caps = Some(caps);
             caps
-        };
-
-        let max_disk = self.nexus.storage.max_disk_usage_bytes.get();
-        if max_disk == 0 {
-            return;
-        }
-
-        let derived_caps = match self.nexus.storage.budget_source {
-            NexusStorageBudgetSource::Unset => return,
-            NexusStorageBudgetSource::OperatorExplicit => {
-                derive_global_nexus_storage_component_caps(
-                    max_disk,
-                    self.nexus.storage.disk_budget_weights,
-                )
-            }
-            NexusStorageBudgetSource::AutoDerived => {
-                let Some(auto_default) = self.nexus.storage.auto_default.as_ref() else {
-                    return;
-                };
-                derive_auto_nexus_storage_component_caps(
-                    auto_default,
-                    self.nexus.storage.disk_budget_weights,
-                )
-            }
         };
 
         self.kura.max_disk_usage_bytes = min_nonzero_bytes(
@@ -768,14 +804,14 @@ fn derive_global_nexus_storage_component_caps(
     caps
 }
 
-fn derive_auto_nexus_storage_component_caps(
-    auto_default: &NexusStorageAutoDefault,
+fn derive_filesystem_nexus_storage_component_caps(
+    filesystem_budgets: &[NexusStorageFilesystemBudget],
     weights: NexusStorageWeights,
 ) -> NexusStorageComponentCaps {
     let mut caps = NexusStorageComponentCaps::default();
-    for filesystem_group in &auto_default.filesystem_groups {
-        let group_caps = split_auto_budget_across_components(
-            filesystem_group.budget_bytes,
+    for filesystem_group in filesystem_budgets {
+        let group_caps = split_filesystem_budget_across_components(
+            filesystem_group.budget_bytes.get(),
             &filesystem_group.components,
             weights,
         );
@@ -794,7 +830,7 @@ fn derive_auto_nexus_storage_component_caps(
     caps
 }
 
-fn split_auto_budget_across_components(
+fn split_filesystem_budget_across_components(
     budget_bytes: u64,
     components: &[NexusStorageBudgetComponent],
     weights: NexusStorageWeights,
@@ -1134,8 +1170,7 @@ signature_threshold = 1
     fn apply_storage_budget_clamps_component_caps() {
         let mut root = minimal_root();
         root.nexus.enabled = true;
-        root.nexus.storage.max_disk_usage_bytes = Bytes(1_000);
-        root.nexus.storage.budget_source = NexusStorageBudgetSource::OperatorExplicit;
+        root.nexus.storage.local_budget_bytes = Some(Bytes(1_000));
         root.nexus.storage.max_wsv_memory_bytes = Bytes(512);
         root.nexus.storage.disk_budget_weights = NexusStorageWeights {
             kura_blocks_bps: 5_000,
@@ -1155,6 +1190,13 @@ signature_threshold = 1
 
         root.apply_storage_budget();
 
+        assert_eq!(
+            root.nexus
+                .storage
+                .effective_local_budget_bytes
+                .map(Bytes::get),
+            Some(1_000)
+        );
         assert_eq!(root.kura.max_disk_usage_bytes.get(), 500);
         assert_eq!(root.tiered_state.max_cold_bytes.get(), 200);
         assert_eq!(root.torii.sorafs_storage.max_capacity_bytes.get(), 200);
@@ -1174,34 +1216,26 @@ signature_threshold = 1
     }
 
     #[test]
-    fn apply_storage_budget_uses_auto_default_group_caps() {
+    fn apply_derived_storage_budget_uses_filesystem_group_caps() {
         let mut root = minimal_root();
         root.nexus.enabled = true;
-        root.nexus.storage.max_disk_usage_bytes = Bytes(2_000);
-        root.nexus.storage.budget_source = NexusStorageBudgetSource::AutoDerived;
-        root.nexus.storage.auto_default = Some(NexusStorageAutoDefault {
-            version: NexusStorageAutoDefault::VERSION,
-            aggregate_budget_bytes: 2_000,
-            filesystem_groups: vec![
-                NexusStorageAutoDefaultFilesystemGroup {
-                    filesystem_id: "dev:1".to_owned(),
-                    budget_bytes: 800,
-                    components: vec![
-                        NexusStorageBudgetComponent::Kura,
-                        NexusStorageBudgetComponent::Sorafs,
-                    ],
-                },
-                NexusStorageAutoDefaultFilesystemGroup {
-                    filesystem_id: "dev:2".to_owned(),
-                    budget_bytes: 1_200,
-                    components: vec![
-                        NexusStorageBudgetComponent::WsvCold,
-                        NexusStorageBudgetComponent::SoranetSpool,
-                        NexusStorageBudgetComponent::SoravpnSpool,
-                    ],
-                },
-            ],
-        });
+        let filesystem_budgets = vec![
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(800).expect("non-zero budget"),
+                components: vec![
+                    NexusStorageBudgetComponent::Kura,
+                    NexusStorageBudgetComponent::Sorafs,
+                ],
+            },
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(1_200).expect("non-zero budget"),
+                components: vec![
+                    NexusStorageBudgetComponent::WsvCold,
+                    NexusStorageBudgetComponent::SoranetSpool,
+                    NexusStorageBudgetComponent::SoravpnSpool,
+                ],
+            },
+        ];
         root.nexus.storage.max_wsv_memory_bytes = Bytes(256);
         root.nexus.storage.disk_budget_weights = NexusStorageWeights {
             kura_blocks_bps: 5_000,
@@ -1219,14 +1253,88 @@ signature_threshold = 1
         root.streaming.soranet.provision_spool_max_bytes = Bytes(0);
         root.streaming.soravpn.provision_spool_max_bytes = Bytes(0);
 
-        root.apply_storage_budget();
+        let aggregate = root
+            .apply_derived_storage_budget(&filesystem_budgets)
+            .expect("valid filesystem budgets");
 
+        assert_eq!(aggregate.get(), 2_000);
+        assert!(root.nexus.storage.local_budget_bytes.is_none());
+        assert_eq!(
+            root.nexus
+                .storage
+                .effective_local_budget_bytes
+                .map(Bytes::get),
+            Some(2_000)
+        );
         assert_eq!(root.kura.max_disk_usage_bytes.get(), 572);
         assert_eq!(root.tiered_state.max_cold_bytes.get(), 800);
         assert_eq!(root.torii.sorafs_storage.max_capacity_bytes.get(), 228);
         assert_eq!(root.streaming.soranet.provision_spool_max_bytes.get(), 200);
         assert_eq!(root.streaming.soravpn.provision_spool_max_bytes.get(), 200);
         assert_eq!(root.tiered_state.hot_retained_bytes.get(), 256);
+    }
+
+    #[test]
+    fn runtime_storage_budget_reconciliation_is_not_ratchet_bound() {
+        let mut root = minimal_root();
+        root.nexus.enabled = true;
+        root.nexus.storage.local_budget_bytes = None;
+        root.nexus.storage.disk_budget_weights = NexusStorageWeights::default();
+        root.kura.max_disk_usage_bytes = Bytes(1_000);
+        let budget = |bytes| NexusStorageFilesystemBudget {
+            budget_bytes: NonZeroU64::new(bytes).expect("non-zero budget"),
+            components: vec![NexusStorageBudgetComponent::Kura],
+        };
+
+        root.apply_derived_storage_budget(&[budget(200)])
+            .expect("valid filesystem budget");
+        assert_eq!(root.kura.max_disk_usage_bytes.get(), 200);
+
+        root.apply_storage_budget();
+        assert_eq!(
+            root.nexus
+                .storage
+                .effective_local_budget_bytes
+                .map(Bytes::get),
+            Some(200),
+            "an absent operator budget must not erase the runtime-derived effective budget"
+        );
+
+        root.apply_derived_storage_budget(&[budget(800)])
+            .expect("valid filesystem budget");
+        assert_eq!(
+            root.kura.max_disk_usage_bytes.get(),
+            800,
+            "a later filesystem probe may raise the cap back toward its configured ceiling"
+        );
+        assert!(root.nexus.storage.local_budget_bytes.is_none());
+        assert_eq!(
+            root.nexus
+                .storage
+                .effective_local_budget_bytes
+                .map(Bytes::get),
+            Some(800)
+        );
+    }
+
+    #[test]
+    fn derived_storage_budget_rejects_an_overflowing_internal_aggregate() {
+        let mut root = minimal_root();
+        root.nexus.enabled = true;
+        let budget = |bytes| NexusStorageFilesystemBudget {
+            budget_bytes: NonZeroU64::new(bytes).expect("non-zero budget"),
+            components: vec![NexusStorageBudgetComponent::Kura],
+        };
+
+        let error = root
+            .apply_derived_storage_budget(&[budget(u64::MAX), budget(1)])
+            .expect_err("the aggregate must use checked arithmetic");
+
+        assert_eq!(error, NexusStorageBudgetApplicationError::AggregateOverflow);
+        assert!(
+            root.nexus.storage.effective_local_budget_bytes.is_none(),
+            "an invalid aggregate must be rejected before mutating effective configuration"
+        );
     }
 
     #[test]
@@ -2680,33 +2788,18 @@ impl Concurrency {
 pub struct Genesis {
     /// Genesis account public key
     pub public_key: PublicKey,
-    /// Path to `GenesisBlock`.
-    /// If it is none, the peer can only observe the genesis block.
-    /// If it is some, the peer is responsible for submitting the genesis block.
+    /// Path to the operator-provisioned signed `GenesisBlock`.
+    ///
+    /// Normal startup derives the exact genesis-instance trust anchor from this artifact when it
+    /// is present. A restart without the artifact must configure [`Self::expected_hash`].
     pub file: Option<WithOrigin<PathBuf>>,
     /// Optional path to genesis manifest JSON for validation at startup.
     pub manifest_json: Option<WithOrigin<PathBuf>>,
-    /// Exact genesis block hash required for remote bootstrap.
+    /// Exact genesis consensus-header hash used as a normal-startup trust anchor.
     ///
-    /// This may be omitted when a local signed genesis file is configured.
+    /// This may be omitted when a local signed genesis file is configured. When both are present,
+    /// they must identify the same signed genesis instance.
     pub expected_hash: Option<HashOf<BlockHeader>>,
-    /// Optional peer allowlist permitted to serve genesis during bootstrap (falls back to trusted peers).
-    pub bootstrap_allowlist: Vec<PeerId>,
-    /// Maximum genesis payload size accepted/served during bootstrap (bytes).
-    pub bootstrap_max_bytes: u64,
-    /// Minimum interval between serving bootstrap responses.
-    pub bootstrap_response_throttle: Duration,
-    /// Per-attempt bootstrap request timeout (preflight + payload).
-    pub bootstrap_request_timeout: Duration,
-    /// Backoff between bootstrap attempts.
-    pub bootstrap_retry_interval: Duration,
-    /// Request windows per retry cycle before backoff resets and a warning is emitted.
-    /// Enabled bootstrap continues across cycles until success or a permanent validation error.
-    pub bootstrap_max_attempts: u32,
-    /// Whether to attempt bootstrap when local genesis is missing.
-    ///
-    /// Enabling this without a local file requires [`Self::expected_hash`].
-    pub bootstrap_enabled: bool,
 }
 
 /// Transaction queue settings.
@@ -3010,17 +3103,6 @@ impl Default for LaneRelayEmergency {
     }
 }
 
-/// Provenance of the effective Nexus aggregate storage budget.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NexusStorageBudgetSource {
-    /// No aggregate budget was configured and no persisted auto-derived metadata is active.
-    Unset,
-    /// The operator explicitly set the aggregate budget.
-    OperatorExplicit,
-    /// The aggregate budget was auto-derived and is backed by persisted filesystem metadata.
-    AutoDerived,
-}
-
 /// Storage component participating in Nexus disk budgeting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NexusStorageBudgetComponent {
@@ -3046,7 +3128,7 @@ impl NexusStorageBudgetComponent {
         Self::SoravpnSpool,
     ];
 
-    /// Stable string label used in persisted config metadata.
+    /// Stable string label used in diagnostics.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -3055,19 +3137,6 @@ impl NexusStorageBudgetComponent {
             Self::Sorafs => "sorafs",
             Self::SoranetSpool => "soranet_spool",
             Self::SoravpnSpool => "soravpn_spool",
-        }
-    }
-
-    /// Parse a persisted component label.
-    #[must_use]
-    pub fn parse_label(label: &str) -> Option<Self> {
-        match label {
-            "kura" => Some(Self::Kura),
-            "wsv_cold" => Some(Self::WsvCold),
-            "sorafs" => Some(Self::Sorafs),
-            "soranet_spool" => Some(Self::SoranetSpool),
-            "soravpn_spool" => Some(Self::SoravpnSpool),
-            _ => None,
         }
     }
 
@@ -3082,66 +3151,38 @@ impl NexusStorageBudgetComponent {
     }
 }
 
-impl FromStr for NexusStorageBudgetComponent {
-    type Err = ();
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Self::parse_label(s).ok_or(())
-    }
-}
-
-/// Persisted per-filesystem metadata backing an auto-derived Nexus budget.
+/// One runtime-derived filesystem group inside the Nexus storage budget.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NexusStorageAutoDefault {
-    /// Metadata schema version.
-    pub version: u32,
-    /// Aggregate budget derived across all filesystem groups.
-    pub aggregate_budget_bytes: u64,
-    /// Per-filesystem budget groups in deterministic order.
-    pub filesystem_groups: Vec<NexusStorageAutoDefaultFilesystemGroup>,
-}
-
-impl NexusStorageAutoDefault {
-    /// Current metadata schema version persisted into `config.toml`.
-    pub const VERSION: u32 = 1;
-
-    /// Whether this metadata can be used to activate auto-derived budgeting for the aggregate.
-    #[must_use]
-    pub fn matches_aggregate_budget(&self, aggregate_budget_bytes: u64) -> bool {
-        self.version == Self::VERSION
-            && self.aggregate_budget_bytes == aggregate_budget_bytes
-            && self.aggregate_budget_bytes == self.sum_budget_bytes()
-    }
-
-    /// Sum the persisted per-filesystem budgets.
-    #[must_use]
-    pub fn sum_budget_bytes(&self) -> u64 {
-        self.filesystem_groups.iter().fold(0_u64, |total, group| {
-            total.saturating_add(group.budget_bytes)
-        })
-    }
-}
-
-/// One persisted filesystem group inside an auto-derived Nexus budget.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NexusStorageAutoDefaultFilesystemGroup {
-    /// Stable filesystem identity recorded at derivation time.
-    pub filesystem_id: String,
-    /// Budget derived for this filesystem group.
-    pub budget_bytes: u64,
+pub struct NexusStorageFilesystemBudget {
+    /// Non-zero absolute budget derived for this filesystem group.
+    pub budget_bytes: NonZeroU64,
     /// Components that share the filesystem, ordered deterministically.
     pub components: Vec<NexusStorageBudgetComponent>,
 }
 
+/// Failure to validate and aggregate runtime-derived filesystem storage budgets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum NexusStorageBudgetApplicationError {
+    /// Runtime derivation did not produce any filesystem budget group.
+    #[error("runtime Nexus storage derivation produced no filesystem budget groups")]
+    NoFilesystemBudgets,
+    /// The checked sum of per-filesystem budgets exceeded `u64`.
+    #[error("aggregate runtime Nexus storage budget overflowed u64")]
+    AggregateOverflow,
+}
+
 /// Storage budget configuration for Nexus-enabled nodes.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct NexusStorage {
-    /// Aggregate on-disk storage budget (bytes).
-    pub max_disk_usage_bytes: Bytes<u64>,
-    /// Provenance of the effective aggregate disk budget.
-    pub budget_source: NexusStorageBudgetSource,
-    /// Persisted auto-derived metadata, when available.
-    pub auto_default: Option<NexusStorageAutoDefault>,
+    /// Operator-configured aggregate on-disk storage budget (bytes).
+    ///
+    /// `None` requests filesystem-aware runtime derivation by `irohad`.
+    pub local_budget_bytes: Option<Bytes<u64>>,
+    /// Effective aggregate on-disk storage budget enforced by this process (bytes).
+    ///
+    /// This actual-layer field is initialized from [`Self::local_budget_bytes`] when configured
+    /// and otherwise populated from runtime filesystem probes by `irohad`.
+    pub effective_local_budget_bytes: Option<Bytes<u64>>,
     /// Block interval between disk budget enforcement scans (0 = every block).
     pub budget_enforce_interval_blocks: u64,
     /// WSV hot-tier deterministic payload size budget (bytes).
@@ -3154,9 +3195,11 @@ pub struct NexusStorage {
 impl fmt::Debug for NexusStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NexusStorage")
-            .field("max_disk_usage_bytes", &self.max_disk_usage_bytes)
-            .field("budget_source", &self.budget_source)
-            .field("auto_default", &self.auto_default)
+            .field("local_budget_bytes", &self.local_budget_bytes)
+            .field(
+                "effective_local_budget_bytes",
+                &self.effective_local_budget_bytes,
+            )
             .field(
                 "budget_enforce_interval_blocks",
                 &self.budget_enforce_interval_blocks,
@@ -3170,9 +3213,8 @@ impl fmt::Debug for NexusStorage {
 impl Default for NexusStorage {
     fn default() -> Self {
         Self {
-            max_disk_usage_bytes: defaults::nexus::storage::MAX_DISK_USAGE_BYTES,
-            budget_source: NexusStorageBudgetSource::Unset,
-            auto_default: None,
+            local_budget_bytes: None,
+            effective_local_budget_bytes: None,
             budget_enforce_interval_blocks:
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
@@ -4538,18 +4580,10 @@ pub fn execution_policy_digest_v1(
     policy.push("content.default_auth_mode", &content.default_auth_mode);
     policy.push("content.stripe_layout", &content.stripe_layout);
 
-    // Offline-cash and deterministic settlement routing. The process-local
-    // service switch is deliberately excluded: per-asset metadata and escrow
-    // bindings determine consensus execution. Artifact paths are authenticated
-    // by the promoted release policy digest instead of their local filesystem names.
-    policy.push(
-        "settlement.offline.escrow_required",
-        &settlement.offline.escrow_required,
-    );
-    policy.push(
-        "settlement.offline.escrow_accounts",
-        &settlement.offline.escrow_accounts,
-    );
+    // Offline-cash primitives are universal. Runtime escrow bindings are
+    // deterministically derived when an offline instruction executes, so no
+    // process-local enablement or asset catalog participates in consensus
+    // policy. Artifact paths are likewise local cache locations.
     policy.push(
         "settlement.offline.kagemusha_max_decoded_bytes",
         &settlement.offline.kagemusha_max_decoded_bytes,
@@ -12286,23 +12320,22 @@ impl FromStr for StreamingSoranetAccessKind {
     }
 }
 
-/// Settlement configuration for offline cash and conversion routing.
+/// Settlement execution state and conversion routing configuration.
 #[derive(Debug, Clone, Default)]
 pub struct Settlement {
-    /// Offline settlement retention policy.
+    /// Universal cash-protocol state plus optional proof-release cache controls.
     pub offline: Offline,
     /// Router configuration for XOR conversion.
     pub router: Router,
 }
 
-/// Kagemusha escrow and execution policy parameters.
+/// Universal Kagemusha execution state and optional proof-release cache parameters.
 #[derive(Debug, Clone)]
 pub struct Offline {
-    /// Whether this node profile enables offline-cash support.
-    pub enabled: bool,
-    /// Whether Kagemusha cash must be escrow-backed.
-    pub escrow_required: bool,
-    /// Escrow accounts keyed by Kagemusha asset definition.
+    /// Lazily derived escrow accounts keyed by asset definition.
+    ///
+    /// This map is runtime state, not operator configuration and not an
+    /// enablement catalog. Every asset can use the offline instructions.
     pub escrow_accounts: BTreeMap<AssetDefinitionId, AccountId>,
     /// Canonical Norito policy authenticating promoted Kagemusha releases.
     pub kagemusha_release_policy_path: Option<PathBuf>,
@@ -12317,8 +12350,6 @@ pub struct Offline {
 impl Default for Offline {
     fn default() -> Self {
         Self {
-            enabled: false,
-            escrow_required: true,
             escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
                 defaults::settlement::offline::kagemusha_release_policy_path(),
@@ -14002,7 +14033,6 @@ mod tests {
             Some(PathBuf::from("/srv/iroha/policy.norito"));
         operational.settlement.offline.kagemusha_artifact_dir =
             Some(PathBuf::from("/srv/iroha/artifacts"));
-        operational.settlement.offline.enabled = !operational.settlement.offline.enabled;
 
         assert_eq!(
             execution_policy_hash(&operational),
@@ -14012,10 +14042,9 @@ mod tests {
     }
 
     #[test]
-    fn offline_defaults_are_dev_friendly_without_weakening_escrow() {
+    fn offline_defaults_need_no_operator_enablement_or_catalog() {
         let offline = Offline::default();
-        assert!(!offline.enabled);
-        assert!(offline.escrow_required);
+        assert!(offline.escrow_accounts.is_empty());
         assert!(offline.kagemusha_release_policy_path.is_none());
         assert!(offline.kagemusha_artifact_dir.is_none());
         assert!(offline.kagemusha_catalog_qualification_seal_path.is_none());
@@ -14023,31 +14052,6 @@ mod tests {
             offline.kagemusha_max_decoded_bytes,
             defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
         );
-    }
-
-    #[test]
-    fn nexus_storage_budget_component_from_str_matches_persisted_labels() {
-        assert_eq!(
-            "kura".parse::<NexusStorageBudgetComponent>(),
-            Ok(NexusStorageBudgetComponent::Kura)
-        );
-        assert_eq!(
-            "wsv_cold".parse::<NexusStorageBudgetComponent>(),
-            Ok(NexusStorageBudgetComponent::WsvCold)
-        );
-        assert_eq!(
-            "sorafs".parse::<NexusStorageBudgetComponent>(),
-            Ok(NexusStorageBudgetComponent::Sorafs)
-        );
-        assert_eq!(
-            "soranet_spool".parse::<NexusStorageBudgetComponent>(),
-            Ok(NexusStorageBudgetComponent::SoranetSpool)
-        );
-        assert_eq!(
-            "soravpn_spool".parse::<NexusStorageBudgetComponent>(),
-            Ok(NexusStorageBudgetComponent::SoravpnSpool)
-        );
-        assert!("unknown".parse::<NexusStorageBudgetComponent>().is_err());
     }
 
     fn default_v2_sumeragi() -> Sumeragi {

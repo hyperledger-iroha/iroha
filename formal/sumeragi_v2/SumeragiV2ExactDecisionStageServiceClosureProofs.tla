@@ -2734,7 +2734,7 @@ BY ExactDecisionResponsePhysicalCompletionDebtIsFinite,
        ExactDecisionPhysicalCompletionRunnerCarrier
 
 THEOREM ExactDecisionPhysicalCompletionNonIngressRunLowersRank ==
-  \A node \in ValidatorIds, response:
+  \A node \in ValidatorIds, response \in AsyncNetworkItems:
     /\ AsyncTypeInvariant
     /\ \/ LocalAdmissionStep(node)
        \/ SerializedRunnerRuntimeStep(node)
@@ -4289,50 +4289,56 @@ after that point cannot enter the strict source prefix.
 ExactDecisionRequestRuntimeCandidateOriginsAt(
     node, schedulerCeiling, physicalCut) ==
   {record.origin:
-     record \in AsyncCandidateLifecycleAdmissions,
-     /\ record.node = node
-     /\ record.ordinal < schedulerCeiling
-     /\ record.sourcePhysicalOrdinal < physicalCut}
+     record \in
+       {owned \in AsyncCandidateLifecycleAdmissions:
+          /\ owned.node = node
+          /\ owned.ordinal < schedulerCeiling
+          /\ owned.sourcePhysicalOrdinal < physicalCut}}
     \cup
   {record.causalOrigin:
-     record \in asyncLeaderWireLifecycles,
-     /\ record.recipient = node
-     /\ record.schedulerOrdinal < schedulerCeiling
-     /\ record.physicalAdmissionOrdinal < physicalCut
-     /\ AsyncLeaderWireLifecycleActive(record)}
+     record \in
+       {owned \in asyncLeaderWireLifecycles:
+          /\ owned.recipient = node
+          /\ owned.schedulerOrdinal < schedulerCeiling
+          /\ owned.physicalAdmissionOrdinal < physicalCut
+          /\ AsyncLeaderWireLifecycleActive(owned)}}
 
 ExactDecisionRequestRuntimeContinuationSourcesAt(
     node, schedulerCeiling, physicalCut) ==
   {AsyncCandidateLifecycleSource(record.origin, record.ordinal):
-     record \in AsyncCandidateLifecycleAdmissions,
-     /\ record.node = node
-     /\ record.ordinal < schedulerCeiling
-     /\ record.sourcePhysicalOrdinal < physicalCut}
+     record \in
+       {owned \in AsyncCandidateLifecycleAdmissions:
+          /\ owned.node = node
+          /\ owned.ordinal < schedulerCeiling
+          /\ owned.sourcePhysicalOrdinal < physicalCut}}
     \cup
   {AsyncCandidateLifecycleSource(
      record.causalOrigin, record.schedulerOrdinal):
-     record \in asyncLeaderWireLifecycles,
-     /\ record.recipient = node
-     /\ record.schedulerOrdinal < schedulerCeiling
-     /\ record.physicalAdmissionOrdinal < physicalCut
-     /\ AsyncLeaderWireLifecycleActive(record)}
+     record \in
+       {owned \in asyncLeaderWireLifecycles:
+          /\ owned.recipient = node
+          /\ owned.schedulerOrdinal < schedulerCeiling
+          /\ owned.physicalAdmissionOrdinal < physicalCut
+          /\ AsyncLeaderWireLifecycleActive(owned)}}
 
 ExactDecisionRequestRuntimeServeSourcesAt(
     node, schedulerCeiling, physicalCut) ==
   {AsyncServeIngressSourceFor(admission):
-     admission \in asyncServeIngressAdmissions,
-     /\ admission.node = node
-     /\ admission.schedulerOrdinal < schedulerCeiling
-     /\ admission.ordinal < physicalCut}
+     admission \in
+       {owned \in asyncServeIngressAdmissions:
+          /\ owned.node = node
+          /\ owned.schedulerOrdinal < schedulerCeiling
+          /\ owned.ordinal < physicalCut}}
 
 ExactDecisionRequestRuntimeLeaderWireIdentitiesAt(
     node, schedulerCeiling, physicalCut) ==
   {AsyncLeaderWirePotentialOwnerIdentity(record):
-     record \in asyncLeaderWireLifecycles,
-     /\ record.recipient = node
-     /\ record.schedulerOrdinal < schedulerCeiling
-     /\ record.physicalAdmissionOrdinal < physicalCut
-     /\ AsyncLeaderWireLifecycleActive(record)}
+     record \in
+       {owned \in asyncLeaderWireLifecycles:
+          /\ owned.recipient = node
+          /\ owned.schedulerOrdinal < schedulerCeiling
+          /\ owned.physicalAdmissionOrdinal < physicalCut
+          /\ AsyncLeaderWireLifecycleActive(owned)}}
 
 ExactDecisionRequestRuntimePrefixSnapshot(
     node, schedulerCeiling, physicalCut) ==
@@ -4465,7 +4471,7 @@ ExactDecisionRequestRuntimeFrozenPrefixRank(snapshot) ==
   <<ExactDecisionRequestRuntimeOlderTimeoutStage(snapshot),
     <<ExactDecisionRequestRuntimeFrozenIngressStage(snapshot),
       <<ExactDecisionRequestRuntimeFrozenSourceRank(snapshot),
-        ExactDecisionRequestRuntimeFrozenIngressDependencyRank(snapshot)>>>>
+        ExactDecisionRequestRuntimeFrozenIngressDependencyRank(snapshot)>>>>>>
 
 ExactDecisionRequestRuntimeFrozenPrefixTailCarrier ==
   AsyncCandidateProducerContinuationFrozenPrefixRankCarrier
@@ -4496,7 +4502,7 @@ ExactDecisionRequestRuntimeFrozenPrefixOrdering ==
     ExactDecisionRequestRuntimeFrozenBarrierOrdering,
     0..1, ExactDecisionRequestRuntimeFrozenBarrierCarrier)
 
-ExactDecisionRequestRuntimeFrozenSourceBottom == <<0, <<0, 0>>>
+ExactDecisionRequestRuntimeFrozenSourceBottom == <<0, <<0, 0>>>>
 
 ExactDecisionRequestRuntimeFrozenPrefixDrained(snapshot) ==
   /\ ExactDecisionRequestRuntimeOlderTimeoutStage(snapshot) = 0
@@ -4687,9 +4693,9 @@ cell.  The theorem is action-local and advertises no producer action as
 progress by itself.
 ***************************************************************************)
 THEOREM ExactDecisionRequestClockPrefixStepIsDescentOrFrame ==
-  \A kind \in ExactDecisionRequestClockPrefixKinds,
-     snapshot, node, qc, ownerOrdinal,
-     rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
+  \A kind \in ExactDecisionRequestClockPrefixKinds:
+    \A snapshot, node, qc, ownerOrdinal:
+      \A rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateServiceLifecycleInvariant
@@ -4779,10 +4785,10 @@ progress.
 ExactDecisionRequestClockPrefixContinuationClosureProperty(
     specification, initialContext) ==
   specification
-    => \A kind \in ExactDecisionRequestClockPrefixKinds,
-          snapshot,
-          node \in AsyncVotersAt(initialContext), qc, ownerOrdinal,
-          rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
+    => \A kind \in ExactDecisionRequestClockPrefixKinds:
+         \A snapshot, qc, ownerOrdinal:
+           \A node \in AsyncVotersAt(initialContext):
+             \A rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
          ExactDecisionRequestClockPrefixContinuationAtRank(
            kind, snapshot, node, qc, ownerOrdinal, rank)
            ~> \/ ExactDecisionRequestClockPrefixRankGoal(
@@ -4809,9 +4815,9 @@ BY AsyncSpecProvidesVoterCandidateProducerContinuationResolutionClosure,
        AsyncVoterCandidateProducerContinuationResolutionClosureProperty
 
 THEOREM ExactDecisionRequestClockPrefixResolvedOwnerIsEnabled ==
-  \A kind \in ExactDecisionRequestClockPrefixKinds,
-     snapshot, node, qc, ownerOrdinal,
-     rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
+  \A kind \in ExactDecisionRequestClockPrefixKinds:
+    \A snapshot, node, qc, ownerOrdinal:
+      \A rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
@@ -4844,9 +4850,9 @@ BY QueuedIoEnablesPostGstService,
        AsyncAllVars
 
 THEOREM ExactDecisionRequestClockPrefixResolvedOwnerConsumesRankCell ==
-  \A kind \in ExactDecisionRequestClockPrefixKinds,
-     snapshot, node, qc, ownerOrdinal,
-     rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
+  \A kind \in ExactDecisionRequestClockPrefixKinds:
+    \A snapshot, node, qc, ownerOrdinal:
+      \A rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateServiceLifecycleInvariant
@@ -4877,12 +4883,12 @@ BY ExactDecisionRequestClockPrefixStepIsDescentOrFrame,
 
 THEOREM ExactDecisionRequestClockPrefixFairOwnerUsesExistingFairness ==
   \A initialContext, snapshot:
-    /\ snapshot.node \in AsyncVotersAt(initialContext)
-    /\ ExactDecisionRequestClockPrefixFairOwner(snapshot)
-         \in AsyncCausalEpisodeFairOwnerKinds
-      => AsyncSpecAt(initialContext)
-           => WF_AsyncAllVars(
-                ExactDecisionRequestClockPrefixFairAction(snapshot))
+    (/\ snapshot.node \in AsyncVotersAt(initialContext)
+     /\ ExactDecisionRequestClockPrefixFairOwner(snapshot)
+          \in AsyncCausalEpisodeFairOwnerKinds)
+      => (AsyncSpecAt(initialContext)
+            => WF_AsyncAllVars(
+                 ExactDecisionRequestClockPrefixFairAction(snapshot)))
 BY Isa, PTL
    DEF ExactDecisionRequestClockPrefixFairAction,
        ExactDecisionRequestClockPrefixFairOwner,
@@ -4891,9 +4897,9 @@ BY Isa, PTL
        AsyncSpecAt, AsyncFairnessAt
 
 THEOREM ExactDecisionRequestClockPrefixResolvedFairOwnerIsStable ==
-  \A kind \in ExactDecisionRequestClockPrefixKinds,
-     snapshot, node, qc, ownerOrdinal,
-     rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
+  \A kind \in ExactDecisionRequestClockPrefixKinds:
+    \A snapshot, node, qc, ownerOrdinal:
+      \A rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateServiceLifecycleInvariant
@@ -4935,10 +4941,10 @@ absolute-priority continuation ahead of the frozen target.
 ExactDecisionRequestClockPrefixResolvedRankStepProperty(
     specification, initialContext) ==
   specification
-    => \A kind \in ExactDecisionRequestClockPrefixKinds,
-          snapshot,
-          node \in AsyncVotersAt(initialContext), qc, ownerOrdinal,
-          rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
+    => \A kind \in ExactDecisionRequestClockPrefixKinds:
+         \A snapshot, qc, ownerOrdinal:
+           \A node \in AsyncVotersAt(initialContext):
+             \A rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
          ExactDecisionRequestClockPrefixResolvedAtRank(
            kind, snapshot, node, qc, ownerOrdinal, rank)
            ~> ExactDecisionRequestClockPrefixRankGoal(
@@ -4966,10 +4972,10 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
 ExactDecisionRequestClockPrefixRankStepProperty(
     specification, initialContext) ==
   specification
-    => \A kind \in ExactDecisionRequestClockPrefixKinds,
-          snapshot,
-          node \in AsyncVotersAt(initialContext), qc, ownerOrdinal,
-          rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
+    => \A kind \in ExactDecisionRequestClockPrefixKinds:
+         \A snapshot, qc, ownerOrdinal:
+           \A node \in AsyncVotersAt(initialContext):
+             \A rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
          ExactDecisionRequestClockPrefixAtRank(
            kind, snapshot, node, qc, ownerOrdinal, rank)
            ~> ExactDecisionRequestClockPrefixRankGoal(
@@ -4991,9 +4997,9 @@ BY AsyncSpecClosesExactDecisionRequestClockPrefixContinuation,
 ExactDecisionRequestClockPrefixClosureProperty(
     specification, initialContext) ==
   specification
-    => \A kind \in ExactDecisionRequestClockPrefixKinds,
-          snapshot,
-          node \in AsyncVotersAt(initialContext), qc, ownerOrdinal:
+    => \A kind \in ExactDecisionRequestClockPrefixKinds:
+         \A snapshot, qc, ownerOrdinal:
+           \A node \in AsyncVotersAt(initialContext):
          /\ ExactDecisionRequestClockPrefixResidual(
               kind, node, qc, ownerOrdinal)
          /\ ExactDecisionRequestRuntimePrefixSnapshotActive(
@@ -5178,7 +5184,8 @@ BY ExactDecisionSendingRetransmitPublishesExactAlias,
        AsyncAllVars, SetLessThan, OpToRel
 
 THEOREM FairExactDecisionRequestClockAcquisitionDistanceStep ==
-  \A initialContext, node, qc, distance \in Nat:
+  \A initialContext, node, qc:
+    \A distance \in Nat:
     AsyncSpecAt(initialContext)
       => (ExactDecisionRequestClockAcquisitionAtDistance(
             node, qc, distance)
@@ -5304,9 +5311,10 @@ ExactDecisionRequestOwnedRuntimeRankProgress(
 
 \* Compatibility projection retained for downstream theorem inventories.
 ExactDecisionRequestRuntimeBlockedAtRank(node, qc, rank) ==
-  \E snapshot, ownerOrdinal \in Nat \ {0}:
-    ExactDecisionRequestOwnedRuntimeAtRank(
-      snapshot, node, qc, ownerOrdinal, rank)
+  \E snapshot:
+    \E ownerOrdinal \in Nat \ {0}:
+      ExactDecisionRequestOwnedRuntimeAtRank(
+        snapshot, node, qc, ownerOrdinal, rank)
 
 ExactDecisionRequestRuntimeRankProgress(node, qc, rank) ==
   \/ ExactDecisionRequestRuntimeGoal(node, qc)
@@ -5356,15 +5364,15 @@ BY ExactDecisionRequestOwnedPrefixHasRuntimeRank, Isa
    DEF ExactDecisionRequestRuntimeBlockedAtRank
 
 THEOREM ExactDecisionRequestRuntimeOwnerEnablesFairRunNode ==
-  \A snapshot, node, qc, ownerOrdinal,
-     rank \in ExactDecisionRequestOwnedRuntimeCarrier:
-    /\ AsyncStrongTypeInvariant
-    /\ AsyncProgressOwnershipInvariant
-    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
-    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
-    /\ ExactDecisionRequestOwnedRuntimeAtRank(
-         snapshot, node, qc, ownerOrdinal, rank)
-      => ENABLED <<PostGstRunNode(node)>>_AsyncAllVars
+  \A snapshot, node, qc, ownerOrdinal:
+    \A rank \in ExactDecisionRequestOwnedRuntimeCarrier:
+      /\ AsyncStrongTypeInvariant
+      /\ AsyncProgressOwnershipInvariant
+      /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+      /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+      /\ ExactDecisionRequestOwnedRuntimeAtRank(
+           snapshot, node, qc, ownerOrdinal, rank)
+        => ENABLED <<PostGstRunNode(node)>>_AsyncAllVars
 BY ResponsiveUnappliedRunNodeIsEnabled,
    EnabledRunNodeLiftsPostGst,
    GstExcludesResponsiveReplayQuarantine,
@@ -9033,8 +9041,8 @@ ExactDecisionRequestLifecycleRankCellOutcome(
 ExactDecisionRequestLifecycleRankCellClosureProperty(
     specification) ==
   specification
-    => \A node, qc, archive, request,
-          rank \in ExactDecisionRequestLifecycleIngressRankCarrier:
+    => \A node, qc, archive, request:
+         \A rank \in ExactDecisionRequestLifecycleIngressRankCarrier:
          ExactDecisionRequestLifecycleAtRank(
            node, qc, archive, request, rank)
            ~> (ExactDecisionRequestLifecycleGoal(
@@ -9048,9 +9056,9 @@ ExactDecisionRequestLifecycleRankCellClosureProperty(
 ExactDecisionRequestLifecycleFiniteProducerEpisodeClosureProperty(
     specification) ==
   specification
-    => \A node, qc, archive, request,
-          rank \in ExactDecisionRequestLifecycleIngressRankCarrier,
-          budget \in Nat:
+    => \A node, qc, archive, request:
+         \A rank \in ExactDecisionRequestLifecycleIngressRankCarrier,
+            budget \in Nat:
          ExactDecisionRequestLifecycleAtRankAndBudget(
            node, qc, archive, request, rank, budget)
            ~> (ExactDecisionRequestLifecycleRankGoal(
@@ -9063,9 +9071,9 @@ ExactDecisionRequestLifecycleFiniteProducerEpisodeClosureProperty(
 
 ExactDecisionRequestLifecycleConcreteActionOriginProperty(specification) ==
   /\ specification
-       => [](\A node, qc, archive, request,
-                  rank \in ExactDecisionRequestLifecycleIngressRankCarrier,
-                  budget \in Nat:
+       => [](\A node, qc, archive, request:
+              \A rank \in ExactDecisionRequestLifecycleIngressRankCarrier,
+                 budget \in Nat:
               /\ ExactDecisionRequestLifecycleAtRankAndBudget(
                    node, qc, archive, request, rank, budget)
               /\ ~ExactDecisionRequestLifecycleRankGoal(
@@ -9080,9 +9088,9 @@ ExactDecisionRequestLifecycleConcreteActionOriginProperty(specification) ==
                       <<ExactDecisionRequestLifecycleSelectedConcreteFairAction(
                           archive, request)>>_AsyncAllVars)
   /\ specification
-       => [](\A node, qc, archive, request,
-                  rank \in ExactDecisionRequestLifecycleIngressRankCarrier,
-                  budget \in Nat:
+       => [](\A node, qc, archive, request:
+              \A rank \in ExactDecisionRequestLifecycleIngressRankCarrier,
+                 budget \in Nat:
               /\ ExactDecisionRequestLifecycleAtRankAndBudget(
                    node, qc, archive, request, rank, budget)
               /\ ~ExactDecisionRequestLifecycleRankGoal(
@@ -9098,9 +9106,9 @@ ExactDecisionRequestLifecycleConcreteActionOriginProperty(specification) ==
                        ExactDecisionRequestLifecycleConcreteFairOwner(
                          archive, request))
   /\ specification
-       => [](\A node, qc, archive, request,
-                  rank \in ExactDecisionRequestLifecycleIngressRankCarrier,
-                  budget \in Nat:
+       => [](\A node, qc, archive, request:
+              \A rank \in ExactDecisionRequestLifecycleIngressRankCarrier,
+                 budget \in Nat:
               /\ ExactDecisionRequestLifecycleAtRankAndBudget(
                    node, qc, archive, request, rank, budget)
               /\ ~ExactDecisionRequestLifecycleRankGoal(
@@ -9315,14 +9323,14 @@ BY ExactDecisionRequestIngressIoServicePersistsAndLowers,
 
 THEOREM ExactDecisionRequestLifecycleConcreteOwnerUsesAsyncFairness ==
   \A initialContext, archive, ownerKind:
-    /\ archive \in AsyncVotersAt(initialContext)
-    /\ archive \in Responsive
-    /\ ownerKind
-         \in ExactDecisionRequestLifecycleConcreteFairOwnerKinds
-    => AsyncSpecAt(initialContext)
-         => WF_AsyncAllVars(
-              ExactDecisionRequestLifecycleConcreteFairAction(
-                archive, ownerKind))
+    (/\ archive \in AsyncVotersAt(initialContext)
+     /\ archive \in Responsive
+     /\ ownerKind
+          \in ExactDecisionRequestLifecycleConcreteFairOwnerKinds)
+      => (AsyncSpecAt(initialContext)
+            => WF_AsyncAllVars(
+                 ExactDecisionRequestLifecycleConcreteFairAction(
+                   archive, ownerKind)))
 BY Isa, PTL
    DEF AsyncSpecAt, AsyncFairnessAt,
        ExactDecisionRequestLifecycleConcreteFairOwnerKinds,
@@ -10579,35 +10587,40 @@ ExactDecisionTargetNeutralCausalRootSet ==
 ExactDecisionTargetNeutralLiveCandidateCausalRoots ==
   {ExactDecisionTargetNeutralCausalRoot(
      candidate.node, candidate.causalOrigin):
-     candidate \in ActiveScheduledCandidates,
-     candidate.node \in Responsive}
+     candidate \in
+       {scheduled \in ActiveScheduledCandidates:
+          scheduled.node \in Responsive}}
 
 ExactDecisionTargetNeutralLifecycleRecordCausalRoots ==
   {ExactDecisionTargetNeutralCausalRoot(record.node, record.origin):
-     record \in AsyncCandidateLifecycleAdmissions,
-     record.node \in Responsive,
-     ~record.retired}
+     record \in
+       {owned \in AsyncCandidateLifecycleAdmissions:
+          /\ owned.node \in Responsive
+          /\ ~owned.retired}}
 
 ExactDecisionTargetNeutralProducerContinuationCausalRoots ==
   {ExactDecisionTargetNeutralCausalRoot(
      continuation.node, continuation.causalOrigin):
-     continuation \in AsyncCandidateProducerContinuations,
-     continuation.node \in Responsive,
-     continuation.status \in {"Reserved", "Materialized"}}
+     continuation \in
+       {owned \in AsyncCandidateProducerContinuations:
+          /\ owned.node \in Responsive
+          /\ owned.status \in {"Reserved", "Materialized"}}}
 
 ExactDecisionTargetNeutralOrdinaryIngressCausalRoots ==
   {ExactDecisionTargetNeutralCausalRoot(
      carrier.node, carrier.origin):
      carrier
-       \in asyncControlServiceState.ordinaryIngressCarrierEvidence,
-     carrier.node \in Responsive}
+       \in {owned \in
+             asyncControlServiceState.ordinaryIngressCarrierEvidence:
+             owned.node \in Responsive}}
 
 ExactDecisionTargetNeutralLeaderWireCausalRoots ==
   {ExactDecisionTargetNeutralCausalRoot(
      owner.recipient, owner.causalOrigin):
-     owner \in asyncLeaderWireLifecycles,
-     owner.recipient \in Responsive,
-     AsyncLeaderWireLifecycleActive(owner)}
+     owner \in
+       {owned \in asyncLeaderWireLifecycles:
+          /\ owned.recipient \in Responsive
+          /\ AsyncLeaderWireLifecycleActive(owned)}}
 
 ExactDecisionTargetNeutralDurableReplayCausalRoots ==
   {ExactDecisionTargetNeutralCausalRoot(node, origin):
@@ -10617,9 +10630,10 @@ ExactDecisionTargetNeutralDurableReplayCausalRoots ==
 ExactDecisionTargetNeutralTimeoutReservationCausalRoots ==
   {ExactDecisionTargetNeutralCausalRoot(
      node, asyncControlServiceState.timeoutLifecycleOrigin[node]):
-     node \in Responsive,
-     AsyncUnmaterializedTimeoutLifecycleReservationIn(
-       asyncControlServiceState, node)}
+     node \in
+       {owner \in Responsive:
+          AsyncUnmaterializedTimeoutLifecycleReservationIn(
+            asyncControlServiceState, owner)}}
 
 ExactDecisionTargetNeutralRetainedCandidateCausalRoots ==
   ExactDecisionTargetNeutralLiveCandidateCausalRoots
@@ -10634,8 +10648,9 @@ ExactDecisionTargetNeutralDuePacketCausalRoots(clockValue) ==
   {ExactDecisionTargetNeutralCausalRoot(
      packet.item.envelope.recipient,
      (DeliveryCandidate(packet.item)).causalOrigin):
-     packet \in HistoricalDiscoveryDuePacketsAt(clockValue),
-     packet.item.envelope.recipient \in Responsive}
+     packet \in
+       {due \in HistoricalDiscoveryDuePacketsAt(clockValue):
+          due.item.envelope.recipient \in Responsive}}
 
 ExactDecisionTargetNeutralFrozenCausalRoots(clockValue) ==
   ExactDecisionTargetNeutralRetainedCandidateCausalRoots
@@ -10643,10 +10658,11 @@ ExactDecisionTargetNeutralFrozenCausalRoots(clockValue) ==
 
 ExactDecisionTargetNeutralCandidateEpisodeUniverse(clockValue) ==
   {ExactDecisionTargetNeutralCandidateOwnerIdentity(candidate):
-     candidate \in ActiveScheduledCandidates,
-     ExactDecisionTargetNeutralCausalRoot(
-       candidate.node, candidate.causalOrigin)
-       \in ExactDecisionTargetNeutralFrozenCausalRoots(clockValue)}
+     candidate \in
+       {scheduled \in ActiveScheduledCandidates:
+          ExactDecisionTargetNeutralCausalRoot(
+            scheduled.node, scheduled.causalOrigin)
+            \in ExactDecisionTargetNeutralFrozenCausalRoots(clockValue)}}
 
 \* A fixed-clock episode freezes the predecessor of the shared scheduler
 \* high-watermark at every responsive process.  This is a past cut, not a
@@ -10798,14 +10814,16 @@ ExactDecisionTargetNeutralConcreteDependencyRankForSnapshot(
 
 ExactDecisionTargetNeutralLiveCandidateIdentitySet ==
   {ExactDecisionTargetNeutralCandidateOwnerIdentity(candidate):
-     candidate \in ActiveScheduledCandidates,
-     candidate.node \in Responsive}
+     candidate \in
+       {scheduledCandidate \in ActiveScheduledCandidates:
+          scheduledCandidate.node \in Responsive}}
 
 ExactDecisionTargetNeutralLiveServeIdentitySet ==
   {ExactDecisionTargetNeutralServeOwnerIdentity(node, job):
      node \in Responsive,
-     job \in SequenceSet(asyncIoQueues[node]),
-     job.class = "Serve"}
+     job \in
+       {serveJob \in SequenceSet(asyncIoQueues[node]):
+          serveJob.class = "Serve"}}
 
 ExactDecisionTargetNeutralRetainedServeLifecycleRecords ==
   {record \in asyncServeAdmissions \cup asyncServeTombstones:
@@ -10835,8 +10853,9 @@ ExactDecisionTargetNeutralServeEpisodeUniverse(clockValue) ==
     \cup
   {ExactDecisionTargetNeutralServeRequestOwnerIdentity(
      packet.item.envelope.recipient, packet.item):
-     packet \in HistoricalDiscoveryDuePacketsAt(clockValue),
-     packet.item.kind \in AsyncReplyRequestKinds}
+     packet \in
+       {requestPacket \in HistoricalDiscoveryDuePacketsAt(clockValue):
+          requestPacket.item.kind \in AsyncReplyRequestKinds}}
 
 ExactDecisionTargetNeutralCandidateIdentityCoalesced(owner) ==
   /\ owner.ownerKind = "Candidate"
@@ -10935,10 +10954,11 @@ ExactDecisionTargetNeutralIngressEpisodeRank(snapshot) ==
 ExactDecisionTargetNeutralFrozenPredecessorOriginsForSnapshot(
     snapshot, node) ==
   {record.origin:
-     record \in AsyncCandidateLifecycleAdmissions,
-     /\ record.node = node
-     /\ record.ordinal <= snapshot.schedulerCuts[node]
-     /\ record.sourcePhysicalOrdinal < snapshot.physicalCuts[node]}
+     record \in
+       {owned \in AsyncCandidateLifecycleAdmissions:
+          /\ owned.node = node
+          /\ owned.ordinal <= snapshot.schedulerCuts[node]
+          /\ owned.sourcePhysicalOrdinal < snapshot.physicalCuts[node]}}
 
 ExactDecisionTargetNeutralCausalCandidatesForSnapshot(snapshot, node) ==
   {candidate \in
@@ -10992,10 +11012,10 @@ ExactDecisionTargetNeutralCausalEpisodeRankForSnapshot(snapshot, node) ==
       snapshot, node),
     <<ExactDecisionTargetNeutralServeWorkBudgetForSnapshot(snapshot, node),
       ExactDecisionTargetNeutralServeReachDebtForSnapshot(
-        snapshot, node)>>>
+        snapshot, node)>>>>
 
 ExactDecisionTargetNeutralCausalEpisodeBottom ==
-  <<0, <<0, 0>>>
+  <<0, <<0, 0>>>>
 
 \* Proofless carrier replacement is charged outside the physical occurrence
 \* rank.  The rigid physical cut contains exactly the leader-wire and
@@ -12166,10 +12186,10 @@ leader-wire Ingress lifecycle.  Thus the existing bounded transport
 coordinate strictly descends; no proof-only reservation bit is needed.
 ***************************************************************************)
 THEOREM ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank ==
-  \A snapshot,
-     packet \in OverdueResponsivePackets,
-     recipient \in Responsive,
-     source \in AsyncIngressSources:
+  \A snapshot:
+    \A packet \in OverdueResponsivePackets,
+       recipient \in Responsive,
+       source \in AsyncIngressSources:
     /\ AsyncStrongTypeInvariant
     /\ snapshot.candidateIdentities
          \subseteq ExactDecisionTargetNeutralCandidateOwnerIdentitySet
@@ -12314,13 +12334,14 @@ BY AsyncIngressPhysicalHighWatermarkIsMonotone, IsaT(600)
    DEF AsyncAllVars
 
 THEOREM ExactDecisionTargetNeutralFrozenActiveLeaderWireCandidatesMatchPhysicalCut ==
-  \A snapshot, node \in Responsive:
-    ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot(
-      snapshot, node)
-      =
-    AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(
-      node, snapshot.schedulerCuts[node] + 1,
-      snapshot.physicalCuts[node])
+  \A snapshot:
+    \A node \in Responsive:
+      ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot(
+        snapshot, node)
+        =
+      AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(
+        node, snapshot.schedulerCuts[node] + 1,
+        snapshot.physicalCuts[node])
 BY Isa
    DEF ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot,
        ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot,
@@ -12328,8 +12349,9 @@ BY Isa
        AsyncCandidateProducerContinuationFrozenLeaderWireCandidates
 
 THEOREM ExactDecisionTargetNeutralActionInertDormantHasZeroProoflessCharge ==
-  \A snapshot, node \in Responsive,
-     record \in asyncLeaderWireLifecycles:
+  \A snapshot:
+    \A node \in Responsive,
+       record \in asyncLeaderWireLifecycles:
     AsyncLeaderWireActionInertDormant(record)
       => /\ record
               \notin
@@ -12345,9 +12367,10 @@ BY CandidateProducerContinuationActionInertDormantHasZeroFrozenStage, Isa
        AsyncLeaderWireLifecycleDormant
 
 THEOREM ExactDecisionTargetNeutralPostCutLeaderWireAdmissionCannotEnterFrozenPrefix ==
-  \A snapshot, node \in Responsive,
-     recipient \in ValidatorIds,
-     source \in AsyncIngressSources:
+  \A snapshot:
+    \A node \in Responsive,
+       recipient \in ValidatorIds,
+       source \in AsyncIngressSources:
     /\ snapshot.physicalCuts \in [Responsive -> Nat]
     /\ snapshot.physicalCuts[node]
          <= AsyncNextIngressPhysicalOrdinal(node)
@@ -12364,9 +12387,10 @@ BY CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix,
    DEF ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot
 
 THEOREM ExactDecisionTargetNeutralPostCutOrdinaryAdmissionCannotEnterFrozenPrefix ==
-  \A snapshot, node \in Responsive,
-     recipient \in ValidatorIds,
-     source \in AsyncIngressSources:
+  \A snapshot:
+    \A node \in Responsive,
+       recipient \in ValidatorIds,
+       source \in AsyncIngressSources:
     /\ snapshot.physicalCuts \in [Responsive -> Nat]
     /\ snapshot.physicalCuts[node]
          <= AsyncNextIngressPhysicalOrdinal(node)
@@ -12384,7 +12408,8 @@ BY CandidateProducerContinuationPostCutOrdinaryAdmissionCannotEnterFrozenPrefix,
    DEF ExactDecisionTargetNeutralFrozenOrdinaryIngressRecordsForSnapshot
 
 THEOREM ExactDecisionTargetNeutralPostCutCausalRootCannotEnterFrozenPrefix ==
-  \A snapshot, node \in Responsive, candidate \in AsyncCandidateSet:
+  \A snapshot:
+    \A node \in Responsive, candidate \in AsyncCandidateSet:
     LET lifecycle ==
           AsyncCandidateLifecycleRecordFor(
             candidate.node, candidate.causalOrigin)
@@ -12408,9 +12433,10 @@ BY Isa
        AsyncControlServiceStateTypeInvariant
 
 THEOREM ExactDecisionTargetNeutralPostCutContinuationCannotEnterFrozenPrefix ==
-  \A snapshot, node \in Responsive,
-     record \in
-       AsyncCandidateProducerContinuationResolutionRecordsForNode(node):
+  \A snapshot:
+    \A node \in Responsive,
+       record \in
+         AsyncCandidateProducerContinuationResolutionRecordsForNode(node):
     /\ snapshot.physicalCuts \in [Responsive -> Nat]
     /\ record.sourcePhysicalOrdinal >= snapshot.physicalCuts[node]
       => record
@@ -12421,9 +12447,10 @@ BY Isa
    DEF ExactDecisionTargetNeutralFrozenContinuationRecordsForSnapshot
 
 THEOREM ExactDecisionTargetNeutralPostCutServeCannotEnterFrozenPrefix ==
-  \A snapshot, node \in Responsive,
-     identity \in AsyncCausalEpisodeServeIngressIdentities(
-                   node, snapshot.schedulerCuts[node]):
+  \A snapshot:
+    \A node \in Responsive,
+       identity \in AsyncCausalEpisodeServeIngressIdentities(
+                     node, snapshot.schedulerCuts[node]):
     /\ snapshot.physicalCuts \in [Responsive -> Nat]
     /\ AsyncServeIngressAdmissionOrdinal(node, identity)
          >= snapshot.physicalCuts[node]
@@ -12435,7 +12462,8 @@ BY Isa
    DEF ExactDecisionTargetNeutralServeIngressIdentitiesForSnapshot
 
 THEOREM ExactDecisionTargetNeutralFrozenActiveLeaderWireCandidatesCannotReplenish ==
-  \A snapshot, node \in Responsive:
+  \A snapshot:
+    \A node \in Responsive:
     /\ gst
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
@@ -12457,7 +12485,8 @@ BY ExactDecisionTargetNeutralFrozenActiveLeaderWireCandidatesMatchPhysicalCut,
    DEF AsyncAllVars
 
 THEOREM ExactDecisionTargetNeutralFrozenOrdinaryIngressCandidatesCannotReplenish ==
-  \A snapshot, node \in Responsive:
+  \A snapshot:
+    \A node \in Responsive:
     /\ gst
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
@@ -12491,7 +12520,8 @@ BY ExactDecisionTargetNeutralPostCutOrdinaryAdmissionCannotEnterFrozenPrefix,
        AsyncAllVars
 
 THEOREM ExactDecisionTargetNeutralDormantLocalReplayReplacementConsumesFrozenCausalCharge ==
-  \A snapshot, node \in Responsive:
+  \A snapshot:
+    \A node \in Responsive:
     /\ gst
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
@@ -12533,7 +12563,8 @@ BY AsyncCandidateProducerContinuationGstExcludesResetReplay,
        AsyncAllVars
 
 THEOREM ExactDecisionTargetNeutralExactLocalReplayReplacesFrozenCharge ==
-  \A snapshot, node \in Responsive:
+  \A snapshot:
+    \A node \in Responsive:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateServiceLifecycleInvariant
@@ -12569,9 +12600,10 @@ BY AsyncCandidateProducerContinuationExactLocalReplayRetainsReservation,
        CandidateScheduled, CandidateScheduledAfter
 
 THEOREM ExactDecisionTargetNeutralDropPolicyRejectedIsFrozenPhysicalPrefixFrame ==
-  \A snapshot, node \in Responsive,
-     recipient \in ValidatorIds,
-     source \in AsyncIngressSources:
+  \A snapshot:
+    \A node \in Responsive,
+       recipient \in ValidatorIds,
+       source \in AsyncIngressSources:
     DropPolicyRejectedHiddenPacket(recipient, source)
       => /\ (ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot(
                 snapshot, node))'
@@ -12596,7 +12628,8 @@ BY CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame,
        DropPolicyRejectedHiddenPacket
 
 THEOREM ExactDecisionTargetNeutralFrozenPastCutOriginsCannotReplenish ==
-  \A snapshot, node \in Responsive:
+  \A snapshot:
+    \A node \in Responsive:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ snapshot.schedulerCuts \in [Responsive -> Nat]
@@ -12620,7 +12653,8 @@ BY AsyncNextNeverSchedulesAnUnownedCandidateLifecycle,
        AsyncAllVars
 
 THEOREM ExactDecisionTargetNeutralFrozenPastCutServeCannotReplenish ==
-  \A snapshot, node \in Responsive:
+  \A snapshot:
+    \A node \in Responsive:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ snapshot.schedulerCuts \in [Responsive -> Nat]
@@ -12653,7 +12687,8 @@ BY AsyncFreshServeIngressCannotReacquirePriorSchedulerOrdinal,
        AsyncAllVars
 
 THEOREM ExactDecisionTargetNeutralFrozenPastCutCandidateServiceConsumesExactOccurrence ==
-  \A snapshot, node \in Responsive, serviced \in AsyncCandidateSet:
+  \A snapshot:
+    \A node \in Responsive, serviced \in AsyncCandidateSet:
     LET cutoffOrdinal == snapshot.schedulerCuts[node]
     IN /\ gst
        /\ AsyncStrongTypeInvariant
@@ -12686,7 +12721,8 @@ BY ExactDecisionTargetNeutralFrozenPastCutOriginsCannotReplenish,
        CandidateScheduled, AsyncAllVars
 
 THEOREM ExactDecisionTargetNeutralExactOccurrenceStructuralStepIsDescentOrFrame ==
-  \A snapshot, node \in Responsive:
+  \A snapshot:
+    \A node \in Responsive:
     LET rank ==
           ExactDecisionTargetNeutralCausalEpisodeRankForSnapshot(
             snapshot, node)
@@ -12758,7 +12794,8 @@ BY ExactDecisionTargetNeutralFrozenPastCutOriginsCannotReplenish,
        LexPairOrdering, OpToRel
 
 THEOREM ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame ==
-  \A snapshot, node \in Responsive:
+  \A snapshot:
+    \A node \in Responsive:
     LET rank ==
           ExactDecisionTargetNeutralProoflessProducerRankForSnapshot(
             snapshot, node)
@@ -12834,7 +12871,8 @@ BY CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight,
        LexPairOrdering, SetLessThan, OpToRel
 
 THEOREM ExactDecisionTargetNeutralComposedCausalEpisodeStepIsDescentOrFrame ==
-  \A snapshot, node \in Responsive:
+  \A snapshot:
+    \A node \in Responsive:
     LET rank ==
           ExactDecisionTargetNeutralComposedCausalEpisodeRankForSnapshot(
             snapshot, node)
@@ -13468,9 +13506,9 @@ BY ExactDecisionTargetNeutralRankCellHasConcreteFairOwner, Isa
 THEOREM ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness ==
   \A initialContext, owner:
     owner \in ExactDecisionTargetNeutralFairOwnerSet(initialContext)
-      => AsyncSpecAt(initialContext)
-           => WF_AsyncAllVars(
-                ExactDecisionTargetNeutralFairAction(owner))
+      => (AsyncSpecAt(initialContext)
+            => WF_AsyncAllVars(
+                 ExactDecisionTargetNeutralFairAction(owner)))
 BY LocalCandidateProducerContinuationResolutionUsesReviewedFairAction,
    ConditionalTransportProducerContinuationServiceUsesReviewedFairAction,
    VolatileBodyProducerContinuationServiceUsesReviewedFairAction,

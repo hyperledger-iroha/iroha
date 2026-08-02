@@ -24,7 +24,6 @@ public enum VerifyingKeyBackendTag : uint
 public enum VerifyingKeyBackendCatalogTag
 {
     Production,
-    Pending,
     Unsupported,
 }
 
@@ -49,32 +48,6 @@ public static class VerifyingKeyBackendTags
             "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-        };
-
-    private static readonly HashSet<string> PendingCatalogBackendAliases =
-        new(StringComparer.Ordinal)
-        {
-            "halo2ipaorchard", "orchard", "zcashorchard",
-            "groth16bls12377", "groth16bls12377decaf377", "bls12377",
-            "decaf377", "masp", "penumbra", "penumbramasp", "halo2ipapenumbra",
-            "halo2ipamasp", "fcmppluspluscurvetree", "fcmp", "monero",
-            "monerofcmp", "monerofcmpplusplus", "curvetree", "halo2ipamonero",
-            "halo2ipacurvetree", "latticepcssis", "latticepcszk", "jindo",
-            "jindolatticepcszk", "jindolatticepcszkv0", "jindolatticepcssis",
-            "starkfrimiden", "midenstark", "aztecplonkishprivatekernel",
-            "aztecprivatekernel", "pqmaspstarkfri", "pqmaspstark",
-            "starkfripqmaspstarkfri", "postquantummasp", "anonymouspgc",
-            "anonymouspgckoutofn", "anonymouspgckoutofnv1", "verange",
-            "verangetransparentrange", "verangetransparentrangev1", "zkat",
-            "zkatpolicyprivateauthenticator", "zkatpolicyprivateauthv1",
-            "recursiveanonymousadmission", "recursiveanonymousadmissionv0",
-            "zkamsrecursiveadmission", "zkamsrecursiveadmissionv0",
-            "vegaexistingcredentialzk", "vegaexistingcredentialzkv0",
-            "silentthresholdanoncred", "silentthresholdanoncredv0",
-            "silentthresholdanonymouscredential", "thresholdanonymouscredentials",
-            "zkx509", "zkvmx509identity", "zkx509onchainidentity",
-            "zkx509onchainidentityv0", "siswithhints", "sishints",
-            "sishintsanoncredpqv0", "latticeanonymouscredentials",
         };
 
     private static readonly HashSet<string> TrustedSetupBackendSegments =
@@ -164,16 +137,12 @@ public static class VerifyingKeyBackendTags
 
     public static VerifyingKeyBackendCatalogTag FromCatalogLabel(string? raw)
     {
-        var label = raw?.Trim().ToLowerInvariant() ?? string.Empty;
+        var label = raw ?? string.Empty;
         if (label.Length == 0 || HasNonAscii(label))
         {
             return VerifyingKeyBackendCatalogTag.Unsupported;
         }
 
-        if (PendingCatalogBackendAliases.Contains(CompactAscii(label)))
-        {
-            return VerifyingKeyBackendCatalogTag.Pending;
-        }
         if (VerifierBackendRegistryLabels.IsSupportedLabel(label)
             || TryFromCanonicalLabel(label, out _))
         {
@@ -181,13 +150,6 @@ public static class VerifyingKeyBackendTags
         }
         return VerifyingKeyBackendCatalogTag.Unsupported;
     }
-
-    public static bool IsPendingProductionBackend(
-        this VerifyingKeyBackendCatalogTag tag) =>
-        tag == VerifyingKeyBackendCatalogTag.Pending;
-
-    public static bool IsPendingProductionBackendLabel(string? raw) =>
-        FromCatalogLabel(raw).IsPendingProductionBackend();
 
     public static bool IsProductionVerifyBackendLabel(string? raw)
     {
@@ -199,7 +161,6 @@ public static class VerifyingKeyBackendTags
         if (string.IsNullOrWhiteSpace(backend)
             || backend.Trim() != backend
             || !IsPortableVerifierBackendLabel(backend)
-            || IsPendingProductionBackendLabel(backend)
             || IsProductionClaimBackendLabel(backend)
             || IsTrustedSetupBackendLabel(backend)
             || IsDeveloperOnlyBackendLabel(backend))

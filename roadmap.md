@@ -7,33 +7,36 @@ Completed history lives in [`status.md`](./status.md).
 
 ## First-release security remediation validation
 
-The source and cross-SDK remediation described in `status.md` is complete.
-Release evidence still requires the serialized build lane to become available,
-then regeneration of the canonical DA reconstruction fixture and unsigned
-OpenAPI development provenance from the final source state, focused Rust
-crate/test validation, and a broad locked offline workspace compile attempt.
+Release validation remains open. It requires a stable serialized build lane,
+focused locked/offline Nexus configuration, daemon, and state-enforcement
+tests, regeneration of the canonical DA reconstruction fixture and unsigned
+OpenAPI development provenance from the final source state, a broad locked
+offline workspace compile attempt, and a final report-by-report reconciliation.
 Do not promote the private audit ledger to complete until those source-bound
 commands and the final reconciliation pass are recorded.
 
 ## Repository structure follow-ups
 
+- Repair the current `iroha_core` library-test compile blockers in the Falcon
+  fixtures, query fallback, Kura sidecar fixture, and mixed `rand_core`
+  versions, then rerun the focused transcript and SHA word-row regressions.
 - Continue extracting cohesive production modules from the exact source-budget
   exceptions, prioritizing Kura, Torii routing/API, core state, and other files
   still above 20,000 lines. Preserve public facades and wire behavior; every
   split must ratchet the checked-in line count downward.
-- Reduce the data-model frontend and monomorphization surface without exceeding
-  the 41-unit compile baseline or its 44-unit hard limit. Prefer bounded
-  internal modules and derive-family isolation over new crates or feature
-  fragmentation.
+- Validate the reduced Norito/data-model frontend on representative lower-memory
+  macOS hosts and under a Linux cgroup hard limit. Keep future reductions inside
+  bounded modules and derive-family isolation rather than adding crates or
+  feature fragmentation.
 - Move additional SDK/code-generation callers onto the focused
   `norito_codegen_exporter` library. Keep the `xtask` compatibility commands
   until every documented and CI caller has migrated, then remove only the
   adapters whose replacement paths have parity evidence.
 
-## Taira testnet recovery and offline-cash release closure
+## Taira testnet recovery and universal offline protocol closure
 
 The source-side consensus-stall, exact `/status.blocks`, supervisor-loop, and
-canonical offline-cash ingress repairs are complete. The restart source patch
+cash-handoff protocol ingress repairs are complete. The restart source patch
 also restores snapshot-authenticated autoscale windows before canonical
 reserialization, rejects any writer payload that cannot pass isolated restart
 initialization before publication/geometry compaction, keeps capture and
@@ -53,12 +56,19 @@ signed-mutation path also uses
 middleware-authenticated signer headers only: Torii rejects retired inline
 signing fields and the CLI omits them from every mutation request. Focused
 locked/offline validation of those consensus and restart repairs is complete.
-Compact-commitment validation, source sealing, release generation, and live
-rollout remain open, and public Taira remains on the old deployment. Do not
-expose it as a ready offline-cash lane until the guarded reset reports
-`mandatory: true`, `ready: true` and passes the signed public canary. The
-rollout checker now enforces that same `/readyz` invariant on public ingress
-and every direct validator rather than relying on controller evidence alone.
+Linked-worktree Git provenance now watches the actual common packed ref and
+safe loose-ref ancestor, preventing the stale nonexistent `packed-refs` input
+from cascading every focused command into a full core relink. The two final
+regression fixtures also mirror production semantics for durable post-decision
+CommitQC rebroadcast and startup auxiliary-lane binding. Source-bound focused
+revalidation, compact-commitment validation, source sealing, release
+generation, and live rollout remain open, and public Taira remains on the old
+deployment. Offline application protocols are a universal Iroha capability;
+they require no validator mode, dataspace or asset opt-in, escrow catalog, or
+backend readiness gate. Taira promotion therefore evaluates ordinary node and
+consensus health only. App/device offline user-interface state must never make
+`/health` or `/readyz` fail. The guarded reset must still pass the signed public
+canary and prove a healthy, advancing validator cohort.
 
 The earlier populated-profile probe is superseded for promotion. Authentic
 final-VK generation exposed a 20,154-byte raw compiled-protocol identity: its
@@ -88,7 +98,7 @@ Remaining work stays ordered and fail-closed:
   the fresh guarded k17 shape probe and bind its exact result; this probe and
   authentic generation have not passed yet.
 - Seal the final reviewed source closure over signed `optimizations` anchor
-  `0ecb714edf29e0ff7c5b4e7988ccbbe411b5d040`. Build and hash the candidate
+  `7d0d0d29544cbeaae114c1c098ee1e41187634e2`. Build and hash the candidate
   generator, runtime binaries, configuration, and reset tooling from that one
   provenance set; no earlier r5/r6 binary or artifact seal attests the k17
   layout.
@@ -99,9 +109,10 @@ Remaining work stays ordered and fail-closed:
   probe output is not a candidate or promotion record.
 - Perform the authorized guarded reset across all four validators, deploy the
   sealed binary/configuration/artifact set, and prove advancing consensus,
-  query-visible `/status.blocks` equality, mandatory offline readiness, signed
-  canary operation, a restart below 45 seconds, and continued advancement after
-  restart.
+  query-visible `/status.blocks` equality, ordinary node readiness, universal
+  `cash_handoff_v1`/ABI-21 capability discovery without an asset catalog,
+  signed canary operation, a restart below 45 seconds, and continued
+  advancement after restart.
 
 ## ZK-ACE JavaScript signed-transaction parity
 
@@ -522,14 +533,12 @@ cutover work.
   peak memory, retry after the native busy result, transient verifier/prover
   sequencing, and no partially advanced wallet lifecycle when a proof worker
   is busy.
-- Continue splitting or simplifying the `iroha_data_model` compile and
-  monomorphization surface. The first source-level decoder de-duplication cut
-  the exact serialized no-run reproducer from 12.191 GiB to 11.466 GiB and cut
-  its eight-object rlib from 570,253,400 to 470,810,416 bytes. Eight codegen
-  units remains the lowest measured profile (16 and 64 were neutral; one unit
-  regressed to 19.322 GiB), but one Cargo job cannot cap this still-large single
-  frontend process. Isolate additional derive families or split bounded model
-  modules, then repeat the exact reproducer under a Linux cgroup hard limit.
+- Repeat the current cold workspace and focused data-model profiles on a
+  representative lower-memory Mac and under a Linux cgroup hard limit. Add a
+  serialization-throughput benchmark for nested writer-backed values so future
+  frontend reductions retain both deterministic bytes and runtime performance.
+  Keep native Cargo jobserver parallelism as the default; use the documented
+  opt-in constrained runner only on hosts that actually require serialization.
 
 Mixed-executable-batch follow-up is limited to completing the full workspace
 suite and the complete platform SDK suites on toolchains with their required
@@ -2886,20 +2895,14 @@ excluded from the first release.
   The 2026-06-29 Windows `.NET 8.0.422` full C# pass certifies matching C#
   confidential transfer/unshield verify request proof-size prechecks for
   `proof must not exceed 33554432 bytes` on `win-x64`.
-- Continue reducing local/CI compile memory after the WSL cargo-test hardening
-  and Kagemusha V3 preflight isolation: plain default tests no longer run the
-  heavy record-bound Pasta proof matrix or the oversized private Sumeragi
-  main-loop unit-test harness. The native Kagemusha V3 FFI adversarial test also keeps minimum-sized random
-  invalid-proof backend verification behind an explicit ignored test, with SDK
-  parity guarding that the backend-heavy soft-invalid check cannot drift back
-  into the default bridge test.
-  The exact serialized bridge reproducer confirmed the independent
-  `iroha_data_model` compiler hotspot. Sharing canonical/prefix decoder control
-  flow reduced its eight-unit kernel high-water mark to `11.466 GiB`, 742.2 MiB
-  below the comparable pre-refactor 16-unit run, but Jobs=1 cannot reduce this
-  remaining one-process footprint. Continue splitting its derive and model
-  surface rather than reintroducing broad Cargo parallelism or
-  one-file-one-binary integration-test discovery.
+- Continue validating local/CI compile memory after the WSL cargo-test
+  hardening, Kagemusha V3 preflight isolation, and Norito serializer
+  de-monomorphization. Plain default tests must keep the heavy record-bound
+  Pasta proof matrix, oversized private Sumeragi main-loop harness, and
+  backend-heavy soft-invalid bridge checks out of routine execution. Run the
+  current focused data-model reproducer under an enforced Linux memory limit
+  and keep target-inventory and source-budget ratchets green while native Cargo
+  jobserver parallelism remains the normal developer default.
 - Native asset locks are now first-class ISIs for escrow-style conditional
   custody, including optional release authority, expiry, partial drawdown,
   deterministic custody, Python SDK helpers, negative/adversarial unit tests, and

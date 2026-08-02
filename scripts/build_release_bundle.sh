@@ -195,13 +195,6 @@ EPOCH_PY
 )"
 export SOURCE_DATE_EPOCH="$source_date_epoch"
 
-if [[ -z "$features" ]]; then
-  case "$profile" in
-    iroha2) features="build-i2" ;;
-    iroha3) features="build-i3" ;;
-  esac
-fi
-
 if [[ -z "$prebuilt_bin_dir" ]]; then
   cargo_command=(cargo build --profile deploy --bins --locked)
   if [[ -n "$target" ]]; then
@@ -230,12 +223,8 @@ PREBUILT_DIR_PY
   )"
 fi
 
-daemon_bin="iroha3d"
-cli_bin="iroha3"
-if [[ "$profile" == "iroha2" ]]; then
-  daemon_bin="iroha2d"
-  cli_bin="iroha2"
-fi
+daemon_bin="irohad"
+cli_bin="iroha"
 utility_bin="kagami"
 sanitizer_bin="attachment_sanitizer"
 if [[ "$os_tag" == "win" ]]; then

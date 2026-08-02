@@ -128,7 +128,7 @@ mod wire {
     }
 
     impl ncore::NoritoSerialize for TimeIntervalWire {
-        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             <(u64, u64) as ncore::NoritoSerialize>::serialize(&(self.0, self.1), writer)
         }
     }

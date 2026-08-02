@@ -351,9 +351,27 @@ pub mod account {
     }
 }
 
-/// Permission tokens governing reads from restricted Nexus dataspaces.
+/// Permission tokens governing reads from ledger state.
 pub mod query {
     use super::*;
+
+    permission! {
+        /// Permission to read ledger-wide state, including account rosters,
+        /// balances, transactions, blocks, and other global records.
+        ///
+        /// This is a genesis-issued root capability. Account-scoped data should
+        /// use [`CanReadAccountData`] instead.
+        #[derive(Copy)]
+        pub struct CanReadAllLedgerData;
+    }
+
+    permission! {
+        /// Permission to read private data belonging to one exact account.
+        pub struct CanReadAccountData {
+            /// Exact account whose private data may be read.
+            pub account: AccountId,
+        }
+    }
 
     permission! {
         /// Permission to read non-public ledger data from one exact dataspace.
@@ -1052,7 +1070,9 @@ mod tests {
     use super::oracle::{
         CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
     };
-    use super::query::CanReadRestrictedDataspace;
+    use super::query::{
+        CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace,
+    };
     use crate::permission::Permission as _;
     use iroha_crypto::KeyPair;
     use iroha_data_model::oracle::OracleChangeStage;
@@ -1206,6 +1226,42 @@ mod tests {
             norito::json::from_str::<CanReadRestrictedDataspace>("{\"dataspace\":\"sbp\"}")
                 .is_err(),
             "restricted read grants must carry a numeric DataSpaceId"
+        );
+    }
+
+    #[test]
+    fn ledger_read_permissions_are_exact_and_typed() {
+        let account = AccountId::new(KeyPair::random().public_key().clone());
+        let account_read = CanReadAccountData {
+            account: account.clone(),
+        };
+        let account_json =
+            norito::json::to_json(&account_read).expect("serialize account-read permission");
+
+        assert_eq!(CanReadAllLedgerData::name(), "CanReadAllLedgerData");
+        assert_eq!(CanReadAccountData::name(), "CanReadAccountData");
+        assert_eq!(
+            account_json,
+            format!("{{\"account\":\"{account}\"}}"),
+            "account-read permission must bind exactly one universal account"
+        );
+
+        let global: iroha_data_model::permission::Permission = CanReadAllLedgerData.into();
+        assert_eq!(
+            CanReadAllLedgerData::try_from(&global).expect("decode canonical global read token"),
+            CanReadAllLedgerData
+        );
+        let malformed_global = iroha_data_model::permission::Permission::new(
+            "CanReadAllLedgerData".into(),
+            norito::json!({"account": account.to_string()}),
+        );
+        assert!(
+            CanReadAllLedgerData::try_from(&malformed_global).is_err(),
+            "the global read root must not accept an invented account scope"
+        );
+        assert!(
+            norito::json::from_str::<CanReadAccountData>("{}").is_err(),
+            "account reads must require an exact account"
         );
     }
 

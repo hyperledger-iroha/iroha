@@ -22,6 +22,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP = REPO_ROOT / "scripts" / "bootstrap_sumeragi_v2_release.py"
+RECEIPT_VALIDATOR_SUPPORT = (
+    REPO_ROOT / "scripts" / "sumeragi_v2_localnet_manifest.py"
+)
 PYTHON = Path(sys.executable).resolve(strict=True)
 FINGERPRINT = "SHA256:" + "A" * 43
 SCALING_EVIDENCE_ENV = "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
@@ -32,6 +35,12 @@ SCALING_TRUST_ENV = (
     "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
     "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
 )
+DEFAULT_SCALING_DIGESTS = {
+    "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256": "a" * 64,
+    "IROHA_RELEASE_SCALING_IROHAD_SHA256": "b" * 64,
+    "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256": "c" * 64,
+    "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256": "d" * 64,
+}
 
 
 def test_scaling_evidence_trust_inputs_are_the_only_new_runner_environment_names() -> None:
@@ -163,19 +172,99 @@ print(json.dumps(value, sort_keys=True, separators=(",", ":")))
 '''
 
 
-def _receipt_validator() -> str:
-    return r'''#!/usr/bin/env python3
+def _receipt_validator(mutation: str = "") -> str:
+    source = r'''#!/usr/bin/env python3
 import argparse
+import os
 from pathlib import Path
 
 parser = argparse.ArgumentParser()
+for option in (
+    "candidate-identity",
+    "sealed-identity",
+    "release-root",
+    "signature-attestation",
+    "signature-transcript",
+    "signature-raw-commit",
+    "signature-cargo-lock",
+    "signature-allowed-signers",
+    "signature-revocation",
+    "signature-git",
+    "signature-ssh-keygen",
+    "expected-git-sha256",
+    "expected-ssh-keygen-sha256",
+    "expected-allowed-signers-sha256",
+    "expected-revocation-sha256",
+    "expected-signer-fingerprint",
+    "bootstrap-completion",
+    "bootstrap-evidence-dir",
+    "bootstrap-identity",
+    "bootstrap-attestation",
+    "bootstrap-transcript",
+    "expected-bootstrap-completion-sha256",
+    "bootstrap-candidate-root",
+    "bootstrap-runner",
+    "corridor-completion",
+    "formal-completion",
+    "seed-completion",
+    "chaos-completion",
+    "taira-completion",
+    "g4p-completion",
+    "g12-seed-completion",
+    "g12-fault-soak-completion",
+    "scaling-evidence-manifest",
+    "expected-scaling-trial-harness-sha256",
+    "expected-scaling-configuration-sha256",
+    "expected-scaling-irohad-sha256",
+    "expected-scaling-iroha-cli-sha256",
+    "repository-root",
+):
+    parser.add_argument(f"--{option}", required=True)
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--verify-existing", action="store_true", required=True)
-args, _ = parser.parse_known_args()
+args = parser.parse_args()
 if not args.output.is_file() or args.output.is_symlink():
     raise SystemExit(41)
+for path in (
+    args.g4p_completion,
+    args.g12_seed_completion,
+    args.g12_fault_soak_completion,
+    args.scaling_evidence_manifest,
+):
+    candidate = Path(path)
+    if (
+        not candidate.is_absolute()
+        or candidate.resolve(strict=True) != candidate
+        or not candidate.is_file()
+        or candidate.is_symlink()
+    ):
+        raise SystemExit(42)
+for argument, environment_name in (
+    (
+        args.expected_scaling_trial_harness_sha256,
+        "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
+    ),
+    (
+        args.expected_scaling_configuration_sha256,
+        "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
+    ),
+    (args.expected_scaling_irohad_sha256, "IROHA_RELEASE_SCALING_IROHAD_SHA256"),
+    (
+        args.expected_scaling_iroha_cli_sha256,
+        "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
+    ),
+):
+    if argument != os.environ.get(environment_name):
+        raise SystemExit(43)
 print(f"Sumeragi v2 aggregate release receipt verified: {args.output.resolve(strict=True)}")
 '''
+    if mutation:
+        source = source.replace(
+            'print(f"Sumeragi v2 aggregate release receipt verified:',
+            mutation
+            + '\nprint(f"Sumeragi v2 aggregate release receipt verified:',
+        )
+    return source
 
 
 def _runner_tool_manifest() -> bytes:
@@ -392,6 +481,7 @@ def _runner(
     *,
     trusted_mutation: Path | None = None,
     observed_scaling_environment: Path | None = None,
+    receipt_mutation_override: str | None = None,
 ) -> str:
     actions = {
         "success": ":",
@@ -408,6 +498,18 @@ def _runner(
         ),
         "directory-mode-tamper": (
             "chmod 0755 \"$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR\""
+        ),
+        "receipt-support-archive-substitution": (
+            "chmod 0600 \"$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/"
+            "sumeragi_v2_localnet_manifest.py\"\n"
+            "printf substituted > \"$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/"
+            "sumeragi_v2_localnet_manifest.py\""
+        ),
+        "receipt-support-archive-omission": (
+            "mv \"$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/"
+            "sumeragi_v2_localnet_manifest.py\" "
+            "\"$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/"
+            "omitted-localnet-manifest.py\""
         ),
         "fail-and-tamper": (
             "chmod 0600 \"$SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION\"\n"
@@ -437,7 +539,7 @@ def _runner(
         )
     else:
         action_script = actions[action]
-    receipt_mutation = {
+    receipt_mutation = receipt_mutation_override or {
         "receipt-wrong-schema": 'receipt["schema_version"] = True',
         "receipt-wrong-bootstrap": (
             'receipt["authentication"]["bootstrap"]["completion_sha256"] = "0" * 64'
@@ -511,10 +613,18 @@ for relative, mode in (
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     destination.write_bytes((candidate / relative).read_bytes())
     destination.chmod(mode)
-(release_root / "scripts").chmod(0o500)
+for relative in (
+    "scripts/nexus/validate_multilane_scaling_evidence.py",
+    "scripts/deploy_localnet.sh",
+    "scripts/tx_load.py",
+    "scripts/nexus_lane_load_test.py",
+):
+    path = release_root / relative
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.write_bytes((relative + "\\n").encode())
+    path.chmod(0o500)
 (release_runner / "sealed-identity.json").write_bytes(identity_bytes)
 (release_runner / "sealed-identity.json").chmod(0o400)
-release_root.chmod(0o500)
 
 def source_artifact(record):
     path = Path(record["source_path"])
@@ -527,6 +637,30 @@ def source_artifact(record):
         "owner_uid": metadata.st_uid,
         "nlink": metadata.st_nlink,
     }}
+
+def full_artifact(path):
+    metadata = path.stat()
+    return {{
+        "path": str(path),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "size_bytes": metadata.st_size,
+        "mode": f"{{metadata.st_mode & 0o7777:04o}}",
+        "owner_uid": metadata.st_uid,
+        "nlink": metadata.st_nlink,
+    }}
+
+def artifact(path):
+    return {{
+        "path": str(path),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }}
+
+def evidence_file(directory, name, data, mode=0o400):
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = directory / name
+    path.write_bytes(data)
+    path.chmod(mode)
+    return path
 
 mock_directory = release_runner / "output" / "mock-completions"
 mock_directory.mkdir(mode=0o700)
@@ -549,6 +683,197 @@ for label in (
         "path": str(path),
         "sha256": hashlib.sha256(data).hexdigest(),
     }}
+
+g_unit_inventory = evidence_file(
+    mock_directory, "g-unit-required-tests.tsv", b"leg_id\\tcrate\\ttest\\n"
+)
+formal_apalache = evidence_file(
+    mock_directory, "multilane_apalache_evidence.tsv", b"apalache\\n"
+)
+formal_resource_jsonl = evidence_file(
+    mock_directory, "tlaps_resource.jsonl", b'{{"event":"sample"}}\\n'
+)
+formal_resource_summary = evidence_file(
+    mock_directory,
+    "tlaps_resource_summary.json",
+    b'{{"event":"summary"}}\\n',
+)
+
+prebuilt_root = (
+    release_root
+    / "target"
+    / "sumeragi-v2-release"
+    / identity["workspace_source_manifest_sha256"]
+    / "programs"
+    / "invocation.test"
+)
+for directory in (
+    prebuilt_root,
+    prebuilt_root / "release",
+    prebuilt_root / "message-control",
+    prebuilt_root / "message-control" / "release",
+):
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+prebuilt_specs = (
+    ("irohad", "release/irohad"),
+    ("irohad_message_control", "message-control/release/irohad"),
+    ("iroha", "release/iroha"),
+    ("kagami", "release/kagami"),
+)
+prebuilt_binaries = []
+for role, relative in prebuilt_specs:
+    binary = evidence_file(
+        prebuilt_root / Path(relative).parent,
+        Path(relative).name,
+        (role + "\\n").encode(),
+        0o500,
+    )
+    prebuilt_binaries.append(
+        {{"role": role, "relative_path": relative, **full_artifact(binary)}}
+    )
+cargo_version = b"cargo 1.0.0\\n"
+rustc_version = b"rustc 1.0.0\\n"
+version_tools = release_runner / "output" / "version-tools"
+cargo_tool = evidence_file(version_tools, "cargo", cargo_version, 0o500)
+rustc_tool = evidence_file(version_tools, "rustc", rustc_version, 0o500)
+prebuilt_manifest_rows = [
+    ("schema_version", "2"),
+    ("source_manifest_sha256", identity["workspace_source_manifest_sha256"]),
+    ("cargo_lock_sha256", identity["cargo_lock_sha256"]),
+    ("cargo_version_sha256", hashlib.sha256(cargo_version).hexdigest()),
+    ("rustc_version_sha256", hashlib.sha256(rustc_version).hexdigest()),
+    ("host_triple", "aarch64-apple-darwin"),
+    ("target_triple", "aarch64-apple-darwin"),
+    ("profile", "release"),
+    ("bundle_dir", str(prebuilt_root)),
+]
+for record in prebuilt_binaries:
+    role = record["role"]
+    prebuilt_manifest_rows.extend(
+        (
+            (f"{{role}}_relative_path", record["relative_path"]),
+            (f"{{role}}_sha256", record["sha256"]),
+            (f"{{role}}_size_bytes", str(record["size_bytes"])),
+            (f"{{role}}_mode_octal", record["mode"]),
+        )
+    )
+prebuilt_manifest = evidence_file(
+    prebuilt_root,
+    ".sumeragi-v2-prebuilt-binaries.tsv",
+    "".join(f"{{key}}\\t{{value}}\\n" for key, value in prebuilt_manifest_rows).encode(),
+)
+for directory in (
+    prebuilt_root / "message-control" / "release",
+    prebuilt_root / "message-control",
+    prebuilt_root / "release",
+    prebuilt_root,
+):
+    directory.chmod(0o500)
+prebuilt_bundle = {{
+    "schema_version": 2,
+    "manifest": full_artifact(prebuilt_manifest),
+    "source_manifest_sha256": identity["workspace_source_manifest_sha256"],
+    "cargo_lock_sha256": identity["cargo_lock_sha256"],
+    "cargo_version_sha256": hashlib.sha256(cargo_version).hexdigest(),
+    "rustc_version_sha256": hashlib.sha256(rustc_version).hexdigest(),
+    "host_triple": "aarch64-apple-darwin",
+    "target_triple": "aarch64-apple-darwin",
+    "profile": "release",
+    "bundle_dir": str(prebuilt_root),
+    "version_transcripts": {{
+        "cargo": {{
+            "argv": [str(cargo_tool), "--version"],
+            "sha256": hashlib.sha256(cargo_version).hexdigest(),
+            "size_bytes": len(cargo_version),
+        }},
+        "rustc": {{
+            "argv": [str(rustc_tool), "-vV"],
+            "sha256": hashlib.sha256(rustc_version).hexdigest(),
+            "size_bytes": len(rustc_version),
+        }},
+    }},
+    "binaries": prebuilt_binaries,
+}}
+
+scaling_root = release_runner / "output" / "scaling"
+scaling_manifest = evidence_file(
+    scaling_root, "scaling_evidence.json", b'{{"schema_version":1}}\\n'
+)
+scaling_files = [
+    {{"relative_path": "scaling_evidence.json", **full_artifact(scaling_manifest)}}
+]
+retained_scaling_validator = (
+    release_root / "scripts" / "nexus" / "validate_multilane_scaling_evidence.py"
+)
+retained_tool_specs = (
+    ("localnet", "scripts/deploy_localnet.sh"),
+    ("load_generator", "scripts/tx_load.py"),
+    ("nexus_load_bundle", "scripts/nexus_lane_load_test.py"),
+)
+scaling_trust_anchors = {{
+    "trial_harness_sha256": os.environ[
+        "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256"
+    ],
+    "configuration_sha256": os.environ[
+        "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256"
+    ],
+    "irohad_sha256": os.environ["IROHA_RELEASE_SCALING_IROHAD_SHA256"],
+    "iroha_cli_sha256": os.environ["IROHA_RELEASE_SCALING_IROHA_CLI_SHA256"],
+    "repository_root": str(release_root),
+    "retained_tooling": [
+        {{
+            "role": role,
+            "source_path": source_path,
+            **full_artifact(release_root / source_path),
+        }}
+        for role, source_path in retained_tool_specs
+    ],
+}}
+
+g4p_root = release_runner / "output" / "g4p"
+g4p_completion = evidence_file(g4p_root, "COMPLETED.tsv", b"g4p completion\\n")
+g4p_summary = evidence_file(g4p_root, "runs.tsv", b"g4p summary\\n")
+g4p_names = (
+    "run-00-nexus_and_streaming.log",
+    "run-01-nexus_and_streaming.log",
+    "run-02-nexus_and_streaming.log",
+    "run-03-native_amx_routing.log",
+)
+g4p_logs = [
+    evidence_file(g4p_root, name, (name + "\\n").encode()) for name in g4p_names
+]
+g4p_evidence = {{
+    "schema_version": 1,
+    "completion": full_artifact(g4p_completion),
+    "run_summary": full_artifact(g4p_summary),
+    "run_logs": [full_artifact(path) for path in g4p_logs],
+}}
+
+g12_seed_root = release_runner / "output" / "g12-seed"
+g12_seed_completion = evidence_file(
+    g12_seed_root, "COMPLETED.tsv", b"g12 seed completion\\n"
+)
+g12_seed_summary = evidence_file(g12_seed_root, "runs.tsv", b"g12 seed summary\\n")
+g12_seed_logs = [
+    evidence_file(
+        g12_seed_root, f"seed-{{ordinal:02d}}.log", f"seed {{ordinal}}\\n".encode()
+    )
+    for ordinal in range(10)
+]
+g12_soak_root = release_runner / "output" / "g12-soak"
+g12_soak_completion = evidence_file(
+    g12_soak_root, "COMPLETED.tsv", b"g12 soak completion\\n"
+)
+g12_soak_log = evidence_file(g12_soak_root, "fault-soak.log", b"soak\\n")
+g12_evidence = {{
+    "seed_completion": full_artifact(g12_seed_completion),
+    "seed_summary": full_artifact(g12_seed_summary),
+    "seed_run_logs": [full_artifact(path) for path in g12_seed_logs],
+    "fault_soak_completion": full_artifact(g12_soak_completion),
+    "fault_soak_log": full_artifact(g12_soak_log),
+}}
+
+release_root.chmod(0o500)
 
 trust_policy = {{
     "git_sha256": marker["trusted_inputs"]["git"]["protected_sha256"],
@@ -629,12 +954,17 @@ receipt = {{
         **completion_records,
         "corridor_summary": {{}},
         "corridor_production_inventory": {{}},
+        "g_unit_focused_test_inventory": artifact(g_unit_inventory),
         "corridor_logs": [],
+        "prebuilt_binary_bundle": prebuilt_bundle,
         "formal_gate_log": {{}},
         "formal_proof_coverage": {{}},
         "formal_proof_evidence": {{}},
+        "formal_multilane_apalache_evidence": artifact(formal_apalache),
         "formal_harness_lock": {{}},
         "formal_toolchain": {{}},
+        "formal_tlaps_resource_jsonl": artifact(formal_resource_jsonl),
+        "formal_tlaps_resource_summary": artifact(formal_resource_summary),
         "seed_matrix_summary": {{}},
         "seed_matrix_run_logs": [],
         "seed_matrix_localnet_manifest_index": {{}},
@@ -642,6 +972,19 @@ receipt = {{
         "chaos_log": {{}},
         "taira_evidence": {{}},
         "taira_run_log": {{}},
+        "multilane_scaling_bundle": {{
+            "root": str(scaling_root),
+            "file_count": len(scaling_files),
+            "total_size_bytes": sum(record["size_bytes"] for record in scaling_files),
+            "directories": [],
+            "files": scaling_files,
+        }},
+        "multilane_scaling_retained_validator": full_artifact(
+            retained_scaling_validator
+        ),
+        "multilane_scaling_trust_anchors": scaling_trust_anchors,
+        "g4p_multilane": g4p_evidence,
+        "g12_cross_dataspace": g12_evidence,
     }},
 }}
 {receipt_mutation}
@@ -791,6 +1134,7 @@ class Fixture:
     manifest: Path
     verifier: Path
     receipt_validator: Path
+    receipt_validator_support: Path
     tool_manifest: Path
     git: Path
     ssh: Path
@@ -799,7 +1143,7 @@ class Fixture:
     revocation: Path
 
     def arguments(self) -> list[str]:
-        return [
+        arguments = [
             str(PYTHON),
             "-I",
             "-S",
@@ -819,6 +1163,9 @@ class Fixture:
             "--expected-identity-verifier-sha256", _sha256(self.verifier),
             "--receipt-validator", str(self.receipt_validator),
             "--expected-receipt-validator-sha256", _sha256(self.receipt_validator),
+            "--receipt-validator-support", str(self.receipt_validator_support),
+            "--expected-receipt-validator-support-sha256",
+            _sha256(self.receipt_validator_support),
             "--runner-tool-manifest", str(self.tool_manifest),
             "--expected-runner-tool-manifest-sha256", _sha256(self.tool_manifest),
             "--bash-bin", str(self.bash),
@@ -830,6 +1177,21 @@ class Fixture:
             "--expected-ssh-revocation-sha256", _sha256(self.revocation),
             "--command-timeout-seconds", "10",
         ]
+        scaling_environment = {
+            **DEFAULT_SCALING_DIGESTS,
+            SCALING_EVIDENCE_ENV: str(
+                self.evidence
+                / "release-runner"
+                / "output"
+                / "scaling"
+                / "scaling_evidence.json"
+            ),
+        }
+        for name in SCALING_TRUST_ENV:
+            arguments.extend(
+                ["--runner-environment", f"{name}={scaling_environment[name]}"]
+            )
+        return arguments
 
     def run(self, arguments: list[str] | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -859,6 +1221,11 @@ def release_fixture(tmp_path: Path) -> Fixture:
     verifier = _write(trust / "verifier.py", _identity_verifier(), 0o500)
     receipt_validator = _write(
         trust / "receipt-validator.py", _receipt_validator(), 0o500
+    )
+    receipt_validator_support = _write(
+        trust / RECEIPT_VALIDATOR_SUPPORT.name,
+        RECEIPT_VALIDATOR_SUPPORT.read_bytes(),
+        0o400,
     )
     tool_manifest = _write(
         trust / "runner-tool-manifest.json", _runner_tool_manifest(), 0o400
@@ -890,6 +1257,7 @@ def release_fixture(tmp_path: Path) -> Fixture:
         manifest,
         verifier,
         receipt_validator,
+        receipt_validator_support,
         tool_manifest,
         git,
         ssh,
@@ -903,6 +1271,82 @@ def _replace_flag(arguments: list[str], flag: str, value: str) -> list[str]:
     updated = arguments.copy()
     updated[updated.index(flag) + 1] = value
     return updated
+
+
+def _replace_runner_environment(
+    arguments: list[str], name: str, value: str
+) -> list[str]:
+    updated = arguments.copy()
+    for index, argument in enumerate(updated[:-1]):
+        if argument == "--runner-environment" and updated[index + 1].startswith(
+            f"{name}="
+        ):
+            updated[index + 1] = f"{name}={value}"
+            return updated
+    raise AssertionError(f"runner environment {name} was not present")
+
+
+def _relocate_receipt_evidence_root(
+    evidence: dict[str, object], anchor_key: str, destination: Path
+) -> None:
+    anchor = evidence[anchor_key]
+    assert isinstance(anchor, Path) and anchor.is_file()
+    source = anchor.parent
+    shutil.move(str(source), destination)
+
+    def relocated(value: object) -> object:
+        if not isinstance(value, Path):
+            return value
+        try:
+            relative = value.relative_to(source)
+        except ValueError:
+            return value
+        return destination / relative
+
+    for key, value in tuple(evidence.items()):
+        if isinstance(value, list):
+            evidence[key] = [relocated(item) for item in value]
+        else:
+            evidence[key] = relocated(value)
+
+
+def _rebind_bootstrap_trusted_input(
+    evidence: dict[str, object],
+    *,
+    label: str,
+    source: Path,
+    archive_name: str,
+    archive_mode: int,
+) -> None:
+    evidence_directory = evidence["bootstrap_evidence_dir"]
+    marker_path = evidence["bootstrap_completion"]
+    assert isinstance(evidence_directory, Path)
+    assert isinstance(marker_path, Path)
+    source = source.resolve(strict=True)
+    source_metadata = source.stat()
+    archive = _write(
+        evidence_directory / archive_name,
+        source.read_bytes(),
+        archive_mode,
+    )
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    digest = _sha256(source)
+    marker["trusted_inputs"][label] = {
+        "archive_name": archive_name,
+        "archive_mode": f"{archive_mode:04o}",
+        "observed_sha256": digest,
+        "protected_sha256": digest,
+        "size_bytes": source_metadata.st_size,
+        "source_mode": f"{stat.S_IMODE(source_metadata.st_mode):04o}",
+        "source_path": str(source),
+    }
+    _write(
+        marker_path,
+        (json.dumps(marker, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+        0o400,
+    )
+    evidence["expected_bootstrap_completion_sha256"] = _sha256(marker_path)
+    assert archive == evidence_directory / archive_name
 
 
 def _assert_never_launched(fixture: Fixture, result: subprocess.CompletedProcess[str]) -> None:
@@ -947,6 +1391,14 @@ def test_success_authenticates_then_launches_exactly_once(release_fixture: Fixtu
         "IROHA_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256",
         "SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256",
     ]
+    support_record = value["trusted_inputs"]["receipt_validator_support"]
+    assert support_record["archive_name"] == RECEIPT_VALIDATOR_SUPPORT.name
+    assert support_record["protected_sha256"] == _sha256(
+        release_fixture.receipt_validator_support
+    )
+    assert _sha256(release_fixture.evidence / RECEIPT_VALIDATOR_SUPPORT.name) == (
+        support_record["protected_sha256"]
+    )
     assert stat.S_IMODE(release_fixture.evidence.stat().st_mode) == 0o700
     assert stat.S_IMODE(marker.stat().st_mode) == 0o400
     receipt = (
@@ -958,9 +1410,19 @@ def test_success_authenticates_then_launches_exactly_once(release_fixture: Fixtu
     )
     terminal_receipt = json.loads(receipt.read_text(encoding="utf-8"))
     assert {
+        "g_unit_focused_test_inventory",
+        "prebuilt_binary_bundle",
         "formal_verus_evidence",
         "formal_verus_log",
+        "formal_multilane_apalache_evidence",
         "formal_cross_tool_evidence",
+        "formal_tlaps_resource_jsonl",
+        "formal_tlaps_resource_summary",
+        "multilane_scaling_bundle",
+        "multilane_scaling_retained_validator",
+        "multilane_scaling_trust_anchors",
+        "g4p_multilane",
+        "g12_cross_dataspace",
     } <= set(terminal_receipt["evidence"])
     external_marker = release_fixture.evidence / "BOOTSTRAP_RELEASE_COMPLETED.json"
     external_data = external_marker.read_bytes()
@@ -1181,6 +1643,151 @@ def test_success_status_without_exact_authenticated_receipt_fails_closed(
 
 
 @pytest.mark.parametrize(
+    "field",
+    [
+        "g_unit_focused_test_inventory",
+        "prebuilt_binary_bundle",
+        "formal_multilane_apalache_evidence",
+        "formal_tlaps_resource_jsonl",
+        "formal_tlaps_resource_summary",
+        "multilane_scaling_bundle",
+        "multilane_scaling_retained_validator",
+        "multilane_scaling_trust_anchors",
+        "g4p_multilane",
+        "g12_cross_dataspace",
+    ],
+)
+def test_terminal_receipt_requires_every_extended_release_field(
+    release_fixture: Fixture, field: str
+) -> None:
+    _write(
+        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+        _runner(
+            release_fixture.launch_count,
+            release_fixture.candidate,
+            "success",
+            receipt_mutation_override=f'receipt["evidence"].pop({field!r})',
+        ),
+        0o500,
+    )
+
+    result = release_fixture.run()
+
+    assert result.returncode == 2, result.stderr
+    assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
+    assert not release_fixture.evidence.exists()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        'receipt["evidence"]["g_unit_focused_test_inventory"]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["g_unit_focused_test_inventory"]["sha256"] = "0" * 64',
+        'receipt["evidence"]["formal_multilane_apalache_evidence"]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["formal_multilane_apalache_evidence"]["sha256"] = "0" * 64',
+        'receipt["evidence"]["formal_tlaps_resource_jsonl"]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["formal_tlaps_resource_jsonl"]["sha256"] = "0" * 64',
+        'receipt["evidence"]["formal_tlaps_resource_summary"]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["formal_tlaps_resource_summary"]["sha256"] = "0" * 64',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["manifest"]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["manifest"]["sha256"] = "0" * 64',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["manifest"]["size_bytes"] += 1',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["manifest"]["mode"] = "0500"',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["manifest"]["owner_uid"] += 1',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["manifest"]["nlink"] += 1',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["schema_version"] = 1',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["source_manifest_sha256"] = "0" * 64',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["cargo_lock_sha256"] = "0" * 64',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["cargo_version_sha256"] = "0" * 64',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["rustc_version_sha256"] = "0" * 64',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["host_triple"] = "invalid"',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["target_triple"] = "x86_64-unknown-linux-gnu"',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["profile"] = "debug"',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["bundle_dir"] = str(candidate)',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["version_transcripts"]["cargo"]["argv"][0] = str(candidate / "payload")',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["version_transcripts"]["cargo"]["argv"][1] = "-V"',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["version_transcripts"]["cargo"]["sha256"] = "0" * 64',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["version_transcripts"]["cargo"]["size_bytes"] = 0',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["version_transcripts"]["rustc"]["argv"][0] = str(candidate / "payload")',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["version_transcripts"]["rustc"]["argv"][1] = "--version"',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["version_transcripts"]["rustc"]["sha256"] = "0" * 64',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["version_transcripts"]["rustc"]["size_bytes"] = 65537',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["binaries"][0]["role"] = "wrong"',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["binaries"][0]["relative_path"] = "release/wrong"',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["binaries"][0]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["binaries"][0]["sha256"] = "0" * 64',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["binaries"][0]["size_bytes"] += 1',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["binaries"][0]["mode"] = "0400"',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["binaries"][0]["owner_uid"] += 1',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["binaries"][0]["nlink"] += 1',
+        'receipt["evidence"]["prebuilt_binary_bundle"]["binaries"].pop()',
+        'receipt["evidence"]["multilane_scaling_bundle"]["root"] = str(candidate)',
+        'receipt["evidence"]["multilane_scaling_bundle"]["file_count"] += 1',
+        'receipt["evidence"]["multilane_scaling_bundle"]["total_size_bytes"] += 1',
+        'receipt["evidence"]["multilane_scaling_bundle"]["files"][0]["relative_path"] = "../escape"',
+        'receipt["evidence"]["multilane_scaling_bundle"]["files"][0]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["multilane_scaling_bundle"]["files"][0]["sha256"] = "0" * 64',
+        'receipt["evidence"]["multilane_scaling_bundle"]["directories"].append("missing")',
+        'receipt["evidence"]["multilane_scaling_retained_validator"]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["multilane_scaling_retained_validator"]["sha256"] = "0" * 64',
+        'receipt["evidence"]["multilane_scaling_trust_anchors"]["trial_harness_sha256"] = "0" * 64',
+        'receipt["evidence"]["multilane_scaling_trust_anchors"]["configuration_sha256"] = "0" * 64',
+        'receipt["evidence"]["multilane_scaling_trust_anchors"]["irohad_sha256"] = "0" * 64',
+        'receipt["evidence"]["multilane_scaling_trust_anchors"]["iroha_cli_sha256"] = "0" * 64',
+        'receipt["evidence"]["multilane_scaling_trust_anchors"]["repository_root"] = str(candidate)',
+        (
+            'receipt["evidence"]["multilane_scaling_trust_anchors"]'
+            '["retained_tooling"][0]["source_path"] = "scripts/wrong.sh"'
+        ),
+        'receipt["evidence"]["multilane_scaling_trust_anchors"]["retained_tooling"][0]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["multilane_scaling_trust_anchors"]["retained_tooling"][0]["sha256"] = "0" * 64',
+        'receipt["evidence"]["multilane_scaling_trust_anchors"]["retained_tooling"].pop()',
+        'receipt["evidence"]["g4p_multilane"]["schema_version"] = 2',
+        'receipt["evidence"]["g4p_multilane"]["completion"]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["g4p_multilane"]["completion"]["sha256"] = "0" * 64',
+        'receipt["evidence"]["g4p_multilane"]["run_summary"]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["g4p_multilane"]["run_summary"]["sha256"] = "0" * 64',
+        'receipt["evidence"]["g4p_multilane"]["run_logs"][0]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["g4p_multilane"]["run_logs"][0]["sha256"] = "0" * 64',
+        'receipt["evidence"]["g4p_multilane"]["run_logs"].pop()',
+        'receipt["evidence"]["g12_cross_dataspace"]["seed_completion"]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["g12_cross_dataspace"]["seed_completion"]["sha256"] = "0" * 64',
+        'receipt["evidence"]["g12_cross_dataspace"]["seed_summary"]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["g12_cross_dataspace"]["seed_summary"]["sha256"] = "0" * 64',
+        'receipt["evidence"]["g12_cross_dataspace"]["seed_run_logs"][0]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["g12_cross_dataspace"]["seed_run_logs"][0]["sha256"] = "0" * 64',
+        'receipt["evidence"]["g12_cross_dataspace"]["seed_run_logs"].pop()',
+        (
+            'receipt["evidence"]["g12_cross_dataspace"]'
+            '["fault_soak_completion"]["path"] = str(candidate / "payload")'
+        ),
+        'receipt["evidence"]["g12_cross_dataspace"]["fault_soak_completion"]["sha256"] = "0" * 64',
+        'receipt["evidence"]["g12_cross_dataspace"]["fault_soak_log"]["path"] = str(candidate / "payload")',
+        'receipt["evidence"]["g12_cross_dataspace"]["fault_soak_log"]["sha256"] = "0" * 64',
+    ],
+)
+def test_terminal_receipt_extended_artifact_mutations_fail_closed(
+    release_fixture: Fixture, mutation: str
+) -> None:
+    _write(
+        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+        _runner(
+            release_fixture.launch_count,
+            release_fixture.candidate,
+            "success",
+            receipt_mutation_override=mutation,
+        ),
+        0o500,
+    )
+
+    result = release_fixture.run()
+
+    assert result.returncode == 2, result.stderr
+    assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
+    assert not release_fixture.evidence.exists()
+
+
+@pytest.mark.parametrize(
     "flag",
     [
         "--expected-bootstrap-sha256",
@@ -1190,6 +1797,7 @@ def test_success_status_without_exact_authenticated_receipt_fails_closed(
         "--expected-manifest-helper-sha256",
         "--expected-identity-verifier-sha256",
         "--expected-receipt-validator-sha256",
+        "--expected-receipt-validator-support-sha256",
         "--expected-runner-tool-manifest-sha256",
         "--expected-bash-sha256",
         "--expected-ssh-allowed-signers-sha256",
@@ -1202,6 +1810,18 @@ def test_protected_hash_mismatch_never_launches(
     result = release_fixture.run(
         _replace_flag(release_fixture.arguments(), flag, "0" * 64)
     )
+    _assert_never_launched(release_fixture, result)
+
+
+def test_receipt_validator_support_omission_never_launches(
+    release_fixture: Fixture,
+) -> None:
+    arguments = release_fixture.arguments()
+    index = arguments.index("--receipt-validator-support")
+    del arguments[index : index + 2]
+
+    result = release_fixture.run(arguments)
+
     _assert_never_launched(release_fixture, result)
 
 
@@ -1219,13 +1839,22 @@ def test_nonisolated_python_startup_never_launches(release_fixture: Fixture) -> 
     _assert_never_launched(release_fixture, result)
 
 
-@pytest.mark.parametrize("input_flag", ["--git-bin", "--manifest-helper", "--ssh-allowed-signers"])
+@pytest.mark.parametrize(
+    "input_flag",
+    [
+        "--git-bin",
+        "--manifest-helper",
+        "--receipt-validator-support",
+        "--ssh-allowed-signers",
+    ],
+)
 def test_candidate_contained_trust_input_never_launches(
     release_fixture: Fixture, input_flag: str
 ) -> None:
     source = {
         "--git-bin": release_fixture.git,
         "--manifest-helper": release_fixture.manifest,
+        "--receipt-validator-support": release_fixture.receipt_validator_support,
         "--ssh-allowed-signers": release_fixture.allowed,
     }[input_flag]
     destination = _write(
@@ -1237,6 +1866,9 @@ def test_candidate_contained_trust_input_never_launches(
     digest_flag = {
         "--git-bin": "--expected-git-sha256",
         "--manifest-helper": "--expected-manifest-helper-sha256",
+        "--receipt-validator-support": (
+            "--expected-receipt-validator-support-sha256"
+        ),
         "--ssh-allowed-signers": "--expected-ssh-allowed-signers-sha256",
     }[input_flag]
     arguments = _replace_flag(arguments, digest_flag, _sha256(destination))
@@ -1371,6 +2003,8 @@ def test_descendant_holding_helper_pipes_cannot_defeat_timeout(
         "evidence-tamper",
         "marker-tamper",
         "directory-mode-tamper",
+        "receipt-support-archive-omission",
+        "receipt-support-archive-substitution",
     ],
 )
 def test_post_launch_tampering_fails_closed(
@@ -1404,6 +2038,27 @@ def test_post_launch_trusted_tool_drift_fails_closed(release_fixture: Fixture) -
     assert not release_fixture.evidence.exists()
 
 
+def test_post_launch_receipt_support_source_drift_fails_closed(
+    release_fixture: Fixture,
+) -> None:
+    _write(
+        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+        _runner(
+            release_fixture.launch_count,
+            release_fixture.candidate,
+            "trusted-drift",
+            trusted_mutation=release_fixture.receipt_validator_support,
+        ),
+        0o500,
+    )
+
+    result = release_fixture.run()
+
+    assert result.returncode == 2, result.stderr
+    assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
+    assert not release_fixture.evidence.exists()
+
+
 def test_runner_failure_status_is_preserved_exactly(release_fixture: Fixture) -> None:
     _write(
         release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
@@ -1430,6 +2085,275 @@ def test_protected_receipt_validator_failure_blocks_external_completion(
     assert result.returncode == 2
     assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
     assert "protected receipt validator" in result.stderr.lower()
+    assert not release_fixture.evidence.exists()
+
+
+def test_bootstrap_protected_validation_accepts_real_terminal_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pytests.scripts import (
+        sumeragi_v2_release_receipt_test as receipt_contract,
+    )
+
+    fixture_root = tmp_path / "nested" / "real-receipt"
+    fixture_root.mkdir(parents=True)
+    evidence: dict[str, object] = receipt_contract.make_evidence(fixture_root)
+    writer = receipt_contract.fixture_writer(fixture_root)
+    bootstrap_evidence = evidence["bootstrap_evidence_dir"]
+    assert isinstance(bootstrap_evidence, Path)
+    release_output = bootstrap_evidence / "release-runner" / "output"
+    for anchor_key, directory_name in (
+        ("corridor_completion", "corridor"),
+        ("formal_completion", "formal"),
+        ("seed_completion", "seed"),
+        ("chaos_completion", "chaos"),
+        ("taira_completion", "taira"),
+        ("scaling_manifest", "scaling"),
+        ("g4p_completion", "g4p"),
+        ("g12_seed_completion", "g12-seed"),
+        ("g12_soak_completion", "g12-soak"),
+    ):
+        _relocate_receipt_evidence_root(
+            evidence, anchor_key, release_output / directory_name
+        )
+
+    marker_path = evidence["bootstrap_completion"]
+    scaling_manifest = evidence["scaling_manifest"]
+    assert isinstance(marker_path, Path)
+    assert isinstance(scaling_manifest, Path)
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["runner"]["environment_without_self_digest"][
+        SCALING_EVIDENCE_ENV
+    ] = str(scaling_manifest)
+    _write(
+        marker_path,
+        (json.dumps(marker, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+        0o400,
+    )
+    evidence["expected_bootstrap_completion_sha256"] = _sha256(marker_path)
+
+    _rebind_bootstrap_trusted_input(
+        evidence,
+        label="receipt_validator",
+        source=writer,
+        archive_name="validate-receipt.py",
+        archive_mode=0o400,
+    )
+    _rebind_bootstrap_trusted_input(
+        evidence,
+        label="python",
+        source=PYTHON,
+        archive_name="python3",
+        archive_mode=0o500,
+    )
+    sealed_source = evidence["sealed"]
+    bootstrap_identity = evidence["bootstrap_identity"]
+    assert isinstance(sealed_source, Path)
+    assert isinstance(bootstrap_identity, Path)
+    sealed_identity = _write(
+        bootstrap_evidence / "release-runner" / "sealed-identity.json",
+        sealed_source.read_bytes(),
+        0o400,
+    )
+    evidence["candidate"] = bootstrap_identity
+    evidence["sealed"] = sealed_identity
+
+    writer_tmp = fixture_root / "writer-tmp"
+    writer_tmp.mkdir()
+    monkeypatch.setenv("TMPDIR", str(writer_tmp))
+    terminal_output = evidence["terminal_output"]
+    assert isinstance(terminal_output, Path)
+    publication = receipt_contract.run_writer(
+        evidence, terminal_output, writer
+    )
+    assert publication.returncode == 0, publication.stderr
+    receipt_before = terminal_output.read_bytes()
+    for log_name in ("runner-stdout.log", "runner-stderr.log"):
+        (bootstrap_evidence / log_name).chmod(0o400)
+
+    spec = importlib.util.spec_from_file_location(
+        "sumeragi_release_bootstrap_real_receipt", BOOTSTRAP
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    def snapshot(path: Path, label: str, maximum_bytes: int) -> object:
+        return module._read_file(path, label, maximum_bytes=maximum_bytes)
+
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    trusted_inputs = marker["trusted_inputs"]
+    archives = {
+        "python": snapshot(
+            bootstrap_evidence / "python3", "archived Python", module._MAX_TOOL_BYTES
+        ),
+        "receipt_validator": snapshot(
+            bootstrap_evidence / "validate-receipt.py",
+            "archived receipt validator",
+            module._MAX_HELPER_BYTES,
+        ),
+        "receipt_validator_support": snapshot(
+            bootstrap_evidence / RECEIPT_VALIDATOR_SUPPORT.name,
+            "archived receipt validator support",
+            module._MAX_HELPER_BYTES,
+        ),
+    }
+    protected = {
+        label: snapshot(
+            Path(trusted_inputs[label]["source_path"]),
+            f"protected {label}",
+            (
+                module._MAX_POLICY_BYTES
+                if label in {"allowed_signers", "revocation"}
+                else module._MAX_TOOL_BYTES
+            ),
+        )
+        for label in ("git", "ssh_keygen", "allowed_signers", "revocation")
+    }
+    identity_outputs = {
+        "attestation": evidence["bootstrap_attestation"],
+        "transcript": evidence["bootstrap_transcript"],
+        "raw_commit": evidence["bootstrap_identity_raw_commit"],
+        "cargo_lock": evidence["bootstrap_identity_cargo_lock"],
+        "allowed": evidence["bootstrap_identity_allowed_signers"],
+        "revocation": evidence["bootstrap_identity_revocation"],
+        "git": evidence["bootstrap_identity_git"],
+        "ssh": evidence["bootstrap_identity_ssh_keygen"],
+    }
+    assert all(isinstance(path, Path) for path in identity_outputs.values())
+    environment = dict(marker["runner"]["environment_without_self_digest"])
+    marker_sha256 = _sha256(marker_path)
+    environment.update(
+        {
+            "IROHA_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256": marker_sha256,
+            "SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256": (
+                marker_sha256
+            ),
+        }
+    )
+    receipt = json.loads(receipt_before)
+    validation = module._run_protected_receipt_validator(
+        evidence=bootstrap_evidence,
+        candidate=Path(evidence["bootstrap_candidate_root"]),
+        receipt=receipt,
+        receipt_snapshot=snapshot(
+            terminal_output,
+            "terminal receipt",
+            module._MAX_TERMINAL_RECEIPT_BYTES,
+        ),
+        sealed_identity_snapshot=snapshot(
+            sealed_identity, "sealed identity", module._MAX_IDENTITY_BYTES
+        ),
+        sealed_root=Path(evidence["release_root"]),
+        archives=archives,
+        protected=protected,
+        identity_snapshot=snapshot(
+            bootstrap_identity,
+            "bootstrap identity",
+            module._MAX_IDENTITY_BYTES,
+        ),
+        identity_outputs=identity_outputs,
+        bootstrap_marker=snapshot(
+            marker_path, "bootstrap marker", module._MAX_EVIDENCE_BYTES
+        ),
+        expected_signer_fingerprint=str(evidence["expected_signer_fingerprint"]),
+        environment=environment,
+        timeout_seconds=30,
+    )
+
+    assert validation.returncode == 0
+    assert terminal_output.read_bytes() == receipt_before
+    assert not (bootstrap_evidence / "__pycache__").exists()
+
+
+def test_bootstrap_invokes_real_terminal_receipt_validator(
+    release_fixture: Fixture,
+) -> None:
+    release_fixture.receipt_validator = _write(
+        release_fixture.trust / "real-receipt-validator.py",
+        (REPO_ROOT / "scripts" / "write_sumeragi_v2_release_receipt.py").read_bytes(),
+        0o500,
+    )
+
+    result = release_fixture.run()
+
+    assert result.returncode == 2
+    assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
+    assert "protected receipt validator rejected terminal receipt" in result.stderr
+    assert "Sumeragi v2 release receipt error:" in result.stderr
+    assert "the following arguments are required" not in result.stderr
+    assert "unrecognized arguments" not in result.stderr
+    assert not release_fixture.evidence.exists()
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "--g4p-completion",
+        "--g12-seed-completion",
+        "--g12-fault-soak-completion",
+        "--scaling-evidence-manifest",
+        "--expected-scaling-trial-harness-sha256",
+        "--expected-scaling-configuration-sha256",
+        "--expected-scaling-irohad-sha256",
+        "--expected-scaling-iroha-cli-sha256",
+    ],
+)
+def test_protected_receipt_validator_extended_argument_mutations_fail_closed(
+    release_fixture: Fixture, flag: str
+) -> None:
+    source = BOOTSTRAP.read_text(encoding="utf-8")
+    needle = f'        "{flag}",\n'
+    assert source.count(needle) == 1
+    mutated = _write(
+        release_fixture.trust / f"bootstrap-{flag.removeprefix('--')}.py",
+        source.replace(needle, f'        "{flag}-mutated",\n', 1),
+        0o500,
+    )
+    arguments = release_fixture.arguments()
+    arguments[3] = str(mutated)
+    arguments = _replace_flag(
+        arguments, "--expected-bootstrap-sha256", _sha256(mutated)
+    )
+
+    result = release_fixture.run(arguments)
+
+    assert result.returncode == 2, result.stderr
+    assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
+    assert "protected receipt validator rejected terminal receipt" in result.stderr
+    assert not release_fixture.evidence.exists()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        (
+            "target = Path(args.scaling_evidence_manifest)\n"
+            "target.chmod(0o600)\n"
+            "target.write_bytes(b'late artifact mutation\\n')"
+        ),
+        (
+            "target = Path(args.g4p_completion).parent / 'late.log'\n"
+            "target.write_bytes(b'late directory mutation\\n')\n"
+            "target.chmod(0o400)"
+        ),
+    ],
+)
+def test_protected_validator_cannot_mutate_nested_terminal_evidence(
+    release_fixture: Fixture, mutation: str
+) -> None:
+    release_fixture.receipt_validator = _write(
+        release_fixture.trust / "mutating-receipt-validator.py",
+        _receipt_validator(mutation),
+        0o500,
+    )
+
+    result = release_fixture.run()
+
+    assert result.returncode == 2, result.stderr
+    assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
+    assert "changed" in result.stderr
     assert not release_fixture.evidence.exists()
 
 
@@ -1577,10 +2501,12 @@ def test_unapproved_runner_environment_is_rejected(release_fixture: Fixture) -> 
 def test_scaling_evidence_runner_environment_is_authenticated_and_forwarded(
     release_fixture: Fixture,
 ) -> None:
-    scaling_manifest = _write(
-        release_fixture.trust / "scaling_evidence.json",
-        "{}\n",
-        0o400,
+    scaling_manifest = (
+        release_fixture.evidence
+        / "release-runner"
+        / "output"
+        / "scaling"
+        / "scaling_evidence.json"
     )
     observed_environment = release_fixture.root / "observed-scaling-environment"
     _write(
@@ -1603,8 +2529,8 @@ def test_scaling_evidence_runner_environment_is_authenticated_and_forwarded(
     }
     arguments = [*release_fixture.arguments()]
     for name in SCALING_TRUST_ENV:
-        arguments.extend(
-            ["--runner-environment", f"{name}={scaling_environment[name]}"]
+        arguments = _replace_runner_environment(
+            arguments, name, scaling_environment[name]
         )
     result = release_fixture.run(arguments)
 

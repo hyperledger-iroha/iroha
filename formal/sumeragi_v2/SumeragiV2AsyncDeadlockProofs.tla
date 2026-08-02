@@ -28,7 +28,7 @@ LocalRunnerServiceContractDebt(node) ==
   ELSE 0
 
 Stage2BusyLocalWorkDecreaseStep ==
-  \E target, witness, phase \in 1..2:
+  \E target, witness \in AsyncCandidateSet, phase \in 1..2:
     /\ Stage2BusyWitnessBlocked(target, witness, phase)
     /\ Stage2BusyPhaseGoal(target, phase)'
 

@@ -16,8 +16,7 @@ use sha2::{Digest, Sha256};
 const DEFAULT_SCENARIO: &str = "submit";
 const DEFAULT_TEST: &str = "org.hyperledger.iroha.android.client.HttpClientTransportHarnessTests";
 const DEFAULT_CONFIG_RELATIVE: &str = "tools/torii_mock_harness/config/default.toml";
-const DEFAULT_FIXTURE_RELATIVE: &str =
-    "java/iroha_android/src/test/resources/transaction_payloads.json";
+const DEFAULT_FIXTURE_RELATIVE: &str = "fixtures/norito_rpc/transaction_payloads.json";
 const DEFAULT_RUNNER_RELATIVE: &str = "java/iroha_android/run_tests.sh";
 
 fn main() -> Result<()> {
@@ -456,6 +455,10 @@ name = "fallback"
         assert_eq!(entries[1].tests, vec![DEFAULT_TEST]);
         assert_eq!(entries[0].runner, PathBuf::from(DEFAULT_RUNNER_RELATIVE));
         assert_eq!(entries[0].fixture, PathBuf::from(DEFAULT_FIXTURE_RELATIVE));
+        assert_eq!(
+            entries[0].fixture,
+            PathBuf::from("fixtures/norito_rpc/transaction_payloads.json")
+        );
     }
 
     #[test]

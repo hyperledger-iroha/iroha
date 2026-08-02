@@ -165,32 +165,39 @@ HistoricalDiscoveryPacketProducerIdentitySet(packet) ==
 HistoricalDiscoveryPacketCandidateCoveredIdentitySet(packet) ==
   HistoricalDiscoveryPacketCandidateIdentitySet(packet)
     \cup
-  {<<"Candidate", record.identity.payload.causalOrigin>>:
-     record \in AsyncCandidateServiceTombstones,
-     record.identity.payload.causalOrigin
-       \in HistoricalDiscoveryPacketCandidateCausalOriginCarrier(packet)}
+  {<<"Candidate", record.causalOrigin>>:
+     record \in
+       {candidateRecord \in AsyncCandidateServiceTombstones:
+          candidateRecord.causalOrigin
+            \in HistoricalDiscoveryPacketCandidateCausalOriginCarrier(
+                 packet)}}
     \cup
   {<<"Candidate", record.origin>>:
-     record \in AsyncCandidateLifecycleAdmissions,
-     record.origin
-       \in HistoricalDiscoveryPacketCandidateCausalOriginCarrier(packet)}
+     record \in
+       {candidateRecord \in AsyncCandidateLifecycleAdmissions:
+          candidateRecord.origin
+            \in HistoricalDiscoveryPacketCandidateCausalOriginCarrier(
+                 packet)}}
 
 HistoricalDiscoveryPacketServeCoveredIdentitySet(packet) ==
   LET carrier == HistoricalDiscoveryPacketServeIdentityCarrier(packet)
   IN HistoricalDiscoveryPacketServeIdentitySet(packet)
        \cup
      {<<"Serve", reservation.identity>>:
-        reservation \in asyncServeReservations,
-        reservation.identity \in carrier}
+        reservation \in
+          {serveReservation \in asyncServeReservations:
+             serveReservation.identity \in carrier}}
        \cup
      {<<"Serve", tombstone.identity>>:
-        tombstone \in asyncServeTombstones,
-        tombstone.identity \in carrier}
+        tombstone \in
+          {serveTombstone \in asyncServeTombstones:
+             serveTombstone.identity \in carrier}}
        \cup
      UNION {
        {<<"Serve", tombstone.identity>>:
-          tombstone \in reservation.rollbackTombstones,
-          tombstone.identity \in carrier}:
+          tombstone \in
+            {rollbackTombstone \in reservation.rollbackTombstones:
+               rollbackTombstone.identity \in carrier}}:
        reservation \in asyncServeReservations}
 
 HistoricalDiscoveryPacketProducerCoveredIdentitySet(packet) ==
@@ -700,7 +707,7 @@ BY HistoricalDiscoveryTimedOwnerModeCannotIncreaseAfterGst,
        AsyncAllVars
 
 THEOREM AsyncSpecProvidesHistoricalDiscoveryDueNodeModeFairness ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      node \in Responsive,
      clockValue \in Nat,
      sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier,
@@ -723,7 +730,7 @@ BY AsyncSpecAlwaysUsesFixedResponsiveVoters, PTL, Isa
        AsyncSpecAt, AsyncFairnessAt
 
 THEOREM AsyncSpecProvidesHistoricalDiscoveryDueIoModeFairness ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      node \in Responsive,
      clockValue \in Nat,
      sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier,
@@ -746,7 +753,7 @@ BY AsyncSpecAlwaysUsesFixedResponsiveVoters, PTL, Isa
        AsyncSpecAt, AsyncFairnessAt
 
 THEOREM AsyncSpecHistoricalDiscoveryDueNodeModeMakesProgress ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      node \in Responsive,
      clockValue \in Nat,
      sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier,
@@ -818,7 +825,7 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM AsyncSpecHistoricalDiscoveryDueIoModeMakesProgress ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      node \in Responsive,
      clockValue \in Nat,
      sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier,
@@ -886,11 +893,11 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM AsyncSpecHistoricalDiscoveryDueNodeOwnerReachesRankGoal ==
-  \A initialContext,
-     node \in Responsive,
-     clockValue \in Nat,
-     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier,
-     owner:
+  \A owner:
+    \A initialContext \in ContextRecords,
+       node \in Responsive,
+       clockValue \in Nat,
+       sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
     AsyncSpecAt(initialContext)
       => ((HistoricalDiscoveryFixedClockBlockedAtRank(
               node, clockValue, sourceRank)
@@ -948,11 +955,11 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM AsyncSpecHistoricalDiscoveryDueIoOwnerReachesRankGoal ==
-  \A initialContext,
-     node \in Responsive,
-     clockValue \in Nat,
-     sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier,
-     owner:
+  \A owner:
+    \A initialContext \in ContextRecords,
+       node \in Responsive,
+       clockValue \in Nat,
+       sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
     AsyncSpecAt(initialContext)
       => ((HistoricalDiscoveryFixedClockBlockedAtRank(
               node, clockValue, sourceRank)
@@ -1088,7 +1095,7 @@ BY HistoricalDiscoveryFixedClockIngressStrictlyDescends,
        AsyncAllVars
 
 THEOREM AsyncSpecHistoricalDiscoveryTickReachesRankGoal ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      node \in Responsive,
      clockValue \in Nat,
      sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
@@ -1599,7 +1606,7 @@ HistoricalDiscoveryCandidateExactPhysicalRankCarrier ==
 HistoricalDiscoveryCandidateExactPhysicalRank(packet, candidate) ==
   <<HistoricalDiscoveryPacketCandidateOccurrenceDebtRank(packet),
     <<CandidateServiceRank(candidate),
-      AsyncCandidateLifecycleOrdinal(candidate)>>>
+      AsyncCandidateLifecycleOrdinal(candidate)>>>>
 
 HistoricalDiscoveryCandidateFrozenPhysicalCoordinates(
     identity, candidate, occurrenceRank) ==
@@ -3109,10 +3116,9 @@ PROOF
         BY <3>4,
            HistoricalDiscoveryBudgetedFixedClockExitConsumesBudget,
            PTL
-      <3>6. /\ AsyncStrongTypeInvariant
-              /\ HistoricalDiscoveryClockBudgetFrontier(node, budget)
-             =>
-           \E clockValue \in Nat:
+      <3>6. (/\ AsyncStrongTypeInvariant
+              /\ HistoricalDiscoveryClockBudgetFrontier(node, budget))
+             => \E clockValue \in Nat:
              HistoricalDiscoveryFixedClockBudgetedPending(
                node, clockValue, budget)
         BY Isa
@@ -3211,12 +3217,11 @@ PROOF
       <3>2. []AsyncStrongTypeInvariant
         BY <1>1
            DEF HistoricalDiscoveryClockTemporalSupportProperty
-      <3>3. /\ AsyncStrongTypeInvariant
+      <3>3. (/\ AsyncStrongTypeInvariant
               /\ gst
               /\ HistoricalRecoveryTarget(node)
-              /\ ~HistoricalDiscoveryClockProgressGoal(node)
-             =>
-           \E budget \in Nat:
+              /\ ~HistoricalDiscoveryClockProgressGoal(node))
+             => \E budget \in Nat:
              HistoricalDiscoveryClockBudgetFrontier(node, budget)
         BY SMT
            DEF HistoricalDiscoveryClockProgressGoal,

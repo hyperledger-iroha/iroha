@@ -4,8 +4,12 @@
 //! parity checks. Repository-facing command wrappers should delegate here so
 //! every caller exercises the same implementation.
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt as _;
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs,
     fs::File,
     io::{Read, Write},
@@ -226,6 +230,7 @@ fn ensure_safe_owned_path(root: &Path, target: &Path) -> Result<()> {
 }
 
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct SchemaHashManifest {
     version: u32,
     entries: Vec<SchemaHashEntry>,
@@ -257,6 +262,7 @@ impl SchemaHashManifest {
 }
 
 #[derive(Debug, JsonSerialize, JsonDeserialize, PartialEq, Eq)]
+#[norito(deny_unknown_fields)]
 struct SchemaHashEntry {
     type_name: String,
     alias: String,
@@ -494,10 +500,17 @@ pub fn generate_fixtures(options: FixtureOptions) -> Result<()> {
     let rendered = tempdir().context("failed to create private fixture publication tree")?;
     let generated = render_fixture_publication(&resolved.fixtures_json, rendered.path())?;
     let owned_paths = owned_publication_paths(&generated.fixtures)?;
-    preflight_publication(&resolved.output_root, &generated.fixtures, &owned_paths)?;
-    publish_owned_publication(rendered.path(), &resolved.output_root, &owned_paths)?;
-    compare_owned_publication(rendered.path(), &resolved.output_root, &owned_paths)?;
-    verify_all_blob_policies(&resolved.output_root, &generated.fixtures, true)?;
+    let removals = preflight_publication(&resolved.output_root, &generated.fixtures, &owned_paths)?;
+    publish_owned_publication(
+        rendered.path(),
+        &resolved.output_root,
+        &owned_paths,
+        &removals,
+        || {
+            compare_owned_publication(rendered.path(), &resolved.output_root, &owned_paths)?;
+            verify_all_blob_policies(&resolved.output_root, &generated.fixtures, true)
+        },
+    )?;
 
     println!(
         "norito-rpc fixtures regenerated: {} entries written to {}",
@@ -597,9 +610,9 @@ struct RawPayloadFixture {
     name: String,
     payload: RawPayload,
     payload_json: Value,
-    chain_hint: Option<String>,
-    authority_hint: Option<String>,
-    creation_time_ms_hint: Option<u64>,
+    chain_hint: String,
+    authority_hint: String,
+    creation_time_ms_hint: u64,
     ttl_ms_hint: u64,
     nonce_hint: Option<u32>,
 }
@@ -620,7 +633,20 @@ struct RawPayload {
 enum RawExecutable {
     Ivm(Vec<u8>),
     Instructions(Vec<RawInstruction>),
+    ContractCall(ContractInvocation),
     Batch(Vec<RawBatchItem>),
+}
+
+impl RawExecutable {
+    fn requires_transaction_gas_limit(&self) -> bool {
+        match self {
+            Self::Ivm(_) | Self::ContractCall(_) => true,
+            Self::Instructions(_) => false,
+            Self::Batch(items) => items
+                .iter()
+                .any(|item| matches!(item, RawBatchItem::ContractCall(_))),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -661,35 +687,27 @@ struct WireInstructionPayload {
 
 impl RawPayloadFixture {
     fn generate_fixture(&self, keypair: &KeyPair) -> Result<Fixture> {
-        if let Some(chain_hint) = &self.chain_hint
-            && chain_hint != &self.payload.chain
-        {
+        if self.chain_hint != self.payload.chain {
             bail!(
                 "fixture '{}' chain mismatch: expected {}, got {}",
                 self.name,
-                chain_hint,
+                self.chain_hint,
                 self.payload.chain
             );
         }
-        if let Some(authority_hint) = &self.authority_hint {
-            let expected = normalize_authority_hint(authority_hint);
-            let actual = normalize_authority_hint(&self.payload.authority);
-            if expected != actual {
-                bail!(
-                    "fixture '{}' authority mismatch: expected {}, got {}",
-                    self.name,
-                    authority_hint,
-                    self.payload.authority
-                );
-            }
+        if self.authority_hint != self.payload.authority {
+            bail!(
+                "fixture '{}' authority mismatch: expected {}, got {}",
+                self.name,
+                self.authority_hint,
+                self.payload.authority
+            );
         }
-        if let Some(creation_hint) = self.creation_time_ms_hint
-            && creation_hint != self.payload.creation_time_ms
-        {
+        if self.creation_time_ms_hint != self.payload.creation_time_ms {
             bail!(
                 "fixture '{}' creation_time_ms mismatch: expected {}, got {}",
                 self.name,
-                creation_hint,
+                self.creation_time_ms_hint,
                 self.payload.creation_time_ms
             );
         }
@@ -701,13 +719,12 @@ impl RawPayloadFixture {
                 self.payload.ttl_ms
             );
         }
-        if let Some(nonce_hint) = self.nonce_hint
-            && Some(nonce_hint) != self.payload.nonce
-        {
+        if self.nonce_hint != self.payload.nonce {
             bail!(
                 "fixture '{}' nonce mismatch: expected {}, got {:?}",
                 self.name,
-                nonce_hint,
+                self.nonce_hint
+                    .map_or_else(|| "null".to_owned(), |nonce| nonce.to_string()),
                 self.payload.nonce
             );
         }
@@ -802,6 +819,9 @@ impl RawPayload {
                     .collect::<Result<Vec<_>>>()?;
                 builder.with_instructions(instructions)
             }
+            RawExecutable::ContractCall(invocation) => {
+                builder.with_executable(Executable::ContractCall(invocation.clone()))
+            }
             RawExecutable::Batch(raws) => {
                 let items = raws
                     .iter()
@@ -868,7 +888,7 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
         .as_object()
         .ok_or_else(|| eyre!("fixture entries must be objects"))?;
     let name = expect_string(obj, "name")?.to_owned();
-    const ALLOWED_FIELDS: &[&str] = &[
+    const FIELDS: &[&str] = &[
         "name",
         "chain",
         "authority",
@@ -881,10 +901,15 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
         "signed_hash",
         "payload",
     ];
-    for key in obj.keys() {
-        if !ALLOWED_FIELDS.contains(&key.as_str()) {
-            bail!("fixture '{name}' contains unknown top-level field '{key}'");
-        }
+    require_exact_fields(obj, FIELDS, &format!("fixture '{name}'"))?;
+    for field in [
+        "payload_base64",
+        "signed_base64",
+        "payload_hash",
+        "signed_hash",
+    ] {
+        expect_string(obj, field)
+            .with_context(|| format!("invalid generated identity for fixture '{name}'"))?;
     }
     let payload_value = obj
         .get("payload")
@@ -893,12 +918,9 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
     let payload = parse_payload(payload_value)
         .with_context(|| format!("invalid payload for fixture '{name}'"))?;
 
-    let chain_hint = obj.get("chain").and_then(Value::as_str).map(str::to_owned);
-    let authority_hint = obj
-        .get("authority")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let creation_time_ms_hint = obj.get("creation_time_ms").and_then(Value::as_u64);
+    let chain_hint = expect_string(obj, "chain")?.to_owned();
+    let authority_hint = expect_string(obj, "authority")?.to_owned();
+    let creation_time_ms_hint = expect_u64(obj, "creation_time_ms")?;
     let ttl_ms_hint = expect_nonzero_u64(obj, "time_to_live_ms")
         .with_context(|| format!("invalid top-level lifetime for fixture '{name}'"))?;
     let nonce_hint = parse_optional_u32(obj, "nonce")
@@ -920,6 +942,20 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
     let obj = value
         .as_object()
         .ok_or_else(|| eyre!("payload entries must be objects"))?;
+    require_exact_fields(
+        obj,
+        &[
+            "chain",
+            "authority",
+            "creation_time_ms",
+            "executable",
+            "time_to_live_ms",
+            "nonce",
+            "fee_payment",
+            "metadata",
+        ],
+        "payload",
+    )?;
     let chain = expect_string(obj, "chain")?.to_owned();
     let authority = expect_string(obj, "authority")?.to_owned();
     let creation_time_ms = expect_u64(obj, "creation_time_ms")?;
@@ -939,10 +975,15 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
     fee_payment
         .validate()
         .map_err(|err| eyre!(err.to_string()))?;
-    let metadata = match obj.get("metadata") {
-        Some(value) => parse_metadata_object(value)?,
-        None => Vec::new(),
-    };
+    if executable.requires_transaction_gas_limit() && fee_payment.gas_limit().is_none() {
+        bail!(
+            "IVM and contract-call fixture executables require an explicit fee_payment gas_limit"
+        );
+    }
+    let metadata = parse_metadata_object(
+        obj.get("metadata")
+            .expect("exact payload field validation requires metadata"),
+    )?;
 
     Ok(RawPayload {
         chain,
@@ -960,62 +1001,96 @@ fn parse_executable(value: &Value) -> Result<RawExecutable> {
     let obj = value
         .as_object()
         .ok_or_else(|| eyre!("executable must be an object"))?;
-    if let Some(ivm) = obj.get("Ivm") {
-        let bytes = ivm
-            .as_str()
-            .ok_or_else(|| eyre!("Ivm value must be base64 string"))?;
-        let decoded = BASE64
-            .decode(bytes)
-            .with_context(|| format!("failed to decode Ivm base64 for payload {bytes:?}"))?;
-        return Ok(RawExecutable::Ivm(decoded));
+    if obj.len() != 1 {
+        bail!("executable must contain exactly one variant");
     }
-    if let Some(instr) = obj.get("Instructions") {
-        let arr = instr
-            .as_array()
-            .ok_or_else(|| eyre!("Instructions must be an array"))?;
-        let mut entries = Vec::with_capacity(arr.len());
-        for entry in arr {
-            entries.push(parse_instruction(entry)?);
+    let (variant, body) = obj.iter().next().expect("one executable variant");
+    match variant.as_str() {
+        "Ivm" => {
+            let bytes = body
+                .as_str()
+                .ok_or_else(|| eyre!("Ivm value must be base64 string"))?;
+            Ok(RawExecutable::Ivm(decode_canonical_base64(
+                bytes,
+                "Ivm payload",
+            )?))
         }
-        return Ok(RawExecutable::Instructions(entries));
+        "Instructions" => {
+            let arr = body
+                .as_array()
+                .ok_or_else(|| eyre!("Instructions must be an array"))?;
+            let entries = arr
+                .iter()
+                .map(parse_instruction)
+                .collect::<Result<Vec<_>>>()?;
+            Ok(RawExecutable::Instructions(entries))
+        }
+        "ContractCall" => {
+            let invocation = parse_contract_invocation(body, "ContractCall")?;
+            Ok(RawExecutable::ContractCall(invocation))
+        }
+        "Batch" => {
+            let arr = body
+                .as_array()
+                .ok_or_else(|| eyre!("Batch must be an array"))?;
+            if arr.is_empty() {
+                bail!("Batch must contain at least one item");
+            }
+            let mut entries = Vec::with_capacity(arr.len());
+            for entry in arr {
+                let item = entry
+                    .as_object()
+                    .ok_or_else(|| eyre!("Batch items must be externally tagged objects"))?;
+                if item.len() != 1 {
+                    bail!("Batch items must contain exactly one variant");
+                }
+                let (item_variant, item_body) = item.iter().next().expect("one Batch item variant");
+                match item_variant.as_str() {
+                    "Instruction" => {
+                        entries.push(RawBatchItem::Instruction(parse_instruction(item_body)?));
+                    }
+                    "ContractCall" => {
+                        let invocation =
+                            parse_contract_invocation(item_body, "Batch ContractCall")?;
+                        entries.push(RawBatchItem::ContractCall(invocation));
+                    }
+                    _ => bail!("unknown Batch item variant '{item_variant}'"),
+                }
+            }
+            Ok(RawExecutable::Batch(entries))
+        }
+        _ => bail!("unknown executable variant '{variant}'"),
     }
-    if let Some(batch) = obj.get("Batch") {
-        let arr = batch
-            .as_array()
-            .ok_or_else(|| eyre!("Batch must be an array"))?;
-        if arr.is_empty() {
-            bail!("Batch must contain at least one item");
-        }
-        let mut entries = Vec::with_capacity(arr.len());
-        for entry in arr {
-            let item = entry
-                .as_object()
-                .ok_or_else(|| eyre!("Batch items must be externally tagged objects"))?;
-            if item.len() != 1 {
-                bail!("Batch items must contain exactly one variant");
-            }
-            if let Some(instruction) = item.get("Instruction") {
-                entries.push(RawBatchItem::Instruction(parse_instruction(instruction)?));
-                continue;
-            }
-            if let Some(invocation) = item.get("ContractCall") {
-                let invocation = json::from_value::<ContractInvocation>(invocation.clone())
-                    .map_err(|err| eyre!(err.to_string()))
-                    .context("invalid Batch ContractCall")?;
-                entries.push(RawBatchItem::ContractCall(invocation));
-                continue;
-            }
-            bail!("unknown Batch item variant");
-        }
-        return Ok(RawExecutable::Batch(entries));
-    }
-    bail!("unknown executable variant")
+}
+
+fn parse_contract_invocation(value: &Value, label: &str) -> Result<ContractInvocation> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| eyre!("{label} body must be an object"))?;
+    require_exact_fields(
+        object,
+        &[
+            "contract_address",
+            "expected_code_hash",
+            "entrypoint",
+            "arguments",
+        ],
+        &format!("{label} body"),
+    )?;
+    json::from_value::<ContractInvocation>(value.clone())
+        .map_err(|err| eyre!(err.to_string()))
+        .with_context(|| format!("invalid {label}"))
 }
 
 fn parse_instruction(value: &Value) -> Result<RawInstruction> {
     let obj = value
         .as_object()
         .ok_or_else(|| eyre!("instruction entries must be objects"))?;
+    require_exact_fields(
+        obj,
+        &["wire_name", "payload_base64"],
+        "instruction wire payload",
+    )?;
     let wire_name = obj
         .get("wire_name")
         .and_then(Value::as_str)
@@ -1026,9 +1101,7 @@ fn parse_instruction(value: &Value) -> Result<RawInstruction> {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| eyre!("instruction wire payload requires payload_base64"))?;
-    if obj.contains_key("kind") || obj.contains_key("arguments") {
-        bail!("legacy instruction fields are not supported; use wire_name/payload_base64");
-    }
+    decode_canonical_base64(&payload_base64, "instruction payload_base64")?;
     Ok(RawInstruction {
         wire_name,
         payload_base64,
@@ -1061,20 +1134,16 @@ fn build_instruction(raw: &RawInstruction) -> Result<InstructionBox> {
         .with_context(|| format!("failed to decode wire instruction '{}'", raw.wire_name))
 }
 
-fn normalize_authority_hint(authority: &str) -> String {
-    let trimmed = authority.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    AccountId::parse_encoded(trimmed)
-        .map(|parsed| parsed.into_account_id().to_string())
-        .unwrap_or_else(|_| trimmed.to_string())
-}
-
 fn parse_account_id(value: &str) -> Result<AccountId> {
-    AccountId::parse_encoded(value.trim())
+    let account = AccountId::parse_encoded(value)
         .map(|parsed| parsed.into_account_id())
-        .with_context(|| format!("account id '{value}' must be a canonical I105-encoded literal"))
+        .with_context(|| {
+            format!("account id '{value}' must be a canonical I105-encoded literal")
+        })?;
+    if account.to_string() != value {
+        bail!("account id '{value}' must use its exact canonical I105 encoding");
+    }
+    Ok(account)
 }
 
 fn optional_u32_value(value: Option<u32>) -> Value {
@@ -1264,6 +1333,30 @@ fn expect_string<'a>(obj: &'a Map, key: &str) -> Result<&'a str> {
         .ok_or_else(|| eyre!("missing '{key}' string"))
 }
 
+fn require_exact_fields(obj: &Map, expected: &[&str], label: &str) -> Result<()> {
+    for field in expected {
+        if !obj.contains_key(*field) {
+            bail!("{label} is missing required field '{field}'");
+        }
+    }
+    for field in obj.keys() {
+        if !expected.contains(&field.as_str()) {
+            bail!("{label} contains unknown field '{field}'");
+        }
+    }
+    Ok(())
+}
+
+fn decode_canonical_base64(encoded: &str, label: &str) -> Result<Vec<u8>> {
+    let decoded = BASE64
+        .decode(encoded.as_bytes())
+        .with_context(|| format!("{label} is not valid base64"))?;
+    if BASE64.encode(&decoded) != encoded {
+        bail!("{label} must use canonical base64");
+    }
+    Ok(decoded)
+}
+
 fn expect_u64(obj: &Map, key: &str) -> Result<u64> {
     obj.get(key)
         .and_then(Value::as_u64)
@@ -1287,6 +1380,9 @@ fn parse_optional_u32(obj: &Map, key: &str) -> Result<Option<u32>> {
                 .ok_or_else(|| eyre!("'{key}' must be an integer or null"))?;
             let value_u32 = u32::try_from(value)
                 .with_context(|| format!("'{key}' must fit in u32 (got {value})"))?;
+            if value_u32 == 0 {
+                bail!("'{key}' must be greater than zero when present");
+            }
             Ok(Some(value_u32))
         }
         Some(other) => bail!("'{key}' must be an integer or null, got {other:?}"),
@@ -1403,49 +1499,675 @@ fn preflight_publication(
     destination_root: &Path,
     fixtures: &[FixtureEntry],
     owned_paths: &[PathBuf],
-) -> Result<()> {
+) -> Result<Vec<GuardedRemoval>> {
     for relative in owned_paths {
         ensure_safe_owned_path(destination_root, &destination_root.join(relative))?;
     }
-    verify_all_blob_policies(destination_root, fixtures, false)
+    let previous_owned = load_previous_owned_blobs(destination_root)?;
+    plan_retired_publication(destination_root, fixtures, &previous_owned)
 }
 
-fn publish_owned_publication(
-    rendered_root: &Path,
-    destination_root: &Path,
-    owned_paths: &[PathBuf],
-) -> Result<()> {
-    for relative in owned_paths {
-        let source = rendered_root.join(relative);
-        let destination = destination_root.join(relative);
-        ensure_safe_owned_path(destination_root, &destination)?;
-        let bytes = fs::read(&source)
-            .with_context(|| format!("missing rendered fixture output {}", source.display()))?;
-        if destination.is_file() && fs::read(&destination)? == bytes {
-            continue;
-        }
-        let parent = destination
-            .parent()
-            .ok_or_else(|| eyre!("fixture output has no parent: {}", destination.display()))?;
-        ensure_safe_owned_path(destination_root, parent)?;
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-        ensure_safe_owned_path(destination_root, &destination)?;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileIdentity {
+    len: u64,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    change_time_seconds: i64,
+    #[cfg(unix)]
+    change_time_nanoseconds: i64,
+    #[cfg(windows)]
+    volume_serial_number: u32,
+    #[cfg(windows)]
+    file_index: u64,
+    #[cfg(windows)]
+    creation_time: u64,
+    #[cfg(windows)]
+    last_write_time: u64,
+}
 
-        let mut temporary = NamedTempFile::new_in(parent)
-            .with_context(|| format!("failed to stage {}", destination.display()))?;
-        temporary.write_all(&bytes)?;
-        temporary.flush()?;
-        temporary.as_file().sync_all()?;
-        temporary.persist(&destination).map_err(|error| {
+#[derive(Clone, Debug)]
+struct GuardedFile {
+    identity: FileIdentity,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct GuardedRemoval {
+    relative: PathBuf,
+    preimage: GuardedFile,
+}
+
+#[derive(Debug)]
+struct PublicationMutation {
+    relative: PathBuf,
+    preimage: Option<GuardedFile>,
+    postimage: Option<Vec<u8>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AppliedMutation {
+    index: usize,
+    post_identity: Option<FileIdentity>,
+}
+
+fn load_previous_owned_blobs(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
+    let manifest_path = root.join(CANONICAL_MANIFEST);
+    match fs::symlink_metadata(&manifest_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to inspect {}", manifest_path.display()))
+        }
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                bail!(
+                    "previous canonical manifest must be a regular non-symlink file: {}",
+                    manifest_path.display()
+                );
+            }
+            let manifest = Manifest::load(&manifest_path).with_context(|| {
+                format!(
+                    "failed to load previous manifest {}",
+                    manifest_path.display()
+                )
+            })?;
+            let canonical_dir = manifest_path
+                .parent()
+                .expect("canonical manifest has a parent directory");
+            manifest
+                .validate(Some(canonical_dir))
+                .context("previous canonical manifest failed validation")?;
+            manifest
+                .fixtures
+                .iter()
+                .map(|fixture| {
+                    validate_fixture_identity(&fixture.name, &fixture.encoded_file)?;
+                    let relative = PathBuf::from(&fixture.encoded_file);
+                    let bytes = BASE64.decode(fixture.payload_base64.as_bytes()).with_context(|| {
+                        format!(
+                            "failed to decode prior canonical blob {} from the validated manifest",
+                            relative.display()
+                        )
+                    })?;
+                    Ok((relative, bytes))
+                })
+                .collect()
+        }
+    }
+}
+
+fn plan_retired_publication(
+    root: &Path,
+    fixtures: &[FixtureEntry],
+    previous_owned: &BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<Vec<GuardedRemoval>> {
+    let expected: BTreeSet<PathBuf> = fixtures
+        .iter()
+        .map(|fixture| PathBuf::from(&fixture.encoded_file))
+        .collect();
+    let mut directories = vec![(
+        PathBuf::from(CANONICAL_FIXTURE_DIRECTORY),
+        LocalBlobPolicy::Canonical,
+        "canonical",
+    )];
+    directories.extend(SDK_FIXTURE_DIRECTORIES.iter().map(|sdk| {
+        (
+            PathBuf::from(sdk.relative_directory),
+            sdk.local_blobs,
+            sdk.label,
+        )
+    }));
+
+    let mut removals = Vec::new();
+    for (relative_directory, policy, label) in directories {
+        let directory = root.join(&relative_directory);
+        let actual = collect_norito_paths_if_present(&directory)?;
+        for relative in actual {
+            if blob_allowed_by_policy(&relative, &expected, policy) {
+                continue;
+            }
+            let Some(expected_bytes) = previous_owned.get(&relative) else {
+                bail!(
+                    "{label} fixture directory {} contains an unowned Norito blob: {}",
+                    directory.display(),
+                    relative.display()
+                );
+            };
+            let publication_relative = relative_directory.join(&relative);
+            let path = root.join(&publication_relative);
+            ensure_safe_owned_path(root, &path)?;
+            let metadata = fs::symlink_metadata(&path)
+                .with_context(|| format!("failed to inspect retired blob {}", path.display()))?;
+            let identity = file_identity(&metadata, &path)?;
+            let actual_bytes = read_guarded_file(&path, identity)?;
+            if actual_bytes != *expected_bytes {
+                bail!(
+                    "{label} fixture blob {} diverges from its prior canonical owner bytes",
+                    path.display()
+                );
+            }
+            removals.push(GuardedRemoval {
+                relative: publication_relative,
+                preimage: GuardedFile {
+                    identity,
+                    bytes: expected_bytes.clone(),
+                },
+            });
+        }
+    }
+    removals.sort_by(|left, right| left.relative.cmp(&right.relative));
+    Ok(removals)
+}
+
+fn blob_allowed_by_policy(
+    relative: &Path,
+    expected: &BTreeSet<PathBuf>,
+    policy: LocalBlobPolicy,
+) -> bool {
+    match policy {
+        LocalBlobPolicy::None => false,
+        LocalBlobPolicy::Canonical => expected.contains(relative),
+        LocalBlobPolicy::SwiftPrefixed => {
+            relative.parent() == Some(Path::new(""))
+                && relative
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("swift_"))
+        }
+    }
+}
+
+#[cfg(unix)]
+fn file_identity(metadata: &fs::Metadata, path: &Path) -> Result<FileIdentity> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!(
+            "fixture publication preimage must be a regular non-symlink file: {}",
+            path.display()
+        );
+    }
+    if metadata.nlink() != 1 {
+        bail!(
+            "fixture publication preimage must not be hard-linked: {}",
+            path.display()
+        );
+    }
+    Ok(FileIdentity {
+        len: metadata.len(),
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        change_time_seconds: metadata.ctime(),
+        change_time_nanoseconds: metadata.ctime_nsec(),
+    })
+}
+
+#[cfg(windows)]
+fn file_identity(metadata: &fs::Metadata, path: &Path) -> Result<FileIdentity> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!(
+            "fixture publication preimage must be a regular non-symlink file: {}",
+            path.display()
+        );
+    }
+    let links = metadata.number_of_links().ok_or_else(|| {
+        eyre!(
+            "failed to prove hard-link count for fixture publication preimage {}",
+            path.display()
+        )
+    })?;
+    if links != 1 {
+        bail!(
+            "fixture publication preimage must not be hard-linked: {}",
+            path.display()
+        );
+    }
+    Ok(FileIdentity {
+        len: metadata.len(),
+        volume_serial_number: metadata.volume_serial_number().ok_or_else(|| {
             eyre!(
-                "failed to atomically publish {}: {}",
-                destination.display(),
-                error.error
+                "missing volume identity for fixture preimage {}",
+                path.display()
+            )
+        })?,
+        file_index: metadata.file_index().ok_or_else(|| {
+            eyre!(
+                "missing file identity for fixture preimage {}",
+                path.display()
+            )
+        })?,
+        creation_time: metadata.creation_time(),
+        last_write_time: metadata.last_write_time(),
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn file_identity(_metadata: &fs::Metadata, path: &Path) -> Result<FileIdentity> {
+    bail!(
+        "fixture publication is unavailable because file identity cannot be proven on this platform: {}",
+        path.display()
+    )
+}
+
+fn read_guarded_file(path: &Path, expected_identity: FileIdentity) -> Result<Vec<u8>> {
+    let path_identity = file_identity(&fs::symlink_metadata(path)?, path)?;
+    if path_identity != expected_identity {
+        bail!(
+            "fixture publication preimage identity changed: {}",
+            path.display()
+        );
+    }
+    let mut file = File::open(path)
+        .with_context(|| format!("failed to open guarded fixture preimage {}", path.display()))?;
+    let handle_identity = file_identity(&file.metadata()?, path)?;
+    if handle_identity != expected_identity {
+        bail!(
+            "fixture publication preimage handle changed: {}",
+            path.display()
+        );
+    }
+    let mut bytes = Vec::with_capacity(expected_identity.len as usize);
+    file.read_to_end(&mut bytes)?;
+    let final_identity = file_identity(&fs::symlink_metadata(path)?, path)?;
+    if final_identity != expected_identity {
+        bail!(
+            "fixture publication preimage changed while reading: {}",
+            path.display()
+        );
+    }
+    Ok(bytes)
+}
+
+fn capture_optional_guarded_file(path: &Path) -> Result<Option<GuardedFile>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to inspect fixture preimage {}", path.display()));
+        }
+    };
+    let identity = file_identity(&metadata, path)?;
+    let bytes = read_guarded_file(path, identity)?;
+    Ok(Some(GuardedFile { identity, bytes }))
+}
+
+fn verify_preimage(path: &Path, expected: Option<&GuardedFile>) -> Result<()> {
+    match expected {
+        Some(expected) => {
+            let actual = read_guarded_file(path, expected.identity).with_context(|| {
+                format!("fixture publication preimage changed: {}", path.display())
+            })?;
+            if actual != expected.bytes {
+                bail!(
+                    "fixture publication preimage bytes changed: {}",
+                    path.display()
+                );
+            }
+        }
+        None => match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to inspect absent fixture preimage {}",
+                        path.display()
+                    )
+                });
+            }
+            Ok(_) => {
+                bail!(
+                    "fixture publication preimage appeared after planning: {}",
+                    path.display()
+                );
+            }
+        },
+    }
+    Ok(())
+}
+
+fn guarded_remove_with_commit<F>(path: &Path, preimage: &GuardedFile, committed: F) -> Result<()>
+where
+    F: FnOnce(),
+{
+    verify_preimage(path, Some(preimage))?;
+    fs::remove_file(path)
+        .with_context(|| format!("failed to remove guarded fixture {}", path.display()))?;
+    committed();
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to verify removal of fixture {}", path.display())),
+        Ok(_) => bail!(
+            "guarded fixture path reappeared while removing it: {}",
+            path.display()
+        ),
+    }
+}
+
+fn guarded_remove(path: &Path, preimage: &GuardedFile) -> Result<()> {
+    guarded_remove_with_commit(path, preimage, || {})
+}
+
+#[cfg(test)]
+fn remove_retired_publication(root: &Path, removals: &[GuardedRemoval]) -> Result<()> {
+    for removal in removals {
+        let path = root.join(&removal.relative);
+        ensure_safe_owned_path(root, &path)?;
+        guarded_remove(&path, &removal.preimage).with_context(|| {
+            format!(
+                "retired fixture preimage changed before removal: {}",
+                path.display()
             )
         })?;
     }
     Ok(())
+}
+
+fn publication_commit_rank(relative: &Path) -> u8 {
+    if relative == Path::new(CANONICAL_MANIFEST) {
+        return 2;
+    }
+    if relative.file_name() == Some(MANIFEST_BASENAME.as_ref())
+        && SDK_FIXTURE_DIRECTORIES
+            .iter()
+            .any(|sdk| relative.parent() == Some(Path::new(sdk.relative_directory)))
+    {
+        return 1;
+    }
+    0
+}
+
+fn prepare_publication_mutations(
+    rendered_root: &Path,
+    destination_root: &Path,
+    owned_paths: &[PathBuf],
+    removals: &[GuardedRemoval],
+) -> Result<Vec<PublicationMutation>> {
+    let mut planned = BTreeMap::<PathBuf, Option<Vec<u8>>>::new();
+    for relative in owned_paths {
+        let source = rendered_root.join(relative);
+        ensure_safe_owned_path(rendered_root, &source)?;
+        let source = capture_optional_guarded_file(&source)?
+            .ok_or_else(|| eyre!("missing rendered fixture output {}", source.display()))?;
+        if planned
+            .insert(relative.clone(), Some(source.bytes))
+            .is_some()
+        {
+            bail!("duplicate generated fixture output {}", relative.display());
+        }
+    }
+
+    let mut guarded_removals = BTreeMap::new();
+    for removal in removals {
+        if guarded_removals
+            .insert(removal.relative.clone(), removal)
+            .is_some()
+        {
+            bail!(
+                "duplicate retired fixture output {}",
+                removal.relative.display()
+            );
+        }
+        if planned.insert(removal.relative.clone(), None).is_some() {
+            bail!(
+                "fixture output is both generated and retired: {}",
+                removal.relative.display()
+            );
+        }
+    }
+
+    let mut mutations = Vec::with_capacity(planned.len());
+    for (relative, postimage) in planned {
+        let destination = destination_root.join(&relative);
+        ensure_safe_owned_path(destination_root, &destination)?;
+        let preimage = capture_optional_guarded_file(&destination)?;
+        if let Some(removal) = guarded_removals.get(&relative) {
+            let actual = preimage.as_ref().ok_or_else(|| {
+                eyre!(
+                    "retired fixture disappeared after planning: {}",
+                    destination.display()
+                )
+            })?;
+            if actual.identity != removal.preimage.identity
+                || actual.bytes != removal.preimage.bytes
+            {
+                bail!(
+                    "retired fixture preimage changed after planning: {}",
+                    destination.display()
+                );
+            }
+        }
+        if postimage
+            .as_ref()
+            .is_some_and(|bytes| preimage.as_ref().is_some_and(|old| old.bytes == *bytes))
+        {
+            continue;
+        }
+        mutations.push(PublicationMutation {
+            relative,
+            preimage,
+            postimage,
+        });
+    }
+    mutations.sort_by(|left, right| {
+        publication_commit_rank(&left.relative)
+            .cmp(&publication_commit_rank(&right.relative))
+            .then_with(|| left.relative.cmp(&right.relative))
+    });
+    Ok(mutations)
+}
+
+fn atomic_publish_bytes_with_commit<F>(
+    root: &Path,
+    path: &Path,
+    preimage: Option<&GuardedFile>,
+    bytes: &[u8],
+    committed: F,
+) -> Result<FileIdentity>
+where
+    F: FnOnce(FileIdentity),
+{
+    ensure_safe_owned_path(root, path)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre!("fixture output has no parent: {}", path.display()))?;
+    ensure_safe_owned_path(root, parent)?;
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    ensure_safe_owned_path(root, path)?;
+
+    let mut temporary = NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to stage {}", path.display()))?;
+    temporary.write_all(bytes)?;
+    temporary.flush()?;
+    temporary.as_file().sync_all()?;
+
+    verify_preimage(path, preimage)?;
+    ensure_safe_owned_path(root, path)?;
+    let published = temporary.persist(path).map_err(|error| {
+        eyre!(
+            "failed to atomically publish {}: {}",
+            path.display(),
+            error.error
+        )
+    })?;
+    let post_identity = file_identity(&published.metadata()?, path)?;
+    committed(post_identity);
+    let actual = read_guarded_file(path, post_identity)
+        .with_context(|| format!("published fixture identity changed: {}", path.display()))?;
+    if actual != bytes {
+        bail!("published fixture bytes changed: {}", path.display());
+    }
+    Ok(post_identity)
+}
+
+fn atomic_publish_bytes(
+    root: &Path,
+    path: &Path,
+    preimage: Option<&GuardedFile>,
+    bytes: &[u8],
+) -> Result<FileIdentity> {
+    atomic_publish_bytes_with_commit(root, path, preimage, bytes, |_| {})
+}
+
+fn apply_publication_mutation<F>(
+    root: &Path,
+    mutation: &PublicationMutation,
+    committed: F,
+) -> Result<()>
+where
+    F: FnOnce(Option<FileIdentity>),
+{
+    let path = root.join(&mutation.relative);
+    ensure_safe_owned_path(root, &path)?;
+    match &mutation.postimage {
+        Some(bytes) => atomic_publish_bytes_with_commit(
+            root,
+            &path,
+            mutation.preimage.as_ref(),
+            bytes,
+            |identity| committed(Some(identity)),
+        )
+        .map(|_| ()),
+        None => {
+            let preimage = mutation.preimage.as_ref().ok_or_else(|| {
+                eyre!(
+                    "retired fixture has no guarded preimage: {}",
+                    path.display()
+                )
+            })?;
+            guarded_remove_with_commit(&path, preimage, || committed(None))
+        }
+    }
+}
+
+fn rollback_publication_mutation(
+    root: &Path,
+    mutation: &PublicationMutation,
+    applied: AppliedMutation,
+) -> Result<()> {
+    let path = root.join(&mutation.relative);
+    ensure_safe_owned_path(root, &path)?;
+    match (&mutation.postimage, applied.post_identity) {
+        (Some(postimage), Some(post_identity)) => {
+            let published = GuardedFile {
+                identity: post_identity,
+                bytes: postimage.clone(),
+            };
+            match &mutation.preimage {
+                Some(preimage) => {
+                    atomic_publish_bytes(root, &path, Some(&published), &preimage.bytes)?;
+                }
+                None => guarded_remove(&path, &published)?,
+            }
+        }
+        (None, None) => {
+            let preimage = mutation.preimage.as_ref().ok_or_else(|| {
+                eyre!(
+                    "deleted fixture has no rollback preimage: {}",
+                    path.display()
+                )
+            })?;
+            verify_preimage(&path, None)?;
+            atomic_publish_bytes(root, &path, None, &preimage.bytes)?;
+        }
+        _ => bail!(
+            "fixture publication rollback state is inconsistent: {}",
+            path.display()
+        ),
+    }
+    Ok(())
+}
+
+fn rollback_publication_mutations(
+    root: &Path,
+    mutations: &[PublicationMutation],
+    applied: &[AppliedMutation],
+) -> Result<()> {
+    let mut failures = Vec::new();
+    for applied in applied.iter().rev().copied() {
+        if let Err(error) = rollback_publication_mutation(root, &mutations[applied.index], applied)
+        {
+            failures.push(format!(
+                "{}: {error}",
+                mutations[applied.index].relative.display()
+            ));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        bail!(
+            "failed to roll back fixture publication mutations: {}",
+            failures.join("; ")
+        )
+    }
+}
+
+fn execute_publication_mutations<F>(
+    root: &Path,
+    mutations: &[PublicationMutation],
+    failure_after: Option<usize>,
+    validate: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    let mut applied = Vec::with_capacity(mutations.len());
+    let outcome = (|| {
+        for (index, mutation) in mutations.iter().enumerate() {
+            if failure_after == Some(applied.len()) {
+                bail!(
+                    "injected fixture publication failure after {} mutations",
+                    applied.len()
+                );
+            }
+            apply_publication_mutation(root, mutation, |post_identity| {
+                applied.push(AppliedMutation {
+                    index,
+                    post_identity,
+                });
+            })
+            .with_context(|| {
+                format!(
+                    "failed to apply fixture publication mutation {}",
+                    mutation.relative.display()
+                )
+            })?;
+        }
+        if failure_after == Some(applied.len()) {
+            bail!(
+                "injected fixture publication failure after {} mutations",
+                applied.len()
+            );
+        }
+        validate().context("fixture publication validation failed")
+    })();
+
+    match outcome {
+        Ok(()) => Ok(()),
+        Err(error) => match rollback_publication_mutations(root, mutations, &applied) {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(eyre!(
+                "fixture publication transaction failed: {error}; {rollback_error}"
+            )),
+        },
+    }
+}
+
+fn publish_owned_publication<F>(
+    rendered_root: &Path,
+    destination_root: &Path,
+    owned_paths: &[PathBuf],
+    removals: &[GuardedRemoval],
+    validate: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    let mutations =
+        prepare_publication_mutations(rendered_root, destination_root, owned_paths, removals)?;
+    execute_publication_mutations(destination_root, &mutations, None, validate)
 }
 
 fn compare_owned_publication(
@@ -1501,7 +2223,7 @@ fn verify_blob_policy(
     require_canonical_set: bool,
 ) -> Result<()> {
     let actual = collect_norito_paths(directory)?;
-    let expected: HashSet<PathBuf> = fixtures
+    let expected: BTreeSet<PathBuf> = fixtures
         .iter()
         .map(|fixture| PathBuf::from(&fixture.encoded_file))
         .collect();
@@ -1557,20 +2279,27 @@ fn verify_blob_policy(
     Ok(())
 }
 
-fn collect_norito_paths(directory: &Path) -> Result<HashSet<PathBuf>> {
+fn collect_norito_paths(directory: &Path) -> Result<BTreeSet<PathBuf>> {
     if !directory.is_dir() {
         bail!("fixture directory missing: {}", directory.display());
     }
-    let mut found = HashSet::new();
-    let mut pending = vec![directory.to_path_buf()];
-    while let Some(current) = pending.pop() {
-        for entry in fs::read_dir(&current)
+    let mut found = BTreeSet::new();
+    let mut pending = BTreeSet::from([directory.to_path_buf()]);
+    while let Some(current) = pending.pop_first() {
+        let mut entries = fs::read_dir(&current)
             .with_context(|| format!("failed to read {}", current.display()))?
-        {
-            let entry = entry?;
+            .collect::<std::io::Result<Vec<_>>>()?;
+        entries.sort_by_key(fs::DirEntry::file_name);
+        for entry in entries {
             let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                bail!(
+                    "fixture directory must not contain symlinks: {}",
+                    entry.path().display()
+                );
+            }
             if file_type.is_dir() {
-                pending.push(entry.path());
+                pending.insert(entry.path());
                 continue;
             }
             if entry
@@ -1581,9 +2310,9 @@ fn collect_norito_paths(directory: &Path) -> Result<HashSet<PathBuf>> {
             {
                 continue;
             }
-            if file_type.is_symlink() {
+            if !file_type.is_file() {
                 bail!(
-                    "Norito fixture must not be a symlink: {}",
+                    "Norito fixture must be a regular file: {}",
                     entry.path().display()
                 );
             }
@@ -1591,6 +2320,22 @@ fn collect_norito_paths(directory: &Path) -> Result<HashSet<PathBuf>> {
         }
     }
     Ok(found)
+}
+
+fn collect_norito_paths_if_present(directory: &Path) -> Result<BTreeSet<PathBuf>> {
+    match fs::symlink_metadata(directory) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeSet::new()),
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to inspect {}", directory.display()))
+        }
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            bail!(
+                "fixture directory must be a non-symlink directory: {}",
+                directory.display()
+            )
+        }
+        Ok(_) => collect_norito_paths(directory),
+    }
 }
 
 fn manifest_digest(path: &Path, root: &Path) -> Result<ManifestDigestReport> {
@@ -1640,6 +2385,7 @@ fn relative_path(root: &Path, path: &Path) -> String {
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct Manifest {
     fixtures: Vec<FixtureEntry>,
 }
@@ -1647,7 +2393,9 @@ struct Manifest {
 impl Manifest {
     fn load(path: &Path) -> Result<Self> {
         let bytes = fs::read(path)?;
-        Ok(json::from_slice(&bytes)?)
+        let value: Value = json::from_slice(&bytes)?;
+        validate_manifest_shape(&value)?;
+        Ok(json::from_value(value)?)
     }
 
     fn validate(&self, base_dir: Option<&Path>) -> Result<()> {
@@ -1697,7 +2445,45 @@ impl Manifest {
     }
 }
 
+fn validate_manifest_shape(value: &Value) -> Result<()> {
+    let root = value
+        .as_object()
+        .ok_or_else(|| eyre!("fixture manifest root must be an object"))?;
+    require_exact_fields(root, &["fixtures"], "fixture manifest root")?;
+    let fixtures = root
+        .get("fixtures")
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre!("fixture manifest field 'fixtures' must be an array"))?;
+    const ENTRY_FIELDS: &[&str] = &[
+        "name",
+        "authority",
+        "chain",
+        "creation_time_ms",
+        "encoded_file",
+        "encoded_len",
+        "signed_len",
+        "payload_base64",
+        "payload_hash",
+        "signed_base64",
+        "signed_hash",
+        "nonce",
+        "time_to_live_ms",
+    ];
+    for (index, fixture) in fixtures.iter().enumerate() {
+        let object = fixture
+            .as_object()
+            .ok_or_else(|| eyre!("fixture manifest entry {index} must be an object"))?;
+        require_exact_fields(
+            object,
+            ENTRY_FIELDS,
+            &format!("fixture manifest entry {index}"),
+        )?;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct FixtureEntry {
     name: String,
     authority: String,
@@ -1710,7 +2496,6 @@ struct FixtureEntry {
     payload_hash: String,
     signed_base64: String,
     signed_hash: String,
-    #[norito(default)]
     nonce: Option<u32>,
     time_to_live_ms: u64,
 }
@@ -1979,6 +2764,66 @@ mod tests {
     }
 
     #[test]
+    fn canonical_manifest_schema_is_closed_and_nonce_is_explicit() {
+        let canonical = json::to_value(&sample_manifest()).expect("serialize sample manifest");
+        validate_manifest_shape(&canonical).expect("canonical manifest shape");
+
+        let mut unknown_root = canonical.clone();
+        unknown_root
+            .as_object_mut()
+            .expect("manifest root object")
+            .insert("legacy_schema".to_owned(), Value::Null);
+        let error = validate_manifest_shape(&unknown_root)
+            .expect_err("unknown manifest root fields must fail closed");
+        assert!(error.to_string().contains("unknown field 'legacy_schema'"));
+
+        let mut missing_nonce = canonical.clone();
+        missing_nonce
+            .as_object_mut()
+            .and_then(|root| root.get_mut("fixtures"))
+            .and_then(Value::as_array_mut)
+            .and_then(|fixtures| fixtures.first_mut())
+            .and_then(Value::as_object_mut)
+            .expect("first manifest entry")
+            .remove("nonce");
+        let error = validate_manifest_shape(&missing_nonce)
+            .expect_err("manifest nonce must be present even when null");
+        assert!(error.to_string().contains("missing required field 'nonce'"));
+
+        let mut unknown_entry = canonical;
+        unknown_entry
+            .as_object_mut()
+            .and_then(|root| root.get_mut("fixtures"))
+            .and_then(Value::as_array_mut)
+            .and_then(|fixtures| fixtures.first_mut())
+            .and_then(Value::as_object_mut)
+            .expect("first manifest entry")
+            .insert("encoded".to_owned(), Value::String("legacy".to_owned()));
+        let error = validate_manifest_shape(&unknown_entry)
+            .expect_err("unknown manifest entry fields must fail closed");
+        assert!(error.to_string().contains("unknown field 'encoded'"));
+    }
+
+    fn canonical_descriptor_fixture(name: &str) -> Value {
+        let source = fs::read_to_string(workspace_root().join(CANONICAL_PAYLOADS))
+            .expect("canonical payload descriptor");
+        let descriptor: Value = json::from_str(&source).expect("canonical payload descriptor JSON");
+        descriptor
+            .as_array()
+            .expect("fixture descriptor array")
+            .iter()
+            .find(|entry| {
+                entry
+                    .as_object()
+                    .and_then(|object| object.get("name"))
+                    .and_then(Value::as_str)
+                    == Some(name)
+            })
+            .unwrap_or_else(|| panic!("canonical fixture {name:?}"))
+            .clone()
+    }
+
+    #[test]
     fn mixed_batch_fixture_parser_preserves_item_order() {
         let mut instruction = Map::new();
         instruction.insert(
@@ -2185,6 +3030,223 @@ mod tests {
     }
 
     #[test]
+    fn retired_fixture_publication_prunes_only_previous_owner_blobs() {
+        let temp = tempdir().expect("fixture publication root");
+        let root = temp.path();
+        let canonical = PathBuf::from(CANONICAL_FIXTURE_DIRECTORY);
+        let java = PathBuf::from("java/iroha_android/src/test/resources");
+        let python = PathBuf::from("python/iroha_python/tests/fixtures");
+        let swift = PathBuf::from("IrohaSwift/Fixtures");
+        for directory in [&canonical, &java, &python, &swift] {
+            fs::create_dir_all(root.join(directory)).expect("create fixture directory");
+            for name in ["active.norito", "retired.norito"] {
+                fs::write(root.join(directory).join(name), name.as_bytes())
+                    .expect("write prior-owner blob");
+            }
+        }
+        fs::write(root.join(&swift).join("swift_owned.norito"), b"swift")
+            .expect("write Swift-owned blob");
+
+        let previous_owned = [
+            (PathBuf::from("active.norito"), b"active.norito".to_vec()),
+            (PathBuf::from("retired.norito"), b"retired.norito".to_vec()),
+        ]
+        .into_iter()
+        .collect();
+        let removals = plan_retired_publication(root, &[fixture("active")], &previous_owned)
+            .expect("plan guarded retirement");
+        assert_eq!(removals.len(), 6);
+        remove_retired_publication(root, &removals).expect("remove guarded retired blobs");
+
+        assert!(root.join(&canonical).join("active.norito").is_file());
+        assert!(root.join(&java).join("active.norito").is_file());
+        for directory in [&canonical, &java, &python, &swift] {
+            assert!(!root.join(directory).join("retired.norito").exists());
+        }
+        assert!(!root.join(&python).join("active.norito").exists());
+        assert!(!root.join(&swift).join("active.norito").exists());
+        assert!(root.join(&swift).join("swift_owned.norito").is_file());
+    }
+
+    #[test]
+    fn retired_fixture_publication_rejects_unknown_or_changed_blobs() {
+        let temp = tempdir().expect("fixture publication root");
+        let root = temp.path();
+        let canonical = root.join(CANONICAL_FIXTURE_DIRECTORY);
+        fs::create_dir_all(&canonical).expect("create canonical fixture directory");
+        fs::write(canonical.join("unknown.norito"), b"unknown").expect("write unknown blob");
+        let error = plan_retired_publication(root, &[], &BTreeMap::new())
+            .expect_err("unknown blobs must fail closed");
+        assert!(error.to_string().contains("unowned Norito blob"));
+
+        fs::remove_file(canonical.join("unknown.norito")).expect("remove unknown test blob");
+        let python = root.join("python/iroha_python/tests/fixtures");
+        fs::create_dir_all(&python).expect("create Python fixture directory");
+        fs::write(python.join("retired.norito"), b"diverged")
+            .expect("write divergent same-name mirror");
+        let previous_owned = [(PathBuf::from("retired.norito"), b"before".to_vec())]
+            .into_iter()
+            .collect();
+        let error = plan_retired_publication(root, &[], &previous_owned)
+            .expect_err("divergent same-name mirrors must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("diverges from its prior canonical owner bytes")
+        );
+        assert!(python.join("retired.norito").is_file());
+        fs::remove_file(python.join("retired.norito")).expect("remove divergent test blob");
+
+        fs::write(canonical.join("retired.norito"), b"before").expect("write retired blob");
+        let previous_owned = [(PathBuf::from("retired.norito"), b"before".to_vec())]
+            .into_iter()
+            .collect();
+        let removals =
+            plan_retired_publication(root, &[], &previous_owned).expect("plan guarded retirement");
+        fs::write(canonical.join("retired.norito"), b"after").expect("simulate concurrent drift");
+        let error = remove_retired_publication(root, &removals)
+            .expect_err("changed destructive preimage must fail closed");
+        assert!(error.to_string().contains("preimage changed"));
+        assert!(canonical.join("retired.norito").is_file());
+    }
+
+    #[test]
+    fn retired_fixture_publication_rejects_same_byte_replacement() {
+        let temp = tempdir().expect("fixture publication root");
+        let root = temp.path();
+        let canonical = root.join(CANONICAL_FIXTURE_DIRECTORY);
+        fs::create_dir_all(&canonical).expect("create canonical fixture directory");
+        let retired = canonical.join("retired.norito");
+        fs::write(&retired, b"same bytes").expect("write retired blob");
+        let previous_owned = [(PathBuf::from("retired.norito"), b"same bytes".to_vec())]
+            .into_iter()
+            .collect();
+        let removals =
+            plan_retired_publication(root, &[], &previous_owned).expect("plan guarded retirement");
+
+        let displaced = canonical.join("retired.preimage");
+        fs::rename(&retired, &displaced).expect("preserve original inode");
+        fs::write(&retired, b"same bytes").expect("write same-byte replacement");
+        let error = remove_retired_publication(root, &removals)
+            .expect_err("same-byte replacement must fail the identity guard");
+        assert!(error.to_string().contains("preimage changed"));
+        assert_eq!(
+            fs::read(&retired).expect("replacement remains present"),
+            b"same bytes"
+        );
+    }
+
+    #[test]
+    fn publication_transaction_rolls_back_injected_failure_and_is_retry_safe() {
+        let rendered = tempdir().expect("rendered publication root");
+        let destination = tempdir().expect("destination publication root");
+        let canonical = PathBuf::from(CANONICAL_FIXTURE_DIRECTORY);
+        let alpha = canonical.join("alpha.norito");
+        let retired = canonical.join("retired.norito");
+        let manifest = PathBuf::from(CANONICAL_MANIFEST);
+        let sdk_manifest =
+            PathBuf::from(SDK_FIXTURE_DIRECTORIES[0].relative_directory).join(MANIFEST_BASENAME);
+        for root in [rendered.path(), destination.path()] {
+            fs::create_dir_all(root.join(&canonical)).expect("create canonical fixture directory");
+            fs::create_dir_all(root.join(sdk_manifest.parent().expect("SDK manifest parent")))
+                .expect("create SDK fixture directory");
+        }
+        fs::write(rendered.path().join(&alpha), b"new alpha").expect("write rendered alpha");
+        fs::write(rendered.path().join(&sdk_manifest), b"new SDK manifest")
+            .expect("write rendered SDK manifest");
+        fs::write(rendered.path().join(&manifest), b"new manifest")
+            .expect("write rendered manifest");
+        fs::write(destination.path().join(&alpha), b"old alpha").expect("write published alpha");
+        fs::write(destination.path().join(&retired), b"old retired")
+            .expect("write published retired fixture");
+        fs::write(destination.path().join(&sdk_manifest), b"old SDK manifest")
+            .expect("write published SDK manifest");
+        fs::write(destination.path().join(&manifest), b"old manifest")
+            .expect("write published manifest");
+
+        let removal = GuardedRemoval {
+            relative: retired.clone(),
+            preimage: capture_optional_guarded_file(&destination.path().join(&retired))
+                .expect("capture retired fixture")
+                .expect("retired fixture exists"),
+        };
+        let owned = vec![manifest.clone(), sdk_manifest.clone(), alpha.clone()];
+        let removals = vec![removal];
+        let mutations =
+            prepare_publication_mutations(rendered.path(), destination.path(), &owned, &removals)
+                .expect("prepare publication transaction");
+        assert_eq!(
+            mutations
+                .iter()
+                .map(|mutation| mutation.relative.as_path())
+                .collect::<Vec<_>>(),
+            vec![
+                alpha.as_path(),
+                retired.as_path(),
+                sdk_manifest.as_path(),
+                manifest.as_path(),
+            ],
+            "ordinary mutations and SDK manifests precede the canonical manifest commit"
+        );
+
+        let error =
+            execute_publication_mutations(destination.path(), &mutations, Some(3), || Ok(()))
+                .expect_err("injected failure must abort publication");
+        assert!(
+            error
+                .to_string()
+                .contains("injected fixture publication failure")
+        );
+        assert_eq!(
+            fs::read(destination.path().join(&alpha)).expect("alpha restored"),
+            b"old alpha"
+        );
+        assert_eq!(
+            fs::read(destination.path().join(&retired)).expect("retired fixture restored"),
+            b"old retired"
+        );
+        assert_eq!(
+            fs::read(destination.path().join(&sdk_manifest)).expect("SDK manifest restored"),
+            b"old SDK manifest"
+        );
+        assert_eq!(
+            fs::read(destination.path().join(&manifest)).expect("manifest preserved"),
+            b"old manifest"
+        );
+
+        let removal = GuardedRemoval {
+            relative: retired.clone(),
+            preimage: capture_optional_guarded_file(&destination.path().join(&retired))
+                .expect("recapture retired fixture")
+                .expect("restored retired fixture exists"),
+        };
+        let retry =
+            prepare_publication_mutations(rendered.path(), destination.path(), &owned, &[removal])
+                .expect("re-prepare publication after rollback");
+        execute_publication_mutations(destination.path(), &retry, None, || {
+            compare_owned_publication(rendered.path(), destination.path(), &owned)?;
+            if destination.path().join(&retired).exists() {
+                bail!("retired fixture remains after publication");
+            }
+            Ok(())
+        })
+        .expect("retry publication succeeds");
+        assert_eq!(
+            fs::read(destination.path().join(&alpha)).expect("alpha published"),
+            b"new alpha"
+        );
+        assert!(!destination.path().join(&retired).exists());
+        assert_eq!(
+            fs::read(destination.path().join(&sdk_manifest)).expect("SDK manifest published"),
+            b"new SDK manifest"
+        );
+        assert_eq!(
+            fs::read(destination.path().join(&manifest)).expect("manifest published"),
+            b"new manifest"
+        );
+    }
+
+    #[test]
     fn manifest_validation_rejects_renamed_cloned_payloads() {
         let first = fixture("alpha");
         let mut second = fixture("beta");
@@ -2338,11 +3400,11 @@ mod tests {
                 metadata: Vec::new(),
             },
             payload_json: Value::Null,
-            chain_hint: None,
-            authority_hint: None,
-            creation_time_ms_hint: None,
+            chain_hint: "00000001".to_owned(),
+            authority_hint: account_id.to_string(),
+            creation_time_ms_hint: 1_735_000_000_000,
             ttl_ms_hint: 60_000,
-            nonce_hint: None,
+            nonce_hint: Some(1),
         };
 
         let fixture = raw
@@ -2404,6 +3466,307 @@ mod tests {
     }
 
     #[test]
+    fn payload_descriptor_rejects_the_encoded_alias() {
+        let mut fixture = canonical_descriptor_fixture("typed_fee_payment_gas_limit");
+        let entry = fixture
+            .as_object_mut()
+            .expect("typed runtime fixture descriptor");
+        entry.remove("encoded");
+        parse_payload_fixture(&Value::Object(entry.clone()))
+            .expect("canonical fields without alias parse");
+        let encoded = entry
+            .get("payload_base64")
+            .expect("canonical payload_base64")
+            .clone();
+        entry.insert("encoded".to_owned(), encoded);
+        let Err(error) = parse_payload_fixture(&Value::Object(entry.clone())) else {
+            panic!("encoded alias must be rejected");
+        };
+        assert!(
+            error.to_string().contains("unknown field 'encoded'"),
+            "unexpected alias error: {error}"
+        );
+    }
+
+    #[test]
+    fn payload_descriptor_requires_exact_top_level_and_payload_fields() {
+        let mut fixture = canonical_descriptor_fixture("typed_fee_payment_gas_limit");
+        let entry = fixture
+            .as_object_mut()
+            .expect("fixture descriptor entry is an object");
+        entry.remove("encoded");
+
+        let mut unknown_top_level = entry.clone();
+        unknown_top_level.insert("legacy_hint".to_owned(), Value::Null);
+        let Err(error) = parse_payload_fixture(&Value::Object(unknown_top_level)) else {
+            panic!("unknown top-level fields must fail closed");
+        };
+        assert!(error.to_string().contains("unknown field 'legacy_hint'"));
+
+        let mut missing_top_level = entry.clone();
+        missing_top_level.remove("chain");
+        let Err(error) = parse_payload_fixture(&Value::Object(missing_top_level)) else {
+            panic!("missing top-level identity fields must fail closed");
+        };
+        assert!(error.to_string().contains("missing required field 'chain'"));
+
+        let mut unknown_payload = entry
+            .get("payload")
+            .and_then(Value::as_object)
+            .expect("nested payload object")
+            .clone();
+        unknown_payload.insert("legacy_metadata".to_owned(), Value::Null);
+        let Err(error) = parse_payload(&Value::Object(unknown_payload)) else {
+            panic!("unknown payload fields must fail closed");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field 'legacy_metadata'")
+        );
+
+        let mut missing_payload = entry
+            .get("payload")
+            .and_then(Value::as_object)
+            .expect("nested payload object")
+            .clone();
+        missing_payload.remove("metadata");
+        let Err(error) = parse_payload(&Value::Object(missing_payload)) else {
+            panic!("metadata must be explicit");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("missing required field 'metadata'")
+        );
+    }
+
+    #[test]
+    fn executable_and_instruction_objects_are_closed_and_unambiguous() {
+        let mut ambiguous = Map::new();
+        ambiguous.insert("Ivm".to_owned(), Value::String("AA==".to_owned()));
+        ambiguous.insert("Instructions".to_owned(), Value::Array(Vec::new()));
+        let Err(error) = parse_executable(&Value::Object(ambiguous)) else {
+            panic!("multiple executable variants must fail closed");
+        };
+        assert!(error.to_string().contains("exactly one variant"));
+
+        let mut unknown = Map::new();
+        unknown.insert("Legacy".to_owned(), Value::Null);
+        let Err(error) = parse_executable(&Value::Object(unknown)) else {
+            panic!("unknown executable variants must fail closed");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("unknown executable variant 'Legacy'")
+        );
+
+        let mut instruction = Map::new();
+        instruction.insert(
+            "wire_name".to_owned(),
+            Value::String("iroha.log".to_owned()),
+        );
+        instruction.insert(
+            "payload_base64".to_owned(),
+            Value::String("AA==".to_owned()),
+        );
+        instruction.insert("kind".to_owned(), Value::String("legacy".to_owned()));
+        let Err(error) = parse_instruction(&Value::Object(instruction)) else {
+            panic!("unknown instruction fields must fail closed");
+        };
+        assert!(error.to_string().contains("unknown field 'kind'"));
+    }
+
+    #[test]
+    fn direct_contract_call_is_supported_and_requires_signed_gas() {
+        let fixture = canonical_descriptor_fixture("mixed_executable_batch");
+        let mut payload = fixture
+            .as_object()
+            .and_then(|object| object.get("payload"))
+            .expect("mixed fixture payload")
+            .clone();
+        let invocation = payload
+            .as_object()
+            .and_then(|object| object.get("executable"))
+            .and_then(Value::as_object)
+            .and_then(|object| object.get("Batch"))
+            .and_then(Value::as_array)
+            .and_then(|items| items.get(1))
+            .and_then(Value::as_object)
+            .and_then(|item| item.get("ContractCall"))
+            .expect("mixed fixture contract call")
+            .clone();
+
+        let mut unknown_invocation = invocation.clone();
+        unknown_invocation
+            .as_object_mut()
+            .expect("contract invocation object")
+            .insert("legacy_gas_limit".to_owned(), Value::from(1_u64));
+        let mut unknown_executable = Map::new();
+        unknown_executable.insert("ContractCall".to_owned(), unknown_invocation);
+        let error = parse_executable(&Value::Object(unknown_executable))
+            .err()
+            .expect("unknown ContractCall fields must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field 'legacy_gas_limit'")
+        );
+
+        let mut missing_invocation = invocation.clone();
+        missing_invocation
+            .as_object_mut()
+            .expect("contract invocation object")
+            .remove("arguments");
+        let mut missing_executable = Map::new();
+        missing_executable.insert("ContractCall".to_owned(), missing_invocation);
+        let error = parse_executable(&Value::Object(missing_executable))
+            .err()
+            .expect("every ContractCall field must be explicit");
+        assert!(
+            error
+                .to_string()
+                .contains("missing required field 'arguments'")
+        );
+
+        let mut executable = Map::new();
+        executable.insert("ContractCall".to_owned(), invocation);
+        payload
+            .as_object_mut()
+            .expect("payload object")
+            .insert("executable".to_owned(), Value::Object(executable));
+
+        let parsed = parse_payload(&payload).expect("direct contract call fixture parses");
+        assert!(matches!(parsed.executable, RawExecutable::ContractCall(_)));
+        assert!(parsed.executable.requires_transaction_gas_limit());
+
+        payload
+            .as_object_mut()
+            .and_then(|object| object.get_mut("fee_payment"))
+            .and_then(Value::as_object_mut)
+            .and_then(|object| object.get_mut("value"))
+            .and_then(Value::as_object_mut)
+            .expect("authority fee payment")
+            .remove("gas_limit");
+        let Err(error) = parse_payload(&payload) else {
+            panic!("gasless direct contract calls must fail closed");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("require an explicit fee_payment gas_limit")
+        );
+    }
+
+    #[test]
+    fn runtime_executable_fixtures_require_signed_gas_bounds() {
+        for name in ["typed_fee_payment_gas_limit", "mixed_executable_batch"] {
+            let fixture = canonical_descriptor_fixture(name);
+            let mut payload = fixture
+                .as_object()
+                .and_then(|object| object.get("payload"))
+                .expect("fixture payload")
+                .clone();
+            payload
+                .as_object_mut()
+                .and_then(|object| object.get_mut("fee_payment"))
+                .and_then(Value::as_object_mut)
+                .and_then(|object| object.get_mut("value"))
+                .and_then(Value::as_object_mut)
+                .expect("authority fee payment")
+                .remove("gas_limit");
+
+            let Err(error) = parse_payload(&payload) else {
+                panic!("gasless runtime fixture {name:?} must be rejected");
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("require an explicit fee_payment gas_limit"),
+                "unexpected gas-bound error for {name:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_runtime_fixture_is_active_and_exactly_gas_bounded() {
+        let source = fs::read_to_string(workspace_root().join(CANONICAL_PAYLOADS))
+            .expect("canonical payload descriptor");
+        let descriptor: Value = json::from_str(&source).expect("canonical payload descriptor JSON");
+        assert!(
+            descriptor
+                .as_array()
+                .expect("fixture descriptor array")
+                .iter()
+                .all(|entry| {
+                    entry
+                        .as_object()
+                        .and_then(|object| object.get("name"))
+                        .and_then(Value::as_str)
+                        != Some("ivm_transfer")
+                }),
+            "the gasless compatibility-only ivm_transfer fixture must be absent"
+        );
+
+        let fixture = canonical_descriptor_fixture("typed_fee_payment_gas_limit");
+        let payload = fixture
+            .as_object()
+            .and_then(|object| object.get("payload"))
+            .and_then(Value::as_object)
+            .expect("typed runtime payload");
+        assert!(
+            payload
+                .get("executable")
+                .and_then(Value::as_object)
+                .is_some_and(|object| object.contains_key("Ivm")),
+            "typed fee-payment fixture must exercise IVM admission"
+        );
+        let fee_payment = payload
+            .get("fee_payment")
+            .and_then(Value::as_object)
+            .expect("typed authority fee payment");
+        assert_eq!(
+            fee_payment.get("payer").and_then(Value::as_str),
+            Some("authority")
+        );
+        let payment = fee_payment
+            .get("value")
+            .and_then(Value::as_object)
+            .expect("typed fee payment value");
+        assert_eq!(payment.get("gas_limit").and_then(Value::as_u64), Some(1000));
+        let limits = payment
+            .get("charge_limits")
+            .and_then(Value::as_array)
+            .expect("typed charge limits");
+        assert_eq!(limits.len(), 1);
+        let limit = limits[0].as_object().expect("typed charge limit");
+        assert_eq!(
+            limit.get("asset_definition_id").and_then(Value::as_str),
+            Some("7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
+        );
+        assert_eq!(
+            limit.get("max_amount").and_then(Value::as_str),
+            Some("1000")
+        );
+        assert_eq!(
+            limit
+                .get("kind")
+                .and_then(Value::as_object)
+                .and_then(|kind| kind.get("kind"))
+                .and_then(Value::as_str),
+            Some("pipeline_gas")
+        );
+        assert!(
+            payload
+                .get("metadata")
+                .and_then(Value::as_object)
+                .is_some_and(|metadata| !metadata.contains_key("gas_limit")),
+            "gas authorization must be signed in fee_payment, not legacy metadata"
+        );
+    }
+
+    #[test]
     fn fixture_manifest_requires_explicit_ttl() {
         let manifest = Manifest {
             fixtures: vec![fixture("required-ttl")],
@@ -2439,7 +3802,7 @@ mod tests {
             .expect("fixture manifest entry")
             .insert("time_to_live_ms".to_owned(), Value::from(0_u64));
         let zero_manifest: Manifest = json::from_value(zero).expect("zero is structurally numeric");
-        zero_manifest
+        let _ = zero_manifest
             .validate(None)
             .expect_err("zero fixture lifetime must be rejected");
     }

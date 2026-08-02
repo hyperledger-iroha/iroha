@@ -25,7 +25,7 @@ def _write_executable(path: Path, payload: str) -> Path:
 def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, str]:
     binaries = tmp_path / "binaries"
     binaries.mkdir()
-    for name in ("iroha2d", "iroha2", "kagami"):
+    for name in ("irohad", "iroha", "kagami", "attachment_sanitizer"):
         _write_executable(
             binaries / name,
             f"#!/bin/sh\nprintf '%s\\n' {name}\n",
@@ -209,7 +209,7 @@ def test_bundle_rejects_compressor_path_replacement_during_launch(
 
 def test_bundle_rejects_hardlinked_prebuilt_binary(tmp_path: Path) -> None:
     binaries, config, zstd, digest = _fixture(tmp_path)
-    os.link(binaries / "iroha2", tmp_path / "binary-hardlink")
+    os.link(binaries / "iroha", tmp_path / "binary-hardlink")
     result = _run(tmp_path / "out", binaries, config, zstd, digest)
     assert result.returncode != 0
     assert "exactly one hard link" in result.stderr

@@ -177,7 +177,7 @@ automation can capture the JSON payload. Optionally set
 Prometheus snapshots for every peer. The helper script
 `scripts/run_sumeragi_da.py` enables the knob automatically for nightly runs and
 now also writes a `sumeragi-da-report.md` by invoking `cargo run -p
-build-support --bin sumeragi_da_report` against the collected artifacts. The
+build-support --features dev-tools --bin sumeragi_da_report` against the collected artifacts. The
 scheduled workflow `.github/workflows/sumeragi-da-nightly.yml` uploads the
 entire run directory (summaries, metrics, Markdown report) so operators can
 inspect results directly from GitHub Actions.
@@ -227,7 +227,7 @@ Operators should alert if delivery latency approaches the harness budget, if
 throughput dips below the computed floor for the configured payload, or if
 per-peer counters diverge (indicating throttled collectors or missing chunks).
 
-The helper `cargo run -p build-support --bin sumeragi_da_report [ARTIFACT_DIR]`
+The helper `cargo run -p build-support --features dev-tools --bin sumeragi_da_report [ARTIFACT_DIR]`
 now ingests the `.summary.json` artifacts emitted by these scenarios and
 produces a Markdown report containing aggregated latencies, throughput, and
 per-run snapshots. Pass the artifact directory as the CLI argument (or set

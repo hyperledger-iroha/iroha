@@ -386,7 +386,7 @@ Required before rollout:
 - End-to-end tests from usage events through statement finalization and acknowledgement.
 - Serialization and fixture tests for all statement, feed, decision, and adjustment payloads.
 - Implemented locally as a generated fixture suite:
-  `cargo run -p sorafs_manifest --bin generate_hedging_fixtures` emits the
+  `cargo run -p sorafs_manifest --features dev-tools --bin generate_hedging_fixtures` emits the
   target positive and negative SFM-5 `.to`/`.json` fixture set documented in
   `fixtures/sorafs_manifest/hedging/README.md`. The target file inventory and
   validator commands are pinned in

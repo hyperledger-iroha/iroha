@@ -531,7 +531,7 @@ run_cargo build --locked --workspace
 export_if_unset IROHA_TEST_SKIP_BUILD 1
 export_if_unset IROHA_TEST_TARGET_DIR "${target_root}"
 
-if irohad_bin="$(resolve_existing_binary "${target_root}" "iroha3d")"; then
+if irohad_bin="$(resolve_existing_binary "${target_root}" "irohad")"; then
     export_if_unset TEST_NETWORK_BIN_IROHAD "${irohad_bin}"
 fi
 if iroha_bin="$(resolve_existing_binary "${target_root}" "iroha")"; then

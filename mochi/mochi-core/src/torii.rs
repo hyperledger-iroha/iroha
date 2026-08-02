@@ -40,9 +40,9 @@ use iroha_data_model::{
     isi::{SetKeyValue, SetParameter},
     nexus::{LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1},
     parameter::Parameter,
-    prelude::{ChainId, DomainId},
+    prelude::ChainId,
     query::{QueryOutput, SignedQuery},
-    transaction::{SignedTransaction, TransactionBuilder},
+    transaction::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
 use iroha_primitives::json::Json;
 use iroha_telemetry::metrics::Status as TelemetryStatus;
@@ -105,6 +105,12 @@ pub enum ToriiError {
         reject_code: Option<String>,
         /// Optional error message decoded from the response body.
         message: Option<String>,
+    },
+    /// Torii throttled the request and may have supplied a retry delay.
+    #[error("Torii request was rate limited")]
+    RateLimited {
+        /// Server-provided `Retry-After` delay, when it was a valid delta in seconds.
+        retry_after: Option<Duration>,
     },
     /// Builder received an invalid header value.
     #[error("invalid HTTP header `{name}`: {source}")]
@@ -249,6 +255,17 @@ impl ToriiError {
                 info.reject_code = reject_code.clone();
                 info
             }
+            Self::RateLimited { retry_after } => {
+                let detail = retry_after.map_or_else(
+                    || "HTTP 429 without a valid Retry-After hint".to_owned(),
+                    |delay| format!("HTTP 429; retry after {delay:?}"),
+                );
+                ToriiErrorInfo::with_detail(
+                    ToriiErrorKind::UnexpectedStatus,
+                    "Torii request was rate limited",
+                    detail,
+                )
+            }
             Self::InvalidHeader { name, source } => ToriiErrorInfo::with_detail(
                 ToriiErrorKind::InvalidHeader,
                 format!("Invalid HTTP header `{name}`"),
@@ -309,6 +326,15 @@ impl ToriiError {
             )
         )
     }
+
+    /// Return the server-provided retry delay for a throttled request.
+    #[must_use]
+    pub const fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::RateLimited { retry_after } => *retry_after,
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, norito::NoritoDeserialize, norito::NoritoSerialize)]
@@ -333,6 +359,39 @@ fn reject_code_from_headers(headers: &HeaderMap) -> Option<String> {
         .or_else(|| headers.get("x-iroha-axt-code"))
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
+}
+
+fn retry_after_from_headers(headers: &HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+}
+
+fn response_status_error(response: &reqwest::Response) -> ToriiError {
+    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+        ToriiError::RateLimited {
+            retry_after: retry_after_from_headers(response.headers()),
+        }
+    } else {
+        ToriiError::UnexpectedStatus {
+            status: response.status(),
+            reject_code: reject_code_from_headers(response.headers()),
+            message: None,
+        }
+    }
+}
+
+fn websocket_connect_error(error: WebSocketError) -> ToriiError {
+    match error {
+        WebSocketError::Http(response) if response.status() == StatusCode::TOO_MANY_REQUESTS => {
+            ToriiError::RateLimited {
+                retry_after: retry_after_from_headers(response.headers()),
+            }
+        }
+        other => ToriiError::WebSocket(other),
+    }
 }
 
 fn error_message_from_body(body: &[u8]) -> Option<String> {
@@ -713,6 +772,35 @@ fn unix_time_now() -> Duration {
         .unwrap_or(Duration::ZERO)
 }
 
+fn smoke_transaction_result_in_block(
+    block: &SignedBlock,
+    tx_hash: &HashOf<SignedTransaction>,
+) -> Option<ToriiResult<u64>> {
+    if !block.has_results() {
+        return None;
+    }
+    block
+        .entrypoint_results()
+        .find_map(|(_, entrypoint, result)| {
+            let is_match = match &entrypoint {
+                TransactionEntrypoint::External(transaction) => transaction.hash() == *tx_hash,
+                TransactionEntrypoint::SealedReveal(reveal) => {
+                    reveal.signed_transaction().hash() == *tx_hash
+                }
+                TransactionEntrypoint::SealedCommitment(_)
+                | TransactionEntrypoint::PrivateKaigi(_)
+                | TransactionEntrypoint::Time(_) => false,
+            };
+            is_match.then(|| match result.as_ref() {
+                Ok(_) => Ok(block.header().height().get()),
+                Err(reason) => Err(ToriiError::SmokeRejected {
+                    hash: tx_hash.to_string(),
+                    reason: format!("{reason:?}"),
+                }),
+            })
+        })
+}
+
 #[derive(Debug, Default)]
 struct ReadinessSmokeAttemptCursor {
     next_index: usize,
@@ -791,19 +879,18 @@ fn build_readiness_smoke_transaction_at(
         .parse::<ChainId>()
         .map_err(|_| ReadinessSmokeBuildError::InvalidChainId(chain_id.to_owned()))?;
     let now_ms = creation_time.as_millis();
-    let domain_id = DomainId::try_new("wonderland", "universal")
-        .map_err(|_| ReadinessSmokeBuildError::InvalidDomain("wonderland.universal".to_owned()))?;
     let key = "mochi_smoke"
         .parse()
         .expect("readiness smoke metadata key is valid");
     let value = Json::new(format!("{now_ms}:{attempt}"));
     let quantity = u32::try_from(attempt + 1).unwrap_or(u32::MAX);
+    let authority = signer.account_id().clone();
     let mut builder = TransactionBuilder::new(
         chain_id,
-        signer.account_id().clone(),
+        authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
-    .with_instructions([SetKeyValue::domain(domain_id, key, value)]);
+    .with_instructions([SetKeyValue::account(authority, key, value)]);
 
     if let Some(nonce) = NonZeroU32::new(quantity) {
         builder.set_nonce(nonce);
@@ -2790,10 +2877,22 @@ impl ToriiClient {
         let tx_hash_str = tx_hash.to_string();
         let started = Instant::now();
 
-        let block_stream = self.block_stream().await?;
-        let events_stream = self.events_stream().await?;
-        let mut block_rx = block_stream.subscribe();
-        let mut event_rx = events_stream.subscribe();
+        // Stream notifications are latency optimizations for this exact-hash
+        // readiness check. Torii may temporarily throttle WebSocket handshakes
+        // while all peers start; keep the canonical HTTP status reconciliation
+        // authoritative instead of failing an otherwise healthy localnet.
+        let block_stream = match self.block_stream().await {
+            Ok(stream) => Some(stream),
+            Err(ToriiError::RateLimited { .. }) => None,
+            Err(error) => return Err(error),
+        };
+        let events_stream = match self.events_stream().await {
+            Ok(stream) => Some(stream),
+            Err(ToriiError::RateLimited { .. }) => None,
+            Err(error) => return Err(error),
+        };
+        let mut block_rx = block_stream.as_ref().map(BlockStream::subscribe);
+        let mut event_rx = events_stream.as_ref().map(EventStream::subscribe);
         let signed_bytes = transaction.encode_versioned();
 
         let mut admission_outcome_unknown = match self.submit_transaction(&signed_bytes).await {
@@ -2850,11 +2949,18 @@ impl ToriiClient {
                             Err(_err) => {}
                         }
                     }
-                    message = block_rx.recv() => {
+                    message = async {
+                        match &mut block_rx {
+                            Some(receiver) => receiver.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
                         match message {
                             Ok(BlockStreamEvent::Block { block, .. }) => {
-                                if block.external_transactions().any(|tx| tx.hash() == tx_hash) {
-                                    return Ok(block.header().height().get());
+                                if let Some(result) =
+                                    smoke_transaction_result_in_block(block.as_ref(), &tx_hash)
+                                {
+                                    return result;
                                 }
                             }
                             Ok(BlockStreamEvent::DecodeError { error }) => {
@@ -2867,7 +2973,12 @@ impl ToriiClient {
                             Err(RecvError::Lagged(_)) | Err(RecvError::Closed) => {}
                         }
                     }
-                    message = event_rx.recv() => {
+                    message = async {
+                        match &mut event_rx {
+                            Some(receiver) => receiver.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
                         match message {
                             Ok(EventStreamEvent::Event { event, .. }) => {
                                 if let EventBox::Pipeline(PipelineEventBox::Transaction(tx_event)) = event.as_ref()
@@ -3661,11 +3772,7 @@ impl ToriiClient {
     async fn fetch_json(&self, url: Url) -> ToriiResult<json::Value> {
         let response = self.http.get(url).send().await?;
         if !response.status().is_success() {
-            return Err(ToriiError::UnexpectedStatus {
-                status: response.status(),
-                reject_code: None,
-                message: None,
-            });
+            return Err(response_status_error(&response));
         }
         let bytes = response.bytes().await?;
         json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))
@@ -3681,11 +3788,7 @@ impl ToriiClient {
             .send()
             .await?;
         if !response.status().is_success() {
-            return Err(ToriiError::UnexpectedStatus {
-                status: response.status(),
-                reject_code: None,
-                message: None,
-            });
+            return Err(response_status_error(&response));
         }
         let bytes = response.bytes().await?;
         json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))
@@ -3701,11 +3804,7 @@ impl ToriiClient {
             .send()
             .await?;
         if response.status() != StatusCode::ACCEPTED {
-            return Err(ToriiError::UnexpectedStatus {
-                status: response.status(),
-                reject_code: None,
-                message: None,
-            });
+            return Err(response_status_error(&response));
         }
         let bytes = response.bytes().await?;
         if !bytes.is_empty() {
@@ -3770,7 +3869,9 @@ impl ToriiClient {
                 HeaderValue::from_static(NORITO_V1_WEBSOCKET_SUBPROTOCOL),
             );
         }
-        let (stream, response) = connect_async(request).await?;
+        let (stream, response) = connect_async(request)
+            .await
+            .map_err(websocket_connect_error)?;
         let selected_protocol = response
             .headers()
             .get(SEC_WEBSOCKET_PROTOCOL)
@@ -3848,8 +3949,10 @@ where
                 message = block_rx.recv() => {
                     match message {
                         Ok(BlockStreamEvent::Block { block, .. }) => {
-                            if block.external_transactions().any(|tx| tx.hash() == tx_hash) {
-                                return Ok(block.header().height().get());
+                            if let Some(result) =
+                                smoke_transaction_result_in_block(block.as_ref(), &tx_hash)
+                            {
+                                return result;
                             }
                         }
                         Ok(BlockStreamEvent::DecodeError { error }) => {
@@ -4531,7 +4634,7 @@ fn asset_event_summary(event: &AssetEvent) -> (String, String) {
             format!("asset={} key={}", change.target(), change.key()),
         ),
         AssetEvent::BatchTransferOutcome(outcome) => (
-            "Asset batch transfer outcome".to_owned(),
+            "Asset batch transfer leg".to_owned(),
             format!(
                 "leg_index={} leg_id={} asset={} destination={} amount={} status={:?}",
                 outcome.leg_index,
@@ -5479,6 +5582,7 @@ mod tests {
     use iroha_data_model::{
         ChainId,
         account::AccountId,
+        asset::{AssetDefinitionId, AssetId},
         block::consensus::{ExecWitness, ExecWitnessMsg},
         events::{
             EventBox, SharedDataEvent,
@@ -5496,6 +5600,7 @@ mod tests {
         isi::InstructionBox,
         nexus::{LaneCatalog, LaneLifecyclePlan, LaneLifecycleStatusV1},
         peer::PeerId,
+        prelude::Quantity,
         query::{
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
             executor::FindExecutorDataModel, prelude::SingularQueryBox,
@@ -5863,6 +5968,46 @@ mod tests {
 
     fn mock_json_body(value: norito::json::Value) -> String {
         norito::json::to_string(&value).expect("serialize mock json body")
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_mcp_rate_limit_preserves_retry_after() {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+        let throttled = server.mock(|when, then| {
+            when.method(GET).path("/v1/mcp");
+            then.status(429).header("retry-after", "7");
+        });
+
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let error = client
+            .validate_local_mcp()
+            .await
+            .expect_err("throttled MCP capabilities probe must remain retryable");
+        assert!(matches!(
+            error,
+            ToriiError::RateLimited {
+                retry_after: Some(delay),
+            } if delay == Duration::from_secs(7)
+        ));
+        throttled.assert();
+    }
+
+    #[test]
+    fn websocket_rate_limit_preserves_retry_after() {
+        let response = http::Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .header(reqwest::header::RETRY_AFTER, "3")
+            .body(None)
+            .expect("valid WebSocket HTTP response");
+        let error = websocket_connect_error(WebSocketError::Http(response));
+        assert!(matches!(
+            error,
+            ToriiError::RateLimited {
+                retry_after: Some(delay),
+            } if delay == Duration::from_secs(3)
+        ));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -6480,6 +6625,31 @@ mod tests {
     }
 
     #[test]
+    fn readiness_smoke_mutates_only_its_signing_account_metadata() {
+        let signer = crate::compose::development_signing_authorities()
+            .first()
+            .expect("development signer available");
+        let plan = ReadinessSmokePlan::for_signer("mochi-smoke", signer)
+            .expect("build readiness smoke plan");
+        let iroha_data_model::transaction::Executable::Instructions(instructions) =
+            plan.transactions[0].instructions()
+        else {
+            panic!("readiness smoke must contain instructions");
+        };
+        assert_eq!(instructions.len(), 1);
+        let set_key_value = instructions[0]
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::SetKeyValueBox>()
+            .expect("readiness smoke instruction is SetKeyValue");
+        match set_key_value {
+            iroha_data_model::isi::SetKeyValueBox::Account(set) => {
+                assert_eq!(set.object(), signer.account_id());
+            }
+            other => panic!("readiness smoke must target its own account, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn generated_readiness_transactions_renew_for_the_full_retry_budget() {
         let signer = crate::compose::development_signing_authorities()
             .first()
@@ -6558,9 +6728,62 @@ mod tests {
         SignedBlock::genesis(vec![tx], PEER_KEYPAIR.private_key(), None, None)
     }
 
+    fn sample_block_with_result(
+        result: iroha_data_model::transaction::TransactionResultInner,
+    ) -> SignedBlock {
+        let mut block = sample_block();
+        let entrypoint_hashes = block
+            .external_entrypoints_cloned()
+            .map(|entrypoint| entrypoint.hash())
+            .collect::<Vec<_>>();
+        block
+            .set_transaction_results(Vec::new(), &entrypoint_hashes, vec![result])
+            .expect("attach aligned sample transaction result");
+        block
+    }
+
+    #[test]
+    fn committed_block_rejection_is_not_reported_as_smoke_success() {
+        use iroha_data_model::transaction::error::{
+            TransactionLimitError, TransactionRejectionReason,
+        };
+
+        let rejection = TransactionRejectionReason::LimitCheck(TransactionLimitError {
+            reason: "limit".to_owned(),
+        });
+        let expected_reason = format!("{rejection:?}");
+        let block = sample_block_with_result(Err(rejection));
+        let tx_hash = block
+            .transactions_vec()
+            .first()
+            .expect("sample block tx")
+            .hash();
+
+        match smoke_transaction_result_in_block(&block, &tx_hash) {
+            Some(Err(ToriiError::SmokeRejected { hash, reason })) => {
+                assert_eq!(hash, tx_hash.to_string());
+                assert_eq!(reason, expected_reason);
+            }
+            other => panic!("expected aligned block rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn block_hash_presence_without_aligned_result_is_not_smoke_success() {
+        let block = sample_block();
+        let tx_hash = block
+            .transactions_vec()
+            .first()
+            .expect("sample block tx")
+            .hash();
+        assert!(smoke_transaction_result_in_block(&block, &tx_hash).is_none());
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn submit_and_wait_for_commit_reports_block_height() {
-        let block = sample_block();
+        let block = sample_block_with_result(Ok(
+            iroha_data_model::transaction::DataTriggerSequence::default(),
+        ));
         let tx_hash = block
             .transactions_vec()
             .first()
@@ -10174,6 +10397,45 @@ state_tiered_cold_entries 2
             detail.contains(&alice_literal),
             "detail `{detail}` should mention {alice_literal}"
         );
+    }
+
+    #[test]
+    fn asset_transfer_summaries_cover_direct_and_batch_events() {
+        let definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("valid domain"),
+            "rose".parse().expect("valid asset name"),
+        );
+        let source = AssetId::new(definition.clone(), ALICE_ID.clone());
+        let destination = AssetId::new(definition, BOB_ID.clone());
+        let amount = Quantity::from(5_u32);
+
+        let direct = AssetEvent::Transferred(AssetTransferred {
+            source: source.clone(),
+            destination: destination.clone(),
+            amount: amount.clone(),
+        });
+        let (label, detail) = asset_event_summary(&direct);
+        assert_eq!(label, "Asset transferred");
+        assert!(detail.contains(&source.to_string()));
+        assert!(detail.contains(&destination.to_string()));
+        assert!(detail.contains(&amount.to_string()));
+
+        let batch = AssetEvent::BatchTransferOutcome(AssetBatchTransferOutcome {
+            leg_index: 2,
+            leg_id: "leg-2".to_owned(),
+            asset: source.clone(),
+            destination: BOB_ID.clone(),
+            amount: amount.clone(),
+            status: AssetBatchTransferLegStatus::Applied,
+        });
+        let (label, detail) = asset_event_summary(&batch);
+        assert_eq!(label, "Asset batch transfer leg");
+        assert!(detail.contains("leg_index=2"));
+        assert!(detail.contains("leg_id=leg-2"));
+        assert!(detail.contains(&source.to_string()));
+        assert!(detail.contains(&BOB_ID.to_string()));
+        assert!(detail.contains(&amount.to_string()));
+        assert!(detail.contains("status=Applied"));
     }
 
     #[test]

@@ -1,9 +1,28 @@
 [package]
 name = "soradns-resolver"
+autobins = false
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
+
+[features]
+default = []
+dev-tools = []
+
+[[bin]]
+name = "soradns-resolver"
+path = "src/main.rs"
+
+[[bin]]
+name = "soradns_transparency_report"
+path = "src/bin/soradns_transparency_report.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "soradns_transparency_tail"
+path = "src/bin/soradns_transparency_tail.rs"
+required-features = ["dev-tools"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }

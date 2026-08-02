@@ -182,7 +182,7 @@ public sealed class VerifyingKeyBackendTagTests
     }
 
     [Fact]
-    public void PendingProductionCatalogLabelsRemainFailClosed()
+    public void ProtocolAndRetiredCatalogAliasesAreUnsupported()
     {
         string[] labels =
         [
@@ -200,21 +200,38 @@ public sealed class VerifyingKeyBackendTagTests
             "vega-existing-credential-zk",
             "silent-threshold-anoncred",
             "zk-x509",
+            "sis-hints-anoncred-pq-v0",
             "sis-with-hints",
         ];
 
         foreach (var label in labels)
         {
-            Assert.True(
-                VerifyingKeyBackendTags.FromCatalogLabel(label)
-                    .IsPendingProductionBackend());
-            Assert.True(VerifyingKeyBackendTags.IsPendingProductionBackendLabel(label));
+            Assert.Equal(
+                VerifyingKeyBackendCatalogTag.Unsupported,
+                VerifyingKeyBackendTags.FromCatalogLabel(label));
             Assert.False(VerifyingKeyBackendTags.IsProductionVerifyBackendLabel(label));
         }
     }
 
     [Fact]
-    public void AdversarialPendingAliasesStayUnsupported()
+    public void CatalogClassifierAcceptsOnlyExactProductionLabels()
+    {
+        foreach (var label in new[] { "halo2-ipa-pasta", "stark", "halo2/ipa", "stark/fri" })
+        {
+            Assert.Equal(
+                VerifyingKeyBackendCatalogTag.Production,
+                VerifyingKeyBackendTags.FromCatalogLabel(label));
+        }
+        foreach (var label in new[] { "HALO2/IPA", " halo2/ipa", "halo2/ipa ", "Stark" })
+        {
+            Assert.Equal(
+                VerifyingKeyBackendCatalogTag.Unsupported,
+                VerifyingKeyBackendTags.FromCatalogLabel(label));
+        }
+    }
+
+    [Fact]
+    public void AdversarialAliasSplicesStayUnsupported()
     {
         string[] labels =
         [
@@ -228,10 +245,9 @@ public sealed class VerifyingKeyBackendTagTests
 
         foreach (var label in labels)
         {
-            Assert.False(
-                VerifyingKeyBackendTags.FromCatalogLabel(label)
-                    .IsPendingProductionBackend());
-            Assert.False(VerifyingKeyBackendTags.IsPendingProductionBackendLabel(label));
+            Assert.Equal(
+                VerifyingKeyBackendCatalogTag.Unsupported,
+                VerifyingKeyBackendTags.FromCatalogLabel(label));
         }
     }
 

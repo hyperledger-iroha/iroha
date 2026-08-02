@@ -1,5 +1,6 @@
 [package]
 name = "sorafs_car"
+autobins = false
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
@@ -7,6 +8,7 @@ description = "Planning utilities for assembling CARv2 archives for SoraFS."
 
 [features]
 default = []
+dev-tools = []
 manifest = [
     "dep:sorafs_manifest",
     "dep:iroha_data_model",
@@ -67,6 +69,11 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time
 sorafs_orchestrator = { path = "../sorafs_orchestrator" }
 
 [[bin]]
+name = "sorafs_chunk_store"
+path = "src/bin/sorafs_chunk_store.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "sorafs_fetch"
 path = "src/bin/sorafs_fetch.rs"
 required-features = ["cli"]
@@ -84,29 +91,29 @@ required-features = ["cli"]
 [[bin]]
 name = "sorafs_manifest_chunk_store"
 path = "src/bin/sorafs_manifest_chunk_store.rs"
-required-features = ["cli"]
+required-features = ["cli", "dev-tools"]
 
 [[bin]]
 name = "sorafs_provider_advert"
 path = "src/bin/sorafs_provider_advert.rs"
-required-features = ["cli"]
+required-features = ["cli", "dev-tools"]
 
 [[bin]]
 name = "provider_admission_fixtures"
 path = "src/bin/provider_admission_fixtures.rs"
-required-features = ["manifest"]
+required-features = ["dev-tools", "manifest"]
 
 [[bin]]
 name = "taikai_car"
 path = "src/bin/taikai_car.rs"
-required-features = ["cli"]
+required-features = ["cli", "dev-tools"]
 
 [[bin]]
 name = "da_reconstruct"
 path = "src/bin/da_reconstruct.rs"
-required-features = ["da_harness"]
+required-features = ["dev-tools", "da_harness"]
 
 [[bin]]
 name = "soranet_trustless_verifier"
 path = "src/bin/soranet_trustless_verifier.rs"
-required-features = ["cli"]
+required-features = ["cli", "dev-tools"]

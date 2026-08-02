@@ -265,7 +265,7 @@ if [[ -n "$capture_json" ]]; then
 fi
 
 if ((${#bench_env[@]} > 0)); then
-    env "${bench_env[@]}" cargo run -p iroha_crypto --bin sm_perf_check --features "$feature_flag" -- "${summary_args[@]}"
+    env "${bench_env[@]}" cargo run -p iroha_crypto --bin sm_perf_check --features "dev-tools,$feature_flag" -- "${summary_args[@]}"
 else
-    cargo run -p iroha_crypto --bin sm_perf_check --features "$feature_flag" -- "${summary_args[@]}"
+    cargo run -p iroha_crypto --bin sm_perf_check --features "dev-tools,$feature_flag" -- "${summary_args[@]}"
 fi

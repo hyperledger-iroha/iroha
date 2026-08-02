@@ -20,17 +20,21 @@ use iroha_core::{
 };
 use iroha_data_model::{
     Level,
-    isi::{Grant, InstructionBox, Log, privacy::RegisterPrivacyProtocolActivationV1},
+    isi::{
+        Grant, InstructionBox, Log,
+        privacy::{RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1},
+    },
     metadata::Metadata,
     permission::Permission,
     prelude::QueryBuilderExt,
     privacy::{
         PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1, PrivacyCompiledProfileResultV1,
-        PrivacyCompiledProfileSnapshotV1, PrivacyParameterDigestV1, PrivacyProposedLifecycleV1,
-        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+        PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1, PrivacyParameterDigestV1,
+        PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
+        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
     },
     query::{block::prelude::FindBlocks, transaction::prelude::FindTransactions},
-    transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
+    transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
@@ -199,6 +203,52 @@ fn build_jindo_action(
         "Jindo builder-reported hash differs from the canonical signed transaction hash"
     );
     Ok(signed.into_signed_transaction())
+}
+
+fn independently_resign_corrupted_jindo_proof(
+    client: &Client,
+    valid: &SignedTransaction,
+) -> Result<SignedTransaction> {
+    let (valid_intent, submission) = valid
+        .privacy_transaction_intent_binding_if_present_v1()
+        .wrap_err("scan canonical Jindo action before proof corruption")?
+        .ok_or_else(|| eyre!("canonical Jindo action omitted its direct privacy submission"))?;
+    let mut envelope = submission.envelope.clone();
+    let PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(proof) = &mut envelope.proof else {
+        return Err(eyre!(
+            "canonical Jindo action carried a different proof variant"
+        ));
+    };
+    ensure!(
+        !proof.bytes.is_empty(),
+        "canonical Jindo proof unexpectedly had no magic byte"
+    );
+    proof.bytes[0] ^= 0x80;
+    envelope
+        .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
+        .wrap_err("proof corruption must preserve the generic envelope contract")?;
+
+    let corrupted = TransactionBuilder::from_payload(valid.payload().clone())
+        .wrap_err("re-open canonical Jindo payload for proof corruption")?
+        .with_instructions([SubmitPrivacyProofV1::new(envelope)])
+        .try_sign(client.key_pair.private_key())
+        .wrap_err("independently sign corrupted Jindo proof payload")?;
+    corrupted
+        .verify_signature()
+        .wrap_err("verify independently signed corrupted Jindo transaction")?;
+    let (corrupted_intent, _) = corrupted
+        .privacy_transaction_intent_binding_if_present_v1()
+        .wrap_err("corrupted Jindo proof lost its valid transaction-intent binding")?
+        .ok_or_else(|| eyre!("corrupted Jindo proof omitted its direct privacy submission"))?;
+    ensure!(
+        corrupted_intent == valid_intent,
+        "proof-only corruption changed the proof-independent Jindo transaction intent"
+    );
+    ensure!(
+        corrupted.hash() != valid.hash(),
+        "proof corruption did not change the canonical signed transaction hash"
+    );
+    Ok(corrupted)
 }
 
 async fn submit_instruction(
@@ -606,6 +656,39 @@ async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_
         .await?;
 
         let final_action = build_jindo_action(&client, genesis_hash, 2)?;
+        let corrupted_action = independently_resign_corrupted_jindo_proof(&client, &final_action)?;
+        let corruption_error = submit_signed_transaction(
+            &client,
+            &corrupted_action,
+            "post-activation corrupted Jindo proof must reject",
+        )
+        .await
+        .expect_err("post-activation corrupted Jindo proof was accepted");
+        ensure!(
+            error_chain_contains(&corruption_error, "native Jindo verification failed"),
+            "corrupted Jindo proof bypassed native verification: {corruption_error:?}"
+        );
+        ensure!(
+            error_chain_contains(&corruption_error, "proof magic is invalid"),
+            "corrupted Jindo proof rejected for the wrong native reason: {corruption_error:?}"
+        );
+        let post_corruption_height = client
+            .get_privacy_capabilities()
+            .wrap_err("query height after corrupted Jindo rejection")?
+            .committed_height;
+        wait_for_all_peer_activations(
+            &network,
+            post_corruption_height,
+            compiled_snapshot,
+            Some(active),
+            "corrupted Jindo rejection must preserve exact Active state",
+        )
+        .await?;
+        ensure!(
+            !exact_applied_transaction_visible(&client, &final_action)?,
+            "canonical Jindo action was visible before its own submission"
+        );
+
         let restart_index = network.peers().len() - 1;
         let restart_peer = network.peers()[restart_index].clone();
         let config_layers = network.config_layers().collect::<Vec<_>>();
@@ -628,7 +711,7 @@ async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_
             .get_privacy_capabilities()
             .wrap_err("query height after Jindo finality")?
             .committed_height;
-        let expected_finalized_height = activation_height
+        let expected_finalized_height = post_corruption_height
             .checked_add(1)
             .ok_or_else(|| eyre!("Jindo finality height overflowed"))?;
         ensure!(

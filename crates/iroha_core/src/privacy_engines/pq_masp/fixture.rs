@@ -28,7 +28,10 @@ use super::{
     PqMaspWitnessV1, derive_pq_masp_authorization_key_digest_v1, derive_pq_masp_note_commitment_v1,
     derive_pq_masp_note_encryption_keys_digest_v1, derive_pq_masp_nullifier_key_digest_v1,
     derive_pq_masp_nullifier_v1, derive_pq_masp_recipient_id_v1, encrypt_pq_masp_note_v1_with_rng,
-    relation::{accumulator_leaf_invocation_v1, accumulator_node_invocation_v1},
+    relation::{
+        accumulator_leaf_invocation_v1, accumulator_node_invocation_v1, namespace_v1,
+        validate_pq_masp_relation_v1,
+    },
 };
 
 /// Complete fixture material kept behind `test` or release-evidence cfg.
@@ -360,13 +363,88 @@ pub(crate) fn pq_masp_release_invalid_path_fixture_v1<R: TryCryptoRng + ?Sized>(
     build_fixture(false, true, keygen_master_seed, randomness)
 }
 
+/// Refresh the normal fixture's consumed-note path against the exact
+/// authoritative successor produced by its own output append.
+///
+/// The returned relation keeps the original stable nullifier but consumes the
+/// post-transition root at the next epoch. A network test can therefore prove
+/// an independently signed protocol replay that reaches the nullifier gate,
+/// instead of failing earlier as a stale-anchor transaction.
+pub(crate) fn pq_masp_release_successor_replay_fixture_v1(
+    fixture: &PqMaspReleaseFixtureV1,
+) -> Result<(PqMaspStarkStatementV1, PqMaspWitnessV1), PqMaspReleaseFixtureErrorV1> {
+    let [input] = fixture.witness.inputs.as_slice() else {
+        return Err(PqMaspReleaseFixtureErrorV1);
+    };
+    let [output] = fixture.witness.outputs.as_slice() else {
+        return Err(PqMaspReleaseFixtureErrorV1);
+    };
+    let [output_commitment] = fixture.statement.output_commitments.as_slice() else {
+        return Err(PqMaspReleaseFixtureErrorV1);
+    };
+    if input.leaf_position != 0 {
+        return Err(PqMaspReleaseFixtureErrorV1);
+    }
+
+    let input_commitment = input
+        .commitment_v1(&fixture.statement)
+        .map_err(|_| PqMaspReleaseFixtureErrorV1)?;
+    let output_leaf = accumulator_leaf_invocation_v1(&fixture.statement, 0, *output_commitment)
+        .map_err(|_| PqMaspReleaseFixtureErrorV1)?
+        .digest;
+    let mut successor_path = input.authentication_path;
+    successor_path[0] = output_leaf;
+
+    let mut statement = fixture.statement.clone();
+    statement.anchor = anchor_for_input_v1(&statement, 0, input_commitment, 0, &successor_path)?;
+    let successor_epoch = statement
+        .anchor_epoch
+        .checked_add(1)
+        .ok_or(PqMaspReleaseFixtureErrorV1)?;
+    statement.anchor_epoch = successor_epoch;
+    statement.authorization_epoch = successor_epoch;
+
+    let origin =
+        crate::privacy_engines::proof_managed_accumulator::build_proof_managed_frontier_v1(
+            namespace_v1(&statement),
+            &[input_commitment],
+        )
+        .map_err(|_| PqMaspReleaseFixtureErrorV1)?;
+    if origin.root != fixture.statement.anchor {
+        return Err(PqMaspReleaseFixtureErrorV1);
+    }
+    let successor =
+        crate::privacy_engines::proof_managed_accumulator::append_proof_managed_commitments_v1(
+            namespace_v1(&statement),
+            origin.tree_size,
+            origin.leaf,
+            &origin.ommers,
+            origin.root,
+            &[*output_commitment],
+        )
+        .map_err(|_| PqMaspReleaseFixtureErrorV1)?;
+    if successor.root != statement.anchor {
+        return Err(PqMaspReleaseFixtureErrorV1);
+    }
+
+    let replay_input = PqMaspInputWitnessV1::new(
+        input.note.clone(),
+        input.nullifier_secret,
+        input.leaf_position,
+        successor_path,
+    )
+    .map_err(|_| PqMaspReleaseFixtureErrorV1)?;
+    let witness = PqMaspWitnessV1::new(vec![replay_input], vec![output.clone()])
+        .map_err(|_| PqMaspReleaseFixtureErrorV1)?;
+    validate_pq_masp_relation_v1(&statement, &witness).map_err(|_| PqMaspReleaseFixtureErrorV1)?;
+    Ok((statement, witness))
+}
+
 #[cfg(test)]
 mod tests {
     use rand::{SeedableRng as _, rngs::StdRng};
 
     use super::*;
-    use crate::privacy_engines::pq_masp::relation::validate_pq_masp_relation_v1;
-
     #[test]
     fn release_context_binds_every_compiled_profile_digest() {
         let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV0)
@@ -417,6 +495,28 @@ mod tests {
         let invalid = pq_masp_release_invalid_path_fixture_v1(raw(0xe3), &mut invalid_rng)
             .expect("invalid fixture");
         assert!(validate_pq_masp_relation_v1(&invalid.statement, &invalid.witness).is_err());
+    }
+
+    #[test]
+    fn successor_replay_refreshes_anchor_but_preserves_the_stable_nullifier() {
+        let mut rng = StdRng::from_seed(raw(0xd4));
+        let fixture =
+            pq_masp_release_fixture_v1(false, raw(0xe4), &mut rng).expect("normal fixture");
+        let (statement, witness) = pq_masp_release_successor_replay_fixture_v1(&fixture)
+            .expect("successor replay fixture");
+        assert_ne!(statement.anchor, fixture.statement.anchor);
+        assert_eq!(statement.anchor_epoch, fixture.statement.anchor_epoch + 1);
+        assert_eq!(
+            statement.authorization_epoch,
+            fixture.statement.authorization_epoch + 1
+        );
+        assert_eq!(statement.authorization_epoch, statement.anchor_epoch);
+        assert_eq!(statement.nullifiers, fixture.statement.nullifiers);
+        assert_eq!(
+            statement.output_commitments,
+            fixture.statement.output_commitments
+        );
+        validate_pq_masp_relation_v1(&statement, &witness).expect("refreshed replay relation");
     }
 
     #[test]

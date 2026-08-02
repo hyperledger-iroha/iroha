@@ -25,7 +25,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 
 class TransactionFixtureParityTest {
     private val adapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT)
@@ -33,7 +32,7 @@ class TransactionFixtureParityTest {
     @Test
     fun `transaction payload fixtures round-trip with kotlin codec`() {
         for (fixture in AndroidFixtureSupport.loadPayloadFixtures()) {
-            val payload = fixture.materializePayload(adapter)
+            val payload = fixture.materializePayload()
 
             assertEquals(fixture.chain, payload.chainId, "${fixture.name}: chain mismatch")
             assertEquals(fixture.authority, payload.authority, "${fixture.name}: authority mismatch")
@@ -49,21 +48,12 @@ class TransactionFixtureParityTest {
             )
             assertEquals(fixture.nonce, payload.nonce, "${fixture.name}: nonce mismatch")
 
-            if (fixture.name == LEGACY_GASLESS_IVM_FIXTURE) {
-                assertIs<Executable.Ivm>(payload.executable)
-                assertNull(payload.feePayment.gasLimit)
-                assertFailsWith<NoritoException> { adapter.encodeTransaction(payload) }
-                continue
-            }
-
             val encoded = adapter.encodeTransaction(payload)
-            fixture.encodedBase64?.let { expected ->
-                assertEquals(
-                    expected,
-                    Base64.getEncoder().encodeToString(encoded),
-                    "${fixture.name}: encoded payload mismatch",
-                )
-            }
+            assertEquals(
+                fixture.payloadBase64,
+                Base64.getEncoder().encodeToString(encoded),
+                "${fixture.name}: encoded payload mismatch",
+            )
 
             val decoded = adapter.decodeTransaction(encoded)
             assertEquals(payload, decoded, "${fixture.name}: Kotlin payload round-trip mismatch")
@@ -74,7 +64,7 @@ class TransactionFixtureParityTest {
     fun `typed fee payment fixture preserves pipeline gas limits`() {
         val fixture = AndroidFixtureSupport.loadPayloadFixtures()
             .single { it.name == "typed_fee_payment_gas_limit" }
-        val payload = fixture.materializePayload(adapter)
+        val payload = fixture.materializePayload()
 
         val feePayment = assertIs<FeePaymentIntent.Authority>(payload.feePayment)
         assertEquals(1000L, feePayment.gasLimit)
@@ -91,7 +81,7 @@ class TransactionFixtureParityTest {
     fun `mixed executable fixture preserves instruction call instruction order`() {
         val fixture = AndroidFixtureSupport.loadPayloadFixtures()
             .single { it.name == "mixed_executable_batch" }
-        val payload = fixture.materializePayload(adapter)
+        val payload = fixture.materializePayload()
 
         val batch = assertIs<Executable.Batch>(payload.executable)
         assertEquals(3, batch.entries.size)
@@ -145,17 +135,11 @@ class TransactionFixtureParityTest {
                 fixture.payloadHash,
                 "${fixture.name}: payload_hash mismatch",
             )
-            if (fixture.name == LEGACY_GASLESS_IVM_FIXTURE) {
-                assertFailsWith<IllegalArgumentException> {
-                    SignedTransactionHasher.hashCanonicalHex(signedBytes)
-                }
-            } else {
-                assertEquals(
-                    SignedTransactionHasher.hashCanonicalHex(signedBytes),
-                    fixture.signedHash,
-                    "${fixture.name}: signed_hash mismatch",
-                )
-            }
+            assertEquals(
+                SignedTransactionHasher.hashCanonicalHex(signedBytes),
+                fixture.signedHash,
+                "${fixture.name}: signed_hash mismatch",
+            )
 
             val payload = adapter.decodeTransaction(payloadBytes)
             assertEquals(fixture.chain, payload.chainId, "${fixture.name}: chain mismatch")
@@ -179,23 +163,17 @@ class TransactionFixtureParityTest {
                 payload.nonce,
                 "${fixture.name}: nonce mismatch",
             )
-            if (fixture.name == LEGACY_GASLESS_IVM_FIXTURE) {
-                assertIs<Executable.Ivm>(payload.executable)
-                assertNull(payload.feePayment.gasLimit)
-                assertFailsWith<NoritoException> { adapter.encodeTransaction(payload) }
-            } else {
-                assertContentEquals(
-                    payloadBytes,
-                    adapter.encodeTransaction(payload),
-                    "${fixture.name}: Kotlin payload re-encoding drift",
-                )
-            }
+            assertContentEquals(
+                payloadBytes,
+                adapter.encodeTransaction(payload),
+                "${fixture.name}: Kotlin payload re-encoding drift",
+            )
 
             val sourceFixture = checkNotNull(payloadFixturesByName[fixture.name]) {
                 "${fixture.name}: manifest fixture missing payload source"
             }
             assertEquals(
-                sourceFixture.encodedBase64,
+                sourceFixture.payloadBase64,
                 fixture.payloadBase64,
                 "${fixture.name}: manifest payload mismatch",
             )
@@ -213,10 +191,6 @@ class TransactionFixtureParityTest {
                 byteArrayOf(),
                 SIGNED_SCHEMA,
             )
-            if (fixture.name == LEGACY_GASLESS_IVM_FIXTURE) {
-                assertFailsWith<NoritoException> { SignedTransactionEncoder.encode(signed) }
-                continue
-            }
             assertContentEquals(
                 signedBytes,
                 SignedTransactionEncoder.encode(signed),
@@ -306,31 +280,133 @@ class TransactionFixtureParityTest {
     }
 
     @Test
+    fun `payload fixture loader requires canonical source fields and rejects retired encoded alias`() {
+        for (field in listOf("payload", "payload_base64")) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                AndroidFixtureSupport.payloadFixtureFromValue(
+                    payloadSourceDescriptor().apply { remove(field) },
+                )
+            }
+            assertEquals(true, error.message?.contains(field), error.message)
+        }
+
+        val descriptor = payloadSourceDescriptor().apply {
+            this["encoded"] = this["payload_base64"]
+        }
+
+        val error = assertFailsWith<IllegalStateException> {
+            AndroidFixtureSupport.payloadFixtureFromValue(descriptor)
+        }
+        assertEquals(true, error.message?.contains("retired encoded alias"), error.message)
+    }
+
+    @Test
+    fun `fixture loaders reject unknown and ambiguous schema fields`() {
+        val extraTopLevelError = assertFailsWith<IllegalArgumentException> {
+            AndroidFixtureSupport.payloadFixtureFromValue(
+                payloadSourceDescriptor().apply { this["unexpected"] = true },
+            )
+        }
+        assertEquals(
+            true,
+            extraTopLevelError.message?.contains("unknown fields: [unexpected]"),
+            extraTopLevelError.message,
+        )
+
+        val extraPayloadField = payloadSourceDescriptor()
+        payloadObject(extraPayloadField)["unexpected"] = true
+        val extraPayloadError = assertFailsWith<IllegalArgumentException> {
+            AndroidFixtureSupport.payloadFixtureFromValue(extraPayloadField)
+        }
+        assertEquals(
+            true,
+            extraPayloadError.message?.contains("unknown fields: [unexpected]"),
+            extraPayloadError.message,
+        )
+
+        val ambiguousExecutable = payloadSourceDescriptor()
+        payloadObject(ambiguousExecutable)["executable"] = mapOf(
+            "Ivm" to "AA==",
+            "Instructions" to emptyList<Any?>(),
+        )
+        val ambiguousError = assertFailsWith<IllegalArgumentException> {
+            AndroidFixtureSupport.payloadFixtureFromValue(ambiguousExecutable).materializePayload()
+        }
+        assertEquals(
+            true,
+            ambiguousError.message?.contains("exactly one externally tagged variant"),
+            ambiguousError.message,
+        )
+
+        val unknownExecutable = payloadSourceDescriptor()
+        payloadObject(unknownExecutable)["executable"] = mapOf("Legacy" to emptyMap<String, Any?>())
+        val unknownError = assertFailsWith<IllegalArgumentException> {
+            AndroidFixtureSupport.payloadFixtureFromValue(unknownExecutable).materializePayload()
+        }
+        assertEquals(
+            true,
+            unknownError.message?.contains("unknown variant Legacy"),
+            unknownError.message,
+        )
+
+        val extraManifestField = manifestDescriptor().apply { this["unexpected"] = true }
+        val extraManifestError = assertFailsWith<IllegalArgumentException> {
+            AndroidFixtureSupport.manifestFixtureFromValue(extraManifestField)
+        }
+        assertEquals(
+            true,
+            extraManifestError.message?.contains("unknown fields: [unexpected]"),
+            extraManifestError.message,
+        )
+    }
+
+    @Test
+    fun `manifest fixture encoded file is canonical and confined to the fixture root`() {
+        val renamedError = assertFailsWith<IllegalArgumentException> {
+            AndroidFixtureSupport.manifestFixtureFromValue(
+                manifestDescriptor().apply { this["encoded_file"] = "renamed.norito" },
+            )
+        }
+        assertEquals(true, renamedError.message?.contains("must be exactly"), renamedError.message)
+
+        val traversalError = assertFailsWith<IllegalArgumentException> {
+            AndroidFixtureSupport.manifestFixtureFromValue(
+                manifestDescriptor().apply {
+                    this["name"] = "nested/fixture"
+                    this["encoded_file"] = "nested/fixture.norito"
+                },
+            )
+        }
+        assertEquals(
+            true,
+            traversalError.message?.contains("fixture-root filename"),
+            traversalError.message,
+        )
+    }
+
+    @Test
+    fun `fixture loader retains the canonical direct contract call variant`() {
+        val descriptor = payloadSourceDescriptor()
+        payloadObject(descriptor)["executable"] = mapOf(
+            "ContractCall" to mapOf(
+                "contract_address" to
+                    "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+                "expected_code_hash" to
+                    "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
+                "entrypoint" to "run",
+                "arguments" to listOf(1L, 2L, 3L, 4L),
+            ),
+        )
+
+        val executable = assertIs<Executable.ContractCall>(
+            AndroidFixtureSupport.payloadFixtureFromValue(descriptor).materializePayload().executable,
+        )
+        assertEquals("run", executable.invocation.entrypoint)
+        assertContentEquals(byteArrayOf(1, 2, 3, 4), executable.invocation.arguments)
+    }
+
+    @Test
     fun `fixture loaders require explicit matching positive integer TTL`() {
-        fun payloadDescriptor(): MutableMap<String, Any?> = mutableMapOf(
-            "name" to "ttl-payload",
-            "chain" to "00000001",
-            "authority" to "authority",
-            "creation_time_ms" to 1L,
-            "time_to_live_ms" to 100_000L,
-            "payload" to mutableMapOf<String, Any?>("time_to_live_ms" to 100_000L),
-        )
-
-        fun manifestDescriptor(): MutableMap<String, Any?> = mutableMapOf(
-            "name" to "ttl-manifest",
-            "chain" to "00000001",
-            "authority" to "authority",
-            "creation_time_ms" to 1L,
-            "time_to_live_ms" to 100_000L,
-            "payload_base64" to "AA==",
-            "payload_hash" to "payload-hash",
-            "encoded_file" to "ttl.norito",
-            "encoded_len" to 1L,
-            "signed_base64" to "AQ==",
-            "signed_hash" to "signed-hash",
-            "signed_len" to 1L,
-        )
-
         fun assertRejected(expected: String, block: () -> Unit) {
             val error = assertFailsWith<IllegalStateException>(block = block)
             assertEquals(true, error.message?.contains(expected), error.message)
@@ -338,7 +414,7 @@ class TransactionFixtureParityTest {
 
         assertEquals(
             100_000L,
-            AndroidFixtureSupport.payloadFixtureFromValue(payloadDescriptor()).timeToLiveMs,
+            AndroidFixtureSupport.payloadFixtureFromValue(payloadSourceDescriptor()).timeToLiveMs,
         )
         assertEquals(
             100_000L,
@@ -348,7 +424,7 @@ class TransactionFixtureParityTest {
         for ((invalid, diagnostic) in listOf(null to "must be an integer", 0L to "must be positive")) {
             assertRejected(diagnostic) {
                 AndroidFixtureSupport.payloadFixtureFromValue(
-                    payloadDescriptor().apply { this["time_to_live_ms"] = invalid },
+                    payloadSourceDescriptor().apply { this["time_to_live_ms"] = invalid },
                 )
             }
             assertRejected(diagnostic) {
@@ -357,7 +433,7 @@ class TransactionFixtureParityTest {
                 )
             }
             assertRejected(diagnostic) {
-                val descriptor = payloadDescriptor()
+                val descriptor = payloadSourceDescriptor()
                 @Suppress("UNCHECKED_CAST")
                 val payload = descriptor["payload"] as MutableMap<String, Any?>
                 payload["time_to_live_ms"] = invalid
@@ -367,7 +443,7 @@ class TransactionFixtureParityTest {
 
         assertRejected("is required") {
             AndroidFixtureSupport.payloadFixtureFromValue(
-                payloadDescriptor().apply { remove("time_to_live_ms") },
+                payloadSourceDescriptor().apply { remove("time_to_live_ms") },
             )
         }
         assertRejected("is required") {
@@ -376,14 +452,14 @@ class TransactionFixtureParityTest {
             )
         }
         assertRejected("is required") {
-            val descriptor = payloadDescriptor()
+            val descriptor = payloadSourceDescriptor()
             @Suppress("UNCHECKED_CAST")
             val payload = descriptor["payload"] as MutableMap<String, Any?>
             payload.remove("time_to_live_ms")
             AndroidFixtureSupport.payloadFixtureFromValue(descriptor)
         }
         assertRejected("values must match") {
-            val descriptor = payloadDescriptor()
+            val descriptor = payloadSourceDescriptor()
             @Suppress("UNCHECKED_CAST")
             val payload = descriptor["payload"] as MutableMap<String, Any?>
             payload["time_to_live_ms"] = 99_999L
@@ -395,7 +471,7 @@ class TransactionFixtureParityTest {
     fun `signed transaction decoder round-trips multisig signatures`() {
         val payload = AndroidFixtureSupport.loadPayloadFixtures()
             .single { it.name == "transfer_asset" }
-            .materializePayload(adapter)
+            .materializePayload()
         val payloadBytes = adapter.encodeTransaction(payload)
         val memberPublicKey = TestEd25519Keys.publicKey(0x41)
         val memberSignature = ByteArray(64) { ((0x80 + it) and 0xFF).toByte() }
@@ -460,11 +536,17 @@ class TransactionFixtureParityTest {
                 "authority" to sampleAuthority(0x51),
                 "creation_time_ms" to 0L,
                 "time_to_live_ms" to 100_000L,
+                "nonce" to null,
+                "payload_base64" to "AA==",
+                "payload_hash" to "payload-hash",
+                "signed_base64" to "AQ==",
+                "signed_hash" to "signed-hash",
                 "payload" to mapOf(
                     "chain" to "00000001",
                     "authority" to sampleAuthority(0x51),
                     "creation_time_ms" to 0L,
                     "time_to_live_ms" to 100_000L,
+                    "nonce" to null,
                     "fee_payment" to mapOf(
                         "payer" to "authority",
                         "value" to mapOf(
@@ -484,7 +566,7 @@ class TransactionFixtureParityTest {
             ),
         )
 
-        val payload = fixture.materializePayload(adapter)
+        val payload = fixture.materializePayload()
         val executable = assertIs<Executable.Instructions>(payload.executable)
         assertEquals(1, executable.instructions.size)
         val wireInstruction = assertIs<WirePayload>(executable.instructions.single().payload)
@@ -506,11 +588,23 @@ class TransactionFixtureParityTest {
                 "authority" to sampleAuthority(0x52),
                 "creation_time_ms" to 0L,
                 "time_to_live_ms" to 100_000L,
+                "nonce" to null,
+                "payload_base64" to "AA==",
+                "payload_hash" to "payload-hash",
+                "signed_base64" to "AQ==",
+                "signed_hash" to "signed-hash",
                 "payload" to mapOf(
                     "chain" to "00000001",
                     "authority" to sampleAuthority(0x52),
                     "creation_time_ms" to 0L,
                     "time_to_live_ms" to 100_000L,
+                    "nonce" to null,
+                    "fee_payment" to mapOf(
+                        "payer" to "authority",
+                        "value" to mapOf(
+                            "charge_limits" to emptyList<Map<String, Any?>>(),
+                        ),
+                    ),
                     "metadata" to emptyMap<String, JsonValue>(),
                     "executable" to mapOf(
                         "Instructions" to listOf(
@@ -527,7 +621,7 @@ class TransactionFixtureParityTest {
         )
 
         assertFailsWith<RuntimeException> {
-            fixture.materializePayload(adapter)
+            fixture.materializePayload()
         }
     }
 
@@ -541,11 +635,22 @@ class TransactionFixtureParityTest {
                 "creation_time_ms" to 1_735_000_000_000L,
                 "time_to_live_ms" to 100_000L,
                 "nonce" to null,
+                "payload_base64" to "AA==",
+                "payload_hash" to "payload-hash",
+                "signed_base64" to "AQ==",
+                "signed_hash" to "signed-hash",
                 "payload" to mapOf(
                     "chain" to "00000002",
                     "authority" to sampleAuthority(0x53),
                     "creation_time_ms" to 1_735_000_000_000L,
                     "time_to_live_ms" to 100_000L,
+                    "nonce" to null,
+                    "fee_payment" to mapOf(
+                        "payer" to "authority",
+                        "value" to mapOf(
+                            "charge_limits" to emptyList<Map<String, Any?>>(),
+                        ),
+                    ),
                     "metadata" to emptyMap<String, JsonValue>(),
                     "executable" to mapOf(
                         "Instructions" to listOf(
@@ -557,9 +662,58 @@ class TransactionFixtureParityTest {
         )
 
         assertFailsWith<RuntimeException> {
-            fixture.materializePayload(adapter)
+            fixture.materializePayload()
         }
     }
+
+    private fun payloadSourceDescriptor(): MutableMap<String, Any?> = mutableMapOf(
+        "name" to "ttl-payload",
+        "chain" to "00000001",
+        "authority" to CANONICAL_AUTHORITY,
+        "creation_time_ms" to 1L,
+        "time_to_live_ms" to 100_000L,
+        "nonce" to null,
+        "payload_base64" to "AA==",
+        "payload_hash" to "payload-hash",
+        "signed_base64" to "AQ==",
+        "signed_hash" to "signed-hash",
+        "payload" to mutableMapOf(
+            "chain" to "00000001",
+            "authority" to CANONICAL_AUTHORITY,
+            "creation_time_ms" to 1L,
+            "time_to_live_ms" to 100_000L,
+            "nonce" to null,
+            "fee_payment" to mapOf(
+                "payer" to "authority",
+                "value" to mapOf(
+                    "charge_limits" to emptyList<Map<String, Any?>>(),
+                    "gas_limit" to 1_000L,
+                ),
+            ),
+            "metadata" to emptyMap<String, Any?>(),
+            "executable" to mapOf("Ivm" to "AA=="),
+        ),
+    )
+
+    private fun manifestDescriptor(): MutableMap<String, Any?> = mutableMapOf(
+        "name" to "ttl-manifest",
+        "chain" to "00000001",
+        "authority" to CANONICAL_AUTHORITY,
+        "creation_time_ms" to 1L,
+        "time_to_live_ms" to 100_000L,
+        "nonce" to null,
+        "payload_base64" to "AA==",
+        "payload_hash" to "payload-hash",
+        "encoded_file" to "ttl-manifest.norito",
+        "encoded_len" to 1L,
+        "signed_base64" to "AQ==",
+        "signed_hash" to "signed-hash",
+        "signed_len" to 1L,
+    )
+
+    @Suppress("UNCHECKED_CAST")
+    private fun payloadObject(descriptor: MutableMap<String, Any?>): MutableMap<String, Any?> =
+        descriptor["payload"] as MutableMap<String, Any?>
 
     private fun decodeSignedParts(name: String, signedBytes: ByteArray): SignedParts {
         val decoder = canonicalDecoder(signedBytes)
@@ -636,6 +790,8 @@ class TransactionFixtureParityTest {
     )
 
     companion object {
+        private const val CANONICAL_AUTHORITY =
+            "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
         private const val SIGNED_SCHEMA = "iroha.transaction.SignedTransaction.v1"
         private const val VERSION_BYTE: Byte = 0x01
         private val BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()

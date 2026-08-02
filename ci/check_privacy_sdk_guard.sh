@@ -48,6 +48,12 @@ EXPECTED_IDS = tuple(row[2] for row in PROTOCOL_ROWS)
 RETIRED_IDS = tuple(row[1] for row in matrix_rows("retired"))
 
 RETIRED_PUBLIC_SYMBOLS = (
+    "privacyCapabilitiesV1",
+    "privacyValidateCapabilitiesV1",
+    "privacy_capabilities_v1",
+    "privacy_validate_capabilities_v1",
+    "PRIVACY_CAPABILITY_VALIDATION_STATUS_V1",
+    "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES",
     "privacyProofRequestV1",
     "privacyBuildProofV1",
     "privacyVerifyProofV1",
@@ -1438,14 +1444,61 @@ def check(overrides: dict[str, str] | None = None) -> None:
                 errors,
             )
 
+    backend_registry_sources = (
+        "javascript/iroha_js/src/toriiClient.js",
+        "python/iroha_python/src/iroha_python/_privacy_backends.py",
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTag.kt",
+        "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
+        "csharp/src/Hyperledger.Iroha.Sdk/Zk/VerifyingKeyBackendTag.cs",
+    )
+    retired_alias_markers = (
+        "PendingCatalogBackendAliases",
+        "pendingCatalogBackendAliases",
+        "pendingCompactLabels",
+        "PENDING_CATALOG_BACKEND_ALIASES",
+        "_PENDING_PRODUCTION_BACKEND_ALIASES",
+        "isPendingProductionBackend",
+        "is_pending_production_backend_label",
+    )
+    for relative in backend_registry_sources:
+        source = read(relative, overrides)
+        require(
+            all(marker not in source for marker in retired_alias_markers),
+            f"{relative} must not expose or normalize a pending backend-alias category",
+            errors,
+        )
+        for protocol_id in RETIRED_IDS:
+            require(
+                protocol_id not in source,
+                f"{relative} must treat retired protocol ID {protocol_id} as unsupported",
+                errors,
+            )
+
+    backend_registry_tests = (
+        "javascript/iroha_js/test/openVerifyEnvelope.test.js",
+        "python/iroha_python/tests/privacy_backend_labels_test.py",
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java",
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTagTest.kt",
+        "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift",
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/VerifyingKeyBackendTagTests.cs",
+    )
+    for relative in backend_registry_tests:
+        source = read(relative, overrides)
+        require(
+            "sis-hints-anoncred-pq-v0" in source and "sis-with-hints" in source,
+            f"{relative} must retain both explicit retired SIS alias rejection cases",
+            errors,
+        )
+
     validator_markers = (
         (
             "javascript/iroha_js/src/crypto.js",
-            "privacyValidateCapabilitiesV1",
+            "privacyValidateCompiledProfileCatalogV1",
         ),
         (
             "python/iroha_python/src/iroha_python/crypto.py",
-            "privacy_validate_capabilities_v1",
+            "privacy_validate_compiled_profile_catalog_v1",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
@@ -1468,7 +1521,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
         source = read(relative, overrides)
         require(
             marker in source,
-            f"{relative} must call the shared Rust typed capability validator",
+            f"{relative} must call the shared Rust typed compiled-catalog validator",
             errors,
         )
         require(
@@ -1490,14 +1543,31 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "Rust data model must own the bounded canonical typed capability validator",
         errors,
     )
+    require(
+        "pub fn validate_privacy_compiled_profile_catalog_archive_v1" in rust_protocol
+        and "decode_canonical_with_limits::<PrivacyCompiledProfileCatalogV1>"
+        in rust_protocol
+        and "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1: usize = 256 * 1024"
+        in rust_protocol
+        and "catalog.validate().is_err()" in rust_protocol,
+        "Rust data model must own the bounded canonical typed compiled-catalog validator",
+        errors,
+    )
     for relative in (
         "crates/iroha_js_host/src/lib.rs",
         "python/iroha_python/iroha_python_rs/src/lib.rs",
     ):
         source = read(relative, overrides)
         require(
-            "validate_privacy_capability_archive_v1" in source,
-            f"{relative} must call the shared Rust capability validator directly",
+            "compiled_privacy_profile_catalog_v1" in source
+            and "validate_local_privacy_compiled_profile_catalog_archive_v1" in source
+            and "PrivacyCompiledProfileCatalogV1" in source,
+            f"{relative} must expose and exactly validate only the local compiled catalog",
+            errors,
+        )
+        require(
+            "committed_privacy_capability_snapshot_v1" not in source,
+            f"{relative} must not synthesize a live capability snapshot from local metadata",
             errors,
         )
         require(
@@ -1587,8 +1657,8 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "python/iroha_python/iroha_python_rs/src/lib.rs",
     ):
         source = read(relative, overrides)
-        for marker in ("PrivacyCapabilitySnapshotV1", "PrivacyProtocolIdV1::ALL"):
-            require(marker in source, f"{relative} lost typed snapshot marker {marker}", errors)
+        for marker in ("PrivacyCompiledProfileCatalogV1", "PrivacyProtocolIdV1::ALL"):
+            require(marker in source, f"{relative} lost local catalog marker {marker}", errors)
         for marker in (
             "struct PrivacyAlgorithmEntry",
             "struct PrivacyCapabilitiesV1",
@@ -2178,6 +2248,11 @@ if mode:
             "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 21",
             "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 22",
             1,
+        )
+    elif mode == "--negative-control-canonical-backend-alias-rejection-coverage":
+        path = "python/iroha_python/src/iroha_python/_privacy_backends.py"
+        overrides[path] = read(path, {}) + (
+            '\n_PENDING_PRODUCTION_BACKEND_ALIASES = {"siswithhints"}\n'
         )
     elif mode == "--negative-control-exact12-bridge-test-fixtures":
         path = "crates/connect_norito_bridge/Cargo.toml"
