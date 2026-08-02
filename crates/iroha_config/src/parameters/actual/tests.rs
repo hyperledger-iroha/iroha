@@ -398,20 +398,18 @@ mod tests {
             Some(PathBuf::from("/srv/iroha/policy.norito"));
         operational.settlement.offline.kagemusha_artifact_dir =
             Some(PathBuf::from("/srv/iroha/artifacts"));
-        operational.settlement.offline.enabled = !operational.settlement.offline.enabled;
 
         assert_eq!(
             execution_policy_hash(&operational),
             expected,
-            "worker, cache, accelerator, tracing, transport, gateway, offline service switch, and path drift must not partition validators"
+            "worker, cache, accelerator, tracing, transport, gateway, and offline cache path drift must not partition validators"
         );
     }
 
     #[test]
-    fn offline_defaults_are_dev_friendly_without_weakening_escrow() {
+    fn offline_defaults_need_no_operator_enablement_or_catalog() {
         let offline = Offline::default();
-        assert!(!offline.enabled);
-        assert!(offline.escrow_required);
+        assert!(offline.escrow_accounts.is_empty());
         assert!(offline.kagemusha_release_policy_path.is_none());
         assert!(offline.kagemusha_artifact_dir.is_none());
         assert!(offline.kagemusha_catalog_qualification_seal_path.is_none());

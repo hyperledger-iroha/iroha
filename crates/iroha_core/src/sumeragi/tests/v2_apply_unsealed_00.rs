@@ -226,6 +226,26 @@
         );
     }
 
+    #[test]
+    fn native_amx_prevote_byte_failures_have_precommit_error_classification() {
+        let construction = V2ApplyService::classify_native_amx_evidence_byte_budget_error(
+            NativeAmxParticipantApplicationEvidenceByteBudgetError::ArtifactConstruction,
+        );
+        assert!(matches!(
+            &construction,
+            V2ApplyError::ExecutionCommitment(_)
+        ));
+        assert!(!construction.requires_restart_recovery());
+
+        let budget = V2ApplyService::classify_native_amx_evidence_byte_budget_error(
+            NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
+                "configured Native AMX artifact pair is oversized".to_owned(),
+            ),
+        );
+        assert!(matches!(&budget, V2ApplyError::Validation(_)));
+        assert!(!budget.requires_restart_recovery());
+    }
+
     struct ApplyFixture {
         context: wire::HeightContext,
         body: SignedBlock,
@@ -450,14 +470,22 @@
         }
 
         fn new_with_lane_payload(include_lane_payload: bool) -> Self {
-            Self::new_with_options(include_lane_payload, false)
+            Self::new_with_options(include_lane_payload, false, false)
         }
 
         fn new_with_reputation_archive() -> Self {
-            Self::new_with_options(false, true)
+            Self::new_with_options(false, true, false)
         }
 
-        fn new_with_options(include_lane_payload: bool, include_projection_policies: bool) -> Self {
+        fn new_with_lane_lifecycle() -> Self {
+            Self::new_with_options(false, false, true)
+        }
+
+        fn new_with_options(
+            include_lane_payload: bool,
+            include_projection_policies: bool,
+            enable_nexus: bool,
+        ) -> Self {
             let chain_id: ChainId = "sumeragi-v2-apply-crash-test".into();
             let mut keys = (1_u8..=4)
                 .map(|seed| {
@@ -515,12 +543,20 @@
                 &treasury_account,
                 include_projection_policies,
             );
-            let state = Arc::new(State::new_with_chain_for_testing(
+            let mut state = State::new_with_chain_for_testing(
                 world,
                 Arc::clone(&kura),
                 LiveQueryStore::start_test(),
                 chain_id.clone(),
-            ));
+            );
+            if enable_nexus {
+                let mut nexus = state.nexus_snapshot();
+                nexus.enabled = true;
+                state
+                    .set_nexus(nexus)
+                    .expect("enable Nexus for lane-lifecycle apply fixture");
+            }
+            let state = Arc::new(state);
             let validator_set_pops = keys
                 .iter()
                 .map(|key| {
@@ -1782,14 +1818,52 @@
         crate::queue::LaneQueueReservationKeyV2,
         TransactionEntrypoint,
     ) {
+        reserve_transaction_for_lane_test_with_identity(
+            state,
+            queue,
+            transaction,
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            reservation_owner_hash,
+            proposal_identity_hash,
+        )
+    }
+
+    fn reserve_transaction_for_lane_test_with_identity(
+        state: &State,
+        queue: &Queue,
+        transaction: iroha_data_model::transaction::SignedTransaction,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        reservation_owner_hash: Hash,
+        proposal_identity_hash: Hash,
+    ) -> (
+        crate::queue::LaneQueueReservationKeyV2,
+        TransactionEntrypoint,
+    ) {
         let entrypoint = TransactionEntrypoint::External(transaction.clone());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+        let expected_route = RoutingDecision::new(lane_id, dataspace_id);
         let routing_plan = queue
             .route_plan_with_state(&accepted, state)
-            .expect("resolve reservation fixture route");
+            .expect("resolve reservation fixture route from committed policy");
+        assert_eq!(
+            routing_plan.coordinator_route(),
+            expected_route,
+            "reservation fixture must use the production-derived coordinator route"
+        );
         let admission_context = queue
             .plan_admission_context_with_state(state, &routing_plan)
             .expect("capture reservation fixture admission context");
+        let proposal_height = admission_context.proposal_height;
+        let lane_incarnation = {
+            let coordinator = admission_context
+                .route_incarnations
+                .first()
+                .expect("reservation fixture has a coordinator incarnation");
+            assert_eq!(coordinator.leg.route, expected_route);
+            coordinator.lane_incarnation
+        };
         let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
             state.chain_id_ref(),
             accepted.entrypoint(),
@@ -1808,13 +1882,11 @@
             .expect("durably enqueue globally bound reservation fixture transaction");
         install_fixture_queue_plan_registry_value(state, &binding);
         let scope = LaneQueueReservationScopeV1 {
-            lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::UNIVERSAL,
-            lane_incarnation: state
-                .lane_incarnation_at_height(LaneId::SINGLE, 1)
-                .expect("default lane incarnation at first proposal height"),
-            proposal_height: 1,
-            lane_block_height: 1,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            proposal_height,
+            lane_block_height: proposal_height,
             lane_block_view: 0,
             reservation_owner_hash,
             proposal_identity_hash,
@@ -1830,29 +1902,122 @@
         (*reserved[0].key(), entrypoint)
     }
 
+    fn install_recreatable_reservation_lane(
+        fixture: &ApplyFixture,
+    ) -> iroha_data_model::nexus::LaneConfig {
+        let state = fixture.state.as_ref();
+        let lane = iroha_data_model::nexus::LaneConfig {
+            id: LaneId::new(1),
+            alias: "recreatable-reservation-lane".to_owned(),
+            ..iroha_data_model::nexus::LaneConfig::default()
+        };
+        state
+            .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![lane.clone()],
+                retire: Vec::new(),
+            })
+            .expect("install recreatable reservation lane");
+
+        let validators = fixture
+            .context
+            .roster
+            .iter()
+            .map(|validator| AccountId::new(validator.validator.public_key().clone()))
+            .collect::<Vec<_>>();
+        let validator_bindings = validators
+            .iter()
+            .zip(&fixture.context.roster)
+            .map(|(validator, power)| ManifestValidatorBinding {
+                validator: validator.clone(),
+                peer_id: power.validator.clone(),
+                torii_url: None,
+            })
+            .collect();
+        let status = LaneManifestStatus {
+            lane: lane.id,
+            alias: lane.alias.clone(),
+            dataspace: lane.dataspace_id,
+            visibility: lane.visibility,
+            storage: lane.storage,
+            governance: lane.governance.clone(),
+            manifest_path: Some(std::path::PathBuf::from(
+                "/tmp/sumeragi-v2-apply-recreatable-lane-manifest.json",
+            )),
+            governance_rules: Some(GovernanceRules {
+                validators,
+                validator_bindings,
+                ..GovernanceRules::default()
+            }),
+            privacy_commitments: Vec::new(),
+        };
+        let mut statuses = state
+            .lane_manifests
+            .read()
+            .statuses()
+            .into_iter()
+            .map(|status| (status.lane, status))
+            .collect::<BTreeMap<_, _>>();
+        statuses.insert(lane.id, status);
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+
+        state.nexus.write().routing_policy.rules.insert(
+            0,
+            iroha_config::parameters::actual::LaneRoutingRule {
+                lane: lane.id,
+                dataspace: Some(lane.dataspace_id),
+                matcher: iroha_config::parameters::actual::LaneRoutingMatcher {
+                    account: Some(fixture.service.genesis_account.to_string()),
+                    ..Default::default()
+                },
+            },
+        );
+
+        let mut expected = fixture
+            .context
+            .roster
+            .iter()
+            .map(|validator| validator.validator.clone())
+            .collect::<Vec<_>>();
+        expected.sort();
+        let mut actual = state.authoritative_lane_peer_ids_at_height(lane.id, 1);
+        actual.sort();
+        assert_eq!(
+            actual, expected,
+            "recreatable reservation lane must have authenticated fixture authority"
+        );
+        lane
+    }
+
+    fn replace_recreatable_reservation_lane(
+        state: &State,
+        lane: &iroha_data_model::nexus::LaneConfig,
+    ) -> (Hash, Hash) {
+        let old_incarnation = state
+            .lane_incarnation(lane.id)
+            .expect("recreatable reservation lane has an incarnation");
+        state
+            .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![lane.clone()],
+                retire: vec![lane.id],
+            })
+            .expect("replace reservation lane with the same lane id");
+        let new_incarnation = state
+            .lane_incarnation(lane.id)
+            .expect("replacement reservation lane has an incarnation");
+        assert_ne!(
+            new_incarnation, old_incarnation,
+            "same-ID replacement must rotate the reservation lane incarnation"
+        );
+        (old_incarnation, new_incarnation)
+    }
+
     fn install_fixture_queue_plan_registry_value(
         state: &State,
         binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
     ) {
-        let registry_key = binding.registry_key();
-        let marker_key = format!(
-            "queue_plan_admission_v2_{}_{}",
-            hex::encode(registry_key.chain_id_digest.as_ref()),
-            hex::encode(registry_key.entrypoint_hash.as_ref()),
-        )
-        .parse()
-        .expect("reservation fixture registry marker key");
-        let marker_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV2 {
-            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
-            binding_hash: binding.canonical_hash(),
-        };
-        let marker_payload =
-            norito::to_bytes(&marker_value).expect("encode reservation fixture registry marker");
-        let mut world = state.world.block();
-        world
-            .smart_contract_state
-            .insert(marker_key, marker_payload);
-        world.commit();
+        state
+            .install_queue_plan_pending_binding_for_test(binding)
+            .expect("install complete reservation fixture QueuePlan owner state");
     }
 
     fn reserve_autonomous_crash_batch(
@@ -2045,6 +2210,80 @@
             &proofs,
         )
         .expect("verify fixture successor context")
+    }
+
+    fn commit_exact_fixture_block_metadata(state: &State, block: &SignedBlock) {
+        let height = NonZeroUsize::new(
+            usize::try_from(block.header().height().get())
+                .expect("fixture block height fits usize"),
+        )
+        .expect("fixture block height is non-zero");
+        assert_eq!(
+            height.get(),
+            state.committed_height().saturating_add(1),
+            "fixture State metadata must advance contiguously"
+        );
+        assert_eq!(
+            block.header().prev_block_hash(),
+            state.committed_block_hashes_snapshot().last().copied(),
+            "fixture State metadata must follow the exact committed predecessor"
+        );
+        assert_eq!(
+            state.durable_block_hash(height),
+            Some(block.hash()),
+            "fixture State metadata must name the exact durable Kura block"
+        );
+
+        let mut state_block = state.block(block.header());
+        state_block.block_hashes.push_for_tests(block.hash());
+        state_block
+            .transactions
+            .insert_block(std::collections::HashSet::new(), height);
+        state_block
+            .commit()
+            .expect("commit exact fixture block metadata to State");
+    }
+
+    fn commit_exact_fixture_carrier_chain_to_state(
+        fixture: &ApplyFixture,
+        parent: &SignedBlock,
+        carrier: &SignedBlock,
+    ) {
+        assert_eq!(
+            fixture.state.committed_height(),
+            0,
+            "fixture carrier chain starts from empty State history"
+        );
+        assert_eq!(parent.header().height().get(), 1);
+        assert_eq!(carrier.header().height().get(), 2);
+        assert_eq!(carrier.header().prev_block_hash(), Some(parent.hash()));
+        commit_exact_fixture_block_metadata(fixture.state.as_ref(), parent);
+        commit_exact_fixture_block_metadata(fixture.state.as_ref(), carrier);
+        assert_eq!(fixture.state.committed_height(), 2);
+        assert_eq!(fixture.state.latest_block_hash_fast(), Some(carrier.hash()));
+    }
+
+    fn verified_successor_context_after_fixture_tip(
+        fixture: &ApplyFixture,
+    ) -> super::super::v2::VerifiedHeightContext {
+        assert_eq!(fixture.state.committed_height(), 2);
+        let parent_artifact = fixture
+            .kura
+            .v2_finality_artifact(2)
+            .expect("read fixture carrier finality")
+            .expect("fixture carrier has finality");
+        let state_view = fixture.state.view();
+        let context = crate::sumeragi::v2_context::build_successor_height_context_from_state(
+            &parent_artifact,
+            &state_view,
+            crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
+                fixture.state.as_ref(),
+            ),
+        )
+        .expect("derive fixture context after the exact canonical carrier");
+        drop(state_view);
+        assert_eq!(context.height, 3);
+        verified_context_for_fixture(fixture, &context)
     }
 
     fn reserve_canonical_successor_autonomous_batch(

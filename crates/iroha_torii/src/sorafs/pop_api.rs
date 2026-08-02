@@ -24,13 +24,13 @@ use sorafs_manifest::pop_credentials::{
 };
 use sorafs_node::pop_credentials::{
     POP_API_AUTHENTICATION_MAX_BYTES_V1, POP_CREDENTIAL_SERVICE_POLICY_VERSION_V1,
-    POP_ENCRYPTED_ENROLLMENT_MAX_BYTES_V1, POP_WALLET_DELIVERY_MAX_BYTES_V1, PopApprovalSignerV1,
-    PopApprovalV1, PopCredentialApiActionV1, PopCredentialApiAuthenticator, PopCredentialApiV1,
-    PopCredentialService, PopCredentialServiceError, PopCredentialServicePolicyV1,
-    PopEnrollmentStateV1, PopEnrollmentStatusV1, PopFinalizedRegistryProjectionV1,
-    PopFinalizedRegistryReader, PopIssuanceDraftV1, PopIssuerHsm, PopOutboxSubmitOutcomeV1,
-    PopRegistrySubmitter, PopWalletKeyWrapper, PopWalletVault,
-    pop_enrollment_recipient_public_key_digest_v1,
+    POP_ENCRYPTED_ENROLLMENT_MAX_BYTES_V1, POP_SERVICE_COLLECTION_MAX_V1,
+    POP_WALLET_DELIVERY_MAX_BYTES_V1, PopApprovalSignerV1, PopApprovalV1, PopCredentialApiActionV1,
+    PopCredentialApiAuthenticator, PopCredentialApiV1, PopCredentialService,
+    PopCredentialServiceError, PopCredentialServicePolicyV1, PopEnrollmentStateV1,
+    PopEnrollmentStatusV1, PopFinalizedRegistryProjectionV1, PopFinalizedRegistryReader,
+    PopIssuanceDraftV1, PopIssuerHsm, PopOutboxSubmitOutcomeV1, PopRegistrySubmitter,
+    PopWalletKeyWrapper, PopWalletVault, pop_enrollment_recipient_public_key_digest_v1,
 };
 use tokio::sync::Mutex;
 
@@ -1203,10 +1203,34 @@ impl PopCredentialToriiRuntimeV1 {
         &self,
         credential: &[u8],
     ) -> Result<Option<PopFinalizedRegistryProjectionV1>, PopCredentialServiceError> {
+        self.finalized_projection_bounded(credential, POP_SERVICE_COLLECTION_MAX_V1)
+            .await
+    }
+
+    async fn finalized_projection_bounded(
+        &self,
+        credential: &[u8],
+        max_reconciliations: usize,
+    ) -> Result<Option<PopFinalizedRegistryProjectionV1>, PopCredentialServiceError> {
         self.provider_registry.assert_qualification()?;
         let result = async {
-            let service = self.service.lock().await;
+            let mut service = self.service.lock().await;
             let now_epoch = self.current_epoch()?;
+            drop(
+                self.api
+                    .finalized_projection(&service, credential, now_epoch)?,
+            );
+            let mut caught_up = false;
+            for _ in 0..max_reconciliations {
+                if !service.reconcile_next(self.registry_reader.as_ref(), now_epoch)? {
+                    caught_up = true;
+                    break;
+                }
+            }
+            if !caught_up {
+                return Err(PopCredentialServiceError::RegistryUnavailable);
+            }
+            self.provider_registry.assert_qualification()?;
             self.api
                 .finalized_projection(&service, credential, now_epoch)
         }
@@ -2255,6 +2279,15 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
     use iroha_crypto::{Algorithm, HybridKeyPair, KeyPair, Signature};
+    use sorafs_manifest::pop_credentials::{
+        POP_COMMITMENT_ROOT_VERSION_V1, POP_CREDENTIAL_TREE_DEPTH_V1,
+        POP_REVOCATION_LIST_VERSION_V1, POP_REVOCATION_TREE_DEPTH_V1, PopCommitmentRootV1,
+        PopSignatureAlgorithmV1, PopSignatureV1, pop_commitment_root_signature_digest_v1,
+        pop_revocation_list_signature_digest_v1, pop_revocation_root_v1,
+    };
+    use sorafs_node::pop_credentials::{
+        POP_FINALIZED_REGISTRY_PROJECTION_VERSION_V1, PopFinalizedCursorV1,
+    };
 
     #[derive(Debug)]
     struct FixedAuthenticator {
@@ -2400,9 +2433,49 @@ mod tests {
     impl PopFinalizedRegistryReader for EmptyRegistryReader {
         fn next_after(
             &self,
-            _cursor: Option<sorafs_node::pop_credentials::PopFinalizedCursorV1>,
+            _cursor: Option<PopFinalizedCursorV1>,
         ) -> Result<Option<PopFinalizedRegistryProjectionV1>, String> {
             Ok(None)
+        }
+    }
+
+    #[derive(Debug)]
+    struct ProjectionSequenceReader {
+        projections: Vec<PopFinalizedRegistryProjectionV1>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PopFinalizedRegistryReader for ProjectionSequenceReader {
+        fn next_after(
+            &self,
+            cursor: Option<PopFinalizedCursorV1>,
+        ) -> Result<Option<PopFinalizedRegistryProjectionV1>, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let next_index = match cursor {
+                None => 0,
+                Some(cursor) => self
+                    .projections
+                    .iter()
+                    .position(|projection| projection.cursor == cursor)
+                    .ok_or_else(|| "unknown finalized cursor".to_owned())?
+                    .saturating_add(1),
+            };
+            Ok(self.projections.get(next_index).cloned())
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingRegistryReader {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PopFinalizedRegistryReader for FailingRegistryReader {
+        fn next_after(
+            &self,
+            _cursor: Option<PopFinalizedCursorV1>,
+        ) -> Result<Option<PopFinalizedRegistryProjectionV1>, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err("finalized registry unavailable".to_owned())
         }
     }
 
@@ -2537,6 +2610,108 @@ mod tests {
             .1
             .try_into()
             .expect("Ed25519 public key width")
+    }
+
+    fn pop_scalar(value: u64) -> [u8; 32] {
+        let mut scalar = [0; 32];
+        scalar[..8].copy_from_slice(&value.to_le_bytes());
+        scalar
+    }
+
+    fn empty_pop_signature(keypair: &KeyPair) -> PopSignatureV1 {
+        PopSignatureV1 {
+            algorithm: PopSignatureAlgorithmV1::Ed25519,
+            public_key: public_key_bytes(keypair).to_vec(),
+            signature: Vec::new(),
+        }
+    }
+
+    fn signed_pop_signature(keypair: &KeyPair, digest: [u8; 32]) -> PopSignatureV1 {
+        PopSignatureV1 {
+            algorithm: PopSignatureAlgorithmV1::Ed25519,
+            public_key: public_key_bytes(keypair).to_vec(),
+            signature: Signature::try_new(keypair.private_key(), &digest)
+                .expect("sign finalized projection fixture")
+                .payload()
+                .to_vec(),
+        }
+    }
+
+    fn finalized_projection_fixture(
+        keypair: &KeyPair,
+        height: u64,
+        previous_block_hash: Option<[u8; 32]>,
+        root_version: u64,
+        previous_root_digest: Option<[u8; 32]>,
+    ) -> PopFinalizedRegistryProjectionV1 {
+        let mut root = PopCommitmentRootV1 {
+            version: POP_COMMITMENT_ROOT_VERSION_V1,
+            root_digest: pop_scalar(100 + root_version),
+            tree_size: root_version,
+            tree_depth: POP_CREDENTIAL_TREE_DEPTH_V1,
+            tree_version: root_version,
+            issuer_id: "pop-issuer-runtime-primary".to_owned(),
+            published_at_epoch: 30 + root_version,
+            previous_root_digest,
+            governance_event_digest: [0x61; 32],
+            publisher_signature: empty_pop_signature(keypair),
+        };
+        let root_signature_digest =
+            pop_commitment_root_signature_digest_v1(&root).expect("commitment root digest");
+        root.publisher_signature = signed_pop_signature(keypair, root_signature_digest);
+
+        let mut revocations = PopRevocationListV1 {
+            version: POP_REVOCATION_LIST_VERSION_V1,
+            list_version: root_version,
+            commitment_root: root.root_digest,
+            revocation_root: pop_revocation_root_v1(&[]).expect("empty revocation root"),
+            revocation_tree_depth: POP_REVOCATION_TREE_DEPTH_V1,
+            issuer_id: "pop-issuer-runtime-primary".to_owned(),
+            published_at_epoch: 30 + root_version,
+            entries: Vec::new(),
+            publisher_signature: empty_pop_signature(keypair),
+        };
+        let revocation_signature_digest =
+            pop_revocation_list_signature_digest_v1(&revocations).expect("revocation-list digest");
+        revocations.publisher_signature =
+            signed_pop_signature(keypair, revocation_signature_digest);
+
+        PopFinalizedRegistryProjectionV1 {
+            version: POP_FINALIZED_REGISTRY_PROJECTION_VERSION_V1,
+            cursor: PopFinalizedCursorV1 {
+                block_height: height,
+                block_hash: [u8::try_from(height).expect("fixture height fits in u8"); 32],
+            },
+            previous_block_hash,
+            issuer_policy_digest: [0x51; 32],
+            canonical_commitment_root: norito::to_bytes(&root)
+                .expect("encode commitment-root fixture"),
+            canonical_revocation_list: norito::to_bytes(&revocations)
+                .expect("encode revocation-list fixture"),
+            committed_operation_digests: Vec::new(),
+            rejected_operation_digests: Vec::new(),
+            revoked_issuer_public_keys: Vec::new(),
+        }
+    }
+
+    fn finalized_projection_sequence(count: u64) -> Vec<PopFinalizedRegistryProjectionV1> {
+        let keypair = ed25519(0x41);
+        let mut projections = Vec::new();
+        let mut previous_block_hash = None;
+        let mut previous_root_digest = None;
+        for height in 1..=count {
+            let projection = finalized_projection_fixture(
+                &keypair,
+                height,
+                previous_block_hash,
+                height,
+                previous_root_digest,
+            );
+            previous_block_hash = Some(projection.cursor.block_hash);
+            previous_root_digest = Some(pop_scalar(100 + height));
+            projections.push(projection);
+        }
+        projections
     }
 
     #[test]
@@ -2686,6 +2861,27 @@ mod tests {
         Arc<TestRuntimeProviderRegistry>,
         Arc<FixedFinalizedTimeProvider>,
     ) {
+        runtime_fixture_with_registry_reader(
+            root,
+            expected_registry_handle,
+            provider_registry_handle,
+            Arc::new(EmptyRegistryReader),
+        )
+    }
+
+    fn runtime_fixture_with_registry_reader(
+        root: &std::path::Path,
+        expected_registry_handle: &str,
+        provider_registry_handle: &str,
+        registry_reader: Arc<dyn PopFinalizedRegistryReader>,
+    ) -> (
+        PopCredentialRuntimeConfigV1,
+        Arc<TestRuntimeProviderRegistry>,
+        Arc<FixedFinalizedTimeProvider>,
+    ) {
+        let root = root
+            .canonicalize()
+            .expect("canonical runtime fixture root without symlink ancestors");
         let hsm = Arc::new(TestRuntimeHsm {
             key_id: "pkcs11:pop/issuer:primary".to_owned(),
             keypair: ed25519(0x41),
@@ -2752,7 +2948,7 @@ mod tests {
                 calls: AtomicUsize::new(0),
             }),
             registry_submitter: Arc::new(NoopRegistrySubmitter),
-            registry_reader: Arc::new(EmptyRegistryReader),
+            registry_reader,
             issuance_draft_provider: Arc::new(UnavailableIssuanceDraftProvider),
             wallet_recipient_secret: wallet_recipient.secret().clone(),
             wallet_key_wrapper: Arc::new(TestWalletKeyWrapper {
@@ -2863,6 +3059,187 @@ mod tests {
                 StatusCode::SERVICE_UNAVAILABLE
             );
         }
+    }
+
+    #[tokio::test]
+    async fn finalized_projection_read_drains_successors_and_survives_restart() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let projections = finalized_projection_sequence(2);
+        let expected = projections[1].clone();
+        let reader_calls = Arc::new(AtomicUsize::new(0));
+        let reader: Arc<dyn PopFinalizedRegistryReader> = Arc::new(ProjectionSequenceReader {
+            projections,
+            calls: Arc::clone(&reader_calls),
+        });
+        let (config, registry, _) = runtime_fixture_with_registry_reader(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+            reader,
+        );
+        let runtime =
+            PopCredentialToriiRuntimeV1::open(config, Some(as_runtime_registry(&registry)))
+                .expect("runtime with finalized reader");
+
+        let projection = runtime
+            .finalized_projection(b"credential")
+            .await
+            .expect("fresh projection read")
+            .expect("finalized projection");
+        assert_eq!(projection, expected);
+        assert_eq!(reader_calls.load(Ordering::SeqCst), 3);
+        drop(runtime);
+
+        let (config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        let restarted =
+            PopCredentialToriiRuntimeV1::open(config, Some(as_runtime_registry(&registry)))
+                .expect("restart from durable projection checkpoint");
+        assert_eq!(
+            restarted
+                .finalized_projection(b"credential")
+                .await
+                .expect("projection read after restart"),
+            Some(expected)
+        );
+    }
+
+    #[tokio::test]
+    async fn finalized_projection_reader_error_with_cache_returns_unavailable() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let projections = finalized_projection_sequence(1);
+        let cached = projections[0].clone();
+        let initial_reader: Arc<dyn PopFinalizedRegistryReader> =
+            Arc::new(ProjectionSequenceReader {
+                projections,
+                calls: Arc::new(AtomicUsize::new(0)),
+            });
+        let (config, registry, _) = runtime_fixture_with_registry_reader(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+            initial_reader,
+        );
+        let runtime =
+            PopCredentialToriiRuntimeV1::open(config, Some(as_runtime_registry(&registry)))
+                .expect("runtime with finalized reader");
+        assert_eq!(
+            runtime
+                .finalized_projection(b"credential")
+                .await
+                .expect("initial projection read"),
+            Some(cached.clone())
+        );
+        drop(runtime);
+
+        let reader_calls = Arc::new(AtomicUsize::new(0));
+        let failing_reader: Arc<dyn PopFinalizedRegistryReader> = Arc::new(FailingRegistryReader {
+            calls: Arc::clone(&reader_calls),
+        });
+        let (config, registry, _) = runtime_fixture_with_registry_reader(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+            failing_reader,
+        );
+        let restarted =
+            PopCredentialToriiRuntimeV1::open(config, Some(as_runtime_registry(&registry)))
+                .expect("restart with unavailable finalized reader");
+        let error = restarted
+            .finalized_projection(b"credential")
+            .await
+            .expect_err("cached projection must not mask reader failure");
+        assert_eq!(error, PopCredentialServiceError::RegistryUnavailable);
+        assert_eq!(
+            error_response(error).status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(reader_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            restarted
+                .service
+                .lock()
+                .await
+                .finalized_projection()
+                .cloned(),
+            Some(cached)
+        );
+    }
+
+    #[tokio::test]
+    async fn finalized_projection_read_fails_closed_at_reconciliation_bound() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let projections = finalized_projection_sequence(3);
+        let second = projections[1].clone();
+        let reader_calls = Arc::new(AtomicUsize::new(0));
+        let reader: Arc<dyn PopFinalizedRegistryReader> = Arc::new(ProjectionSequenceReader {
+            projections,
+            calls: Arc::clone(&reader_calls),
+        });
+        let (config, registry, _) = runtime_fixture_with_registry_reader(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+            reader,
+        );
+        let runtime =
+            PopCredentialToriiRuntimeV1::open(config, Some(as_runtime_registry(&registry)))
+                .expect("runtime with finalized reader");
+
+        let error = runtime
+            .finalized_projection_bounded(b"credential", 2)
+            .await
+            .expect_err("unproven head must fail closed at the bound");
+        assert_eq!(error, PopCredentialServiceError::RegistryUnavailable);
+        assert_eq!(
+            error_response(error).status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(reader_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            runtime.service.lock().await.finalized_projection().cloned(),
+            Some(second)
+        );
+    }
+
+    #[tokio::test]
+    async fn unauthorized_projection_read_does_not_reconcile() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let reader_calls = Arc::new(AtomicUsize::new(0));
+        let reader: Arc<dyn PopFinalizedRegistryReader> = Arc::new(ProjectionSequenceReader {
+            projections: finalized_projection_sequence(2),
+            calls: Arc::clone(&reader_calls),
+        });
+        let (config, registry, _) = runtime_fixture_with_registry_reader(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+            reader,
+        );
+        registry
+            .secrets
+            .lock()
+            .expect("runtime secrets lock")
+            .as_mut()
+            .expect("runtime secrets")
+            .authenticator = Arc::new(FixedAuthenticator {
+            principal_digest: [0x71; 32],
+            expires_at_epoch: 1_000,
+            reject: true,
+            calls: AtomicUsize::new(0),
+        });
+        let runtime =
+            PopCredentialToriiRuntimeV1::open(config, Some(as_runtime_registry(&registry)))
+                .expect("runtime with rejecting authenticator");
+
+        assert_eq!(
+            runtime.finalized_projection(b"credential").await,
+            Err(PopCredentialServiceError::Unauthorized)
+        );
+        assert_eq!(reader_calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

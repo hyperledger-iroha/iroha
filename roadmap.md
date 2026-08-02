@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-01
+Last updated: 2026-08-02
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -33,15 +33,28 @@ commands and the final reconciliation pass are recorded.
 The standard outbound request path and exact inbound receiver now have sealed
 cross-replica nonce fencing, and bounded signed DAG block-prefix archive/readback
 is implemented; completed source details and focused results live in
-`status.md`. Remaining work is deployment-owned: install the receiver in both
-Kubo/head ingress administrations, package and supervise genuine
-HSM/authentication/sealed-CAS broker backends, and qualify two instances through
-CAS failover, signer rotation, archive recovery, rollback, public-mirror,
-corruption, outage, and disaster-recovery rehearsals. None of those external
-proofs may be replaced by an in-tree test provider or local source validation.
+`status.md`. The standalone validated config view now exposes an exact public
+service-only broker catalog: slots 8 and 10 for IPNS, slots 8, 9, and 10 for
+signed HTTP, and never producer signer slot 7. Canonical build, deterministic
+release-bundle, and generic OCI inventories now include
+`sorafs_governance_dag`; this closes source discoverability and package
+inventory only.
+
+Remaining work is deployment-owned: install the receiver in both Kubo/head
+ingress administrations, package and supervise a deployment-owned broker
+executable with genuine HSM/authentication/sealed-CAS backends, and qualify two
+instances through CAS failover, signer rotation, archive recovery, rollback,
+public-mirror, corruption, outage, and disaster-recovery rehearsals.
+Clean-source five-target artifacts, binary smokes, SBOM/provenance, L1
+qualification, and L2 promotion evidence remain open. None of those external
+proofs may be replaced by an in-tree test provider, package inventory, or local
+source validation.
 
 ## Repository structure follow-ups
 
+- Repair the current `iroha_core` library-test compile blockers in the Falcon
+  fixtures, query fallback, Kura sidecar fixture, and mixed `rand_core`
+  versions, then rerun the focused transcript and SHA word-row regressions.
 - Continue extracting cohesive production modules from the exact source-budget
   exceptions, prioritizing Kura, Torii routing/API, core state, and other files
   still above 20,000 lines. Preserve public facades and wire behavior; every
@@ -55,10 +68,10 @@ proofs may be replaced by an in-tree test provider or local source validation.
   until every documented and CI caller has migrated, then remove only the
   adapters whose replacement paths have parity evidence.
 
-## Taira testnet recovery and offline-cash release closure
+## Taira testnet recovery and universal offline protocol closure
 
 The source-side consensus-stall, exact `/status.blocks`, supervisor-loop, and
-canonical offline-cash ingress repairs are complete. The restart source patch
+cash-handoff protocol ingress repairs are complete. The restart source patch
 also restores snapshot-authenticated autoscale windows before canonical
 reserialization, rejects any writer payload that cannot pass isolated restart
 initialization before publication/geometry compaction, keeps capture and
@@ -78,12 +91,19 @@ signed-mutation path also uses
 middleware-authenticated signer headers only: Torii rejects retired inline
 signing fields and the CLI omits them from every mutation request. Focused
 locked/offline validation of those consensus and restart repairs is complete.
-Compact-commitment validation, source sealing, release generation, and live
-rollout remain open, and public Taira remains on the old deployment. Do not
-expose it as a ready offline-cash lane until the guarded reset reports
-`mandatory: true`, `ready: true` and passes the signed public canary. The
-rollout checker now enforces that same `/readyz` invariant on public ingress
-and every direct validator rather than relying on controller evidence alone.
+Linked-worktree Git provenance now watches the actual common packed ref and
+safe loose-ref ancestor, preventing the stale nonexistent `packed-refs` input
+from cascading every focused command into a full core relink. The two final
+regression fixtures also mirror production semantics for durable post-decision
+CommitQC rebroadcast and startup auxiliary-lane binding. Source-bound focused
+revalidation, compact-commitment validation, source sealing, release
+generation, and live rollout remain open, and public Taira remains on the old
+deployment. Offline application protocols are a universal Iroha capability;
+they require no validator mode, dataspace or asset opt-in, escrow catalog, or
+backend readiness gate. Taira promotion therefore evaluates ordinary node and
+consensus health only. App/device offline user-interface state must never make
+`/health` or `/readyz` fail. The guarded reset must still pass the signed public
+canary and prove a healthy, advancing validator cohort.
 
 The earlier populated-profile probe is superseded for promotion. Authentic
 final-VK generation exposed a 20,154-byte raw compiled-protocol identity: its
@@ -124,9 +144,10 @@ Remaining work stays ordered and fail-closed:
   probe output is not a candidate or promotion record.
 - Perform the authorized guarded reset across all four validators, deploy the
   sealed binary/configuration/artifact set, and prove advancing consensus,
-  query-visible `/status.blocks` equality, mandatory offline readiness, signed
-  canary operation, a restart below 45 seconds, and continued advancement after
-  restart.
+  query-visible `/status.blocks` equality, ordinary node readiness, universal
+  `cash_handoff_v1`/ABI-21 capability discovery without an asset catalog,
+  signed canary operation, a restart below 45 seconds, and continued
+  advancement after restart.
 
 ## ZK-ACE JavaScript signed-transaction parity
 
@@ -177,15 +198,20 @@ reader deduplication, with post-edit startup-binding and B/A/B regressions
 green. This focused evidence does not replace the complete release gates.
 
 The static release inventory now matches `813/813` production tests across 39
-modules and `397/397` focused `G-UNIT` entries. Its canonical 398-line TSV has
+modules and `418/418` focused `G-UNIT` entries. Its canonical 419-line TSV has
 SHA-256
-`69306f32aa225e45c9f3374966884a4d0f47c7320eb8ea516f1b39543182bbf8`.
+`d395aec773c5d0482cc1f4af970267424243f9362d1e1153c9ea7887db885fa7`.
+The 215-entry core group additionally source-seals grouped Native prevote
+budget rejection before Kura/WSV mutation, exact durable QueuePlan obligation
+authentication and route accumulation, registry corruption checks,
+ApplyCarrier authorization, and the retirement transition/lifecycle-fence
+lock order. This is source inventory consistency, not execution evidence.
 Schema 5 machine-maps 30 conceptual multilane rows to 73 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending source check;
 the final pre-self-documentation source manifest is
 `01754c06f060330a30cddd03c48203a55909832dfcb8475aee3f5b95651a4d5c`.
-The proof-ledger release-inventory subset passes `42/42`, the aggregate
+The proof-ledger release-inventory subset passes `54/54`, the aggregate
 multilane model/source contract suite passes `100/100`, and the static
 Apalache-runner contract passes all 14 fail-closed controls. No current TLC or
 Apalache engine run is claimed.
@@ -195,8 +221,9 @@ hashes to
 `0fb9bf6a490f4974e65a5a03985bfe75321e3de1f54be064c3b088ccffc061d1`;
 the synchronized 48-line wire TSV hashes to
 `f4ed50fb3db8aba9a8f50c542a58b72099c162e5cb927637c83634bca5120ae7`.
-Direct OpenAPI `7/7`, Python `58/58`, JavaScript grouped `56/56`, and
-JavaScript status/diagnostics `43/43` checks pass. Rust, Swift, Kotlin, Java,
+Direct OpenAPI `7/7`, Python `58/58`, JavaScript grouped `56/56`, and the
+dedicated no-skip JavaScript status/diagnostics source inventory `44/44` checks
+pass. Rust, Swift, Kotlin, Java,
 and one archived aggregate source/distribution replay remain open under
 `G-SDK`.
 
@@ -235,7 +262,7 @@ The remaining work is evidence-driven and must stay in order:
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
   obligations remain in the formal dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 397 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 418 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
@@ -246,7 +273,8 @@ The remaining work is evidence-driven and must stay in order:
   and wire-TSV SHA-256
   `f4ed50fb3db8aba9a8f50c542a58b72099c162e5cb927637c83634bca5120ae7`.
   Current direct results are OpenAPI `7/7`, Python `58/58`, JavaScript grouped
-  `56/56`, and JavaScript status/diagnostics `43/43`. Those results are not an
+  `56/56`, and the dedicated no-skip JavaScript status/diagnostics source
+  inventory `44/44`. Those results are not an
   archived all-surface replay; Rust, Swift, Kotlin, Java, and the aggregate
   source/distribution harness remain required.
 - Complete the mandatory unskipped real-network `G-4P` expansion, drain,
@@ -351,11 +379,15 @@ release targets remain open. Kotlin/JVM and mirrored Java Android now require
 both exact bridge ABI 21 and `NativeSignerBridge` JNI contract revision 1 before
 making any native signer call; the Android artifact gate requires both
 revision-probe exports, preventing a stale same-ABI JNI descriptor from passing
-package qualification. The separate SoraFS pin-register SDK workflow, runner,
-and guard are also exact Python 3.12 and install only the hash-locked,
-binary-only `requirements-ci.lock`; a fresh isolated CPython 3.12.13 venv is
-green at 3/3, including positive static coverage and
-version/resolver/major/workflow/lock negative controls.
+package qualification. Swift package admission now requires an embedded
+`NoritoBridge.artifacts.json` declaring exact ABI 21, and its runtime loader
+rejects missing or stale manifest ABI metadata before accepting a matching
+artifact hash. The ignored local XCFramework remains unqualified: it lacks the
+embedded manifest and its sibling manifest declares ABI 19. The separate
+SoraFS pin-register SDK workflow, runner, and guard are also exact Python 3.12
+and install only the hash-locked, binary-only `requirements-ci.lock`; a fresh
+isolated CPython 3.12.13 venv is green at 3/3, including positive static
+coverage and version/resolver/major/workflow/lock negative controls.
 Kotlin/JVM contract-manifest and SCCP protocol-V4 source drift is closed at
 26/26 focused tests, the mirrored Java SCCP harness passes, and the complete
 51-test Android module now exercises the mandatory fresh transaction
@@ -6915,10 +6947,14 @@ excluded from the first release.
   ships deterministic weekly appeal-finance rollup aggregation and validation
   for transparency dashboards, and `sorafs_node` can publish weekly rollups to
   the local Governance DAG filesystem sink, CAR queue, publish-index, and
-  optional signed runtime DAG. Torii also exposes canonical-authenticated local
-  Governance DAG publish endpoints for appeal finance reports and weekly
-  rollups, plus local publish-index-backed report and weekly rollup dashboard
-  endpoints. A checked-in Grafana/Prometheus appeal-finance dashboard and alert
+  optional signed runtime DAG. Torii exposes local publish-index-backed report
+  and weekly-rollup dashboard read endpoints. The caller-supplied report and
+  weekly-rollup POST routes are a V1 hard cut: canonical account authentication
+  does not make caller-provided finance totals authoritative. Production
+  publication remains outstanding until a supervised worker derives reports
+  from one immutable finalized view, derives rollups from the exact
+  authenticated report set, and obtains the configured external HSM signature.
+  A checked-in Grafana/Prometheus appeal-finance dashboard and alert
   pack now covers report/weekly-rollup/settlement-receipt publication
   freshness, failures, payload throughput, rollup lag, receipt/report lag, and
   Governance DAG backlog.

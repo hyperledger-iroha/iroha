@@ -25,12 +25,11 @@ deleted, including its request DTOs, handlers, conversions, and response
 formats. Those routes are neither mountable nor catalogued, advertised by the
 operator panel, or documented in OpenAPI.
 
-The two legacy aggregate-audit POST routes remain only as authenticated and
-operator-authorized retirement tombstones. They return HTTP `410 Gone` without
-parsing the retired request body or mutating the former local registry. They do
-not control or trigger the supervised transparency worker. The signed receipt
-checkpoint and the exact `(sequence, receipt_digest)` transparency projection
-derived from it are the sole audit authority.
+The two former aggregate-audit POST routes are hard-removed. They have no
+compatibility aliases or retirement tombstones and fall through Torii's unknown
+route handling. The signed receipt checkpoint and the exact
+`(sequence, receipt_digest)` transparency projection derived from it are the
+sole audit authority.
 
 The surrounding finalized moderation workflow now has a supervised,
 payload-free panel-notification path. It durably claims a finalized-event
@@ -226,16 +225,9 @@ The catalogued and OpenAPI-described active evidence family is:
 | `GET`, `POST` | `/v1/evidence/retention` | Read due candidates or record a signed retention decision. |
 | `POST` | `/v1/evidence/erasure` | Perform legal-hold-aware irreversible erasure and issue a signed receipt. |
 
-The only retained legacy aggregate-audit routes are authenticated retirement
-tombstones, not compatibility implementations:
-
-| Method | Route | Purpose |
-| --- | --- | --- |
-| `POST` | `/v1/sorafs/moderation/viewer-audit-reports` | Require canonical request authentication and the moderation-operator role, then return HTTP `410 Gone`; the retired body is not parsed and no local audit state is changed. |
-| `POST` | `/v1/sorafs/moderation/viewer-audit-reports/publish-due` | Require the same authentication and authorization, then return HTTP `410 Gone`; it does not run a scheduler or publish a report. |
-
-The deleted `/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-sessions`
-and
+The deleted `/v1/sorafs/moderation/viewer-audit-reports`,
+`/v1/sorafs/moderation/viewer-audit-reports/publish-due`,
+`/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-sessions`, and
 `/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-access`
 routes are not compatibility aliases and are absent from routing, the route
 catalogue, and OpenAPI.
@@ -303,8 +295,8 @@ durably retain the exact signed checkpoint anchor and `(sequence, digest)`
 cursor. An unknown digest, same-sequence substitution, malformed anchor,
 signature change, local cache fork, or cache rollback beyond the single
 verified predecessor fails closed. The authenticated audit and status routes
-are read projections of the checkpoint and do not call the signer. Neither
-legacy tombstone can create or modify audit state.
+are read projections of the checkpoint and do not call the signer. No retired
+aggregate-audit route can create or modify audit state.
 
 A signature proves anchor integrity and governed signer identity, not global
 freshness to a first-time client. Such a client cannot distinguish an older

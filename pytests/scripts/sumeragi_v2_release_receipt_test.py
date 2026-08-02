@@ -1557,7 +1557,13 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     data_lane_certificate_test = writer_symbols["_DATA_LANE_CERTIFICATE_TEST"]
     taira_contract_tests = writer_symbols["_TAIRA_CONTRACT_TESTS"]
     cross_sdk_tests = writer_symbols["_CROSS_SDK_TESTS"]
-    js_status_tests = writer_symbols["_JS_STATUS_TESTS"]
+    rust_sdk_diagnostics_tests = writer_symbols["_RUST_SDK_DIAGNOSTICS_TESTS"]
+    sdk_diagnostics_suite_source_paths = writer_symbols[
+        "_SUMERAGI_SDK_DIAGNOSTICS_SUITE_SOURCE_PATHS"
+    ]
+    sdk_diagnostics_suite_source_manifest = writer_symbols[
+        "_sumeragi_sdk_diagnostics_suite_source_manifest"
+    ](ROOT_DIR)
     native_amx_grouped_fixture = writer_symbols["_NATIVE_AMX_GROUPED_FIXTURE"]
     native_amx_grouped_negative_control_count = writer_symbols[
         "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT"
@@ -1574,6 +1580,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     for relative_path in (
         native_amx_grouped_fixture,
         *native_amx_grouped_suite_source_paths,
+        *sdk_diagnostics_suite_source_paths,
     ):
         retained_source = release_root / relative_path
         retained_source.parent.mkdir(parents=True, exist_ok=True)
@@ -1660,6 +1667,10 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 test_lines = [f"test {data_lane_certificate_test} ... ok"]
             elif leg_id == "cross-sdk-rust":
                 test_lines = [f"test {test} ... ok" for test in cross_sdk_tests]
+            elif leg_id == "sumeragi-diagnostics-rust":
+                test_lines = [
+                    f"test {test} ... ok" for test in rust_sdk_diagnostics_tests
+                ]
             elif leg_id.startswith("taira-contract-"):
                 contract_index = int(leg_id.rsplit("-", 1)[1])
                 test_lines = [
@@ -1683,16 +1694,16 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 "suite_source_manifest_sha256="
                 f"{native_amx_grouped_suite_source_manifest}"
             ]
-        else:
+        elif kind == "sdk-diagnostics":
+            surface = leg_id.removeprefix("sumeragi-diagnostics-")
             log_lines = [
-                *(
-                    line
-                    for test_index, test in enumerate(js_status_tests, 1)
-                    for line in (f"# Subtest: {test}", f"ok {test_index} - {test}")
-                ),
-                f"# pass {required_count}",
-                "# fail 0",
+                "sumeragi-v2-sdk-diagnostics "
+                f"surface={surface} tests={required_count} "
+                "suite_source_manifest_sha256="
+                f"{sdk_diagnostics_suite_source_manifest}"
             ]
+        else:
+            raise AssertionError(f"unsupported corridor leg kind {kind}")
         log.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
         corridor_logs.append(log)
         corridor_summary_lines.append(
@@ -2777,6 +2788,19 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         {"path": str(path.resolve()), "sha256": sha256(path)}
         for path in corridor_logs
     ]
+    diagnostics_legs = {
+        Path(artifact["path"]).stem.split("-", 1)[1]
+        for artifact in receipt["evidence"]["corridor_logs"]
+        if "-sumeragi-diagnostics-" in Path(artifact["path"]).name
+    }
+    assert diagnostics_legs == {
+        "sumeragi-diagnostics-rust",
+        "sumeragi-diagnostics-python",
+        "sumeragi-diagnostics-javascript",
+        "sumeragi-diagnostics-swift",
+        "sumeragi-diagnostics-kotlin",
+        "sumeragi-diagnostics-java",
+    }
     proof_fidelity_logs = [
         artifact
         for artifact in receipt["evidence"]["corridor_logs"]
@@ -3385,9 +3409,11 @@ def test_receipt_rejects_prebuilt_artifact_symlink(
         assert isinstance(binaries, list)
         artifact = binaries[0]
     assert isinstance(artifact, Path)
+    original_bytes = artifact.read_bytes()
+    original_mode = stat.S_IMODE(artifact.stat().st_mode)
     replacement = tmp_path / f"{fixture_name}-replacement"
-    replacement.write_bytes(artifact.read_bytes())
-    replacement.chmod(artifact.stat().st_mode & 0o7777)
+    replacement.write_bytes(original_bytes)
+    replacement.chmod(original_mode)
     parent = artifact.parent
     parent.chmod(0o700)
     artifact.unlink()
@@ -3396,12 +3422,24 @@ def test_receipt_rejects_prebuilt_artifact_symlink(
     except (NotImplementedError, OSError) as error:
         pytest.skip(f"symlinks unavailable: {error}")
     parent.chmod(0o500)
-    writer = fixture_writer(tmp_path)
 
-    result = run_writer(evidence, terminal_output_path(evidence), writer)
+    try:
+        writer = fixture_writer(tmp_path)
+        result = run_writer(evidence, terminal_output_path(evidence), writer)
 
-    assert result.returncode == 1
-    assert "non-symlink" in result.stderr
+        assert result.returncode == 1
+        assert "non-symlink" in result.stderr
+    finally:
+        # Restore the sealed fixture before pytest's retained tmp-path cleanup.
+        # Otherwise the external replacement can be removed before this
+        # read-only parent's symlink, leaving a dangling link that pytest cannot
+        # chmod and unlink on macOS.
+        parent.chmod(0o700)
+        if artifact.is_symlink() or artifact.exists():
+            artifact.unlink()
+        artifact.write_bytes(original_bytes)
+        artifact.chmod(original_mode)
+        parent.chmod(0o500)
 
 
 def test_receipt_rejects_prebuilt_binary_hardlink_alias(tmp_path: Path) -> None:
@@ -5308,6 +5346,69 @@ def test_receipt_rejects_rehashed_malformed_corridor_log(
 
     assert result.returncode == 1
     assert "ambiguous Cargo transcript" in result.stderr
+
+
+def test_receipt_rejects_sumeragi_diagnostics_rust_log_missing_named_test(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    summary = evidence["corridor_summary"]
+    completion = evidence["corridor_completion"]
+    assert isinstance(summary, Path)
+    assert isinstance(completion, Path)
+    summary_lines = summary.read_text(encoding="utf-8").splitlines()
+    row_index = next(
+        index
+        for index, line in enumerate(summary_lines[1:], 1)
+        if "\tsumeragi-diagnostics-rust\t" in line
+    )
+    row = summary_lines[row_index].split("\t")
+    log = summary.parent / row[8]
+    log_lines = log.read_text(encoding="utf-8").splitlines()
+    named_test_index = next(
+        index
+        for index, line in enumerate(log_lines)
+        if line.startswith("test client::tests::get_sumeragi_")
+    )
+    del log_lines[named_test_index]
+    log.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+    row[7] = sha256(log)
+    summary_lines[row_index] = "\t".join(row)
+    summary.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
+    completion_fields = read_tsv_fields(completion)
+    completion_fields["summary_sha256"] = sha256(summary)
+    write_tsv(completion, completion_fields)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert (
+        "corridor exact Cargo leg sumeragi-diagnostics-rust lacks its named test"
+        in result.stderr
+    )
+
+
+def test_receipt_rejects_sumeragi_diagnostics_suite_source_drift(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    release_root = evidence["release_root"]
+    assert isinstance(release_root, Path)
+    source = (
+        release_root
+        / "python/iroha_python/tests/client_sumeragi_v2_status_test.py"
+    )
+    source.write_bytes(source.read_bytes() + b"\n# forged post-harness source drift\n")
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert (
+        "corridor Sumeragi v2 SDK diagnostics python leg is not bound to the "
+        "exact suite sources" in result.stderr
+    )
 
 
 def test_hand_invoked_writer_rejects_fake_machine_completion_artifacts(

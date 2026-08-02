@@ -149,12 +149,159 @@ pub enum IrohaRuntimeProviderSlotV1 {
 }
 
 impl IrohaRuntimeProviderSlotV1 {
+    /// Every first-release runtime-provider slot in wire-ID order.
+    pub const ALL: [Self; 55] = [
+        Self::ModerationQuarantineKeyWrapper,
+        Self::PrivacyCyclePrfProvider,
+        Self::PrivacyReleaseAnchor,
+        Self::TransparencyLeaderLease,
+        Self::FencedPrivacyPublisher,
+        Self::FencedPrivacyHeadReader,
+        Self::GovernanceDagSigner,
+        Self::GovernanceDagIpfsAuthenticator,
+        Self::GovernanceDagHeadAuthenticator,
+        Self::GovernanceDagCheckpointStore,
+        Self::StreamTokenSigner,
+        Self::AppealFinanceTransactionSigner,
+        Self::AppealFinanceCheckpoint,
+        Self::ProofOutcomeTransactionSigner,
+        Self::RepairTransactionSigner,
+        Self::ReserveTransactionSigner,
+        Self::OrderbookTransactionSigner,
+        Self::ModerationTransactionSigner,
+        Self::ModerationSettlementHandoff,
+        Self::ModerationPublicationHandoff,
+        Self::ModerationPanelNotification,
+        Self::EvidenceViewerWebAuthn,
+        Self::EvidenceViewerGrantAuthority,
+        Self::EvidenceViewerReceiptSigner,
+        Self::EvidenceViewerErasure,
+        Self::EvidenceViewerCheckpointStore,
+        Self::PopCredentialProviderRegistry,
+        Self::PotrGatewaySigner,
+        Self::PotrProviderSigner,
+        Self::GatewayAcmeClient,
+        Self::GatewayComplianceFeedTransport,
+        Self::ReputationJournalTransactionSubmitter,
+        Self::ReputationThresholdSigner,
+        Self::ReputationGovernanceDag,
+        Self::BillingFinalizedQuery,
+        Self::BillingJournalVerifier,
+        Self::BillingStatementSigner,
+        Self::BillingStatementPublisher,
+        Self::BillingAcknowledgementAuthority,
+        Self::BillingEpochWitnessStore,
+        Self::ProviderIngestAuthenticatedSource,
+        Self::ProviderIngestCompletionSignerResolver,
+        Self::ProviderIngestCompletionSigner,
+        Self::ProviderIngestCheckpointStore,
+        Self::ProviderIngestRetentionAuthority,
+        Self::PorFinalizedReplayArchive,
+        Self::EvidenceViewerCompactionArchive,
+        Self::ReputationFinalizedArchiveRetentionAuthority,
+        Self::SoracloudRuntimeMutationSigner,
+        Self::ReputationJournalCheckpoint,
+        Self::SoracloudHfInferenceCredentialProvider,
+        Self::ModerationCheckpointStore,
+        Self::EvidenceViewerTransparencyPublisher,
+        Self::StreamTokenGatewayAdmission,
+        Self::ModerationPanelNotificationArchive,
+    ];
+
     /// Return the stable first-release broker protocol identifier for this role.
     #[must_use]
     pub const fn wire_id(self) -> u16 {
         self as u16
     }
+
+    /// Decode one stable first-release broker protocol role identifier.
+    #[must_use]
+    pub const fn from_wire_id(wire_id: u16) -> Option<Self> {
+        match wire_id {
+            1 => Some(Self::ModerationQuarantineKeyWrapper),
+            2 => Some(Self::PrivacyCyclePrfProvider),
+            3 => Some(Self::PrivacyReleaseAnchor),
+            4 => Some(Self::TransparencyLeaderLease),
+            5 => Some(Self::FencedPrivacyPublisher),
+            6 => Some(Self::FencedPrivacyHeadReader),
+            7 => Some(Self::GovernanceDagSigner),
+            8 => Some(Self::GovernanceDagIpfsAuthenticator),
+            9 => Some(Self::GovernanceDagHeadAuthenticator),
+            10 => Some(Self::GovernanceDagCheckpointStore),
+            11 => Some(Self::StreamTokenSigner),
+            12 => Some(Self::AppealFinanceTransactionSigner),
+            13 => Some(Self::AppealFinanceCheckpoint),
+            14 => Some(Self::ProofOutcomeTransactionSigner),
+            15 => Some(Self::RepairTransactionSigner),
+            16 => Some(Self::ReserveTransactionSigner),
+            17 => Some(Self::OrderbookTransactionSigner),
+            18 => Some(Self::ModerationTransactionSigner),
+            19 => Some(Self::ModerationSettlementHandoff),
+            20 => Some(Self::ModerationPublicationHandoff),
+            21 => Some(Self::ModerationPanelNotification),
+            22 => Some(Self::EvidenceViewerWebAuthn),
+            23 => Some(Self::EvidenceViewerGrantAuthority),
+            24 => Some(Self::EvidenceViewerReceiptSigner),
+            25 => Some(Self::EvidenceViewerErasure),
+            26 => Some(Self::EvidenceViewerCheckpointStore),
+            27 => Some(Self::PopCredentialProviderRegistry),
+            28 => Some(Self::PotrGatewaySigner),
+            29 => Some(Self::PotrProviderSigner),
+            30 => Some(Self::GatewayAcmeClient),
+            31 => Some(Self::GatewayComplianceFeedTransport),
+            32 => Some(Self::ReputationJournalTransactionSubmitter),
+            33 => Some(Self::ReputationThresholdSigner),
+            34 => Some(Self::ReputationGovernanceDag),
+            35 => Some(Self::BillingFinalizedQuery),
+            36 => Some(Self::BillingJournalVerifier),
+            37 => Some(Self::BillingStatementSigner),
+            38 => Some(Self::BillingStatementPublisher),
+            39 => Some(Self::BillingAcknowledgementAuthority),
+            40 => Some(Self::BillingEpochWitnessStore),
+            41 => Some(Self::ProviderIngestAuthenticatedSource),
+            42 => Some(Self::ProviderIngestCompletionSignerResolver),
+            43 => Some(Self::ProviderIngestCompletionSigner),
+            44 => Some(Self::ProviderIngestCheckpointStore),
+            45 => Some(Self::ProviderIngestRetentionAuthority),
+            46 => Some(Self::PorFinalizedReplayArchive),
+            47 => Some(Self::EvidenceViewerCompactionArchive),
+            48 => Some(Self::ReputationFinalizedArchiveRetentionAuthority),
+            49 => Some(Self::SoracloudRuntimeMutationSigner),
+            50 => Some(Self::ReputationJournalCheckpoint),
+            51 => Some(Self::SoracloudHfInferenceCredentialProvider),
+            52 => Some(Self::ModerationCheckpointStore),
+            53 => Some(Self::EvidenceViewerTransparencyPublisher),
+            54 => Some(Self::StreamTokenGatewayAdmission),
+            55 => Some(Self::ModerationPanelNotificationArchive),
+            _ => None,
+        }
+    }
+
+    /// Return the maximum number of configured bindings for this V1 role.
+    #[must_use]
+    pub const fn max_configured_multiplicity(self) -> usize {
+        match self {
+            Self::AppealFinanceTransactionSigner => {
+                iroha_config::parameters::SORAFS_APPEAL_FINANCE_MAX_SUBMITTER_SIGNERS_V1
+            }
+            _ => 1,
+        }
+    }
 }
+
+const fn runtime_provider_catalog_max_entries_v1() -> usize {
+    let mut total = 0;
+    let mut index = 0;
+    while index < IrohaRuntimeProviderSlotV1::ALL.len() {
+        total += IrohaRuntimeProviderSlotV1::ALL[index].max_configured_multiplicity();
+        index += 1;
+    }
+    total
+}
+
+/// Maximum complete V1 catalog derived from every configured role multiplicity.
+pub(crate) const RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1: usize =
+    runtime_provider_catalog_max_entries_v1();
 
 /// Public identity and optional exact qualification of one requested provider.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1319,6 +1466,125 @@ impl IrohaRuntimeProviderBindingsV1 {
         })
     }
 
+    /// Project the exact public provider catalog requested by a validated
+    /// standalone Governance DAG service view.
+    ///
+    /// Producer-signing fields in the view are deliberately excluded because
+    /// the standalone service consumes already signed producer output. The
+    /// resulting catalog contains slots 8 and 10 in IPNS mode and slots 8, 9,
+    /// and 10 in signed-HTTP mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the service is disabled, its head mode is invalid,
+    /// a required public binding is missing, or an in-memory view was manually
+    /// substituted with a noncanonical, zero-qualified, or test-marked
+    /// binding.
+    pub fn try_from_governance_dag_service_view(
+        chain_id: &iroha_data_model::ChainId,
+        view: &iroha_config::parameters::actual::SorafsGovernanceDagServiceView,
+    ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
+        let service = &view.service;
+        if !service.enabled {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+            ));
+        }
+
+        let ipfs_authenticator = match (
+            service.ipfs_authenticator_handle.as_deref(),
+            service.ipfs_authenticator_revision,
+            service.ipfs_authenticator_policy_digest,
+            service.ipfs_request_auth_public_key,
+        ) {
+            (Some(handle), Some(revision), Some(policy_digest), Some(public_key)) => {
+                GovernanceDagRequestAuthBindingProjectionV1 {
+                    handle,
+                    qualification: sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
+                        revision,
+                        policy_digest,
+                    ),
+                    public_key,
+                }
+            }
+            _ => {
+                return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                    IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+                ));
+            }
+        };
+        let head_authenticator = match service.head_mode.as_str() {
+            "signed_http" => match (
+                service.head_authenticator_handle.as_deref(),
+                service.head_authenticator_revision,
+                service.head_authenticator_policy_digest,
+                service.head_request_auth_public_key,
+            ) {
+                (Some(handle), Some(revision), Some(policy_digest), Some(public_key)) => {
+                    Some(GovernanceDagRequestAuthBindingProjectionV1 {
+                        handle,
+                        qualification:
+                            sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
+                                revision,
+                                policy_digest,
+                            ),
+                        public_key,
+                    })
+                }
+                _ => {
+                    return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                        IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
+                    ));
+                }
+            },
+            "ipns"
+                if service.head_authenticator_handle.is_none()
+                    && service.head_authenticator_revision.is_none()
+                    && service.head_authenticator_policy_digest.is_none()
+                    && service.head_request_auth_public_key.is_none() =>
+            {
+                None
+            }
+            _ => {
+                return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                    IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
+                ));
+            }
+        };
+        let checkpoint_store_qualification = match (
+            service.checkpoint_store_revision,
+            service.checkpoint_store_policy_digest,
+        ) {
+            (Some(revision), Some(policy_digest)) => {
+                sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
+                    revision,
+                    policy_digest,
+                )
+            }
+            _ => {
+                return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                    IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore,
+                ));
+            }
+        };
+        let Some(checkpoint_store_handle) = service.checkpoint_store_handle.as_deref() else {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore,
+            ));
+        };
+
+        Self::try_from_governance_dag_service_projection(
+            chain_id,
+            GovernanceDagServiceBindingProjectionV1 {
+                ipfs_authenticator,
+                head_authenticator,
+                request_auth_max_body_bytes: service.max_request_bytes.0,
+                checkpoint_store_handle,
+                checkpoint_store_qualification,
+            },
+        )
+    }
+
     /// Project the exact public provider catalog requested by the standalone
     /// Governance DAG service.
     ///
@@ -1467,6 +1733,31 @@ impl IrohaRuntimeProviderBindingsV1 {
                     Some(policy_digest),
                 )
                 .expect("test binding must be production-shaped"),
+            ],
+        }
+    }
+
+    /// Construct one exactly qualified Governance DAG signer test catalog.
+    #[cfg(test)]
+    pub(crate) fn qualified_governance_dag_signer_for_test(
+        chain_id: impl Into<String>,
+        handle: impl Into<String>,
+        revision: u64,
+        policy_digest: [u8; 32],
+        publisher_peer_id: &str,
+        publisher_public_key_hex: &str,
+    ) -> Self {
+        Self {
+            chain_id: chain_id.into(),
+            bindings: vec![
+                IrohaRuntimeProviderBindingV1::try_new_governance_dag_signer(
+                    handle,
+                    revision,
+                    policy_digest,
+                    publisher_peer_id,
+                    publisher_public_key_hex,
+                )
+                .expect("test Governance DAG signer binding must be production-shaped"),
             ],
         }
     }
@@ -3235,72 +3526,56 @@ mod tests {
 
     #[test]
     fn runtime_provider_slot_wire_ids_are_stable_and_ordered() {
-        use IrohaRuntimeProviderSlotV1 as Slot;
-
-        let slots = [
-            Slot::ModerationQuarantineKeyWrapper,
-            Slot::PrivacyCyclePrfProvider,
-            Slot::PrivacyReleaseAnchor,
-            Slot::TransparencyLeaderLease,
-            Slot::FencedPrivacyPublisher,
-            Slot::FencedPrivacyHeadReader,
-            Slot::GovernanceDagSigner,
-            Slot::GovernanceDagIpfsAuthenticator,
-            Slot::GovernanceDagHeadAuthenticator,
-            Slot::GovernanceDagCheckpointStore,
-            Slot::StreamTokenSigner,
-            Slot::AppealFinanceTransactionSigner,
-            Slot::AppealFinanceCheckpoint,
-            Slot::ProofOutcomeTransactionSigner,
-            Slot::RepairTransactionSigner,
-            Slot::ReserveTransactionSigner,
-            Slot::OrderbookTransactionSigner,
-            Slot::ModerationTransactionSigner,
-            Slot::ModerationSettlementHandoff,
-            Slot::ModerationPublicationHandoff,
-            Slot::ModerationPanelNotification,
-            Slot::EvidenceViewerWebAuthn,
-            Slot::EvidenceViewerGrantAuthority,
-            Slot::EvidenceViewerReceiptSigner,
-            Slot::EvidenceViewerErasure,
-            Slot::EvidenceViewerCheckpointStore,
-            Slot::PopCredentialProviderRegistry,
-            Slot::PotrGatewaySigner,
-            Slot::PotrProviderSigner,
-            Slot::GatewayAcmeClient,
-            Slot::GatewayComplianceFeedTransport,
-            Slot::ReputationJournalTransactionSubmitter,
-            Slot::ReputationThresholdSigner,
-            Slot::ReputationGovernanceDag,
-            Slot::BillingFinalizedQuery,
-            Slot::BillingJournalVerifier,
-            Slot::BillingStatementSigner,
-            Slot::BillingStatementPublisher,
-            Slot::BillingAcknowledgementAuthority,
-            Slot::BillingEpochWitnessStore,
-            Slot::ProviderIngestAuthenticatedSource,
-            Slot::ProviderIngestCompletionSignerResolver,
-            Slot::ProviderIngestCompletionSigner,
-            Slot::ProviderIngestCheckpointStore,
-            Slot::ProviderIngestRetentionAuthority,
-            Slot::PorFinalizedReplayArchive,
-            Slot::EvidenceViewerCompactionArchive,
-            Slot::ReputationFinalizedArchiveRetentionAuthority,
-            Slot::SoracloudRuntimeMutationSigner,
-            Slot::ReputationJournalCheckpoint,
-            Slot::SoracloudHfInferenceCredentialProvider,
-            Slot::ModerationCheckpointStore,
-            Slot::EvidenceViewerTransparencyPublisher,
-            Slot::StreamTokenGatewayAdmission,
-            Slot::ModerationPanelNotificationArchive,
-        ];
-        for (index, slot) in slots.into_iter().enumerate() {
+        let mut seen = [false; 56];
+        for (index, slot) in IrohaRuntimeProviderSlotV1::ALL.into_iter().enumerate() {
+            let wire_id = slot.wire_id();
             assert_eq!(
-                usize::from(slot.wire_id()),
+                usize::from(wire_id),
                 index + 1,
                 "V1 broker role identifiers must stay contiguous and immutable"
             );
+            assert_eq!(
+                IrohaRuntimeProviderSlotV1::from_wire_id(wire_id),
+                Some(slot),
+                "every advertised wire ID must have an exact inverse"
+            );
+            assert!(
+                !std::mem::replace(&mut seen[usize::from(wire_id)], true),
+                "wire ID {wire_id} must not be duplicated"
+            );
         }
+        assert!(
+            seen[1..].iter().all(|present| *present),
+            "the V1 slot inventory must not omit a wire ID"
+        );
+        for unknown in [0, 56, u16::MAX] {
+            assert_eq!(
+                IrohaRuntimeProviderSlotV1::from_wire_id(unknown),
+                None,
+                "unknown wire ID {unknown} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_provider_catalog_capacity_is_derived_from_configured_multiplicities() {
+        let derived = IrohaRuntimeProviderSlotV1::ALL
+            .into_iter()
+            .map(IrohaRuntimeProviderSlotV1::max_configured_multiplicity)
+            .sum::<usize>();
+        assert_eq!(derived, RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1);
+        assert_eq!(RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1, 182);
+        assert_eq!(
+            IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner
+                .max_configured_multiplicity(),
+            iroha_config::parameters::SORAFS_APPEAL_FINANCE_MAX_SUBMITTER_SIGNERS_V1
+        );
+        assert!(
+            IrohaRuntimeProviderSlotV1::ALL.into_iter().all(|slot| slot
+                == IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner
+                || slot.max_configured_multiplicity() == 1),
+            "every non-appeal role is singular in the V1 configuration projection"
+        );
     }
 
     #[test]
@@ -4628,23 +4903,25 @@ mod tests {
         }
     }
 
-    fn governance_service_projection(
-        signed_head: bool,
-    ) -> GovernanceDagServiceBindingProjectionV1<'static> {
-        GovernanceDagServiceBindingProjectionV1 {
-            ipfs_authenticator: GovernanceDagRequestAuthBindingProjectionV1 {
-                handle: GOVERNANCE_IPFS_HANDLE,
-                qualification: GOVERNANCE_QUALIFICATION,
-                public_key: governance_auth_public_key(GOVERNANCE_IPFS_HANDLE),
+    fn governance_service_view(
+        head_mode: &str,
+    ) -> iroha_config::parameters::actual::SorafsGovernanceDagServiceView {
+        let mut config = default_runtime_config();
+        configure_governance_service(&mut config, head_mode);
+        let mut service = config.torii.sorafs_storage.governance_dag_service;
+        service.max_request_bytes = Bytes(65_536);
+        let producer_public_key_hex = hex::encode(governance_signer_public_key(0x73));
+        iroha_config::parameters::actual::SorafsGovernanceDagServiceView {
+            source_dir: None,
+            producer_publisher_peer_id: Some(GOVERNANCE_PUBLISHER_PEER_ID.to_owned()),
+            producer_signer_handle: Some(GOVERNANCE_SIGNER_HANDLE.to_owned()),
+            producer_signer_revision: Some(GOVERNANCE_QUALIFICATION.revision),
+            producer_signer_policy_digest: Some(GOVERNANCE_QUALIFICATION.policy_digest),
+            producer_publisher_public_key_hex: Some(producer_public_key_hex.clone()),
+            service: {
+                service.publisher_public_key_hex = Some(producer_public_key_hex);
+                service
             },
-            head_authenticator: signed_head.then(|| GovernanceDagRequestAuthBindingProjectionV1 {
-                handle: GOVERNANCE_HEAD_HANDLE,
-                qualification: GOVERNANCE_QUALIFICATION,
-                public_key: governance_auth_public_key(GOVERNANCE_HEAD_HANDLE),
-            }),
-            request_auth_max_body_bytes: 65_536,
-            checkpoint_store_handle: GOVERNANCE_CHECKPOINT_HANDLE,
-            checkpoint_store_qualification: GOVERNANCE_QUALIFICATION,
         }
     }
 
@@ -4863,9 +5140,9 @@ mod tests {
                 checkpoint_store_revision: 7,
                 checkpoint_store_policy_digest: [0xC7; 32],
                 checkpoint_store_attestation_public_key: [
-                    0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3,
-                    0xc9, 0x64, 0x07, 0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25,
-                    0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a,
+                    0x3d, 0x40, 0x17, 0xc3, 0xe8, 0x43, 0x89, 0x5a, 0x92, 0xb7, 0x0a, 0xa7,
+                    0x4d, 0x1b, 0x7e, 0xbc, 0x9c, 0x98, 0x2c, 0xcf, 0x2e, 0xc4, 0x96, 0x8c,
+                    0xc0, 0xcd, 0x55, 0xf1, 0x2a, 0xf4, 0x66, 0x0c,
                 ],
                 maintenance_authority: iroha_data_model::account::AccountId::new(
                     maintenance_key.public_key().clone(),
@@ -4941,9 +5218,9 @@ mod tests {
         assert_eq!(
             checkpoint.moderation_checkpoint_attestation_public_key(),
             Some([
-                0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64,
-                0x07, 0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68,
-                0xf7, 0x07, 0x51, 0x1a,
+                0x3d, 0x40, 0x17, 0xc3, 0xe8, 0x43, 0x89, 0x5a, 0x92, 0xb7, 0x0a, 0xa7, 0x4d, 0x1b,
+                0x7e, 0xbc, 0x9c, 0x98, 0x2c, 0xcf, 0x2e, 0xc4, 0x96, 0x8c, 0xc0, 0xcd, 0x55, 0xf1,
+                0x2a, 0xf4, 0x66, 0x0c,
             ])
         );
         let archive = bindings
@@ -4996,6 +5273,43 @@ mod tests {
                         | IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
                 ))
             ));
+        }
+    }
+
+    #[test]
+    fn moderation_archive_projection_rejects_checkpoint_role_collisions() {
+        let archive_slot = IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive;
+        for mutation in 0..3 {
+            let mut config = default_runtime_config();
+            configure_moderation_runtime(&mut config);
+            let moderation = config
+                .torii
+                .sorafs_storage
+                .moderation_orchestrator
+                .as_mut()
+                .expect("configured moderation runtime");
+            match mutation {
+                0 => {
+                    moderation.panel_notification_archive_handle =
+                        moderation.checkpoint_store_handle.clone();
+                }
+                1 => {
+                    moderation.checkpoint_store_attestation_public_key =
+                        moderation.panel_notification_archive_bootstrap_public_key;
+                }
+                2 => {
+                    moderation.panel_notification_archive_public_key =
+                        moderation.checkpoint_store_attestation_public_key;
+                }
+                _ => unreachable!(),
+            }
+
+            assert_eq!(
+                IrohaRuntimeProviderBindingsV1::try_from_config(&config),
+                Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                    archive_slot
+                ))
+            );
         }
     }
 
@@ -6676,30 +6990,50 @@ mod tests {
     #[test]
     fn standalone_governance_service_projection_is_exact_and_mode_scoped() {
         let chain_id = iroha_data_model::ChainId::from("governance-service-projection");
-        let signed_head =
-            IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_projection(
-                &chain_id,
-                governance_service_projection(true),
-            )
-            .expect("project signed-head standalone service bindings");
+        let signed_head_view = governance_service_view("signed_http");
+        assert!(signed_head_view.producer_signer_handle.is_some());
+        let signed_head = IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_view(
+            &chain_id,
+            &signed_head_view,
+        )
+        .expect("project signed-head standalone service bindings");
         assert_eq!(signed_head.chain_id(), chain_id.to_string());
         assert_eq!(
             signed_head
                 .iter()
-                .map(IrohaRuntimeProviderBindingV1::slot)
+                .map(|binding| (binding.slot(), binding.handle()))
                 .collect::<Vec<_>>(),
             vec![
-                IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
-                IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
-                IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore,
+                (
+                    IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+                    GOVERNANCE_IPFS_HANDLE,
+                ),
+                (
+                    IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
+                    GOVERNANCE_HEAD_HANDLE,
+                ),
+                (
+                    IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore,
+                    GOVERNANCE_CHECKPOINT_HANDLE,
+                ),
             ]
         );
-        for binding in signed_head.iter().take(2) {
+        for binding in signed_head.iter() {
+            assert_eq!(binding.revision(), Some(GOVERNANCE_QUALIFICATION.revision));
             assert_eq!(
-                binding.governance_request_auth_max_body_bytes(),
-                Some(65_536)
+                binding.policy_digest(),
+                Some(GOVERNANCE_QUALIFICATION.policy_digest)
             );
-            assert!(binding.governance_request_auth_public_key().is_some());
+            if binding.slot() == IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore {
+                assert_eq!(binding.governance_request_auth_max_body_bytes(), None);
+                assert_eq!(binding.governance_request_auth_public_key(), None);
+            } else {
+                assert_eq!(
+                    binding.governance_request_auth_max_body_bytes(),
+                    Some(65_536)
+                );
+                assert!(binding.governance_request_auth_public_key().is_some());
+            }
         }
         assert!(
             signed_head.iter().all(|binding| {
@@ -6707,34 +7041,110 @@ mod tests {
             })
         );
 
-        let ipns = IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_projection(
+        let ipns = IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_view(
             &chain_id,
-            governance_service_projection(false),
+            &governance_service_view("ipns"),
         )
         .expect("project IPNS standalone service bindings");
         assert_eq!(
             ipns.iter()
-                .map(IrohaRuntimeProviderBindingV1::slot)
+                .map(|binding| (binding.slot(), binding.handle()))
                 .collect::<Vec<_>>(),
             vec![
-                IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
-                IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore,
+                (
+                    IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+                    GOVERNANCE_IPFS_HANDLE,
+                ),
+                (
+                    IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore,
+                    GOVERNANCE_CHECKPOINT_HANDLE,
+                ),
             ]
         );
+        assert!(ipns.iter().all(|binding| {
+            !matches!(
+                binding.slot(),
+                IrohaRuntimeProviderSlotV1::GovernanceDagSigner
+                    | IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator
+            )
+        }));
     }
 
     #[test]
-    fn standalone_governance_service_projection_rejects_invalid_public_bounds() {
+    fn standalone_governance_service_view_projection_rejects_invalid_public_bindings() {
         let chain_id = iroha_data_model::ChainId::from("governance-service-projection");
-        let mut projection = governance_service_projection(true);
-        projection.request_auth_max_body_bytes = 0;
-        assert_eq!(
-            IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_projection(
-                &chain_id, projection,
-            ),
-            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
-            ))
+        let assert_invalid =
+            |view: &iroha_config::parameters::actual::SorafsGovernanceDagServiceView, slot| {
+                assert_eq!(
+                    IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_view(
+                        &chain_id, view,
+                    ),
+                    Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))
+                );
+            };
+
+        let mut disabled = governance_service_view("signed_http");
+        disabled.service.enabled = false;
+        assert_invalid(
+            &disabled,
+            IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+        );
+
+        let mut missing_ipfs = governance_service_view("signed_http");
+        missing_ipfs.service.ipfs_authenticator_handle = None;
+        assert_invalid(
+            &missing_ipfs,
+            IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+        );
+
+        let mut missing_head = governance_service_view("signed_http");
+        missing_head.service.head_authenticator_handle = None;
+        assert_invalid(
+            &missing_head,
+            IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
+        );
+
+        let mut missing_checkpoint = governance_service_view("signed_http");
+        missing_checkpoint.service.checkpoint_store_handle = None;
+        assert_invalid(
+            &missing_checkpoint,
+            IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore,
+        );
+
+        let mut zero_qualified = governance_service_view("signed_http");
+        zero_qualified.service.checkpoint_store_revision = Some(0);
+        assert_invalid(
+            &zero_qualified,
+            IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore,
+        );
+
+        let mut zero_bound = governance_service_view("signed_http");
+        zero_bound.service.max_request_bytes = Bytes(0);
+        assert_invalid(
+            &zero_bound,
+            IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+        );
+
+        let mut test_marked = governance_service_view("signed_http");
+        test_marked.service.head_authenticator_handle =
+            Some("vault://governance/test-head".to_owned());
+        assert_invalid(
+            &test_marked,
+            IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
+        );
+
+        let mut invalid_mode = governance_service_view("signed_http");
+        invalid_mode.service.head_mode = "compatibility".to_owned();
+        assert_invalid(
+            &invalid_mode,
+            IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
+        );
+
+        let mut ipns_with_head_binding = governance_service_view("signed_http");
+        ipns_with_head_binding.service.head_mode = "ipns".to_owned();
+        assert_invalid(
+            &ipns_with_head_binding,
+            IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
         );
     }
 

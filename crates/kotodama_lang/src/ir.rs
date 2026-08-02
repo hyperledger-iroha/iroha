@@ -12368,12 +12368,7 @@ seiyaku RangeOffsetBits {{
     #[test]
     fn named_struct_literal_lowers_in_declaration_order() {
         let program = parse(
-            r#"
-            module NamedStruct {
-                struct Pair { int first; int second; }
-                fn main() -> Pair { return Pair { second: 2, first: 1 }; }
-            }
-            "#,
+            include_str!("ir/test_sources/named_struct_literal_lowers_in_declaration_order_1.ko"),
         )
         .expect("parse named struct literal");
         let typed = analyze(&program).expect("analyze named struct literal");
@@ -12412,14 +12407,7 @@ seiyaku RangeOffsetBits {{
     #[test]
     fn named_struct_literal_evaluates_fields_in_source_order_before_layout() {
         let program = parse(
-            r#"
-            module NamedStructEffects {
-                struct Pair { int first; int second; }
-                fn first() -> int { 1 }
-                fn second() -> int { 2 }
-                fn main() -> Pair { Pair { second: second(), first: first() } }
-            }
-            "#,
+            include_str!("ir/test_sources/named_struct_literal_evaluates_fields_in_source_order_before_layout_1.ko"),
         )
         .expect("parse effectful named struct literal");
         let lowered = lower(&analyze(&program).expect("analyze named struct effects"))
@@ -13058,16 +13046,7 @@ seiyaku RangeOffsetBits {{
     #[test]
     fn wrapping_builtins_have_distinct_ir() {
         let program = parse(
-            r#"
-fn main(int left, int right) -> (int, int, int, int) {
-    return (
-        math::wrapping_add(left: left, right: right),
-        math::wrapping_sub(left: left, right: right),
-        math::wrapping_mul(left: left, right: right),
-        math::wrapping_neg(left)
-    );
-}
-"#,
+            include_str!("ir/test_sources/wrapping_builtins_have_distinct_ir_1.ko"),
         )
         .expect("parse wrapping builtins");
         let program = lower(&analyze(&program).expect("analyze wrapping builtins"))

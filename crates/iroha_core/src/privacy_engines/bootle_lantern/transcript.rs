@@ -1814,7 +1814,7 @@ mod tests {
             presentation_transcript().derive_uniform_polynomials(
                 b"uniform-polynomials",
                 &[],
-                MAX_STAGED_UNIFORM_POLYNOMIALS_V1 + 1
+                MAX_STAGED_UNIFORM_POLYNOMIALS_V1 + 1,
             ),
             Err(TranscriptErrorV1::FixedProfileCapacityExceeded {
                 field: "uniform_polynomials"
@@ -1824,7 +1824,7 @@ mod tests {
             presentation_transcript().derive_uniform_scalars(
                 b"uniform-scalars",
                 &[],
-                MAX_STAGED_UNIFORM_SCALARS_V1 + 1
+                MAX_STAGED_UNIFORM_SCALARS_V1 + 1,
             ),
             Err(TranscriptErrorV1::FixedProfileCapacityExceeded {
                 field: "uniform_scalars"

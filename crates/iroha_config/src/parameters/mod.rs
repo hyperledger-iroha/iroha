@@ -16,6 +16,9 @@ pub enum ProductionRuntimeHandleError {
 /// Maximum UTF-8 byte length of a production runtime-provider handle.
 pub const PRODUCTION_RUNTIME_HANDLE_MAX_BYTES: usize = 256;
 
+/// Maximum appeal-finance submitter signers in one V1 runtime configuration.
+pub const SORAFS_APPEAL_FINANCE_MAX_SUBMITTER_SIGNERS_V1: usize = 128;
+
 /// Validate a credential-free production runtime-provider handle.
 ///
 /// Handles are stable public deployment identities rather than endpoint URLs or

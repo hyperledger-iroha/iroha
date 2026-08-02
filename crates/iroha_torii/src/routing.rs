@@ -244,11 +244,8 @@ pub const SORANET_PRIVACY_EVENT_ENDPOINT: &str = "/v1/soranet/privacy/event";
 #[cfg(feature = "telemetry")]
 pub const SORANET_PRIVACY_SHARE_ENDPOINT: &str = "/v1/soranet/privacy/share";
 
-pub async fn handler_openapi_spec(State(state): State<crate::SharedAppState>) -> Response {
-    let offline_enabled = state.state.view().settlement.offline.enabled;
-    match norito::json::to_string_pretty(&crate::openapi::generate_spec_for_runtime(
-        offline_enabled,
-    )) {
+pub async fn handler_openapi_spec(State(_state): State<crate::SharedAppState>) -> Response {
+    match norito::json::to_string_pretty(&crate::openapi::generate_spec()) {
         Ok(body) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/json")
@@ -4192,7 +4189,6 @@ pub async fn handle_v1_confidential_asset_transitions(
 }
 
 #[cfg(feature = "zk-proof-tags")]
-#[derive(Debug)]
 /// GET /v1/zk/proof-tags/{backend}/{hash} — return ZK1 TLV tags for ProofId (debug).
 pub async fn handle_get_proof_tags(
     state: Arc<CoreState>,
@@ -4218,15 +4214,8 @@ pub async fn handle_get_proof_tags(
         proof_hash: arr,
     };
     let world = state.world_view();
-    #[allow(unused_mut)]
-    let mut tags: Vec<[u8; 4]> = Vec::new();
-    #[cfg(feature = "zk-proof-tags")]
-    {
-        use mv::storage::StorageReadOnly as _;
-        if let Some(v) = world.proof_tags().get(&id) {
-            tags = v.clone();
-        }
-    }
+    use mv::storage::StorageReadOnly as _;
+    let tags = world.proof_tags().get(&id).cloned().unwrap_or_default();
     // Map to JSON strings (ASCII when possible, else hex)
     let mut out: Vec<norito::json::Value> = Vec::with_capacity(tags.len());
     for t in tags {
@@ -8229,12 +8218,10 @@ mod sccp_first_release_api_tests {
             },
         )
         .expect_err("recent readback requires immutable retained-header finality and archive");
-        assert!(
-            error
-                .to_string()
-                .contains("finality artifact for height 9 not found"),
-            "unexpected missing-archive error: {error}"
-        );
+        let Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = error else {
+            panic!("unexpected missing-archive error: {error}");
+        };
+        assert!(message.contains("finality artifact for height 9 not found"));
 
         let error = sccp_message_bundle_for_request(&state, message_id)
             .expect_err("proof material still requires an exact retained-header finality record");
@@ -75077,12 +75064,11 @@ mod status_block_visibility_tests {
     #[test]
     fn authoritative_state_height_replaces_lagging_and_leading_counters() {
         for telemetry_height in [3, 19] {
+            let mut sumeragi = SumeragiConsensusStatus::default();
+            sumeragi.commit_qc_height = telemetry_height;
             let mut status = Status {
                 blocks: telemetry_height,
-                sumeragi: Some(SumeragiConsensusStatus {
-                    commit_qc_height: telemetry_height,
-                    ..SumeragiConsensusStatus::default()
-                }),
+                sumeragi: Some(sumeragi),
                 ..Status::default()
             };
 
@@ -75094,12 +75080,11 @@ mod status_block_visibility_tests {
 
     #[test]
     fn missing_state_anchor_keeps_monotonic_commit_qc_fallback() {
+        let mut sumeragi = SumeragiConsensusStatus::default();
+        sumeragi.commit_qc_height = 8;
         let mut status = Status {
             blocks: 5,
-            sumeragi: Some(SumeragiConsensusStatus {
-                commit_qc_height: 8,
-                ..SumeragiConsensusStatus::default()
-            }),
+            sumeragi: Some(sumeragi),
             ..Status::default()
         };
 

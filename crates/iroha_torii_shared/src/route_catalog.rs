@@ -954,11 +954,11 @@ fn validate_feature_name(
     }
 }
 
-/// Final first-release offline route descriptors.
+/// Universal offline-wallet protocol route descriptors.
 pub mod offline {
     use super::{ApiSurface, FeatureGate, HttpMethod, Listener, RouteDescriptor, RouteProjections};
 
-    /// Fetch evaluated offline-payment readiness for an asset definition.
+    /// Fetch the node's universal offline-wallet interface capability.
     pub const READINESS_PATH: &str = "/v1/offline/readiness";
     /// Resolve proof-bearing active registration lineage for a signed receiver request.
     pub const RECIPIENT_LINEAGE_PATH: &str = "/v1/offline/receiver-lineage";
@@ -969,7 +969,7 @@ pub mod offline {
     /// Fetch one offline operation by its canonical operation ID.
     pub const OPERATION_PATH: &str = "/v1/offline/operations/{operation_id}";
 
-    /// Descriptor for offline-payment readiness evaluation.
+    /// Descriptor for universal offline-wallet capability discovery.
     pub const READINESS: RouteDescriptor = RouteDescriptor::new(
         "offline.readiness",
         HttpMethod::Get,
@@ -977,8 +977,8 @@ pub mod offline {
         ApiSurface::Public,
         Listener::Torii,
     )
-    .with_feature_gate(FeatureGate::All(&["app_api", "offline"]))
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::ALL)
     .with_implicit_head(true)
     .with_cors_options(true);
     /// Descriptor for proof-bearing receiver-registration lineage resolution.
@@ -989,8 +989,8 @@ pub mod offline {
         ApiSurface::Public,
         Listener::Torii,
     )
-    .with_feature_gate(FeatureGate::All(&["app_api", "offline"]))
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Descriptor for online-to-offline top-up submission.
     pub const TOP_UP: RouteDescriptor = RouteDescriptor::new(
@@ -1000,8 +1000,8 @@ pub mod offline {
         ApiSurface::Public,
         Listener::Torii,
     )
-    .with_feature_gate(FeatureGate::All(&["app_api", "offline"]))
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Descriptor for offline redemption submission.
     pub const REDEEM: RouteDescriptor = RouteDescriptor::new(
@@ -1011,8 +1011,8 @@ pub mod offline {
         ApiSurface::Public,
         Listener::Torii,
     )
-    .with_feature_gate(FeatureGate::All(&["app_api", "offline"]))
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Descriptor for reading one offline operation.
     pub const OPERATION: RouteDescriptor = RouteDescriptor::new(
@@ -1022,8 +1022,8 @@ pub mod offline {
         ApiSurface::Public,
         Listener::Torii,
     )
-    .with_feature_gate(FeatureGate::All(&["app_api", "offline"]))
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::ALL)
     .with_implicit_head(true)
     .with_cors_options(true);
 
@@ -1246,7 +1246,7 @@ pub mod core {
         reason: "orchestrator liveness-probe convention",
     })
     .with_implicit_head(true);
-    /// Complete node readiness probe, including mandatory offline cash.
+    /// Complete node readiness probe, independent of optional application state.
     pub const READYZ: RouteDescriptor = RouteDescriptor::new(
         "protocol.readyz",
         HttpMethod::Get,
@@ -3190,19 +3190,9 @@ pub mod sorafs {
         "sorafs.appeal_finance_report.list",
         "/v1/sorafs/appeals/finance/reports",
     );
-    /// Publish an appeal-finance report.
-    pub const APPEAL_FINANCE_REPORTS_POST: RouteDescriptor = documented_post(
-        "sorafs.appeal_finance_report.publish",
-        "/v1/sorafs/appeals/finance/reports",
-    );
     /// List local appeal-finance weekly rollups.
     pub const APPEAL_FINANCE_WEEKLY_ROLLUPS_GET: RouteDescriptor = documented_get(
         "sorafs.appeal_finance_weekly_rollup.list",
-        "/v1/sorafs/appeals/finance/weekly-rollups",
-    );
-    /// Publish an appeal-finance weekly rollup.
-    pub const APPEAL_FINANCE_WEEKLY_ROLLUPS_POST: RouteDescriptor = documented_post(
-        "sorafs.appeal_finance_weekly_rollup.publish",
         "/v1/sorafs/appeals/finance/weekly-rollups",
     );
     /// List local appeal-finance settlement receipts.
@@ -3507,9 +3497,7 @@ pub mod sorafs {
         TRANSPARENCY_TOKEN_ISSUANCE,
         TRANSPARENCY_TOKEN_VERIFY,
         APPEAL_FINANCE_REPORTS_GET,
-        APPEAL_FINANCE_REPORTS_POST,
         APPEAL_FINANCE_WEEKLY_ROLLUPS_GET,
-        APPEAL_FINANCE_WEEKLY_ROLLUPS_POST,
         APPEAL_FINANCE_SETTLEMENT_RECEIPTS,
         GOVERNANCE_DAG_CAR_QUEUE,
         GOVERNANCE_DAG_CAR_QUEUE_DIGEST,
@@ -4142,6 +4130,8 @@ pub mod contracts_and_verification_keys {
         SORAFS_MODERATION_MODEL_REGISTRY_CORPORA_POST => app_post("contracts.sorafs_moderation_model_registry_corpora_post", "/v1/sorafs/moderation/model-registry/corpora");
         SORAFS_MODERATION_SCREENING_RESULTS_POST => app_post("contracts.sorafs_moderation_screening_results_post", "/v1/sorafs/moderation/screening-results");
         SORAFS_MODERATION_SCREENING_RESULTS_GET => app_get("contracts.sorafs_moderation_screening_results_get", "/v1/sorafs/moderation/screening-results");
+        SORAFS_MODERATION_DEAD_LETTERS_PREPARE_POST => app_signed_post("contracts.sorafs_moderation_dead_letters_prepare_post", "/v1/sorafs/moderation/dead-letters/prepare");
+        SORAFS_MODERATION_DEAD_LETTERS_APPLY_POST => app_signed_post("contracts.sorafs_moderation_dead_letters_apply_post", "/v1/sorafs/moderation/dead-letters/apply");
         SORAFS_MODERATION_QUARANTINE_GET => app_get("contracts.sorafs_moderation_quarantine_get", "/v1/sorafs/moderation/quarantine");
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_REVIEW_POST => app_post("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_review_post", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review");
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_RELEASE_POST => app_post("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_release_post", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release");
@@ -4164,8 +4154,6 @@ pub mod contracts_and_verification_keys {
         EVIDENCE_VIEWER_GET => app_unprojected_get("contracts.evidence_viewer_get", "/v1/evidence/viewer");
         EVIDENCE_VIEWER_CSS_GET => app_unprojected_static_asset_get("contracts.evidence_viewer_css_get", "/v1/evidence/viewer/app.css");
         EVIDENCE_VIEWER_JS_GET => app_unprojected_static_asset_get("contracts.evidence_viewer_js_get", "/v1/evidence/viewer/app.js");
-        SORAFS_MODERATION_VIEWER_AUDIT_REPORTS_POST => app_post("contracts.sorafs_moderation_viewer_audit_reports_post", "/v1/sorafs/moderation/viewer-audit-reports");
-        SORAFS_MODERATION_VIEWER_AUDIT_REPORTS_PUBLISH_DUE_POST => app_post("contracts.sorafs_moderation_viewer_audit_reports_publish_due_post", "/v1/sorafs/moderation/viewer-audit-reports/publish-due");
         SORAFS_AUDIT_REPAIR_REPORT_POST => app_post("contracts.sorafs_audit_repair_report_post", "/v1/sorafs/audit/repair/report");
         SORAFS_AUDIT_REPAIR_SLASH_POST => app_post("contracts.sorafs_audit_repair_slash_post", "/v1/sorafs/audit/repair/slash");
         SORAFS_AUDIT_REPAIR_CLAIM_POST => app_post("contracts.sorafs_audit_repair_claim_post", "/v1/sorafs/audit/repair/claim");
@@ -4539,9 +4527,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sorafs::TRANSPARENCY_TOKEN_ISSUANCE,
     sorafs::TRANSPARENCY_TOKEN_VERIFY,
     sorafs::APPEAL_FINANCE_REPORTS_GET,
-    sorafs::APPEAL_FINANCE_REPORTS_POST,
     sorafs::APPEAL_FINANCE_WEEKLY_ROLLUPS_GET,
-    sorafs::APPEAL_FINANCE_WEEKLY_ROLLUPS_POST,
     sorafs::APPEAL_FINANCE_SETTLEMENT_RECEIPTS,
     sorafs::GOVERNANCE_DAG_CAR_QUEUE,
     sorafs::GOVERNANCE_DAG_CAR_QUEUE_DIGEST,
@@ -4890,6 +4876,8 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::SORAFS_MODERATION_MODEL_REGISTRY_CORPORA_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_SCREENING_RESULTS_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_SCREENING_RESULTS_GET,
+    contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_PREPARE_POST,
+    contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_APPLY_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_GET,
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_REVIEW_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_RELEASE_POST,
@@ -4912,8 +4900,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::EVIDENCE_VIEWER_GET,
     contracts_and_verification_keys::EVIDENCE_VIEWER_CSS_GET,
     contracts_and_verification_keys::EVIDENCE_VIEWER_JS_GET,
-    contracts_and_verification_keys::SORAFS_MODERATION_VIEWER_AUDIT_REPORTS_POST,
-    contracts_and_verification_keys::SORAFS_MODERATION_VIEWER_AUDIT_REPORTS_PUBLISH_DUE_POST,
     contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_REPORT_POST,
     contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_SLASH_POST,
     contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_CLAIM_POST,
@@ -4999,26 +4985,24 @@ mod tests {
     }
 
     #[test]
-    fn offline_routes_require_the_runtime_capability_in_addition_to_app_api() {
+    fn offline_routes_are_universal_for_app_api_and_project_to_mcp() {
         let catalog = RouteCatalog::new(offline::ROUTES);
-        assert!(
+        assert_eq!(
             catalog
                 .project(
                     CatalogProjection::Mounted,
                     EnabledFeatures::new(&["app_api"]),
                 )
-                .is_empty(),
-            "an app-api node with offline support disabled must expose no offline paths"
+                .len(),
+            offline::ROUTES.len(),
+            "every app-api node must expose the complete offline route family"
         );
         assert_eq!(
             catalog
-                .project(
-                    CatalogProjection::Mounted,
-                    EnabledFeatures::new(&["app_api", "offline"]),
-                )
+                .project(CatalogProjection::Mcp, EnabledFeatures::new(&["app_api"]))
                 .len(),
             offline::ROUTES.len(),
-            "an offline-enabled app-api node must expose the complete route family"
+            "the offline route family must be available to MCP clients"
         );
     }
 
@@ -5422,6 +5406,43 @@ mod tests {
     }
 
     #[test]
+    fn moderation_dead_letter_routes_are_account_signed_operator_role_posts() {
+        let routes = [
+            (
+                contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_PREPARE_POST,
+                "contracts.sorafs_moderation_dead_letters_prepare_post",
+                "/v1/sorafs/moderation/dead-letters/prepare",
+            ),
+            (
+                contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_APPLY_POST,
+                "contracts.sorafs_moderation_dead_letters_apply_post",
+                "/v1/sorafs/moderation/dead-letters/apply",
+            ),
+        ];
+
+        for (route, stable_route_id, path) in routes {
+            assert_eq!(route.stable_route_id(), stable_route_id);
+            assert_eq!(route.method(), HttpMethod::Post);
+            assert_eq!(route.path(), path);
+            assert_eq!(route.surface(), ApiSurface::Public);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature
+            );
+            assert_eq!(route.projections(), RouteProjections::OPENAPI_AND_SDK);
+            assert!(route.cors_options());
+            assert!(
+                route
+                    .feature_gate()
+                    .is_enabled(EnabledFeatures::new(&["app_api"]))
+            );
+            assert!(CATALOGED_ROUTES.contains(&route));
+        }
+
+        assert_eq!(validate_catalog(&routes.map(|(route, _, _)| route)), Ok(()));
+    }
+
+    #[test]
     fn sorafs_catalog_has_one_strict_first_release_path_per_operation() {
         let catalog = RouteCatalog::new(sorafs::ROUTES);
         assert_eq!(catalog.validate(), Ok(()));
@@ -5437,6 +5458,24 @@ mod tests {
                 PathNormalization::Strict,
                 "SoraFS route must reject normalization aliases: {}",
                 expected.stable_route_id()
+            );
+        }
+
+        for read_only_path in [
+            "/v1/sorafs/appeals/finance/reports",
+            "/v1/sorafs/appeals/finance/weekly-rollups",
+        ] {
+            assert!(
+                sorafs::ROUTES.iter().any(|route| {
+                    route.path() == read_only_path && route.method() == HttpMethod::Get
+                }),
+                "appeal-finance publication readback route is missing: {read_only_path}"
+            );
+            assert!(
+                sorafs::ROUTES.iter().all(|route| {
+                    route.path() != read_only_path || route.method() != HttpMethod::Post
+                }),
+                "caller-controlled appeal-finance publication route leaked into the catalog: {read_only_path}"
             );
         }
 

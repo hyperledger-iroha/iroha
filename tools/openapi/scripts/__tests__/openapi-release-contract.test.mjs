@@ -144,8 +144,10 @@ test('OpenAPI workflow actions and tooling tests are pinned', async () => {
   }
   assert.equal(
     Array.from(workflow.matchAll(/fetch-depth:\s*0/g)).length,
-    2,
+    3,
   );
+  assert.match(workflow, /name: Complete Norito binding parity/);
+  assert.match(workflow, /run: bash ci\/check_norito_bindings_sync\.sh/);
   for (const releaseInputTrigger of [
     'Cargo.lock',
     'IrohaSwift/**',

@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -7,7 +7,7 @@ import path from "node:path";
 import vm from "node:vm";
 import {
   LocalSigningContext,
-  ToriiClient,
+  ToriiClient as SourceToriiClient,
   ToriiDataModelMismatchError,
   ToriiHttpError,
   extractPipelineStatusKind,
@@ -53,6 +53,34 @@ import {
   nativeBindingError,
   nativeUnavailableMessage,
 } from "./helpers/native.js";
+
+const SUMERAGI_DIAGNOSTICS_FOCUS_SYMBOL = Symbol.for(
+  "iroha.js.test.sumeragiDiagnosticsContract",
+);
+const sumeragiDiagnosticsFocus =
+  globalThis[SUMERAGI_DIAGNOSTICS_FOCUS_SYMBOL] ?? null;
+const ToriiClient =
+  sumeragiDiagnosticsFocus?.ToriiClient ?? SourceToriiClient;
+
+function focusedTestRegistration(baseTest) {
+  return (nameOrOptions, optionsOrFn, maybeFn) => {
+    if (
+      typeof nameOrOptions !== "string"
+      || !sumeragiDiagnosticsFocus.names.has(nameOrOptions)
+    ) {
+      return undefined;
+    }
+    sumeragiDiagnosticsFocus.observed.push(nameOrOptions);
+    return baseTest(nameOrOptions, optionsOrFn, maybeFn);
+  };
+}
+
+const test = sumeragiDiagnosticsFocus === null
+  ? nodeTest
+  : focusedTestRegistration(nodeTest);
+if (sumeragiDiagnosticsFocus !== null && typeof nodeTest.only === "function") {
+  test.only = focusedTestRegistration(nodeTest.only.bind(nodeTest));
+}
 
 const BASE_URL = "https://localhost:8080";
 const VK_SIGNING_CHAIN_ID = "vk-test";
@@ -10686,6 +10714,38 @@ test("getSumeragiStatus fetches the flattened v2 payload without rewriting it", 
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   assert.deepEqual(await client.getSumeragiStatus(), expected);
+});
+
+test("typed Sumeragi endpoints reject swapped status and diagnostics payloads", async () => {
+  const requests = [];
+  const payloads = new Map([
+    ["/v1/sumeragi/status", createSumeragiDiagnosticsPayload()],
+    ["/v1/sumeragi/diagnostics", createSumeragiV2StatusPayload()],
+  ]);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url) => {
+      const route = new URL(url).pathname;
+      requests.push(route);
+      return createResponse({
+        status: 200,
+        jsonData: payloads.get(route),
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  await assert.rejects(
+    () => client.getSumeragiStatusTyped(),
+    /sumeragi status payload contains unknown field pipeline_execution/u,
+  );
+  await assert.rejects(
+    () => client.getSumeragiDiagnosticsTyped(),
+    /sumeragi diagnostics contains unknown field protocol_version/u,
+  );
+  assert.deepEqual(requests, [
+    "/v1/sumeragi/status",
+    "/v1/sumeragi/diagnostics",
+  ]);
 });
 
 function sumeragiClientForPayload(payload, Client = ToriiClient) {

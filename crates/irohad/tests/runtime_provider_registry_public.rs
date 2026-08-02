@@ -126,6 +126,19 @@ fn external_crate_can_implement_and_name_broker_backend_launcher() {
 }
 
 #[test]
+fn external_crate_can_name_standalone_governance_view_projection() {
+    let projection: fn(
+        &iroha_data_model::ChainId,
+        &iroha_config::parameters::actual::SorafsGovernanceDagServiceView,
+    ) -> Result<
+        IrohaRuntimeProviderBindingsV1,
+        IrohaRuntimeProviderRegistryErrorV1,
+    > = IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_view;
+
+    let _ = projection;
+}
+
+#[test]
 fn checked_in_binaries_are_explicitly_adapter_disabled() {
     let source = include_str!("../src/bin/irohad.rs");
     let compact: String = source

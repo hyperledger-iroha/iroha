@@ -149,8 +149,15 @@ The source contract binds the write/flush/fsync/rename/fsync-directory order,
 and adversarial tests require invalid mixed-stage groups to remain byte-identical
 while canonical restart prefixes resume idempotently.
 
-Canonical application checks `ApplyCarrier` before the WSV commit sink. Queue
-then checks each ordered `PersistReservationCommitted`,
+Canonical application retains every checked `ApplyCarrier` projection in a
+move-only `CheckedCarrierApplications` batch. V2 binds its exact finalized
+block, merge entry, and lane cardinality, then boxes it as a
+`StateBlockCommitAuthorization`. `StateBlock::commit_inner` consumes that
+authorization while holding `state_commit_lock` and, for lifecycle changes,
+the lane-lifecycle fence, after the final scale-in Queue veto and before lane
+geometry or `transactions.commit()` can publish. V2 acquires the Queue
+retirement observer only when the staged block reports an exact pending
+scale-in. Queue then checks each ordered `PersistReservationCommitted`,
 `PersistPlanTombstone`, and `ForgetReservationCommit` prefix against the same
 group. Separately, the pre-Kura reservation-batch release path uses the same
 complete-group revalidation predicate while holding the Queue transition and
@@ -158,6 +165,13 @@ FIFO locks, checks committee geometry, then consumes its move-only
 checked `DirectReleased` token immediately before the journal `release_batch`
 append. These local slices are not a complete production trace-extraction
 theorem.
+
+The source-certificate contract authenticates that direct-release seam, but it
+still does not extract six named model actions: `FanoutFromProducer`,
+`ServeLateBody`, `Crash`, `Recover`, `RecoverReservationSnapshot`, and
+`RepairPostCarrierEvidence`. They remain explicit open obligations; the
+certificate must not treat their absence as stuttering or unreachable without
+a production proof.
 
 The remaining exact blocker is a machine-checked extraction from every other
 Rust QueuePlan journal V4 and reservation journal V5 transition, Kura, recovery,

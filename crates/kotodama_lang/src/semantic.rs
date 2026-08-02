@@ -16277,9 +16277,7 @@ mod tests {
     #[test]
     fn native_json_rejects_decoded_duplicate_keys_and_oversized_nodes() {
         let error = analyze_error(
-            r#"fn duplicate(AccountId owner) -> Json {
-                json { owner: owner, "owner": owner }
-            }"#,
+            include_str!("semantic/test_sources/native_json_rejects_decoded_duplicate_keys_and_oversized_nodes_1.ko"),
         );
         assert_eq!(error.code, "E_JSON_DUPLICATE_KEY");
 
@@ -16305,17 +16303,13 @@ mod tests {
     #[test]
     fn json_parse_literals_fail_during_semantic_analysis() {
         let duplicate = analyze_error(
-            r#"fn duplicate() -> Json {
-                Json::parse("{\"owner\":1,\"owner\":2}")
-            }"#,
+            include_str!("semantic/test_sources/json_parse_literals_fail_during_semantic_analysis_1.ko"),
         );
         assert_eq!(duplicate.code, "E_JSON_DUPLICATE_KEY");
         assert!(duplicate.message.contains("owner"), "{}", duplicate.message);
 
         let malformed = analyze_error(
-            r#"fn malformed() -> Json {
-                Json::parse("{\"owner\":")
-            }"#,
+            include_str!("semantic/test_sources/json_parse_literals_fail_during_semantic_analysis_2.ko"),
         );
         assert_eq!(malformed.code, "E_JSON_LITERAL_INVALID");
         assert!(
@@ -16328,15 +16322,9 @@ mod tests {
     #[test]
     fn json_parse_requires_a_direct_literal_but_native_json_remains_typed() {
         for source in [
-            r#"fn decode(string raw) -> Json {
-                Json::parse(raw)
-            }"#,
-            r#"const string RAW = "{}";
-            fn decode() -> Json { Json::parse(RAW) }"#,
-            r#"fn decode() -> Json {
-                let string raw = "{}";
-                Json::parse(value: raw)
-            }"#,
+            include_str!("semantic/test_sources/json_parse_requires_a_direct_literal_but_native_json_remains_typed_1.ko"),
+            include_str!("semantic/test_sources/json_parse_requires_a_direct_literal_but_native_json_remains_typed_2.ko"),
+            include_str!("semantic/test_sources/json_parse_requires_a_direct_literal_but_native_json_remains_typed_3.ko"),
         ] {
             let dynamic = analyze_error(source);
             assert_eq!(dynamic.code, "E_JSON_LITERAL_REQUIRED", "{source}");
@@ -16344,9 +16332,7 @@ mod tests {
         }
 
         let native = parse(
-            r#"fn decode(string raw) -> Json {
-                json { amount: raw, typed: 7 }
-            }"#,
+            include_str!("semantic/test_sources/json_parse_requires_a_direct_literal_but_native_json_remains_typed_4.ko"),
         )
         .expect("lowercase typed native JSON source should parse");
         analyze(&native).expect("lowercase typed native JSON must remain available");
@@ -16556,25 +16542,7 @@ mod tests {
     #[test]
     fn list_contains_accepts_recursive_durable_aggregates() {
         let expression = function_tail(
-            r#"
-                struct Envelope {
-                    List<Option<int>, 2> labels,
-                    Result<(int, bool), int> outcome,
-                }
-
-                fn contains_nested() -> bool {
-                    let List<Envelope, 2> values = [
-                        Envelope {
-                            labels: [Option::none, Option::some(7)],
-                            outcome: Result::ok((9, true)),
-                        },
-                    ];
-                    values.contains(Envelope {
-                        labels: [Option::none, Option::some(7)],
-                        outcome: Result::ok((9, true)),
-                    })
-                }
-            "#,
+            include_str!("semantic/test_sources/list_contains_accepts_recursive_durable_aggregates_1.ko"),
         );
         assert_eq!(expression.ty, Type::Bool);
         assert!(
@@ -17988,17 +17956,7 @@ mod tests {
     #[test]
     fn japanese_branded_capability_segments_normalize_to_the_canonical_registry() {
         let program = parse(
-            r#"
-            seiyaku BrandedCapabilities {
-                kotoage fn inspect() authorize("Inspect") {
-                    let _selector = context::言挙げ();
-                    ledger::誓約::grant_kotoage(
-                        account: context::authority(),
-                        言挙げ: "inspect",
-                    );
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/japanese_branded_capability_segments_normalize_to_the_canonical_registry_1.ko"),
         )
         .expect("parse Japanese branded capability path");
         analyze(&program).expect("Japanese capability segments must resolve canonically");
@@ -18240,19 +18198,7 @@ mod tests {
     #[test]
     fn trigger_callbacks_accept_trigger_event_payload_helpers() {
         let program = parse(
-            r#"
-            seiyaku Demo {
-                kotoage fn run() authorize("RunTrigger") {
-                    let ev = context::trigger_event();
-                    let _escrow_id = ev.get_name(Name::parse("escrow_id"));
-                    let _condition_code = ev.get_int(Name::parse("condition_code"));
-                }
-
-                trigger wake -> run {
-                    on execute trigger wake;
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/trigger_callbacks_accept_trigger_event_payload_helpers_1.ko"),
         )
         .expect("parse trigger callback trigger_event");
         analyze(&program).expect("trigger callback trigger_event should type-check");
@@ -18261,15 +18207,7 @@ mod tests {
     #[test]
     fn namespaced_trigger_callback_does_not_require_local_entrypoint() {
         let program = parse(
-            r#"
-            seiyaku Demo {
-                kotoage fn arm() authorize("ArmTrigger") {}
-
-                trigger wake -> callee::run {
-                    on time pre_commit;
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/namespaced_trigger_callback_does_not_require_local_entrypoint_1.ko"),
         )
         .expect("parse namespaced trigger callback");
 
@@ -18279,18 +18217,7 @@ mod tests {
     #[test]
     fn namespaced_trigger_callback_does_not_mark_local_function_as_trigger_callback() {
         let program = parse(
-            r#"
-            seiyaku Demo {
-                kotoage fn arm() authorize("ArmTrigger") {}
-                kotoage fn run() authorize("RunTrigger") {
-                    let _ev = context::trigger_event();
-                }
-
-                trigger wake -> callee::run {
-                    on time pre_commit;
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/namespaced_trigger_callback_does_not_mark_local_function_as_trigger_callback_1.ko"),
         )
         .expect("parse namespaced trigger callback");
         let err = analyze(&program)
@@ -18307,17 +18234,7 @@ mod tests {
     #[test]
     fn invoke_entrypoint_accepts_test_functions() {
         let program = parse(
-            r#"
-            seiyaku Demo {
-                kotoage fn run(int count) -> int authorize("Run") { return count + 1; }
-
-                #[test]
-                fn drive_run() {
-                    let next = test::invoke_kotoage("run", Json::parse("{\"count\": 7}"));
-                    test::assert_eq(actual: next, expected: 8);
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/invoke_entrypoint_accepts_test_functions_1.ko"),
         )
         .expect("parse invoke_entrypoint");
         analyze_test(&program).expect("invoke_entrypoint in tests should type-check");
@@ -18326,15 +18243,7 @@ mod tests {
     #[test]
     fn invoke_entrypoint_rejects_non_test_functions() {
         let program = parse(
-            r#"
-            seiyaku Demo {
-                kotoage fn run(int count) -> int authorize("Run") { return count; }
-
-                fn helper() {
-                    let _next = test::invoke_kotoage("run", Json::parse("{\"count\": 7}"));
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/invoke_entrypoint_rejects_non_test_functions_1.ko"),
         )
         .expect("parse non-test invoke_entrypoint");
         let err = analyze_test(&program).expect_err("non-test invoke_entrypoint should fail");
@@ -18344,17 +18253,7 @@ mod tests {
     #[test]
     fn invoke_entrypoint_accepts_name_literal_target() {
         let program = parse(
-            r#"
-            seiyaku Demo {
-                kotoage fn run(int count) -> int authorize("Run") { return count + 1; }
-
-                #[test]
-                fn drive_run() {
-                    let next = test::invoke_kotoage(Name::parse("run"), Json::parse("{\"count\": 7}"));
-                    test::assert_eq(actual: next, expected: 8);
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/invoke_entrypoint_accepts_name_literal_target_1.ko"),
         )
         .expect("parse name literal invoke_entrypoint");
         analyze_test(&program).expect("name literal invoke_entrypoint should type-check");
@@ -18363,17 +18262,7 @@ mod tests {
     #[test]
     fn invoke_entrypoint_rejects_non_literal_target() {
         let program = parse(
-            r#"
-            seiyaku Demo {
-                kotoage fn run(int count) -> int authorize("Run") { return count; }
-
-                #[test]
-                fn drive_run() {
-                    let target = "run";
-                    let _next = test::invoke_kotoage(target, Json::parse("{\"count\": 7}"));
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/invoke_entrypoint_rejects_non_literal_target_1.ko"),
         )
         .expect("parse dynamic target invoke_entrypoint");
         let err = analyze_test(&program).expect_err("dynamic target should fail");
@@ -18386,16 +18275,7 @@ mod tests {
     #[test]
     fn invoke_entrypoint_rejects_non_json_payload() {
         let program = parse(
-            r#"
-            seiyaku Demo {
-                kotoage fn run(int count) -> int authorize("Run") { return count; }
-
-                #[test]
-                fn drive_run() {
-                    let _next = test::invoke_kotoage("run", 7);
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/invoke_entrypoint_rejects_non_json_payload_1.ko"),
         )
         .expect("parse non-json payload invoke_entrypoint");
         let err = analyze_test(&program).expect_err("non-json payload should fail");
@@ -18405,16 +18285,7 @@ mod tests {
     #[test]
     fn invoke_entrypoint_rejects_internal_target() {
         let program = parse(
-            r#"
-            seiyaku Demo {
-                fn helper() -> int { return 7; }
-
-                #[test]
-                fn drive_run() {
-                    let _next = test::invoke_kotoage("helper", Json::parse("{}"));
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/invoke_entrypoint_rejects_internal_target_1.ko"),
         )
         .expect("parse internal target invoke_entrypoint");
         let err = analyze_test(&program).expect_err("internal target should fail");
@@ -18427,29 +18298,7 @@ mod tests {
     #[test]
     fn invoke_entrypoint_as_and_actor_helpers_type_check_in_tests() {
         let program = parse(
-            r#"
-            seiyaku Demo {
-                kotoage fn run(int count) -> int authorize("Run") { return count + 1; }
-
-                #[test]
-                fn drive_run() {
-                    let next = test::invoke_kotoage_as(
-                        actor: "issuer",
-                        kotoage: "run",
-                        arguments: Json::parse("{\"count\": 7}"),
-                    );
-                    let acct = test::actor_account("issuer");
-                    let pk = test::actor_public_key("issuer");
-                    let sig = test::actor_sign("issuer", b"demo");
-                    test::expect_reject_as(
-                        actor: "issuer",
-                        kotoage: "run",
-                        arguments: Json::parse("{\"count\": -1}"),
-                    );
-                    let _ = (next, acct, pk, sig);
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/invoke_entrypoint_as_and_actor_helpers_type_check_in_tests_1.ko"),
         )
         .expect("parse invoke_entrypoint_as");
         analyze_test(&program).expect("test helpers should type-check");
@@ -18458,20 +18307,7 @@ mod tests {
     #[test]
     fn invoke_entrypoint_as_accepts_tuple_returning_targets() {
         let program = parse(
-            r#"
-            seiyaku Demo {
-                kotoage fn run(int count) -> (int, int) authorize("Run") { return (count, count + 1); }
-
-                #[test]
-                fn drive_run() {
-                    let _pair = test::invoke_kotoage_as(
-                        actor: "issuer",
-                        kotoage: "run",
-                        arguments: Json::parse("{\"count\": 7}"),
-                    );
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/invoke_entrypoint_as_accepts_tuple_returning_targets_1.ko"),
         )
         .expect("parse tuple invoke_entrypoint_as");
         analyze_test(&program).expect("tuple-returning target should type-check");
@@ -18480,13 +18316,7 @@ mod tests {
     #[test]
     fn standalone_test_helpers_preserve_external_entrypoint_kind() {
         let target = parse(
-            r#"
-            seiyaku Demo {
-                hajimari() {}
-                kotoage fn run() authorize("Run") {}
-                fn helper() {}
-            }
-            "#,
+            include_str!("semantic/test_sources/standalone_test_helpers_preserve_external_entrypoint_kind_1.ko"),
         )
         .expect("parse target contract");
         let signatures = SemanticContext::with_capabilities(false, true)
@@ -18494,18 +18324,7 @@ mod tests {
             .expect("resolve target signatures");
 
         let accepted = parse(
-            r#"
-            module Tests {
-                #[test]
-                fn invokes_lifecycle() {
-                    test::invoke_kotoage_as(
-                        actor: "issuer",
-                        kotoage: "hajimari",
-                        arguments: Json::parse("{}"),
-                    );
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/standalone_test_helpers_preserve_external_entrypoint_kind_2.ko"),
         )
         .expect("parse standalone test module");
         SemanticContext::with_capabilities(false, true)
@@ -18513,18 +18332,7 @@ mod tests {
             .expect("external lifecycle entrypoint should retain its kind");
 
         let rejected = parse(
-            r#"
-            module Tests {
-                #[test]
-                fn invokes_private_helper() {
-                    test::invoke_kotoage_as(
-                        actor: "issuer",
-                        kotoage: "helper",
-                        arguments: Json::parse("{}"),
-                    );
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/invokes_lifecycle_1.ko"),
         )
         .expect("parse private-helper test module");
         let error = SemanticContext::with_capabilities(false, true)
@@ -18533,14 +18341,7 @@ mod tests {
         assert_eq!(error.code(), "E_TEST_ENTRYPOINT_KIND");
 
         let direct_call = parse(
-            r#"
-            module Tests {
-                #[test]
-                fn bypasses_contract_boundary() {
-                    run();
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/invokes_private_helper_1.ko"),
         )
         .expect("parse direct external-entrypoint call");
         let error = SemanticContext::with_capabilities(false, true)
@@ -18552,13 +18353,7 @@ mod tests {
     #[test]
     fn actor_helpers_reject_non_test_functions() {
         let program = parse(
-            r#"
-            seiyaku Demo {
-                fn helper() {
-                    let _acct = test::actor_account("issuer");
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/actor_helpers_reject_non_test_functions_1.ko"),
         )
         .expect("parse non-test actor helper");
         let err = analyze_test(&program).expect_err("actor helper outside test should fail");
@@ -19146,25 +18941,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn canonical_context_and_ledger_namespaces_type_check() {
         let program = parse(
-            r#"
-            seiyaku Payments {
-                kotoage fn transfer(
-                    AccountId recipient,
-                    AssetDefinitionId asset,
-                    quantity amount,
-                    DataSpaceId dataspace
-                ) authorize("TransferAsset") {
-                    let sender = context::authority();
-                    ledger::asset::transfer(
-                        source: sender,
-                        destination: recipient,
-                        asset_definition: asset,
-                        amount: amount,
-                        dataspace: dataspace,
-                    );
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/canonical_context_and_ledger_namespaces_type_check_1.ko"),
         )
         .expect("parse canonical namespaced calls");
         analyze(&program).expect("canonical context and ledger namespaces should type-check");
@@ -19173,51 +18950,13 @@ seiyaku UnshieldAmount {{
     #[test]
     fn escrow_open_offer_signature_matches_the_host_abi() {
         let program = parse(
-            r#"
-            seiyaku Escrow {
-                fn open(
-                    Name escrow,
-                    AssetDefinitionId asset,
-                    quantity amount,
-                    bytes evidence
-                ) {
-                    ledger::escrow::open_offer(
-                        offer: escrow,
-                        asset_definition: asset,
-                        amount: amount,
-                    );
-                    ledger::escrow::open_offer(
-                        offer: escrow,
-                        asset_definition: asset,
-                        amount: amount,
-                        evidence: evidence,
-                    );
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/escrow_open_offer_signature_matches_the_host_abi_1.ko"),
         )
         .expect("parse canonical escrow calls");
         analyze(&program).expect("three required arguments plus optional evidence must type-check");
 
         let invalid = parse(
-            r#"
-            seiyaku Escrow {
-                fn open(
-                    Name escrow,
-                    AccountId account,
-                    AssetDefinitionId asset,
-                    quantity amount
-                ) {
-                    ledger::escrow::open_offer(
-                        offer: escrow,
-                        asset_definition: account,
-                        amount: account,
-                        evidence: asset,
-                        unexpected: amount,
-                    );
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/escrow_open_offer_signature_matches_the_host_abi_2.ko"),
         )
         .expect("parse invalid escrow call");
         let error = analyze(&invalid).expect_err("the retired five-argument shape must fail");
@@ -19310,26 +19049,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn durable_state_maps_accept_forward_declared_struct_values() {
         let program = parse(
-            r#"seiyaku Demo {
-                struct Request {
-                    int status,
-                    bytes alias_blob,
-                    bytes requested_by_actor_id,
-                    Json requested_by_actor
-                }
-                state StateMap<Name, Request> Requests;
-                kotoage fn create_request(Name proposal_id,
-                                          bytes alias_literal,
-                                          bytes requested_by_actor_id,
-                                          Json requested_by_actor) authorize("CreateRequest") {
-                    Requests[proposal_id] = Request {
-                        status: 1,
-                        alias_blob: alias_literal,
-                        requested_by_actor_id,
-                        requested_by_actor,
-                    };
-                }
-            }"#,
+            include_str!("semantic/test_sources/durable_state_maps_accept_forward_declared_struct_values_1.ko"),
         )
         .expect("parse durable struct map");
         analyze(&program).expect("durable struct-valued state map should type-check");
@@ -19371,10 +19091,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn durable_string_state_is_supported() {
         let program = parse(
-            r#"seiyaku C {
-                state string label;
-                hajimari() { label = "ready"; }
-            }"#,
+            include_str!("semantic/test_sources/durable_string_state_is_supported_1.ko"),
         )
         .expect("parse string state");
         analyze(&program).expect("string state should be supported");
@@ -19383,11 +19100,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn durable_struct_string_field_is_supported() {
         let program = parse(
-            r#"seiyaku C {
-                struct S { string label }
-                state S s;
-                hajimari() { s = S { label: "ready" }; }
-            }"#,
+            include_str!("semantic/test_sources/durable_struct_string_field_is_supported_1.ko"),
         )
         .expect("parse state struct");
         analyze(&program).expect("string state field should be supported");
@@ -19413,15 +19126,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn durable_option_and_result_accept_aggregate_payloads() {
         let program = parse(
-            r#"seiyaku C {
-                struct Pair { int count, bool ready }
-                state Option<Pair> maybe;
-                state Result<Pair, Pair> outcome;
-                hajimari() {
-                    maybe = Option::none;
-                    outcome = Result::ok(Pair { count: 1, ready: true });
-                }
-            }"#,
+            include_str!("semantic/test_sources/durable_option_and_result_accept_aggregate_payloads_1.ko"),
         )
         .expect("parse aggregate sum state");
         analyze(&program).expect("aggregate Option/Result state should type-check");
@@ -19430,19 +19135,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn local_sum_annotations_resolve_aggregate_payloads_contextually() {
         let program = parse(
-            r#"seiyaku C {
-                struct Pair { int count, bool ready }
-                fn values() {
-                    let Option<Pair> some = Option::some(Pair { count: 1, ready: true });
-                    let Option<Pair> none = Option::none;
-                    let Result<Pair, Pair> ok = Result::ok(Pair { count: 2, ready: true });
-                    let Result<Pair, Pair> err = Result::err(Pair { count: 3, ready: false });
-                    var Option<Pair> changing_option = Option::some(Pair { count: 4, ready: true });
-                    changing_option = Option::none;
-                    var Result<Pair, Pair> changing_result = Result::ok(Pair { count: 5, ready: true });
-                    changing_result = Result::err(Pair { count: 6, ready: false });
-                }
-            }"#,
+            include_str!("semantic/test_sources/local_sum_annotations_resolve_aggregate_payloads_contextually_1.ko"),
         )
         .expect("parse aggregate local sums");
         analyze(&program).expect("aggregate local sum annotations should resolve nominal payloads");
@@ -19683,32 +19376,12 @@ seiyaku UnshieldAmount {{
     #[test]
     fn trigger_metadata_json_parse_uses_json_literal_diagnostics() {
         let duplicate = analyze_error(
-            r#"
-            seiyaku C {
-                kotoage fn run() authorize("RunTrigger") {}
-                trigger wake -> run {
-                    on time pre_commit;
-                    metadata {
-                        payload: Json::parse("{\"owner\":1,\"owner\":2}");
-                    }
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_1.ko"),
         );
         assert_eq!(duplicate.code, "E_JSON_DUPLICATE_KEY");
 
         let malformed = analyze_error(
-            r#"
-            seiyaku C {
-                kotoage fn run() authorize("RunTrigger") {}
-                trigger wake -> run {
-                    on time pre_commit;
-                    metadata {
-                        payload: Json::parse("{\"owner\":");
-                    }
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_2.ko"),
         );
         assert_eq!(malformed.code, "E_JSON_LITERAL_INVALID");
     }
@@ -19769,14 +19442,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn trigger_decl_supports_data_filter() {
         let program = parse(
-            r#"
-            seiyaku C {
-                kotoage fn run() authorize("RunTrigger") {}
-                trigger wake -> run {
-                    on data any;
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/trigger_decl_supports_data_filter_1.ko"),
         )
         .expect("parse trigger decl");
         let typed = analyze(&program).expect("analyze trigger decl");
@@ -20089,28 +19755,14 @@ seiyaku UnshieldAmount {{
                 )),
             ),
             (
-                r#"
-                seiyaku C {
-                    kotoage fn run() authorize("RunTrigger") {}
-                    trigger wake -> run {
-                        on data configuration changed {}
-                    }
-                }
-                "#
+                include_str!("semantic/test_sources/trigger_decl_supports_structured_data_filters_for_core_families_1.ko")
                 .to_string(),
                 EventFilterBox::Data(DataEventFilter::Configuration(
                     ConfigurationEventFilter::new().for_events(ConfigurationEventSet::Changed),
                 )),
             ),
             (
-                r#"
-                seiyaku C {
-                    kotoage fn run() authorize("RunTrigger") {}
-                    trigger wake -> run {
-                        on data executor upgraded {}
-                    }
-                }
-                "#
+                include_str!("semantic/test_sources/trigger_decl_supports_structured_data_filters_for_core_families_2.ko")
                 .to_string(),
                 EventFilterBox::Data(DataEventFilter::Executor(
                     ExecutorEventFilter::new().for_events(ExecutorEventSet::Upgraded),
@@ -20131,14 +19783,7 @@ seiyaku UnshieldAmount {{
         use iroha_data_model::events::pipeline::{BlockEventFilter, BlockStatus};
 
         let program = parse(
-            r#"
-            seiyaku C {
-                kotoage fn run() authorize("RunTrigger") {}
-                trigger wake -> run {
-                    on pipeline block approved;
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/trigger_decl_supports_pipeline_filter_1.ko"),
         )
         .expect("parse trigger decl");
         let typed = analyze(&program).expect("analyze trigger decl");
@@ -20156,14 +19801,7 @@ seiyaku UnshieldAmount {{
         use iroha_data_model::events::pipeline::{TransactionEventFilter, TransactionStatus};
 
         let program = parse(
-            r#"
-            seiyaku C {
-                kotoage fn run() authorize("RunTrigger") {}
-                trigger wake -> run {
-                    on pipeline transaction approved;
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/trigger_decl_supports_pipeline_transaction_approved_filter_1.ko"),
         )
         .expect("parse trigger decl");
         let typed = analyze(&program).expect("analyze trigger decl");
@@ -20179,16 +19817,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn trigger_decl_rejects_invalid_data_matcher_literal() {
         let program = parse(
-            r#"
-            seiyaku C {
-                kotoage fn run() authorize("RunTrigger") {}
-                trigger wake -> run {
-                    on data asset added {
-                        asset_definition "not-an-address";
-                    }
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/trigger_decl_rejects_invalid_data_matcher_literal_1.ko"),
         )
         .expect("parse trigger decl");
         let err = analyze(&program).expect_err("invalid matcher should error");
@@ -20226,15 +19855,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn trigger_decl_rejects_invalid_authority() {
         let program = parse(
-            r#"
-            seiyaku C {
-                kotoage fn run() authorize("RunTrigger") {}
-                trigger wake -> run {
-                    on time pre_commit;
-                    authority "not-an-account";
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/trigger_decl_rejects_invalid_authority_1.ko"),
         )
         .expect("parse trigger decl");
         let err = analyze(&program).expect_err("invalid authority should error");
@@ -20271,14 +19892,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn trigger_decl_requires_kotoage_entrypoint() {
         let program = parse(
-            r#"
-            seiyaku C {
-                fn run() {}
-                trigger wake -> run {
-                    on time pre_commit;
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/trigger_decl_requires_kotoage_entrypoint_1.ko"),
         )
         .expect("parse trigger decl");
         let err = analyze(&program).expect_err("non-kotoage target should error");
@@ -20289,16 +19903,7 @@ seiyaku UnshieldAmount {{
     fn trigger_decl_cannot_target_lifecycle_entrypoints_through_constructed_ast() {
         for lifecycle in ["hajimari", "kaizen"] {
             let mut program = parse(
-                r#"
-                seiyaku C {
-                    hajimari() {}
-                    kaizen() {}
-                    kotoage fn run() authorize("Run") {}
-                    trigger wake -> run {
-                        on time pre_commit;
-                    }
-                }
-                "#,
+                include_str!("semantic/test_sources/trigger_decl_cannot_target_lifecycle_entrypoints_through_constructed_ast_1.ko"),
             )
             .expect("parse valid trigger declaration");
             let trigger = program
@@ -20341,17 +19946,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn typed_core_queries_expose_declared_projection_and_page_types() {
         let program = parse(
-            r#"
-            seiyaku Queries {
-                fn account(AccountId id) -> Option<AccountView> {
-                    ledger::query::account(id)
-                }
-
-                fn accounts(int offset, int limit) -> QueryPage<AccountView> {
-                    ledger::query::accounts(offset: offset, limit: limit)
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/typed_core_queries_expose_declared_projection_and_page_types_1.ko"),
         )
         .expect("parse typed core queries");
         let typed = analyze(&program).expect("typed core query surface should type-check");
@@ -20443,31 +20038,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn tail_sums_matches_if_let_and_propagation_type_check_together() {
         let program = parse(
-            r#"
-            seiyaku Sums {
-                fn option(Option<int> input) -> Option<int> {
-                    let value = input?;
-                    Option::some(value)
-                }
-
-                fn result(Result<int, string> input) -> Result<int, string> {
-                    Result::ok(input?)
-                }
-
-                fn inspect(Option<int> input) -> int {
-                    match input {
-                        Option::some(value) => value,
-                        Option::none => 0,
-                    }
-                }
-
-                fn guarded(Option<int> input) -> int {
-                    if let Option::some(value) = input { value } else { 0 }
-                }
-
-                fn absent() -> Option<int> { Option::none }
-            }
-            "#,
+            include_str!("semantic/test_sources/tail_sums_matches_if_let_and_propagation_type_check_together_1.ko"),
         )
         .expect("parse active-only sum program");
         analyze(&program).expect("active-only sums and expression control flow must type-check");
@@ -20476,40 +20047,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn divergent_expression_arms_inhabit_the_sibling_value_type() {
         let program = parse(
-            r#"
-            seiyaku DivergentArms {
-                fn result(Result<int, bool> input) -> Result<(int, int), bool> {
-                    let payload = match input {
-                        Result::ok(payload) => payload,
-                        Result::err(failure) => { return Result::err(failure); },
-                    };
-                    Result::ok((payload, payload))
-                }
-
-                fn option(Option<int> input) -> Option<(int, int)> {
-                    let payload = match input {
-                        Option::some(payload) => payload,
-                        Option::none => { return Option::none; },
-                    };
-                    Option::some((payload, payload))
-                }
-
-                fn choose(bool flag) -> int {
-                    if flag { 7 } else { return 9; }
-                }
-
-                fn choose_if_let(Option<int> input) -> int {
-                    if let Option::some(value) = input { value } else { return 0; }
-                }
-
-                fn choose_match(Option<int> input) -> int {
-                    match input {
-                        Option::some(value) => value,
-                        Option::none => { return 0; },
-                    }
-                }
-            }
-            "#,
+            include_str!("semantic/test_sources/divergent_expression_arms_inhabit_the_sibling_value_type_1.ko"),
         )
         .expect("parse divergent expression arms");
         analyze(&program).expect("a returning arm must not synthesize a unit placeholder value");
@@ -20518,12 +20056,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn discarded_branch_tail_does_not_count_as_function_return_coverage() {
         let program = parse(
-            r#"
-            fn incomplete(bool flag) -> int {
-                if flag { 7 } else { return 9; }
-                let still_falls_through = 1;
-            }
-            "#,
+            include_str!("semantic/test_sources/discarded_branch_tail_does_not_count_as_function_return_coverage_1.ko"),
         )
         .expect("parse non-final mixed control flow");
         let error = analyze(&program)
@@ -20534,11 +20067,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn wholly_divergent_expression_without_a_type_context_fails_closed() {
         let program = parse(
-            r#"
-            fn ambiguous(bool flag) {
-                let unreachable = if flag { return; } else { return; };
-            }
-            "#,
+            include_str!("semantic/test_sources/wholly_divergent_expression_without_a_type_context_fails_closed_1.ko"),
         )
         .expect("parse context-free divergent expression");
         let error =

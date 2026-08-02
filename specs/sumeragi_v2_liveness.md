@@ -1150,12 +1150,17 @@ provenance, and invalid-QC quarantine regressions bind one actor-global
 logical owner across its physical retries.
 Seven physical-cut, adapter-capability, aggregate-rebase, and ineligible-driver
 regressions bring the current source-bound inventory to 813 exact tests across
-39 modules and 82 pre-network legs.
+39 modules and 86 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
 `708e0ed0221056b20b9d9f03f1ea8cd07225b0c84c39ad18dd25402e090fb30f`.
-Nine of those legs execute the separate 397-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 398 TSV lines and has SHA-256
-`69306f32aa225e45c9f3374966884a4d0f47c7320eb8ea516f1b39543182bbf8`.
+Nine of those legs execute the separate 418-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 419 TSV lines and has SHA-256
+`d395aec773c5d0482cc1f4af970267424243f9362d1e1153c9ea7887db885fa7`.
+The 215-test core group includes grouped Native prevote-budget rejection before
+Kura/WSV mutation, exact durable QueuePlan obligation authentication and route
+accumulation, registry corruption checks, ApplyCarrier authorization, and the
+retirement transition/lifecycle-fence lock order. This source-derived inventory
+does not claim execution evidence.
 Together, the closures bind proposal-origin reducer/deferred identity,
 equivocation evidence, aggregate signatures, finality/header geometry, compact
 offline QCs, parent height-context identity, source-scoped sidecar limits,
@@ -1389,7 +1394,7 @@ authenticated-non-validator, and two-anonymous owners (`4N+2H+2` total)
 capacity-negative boundary and the exact
 PrepareQC count-and-power quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-82 legs, including separate exact status and atomic lane-certificate decode
+86 legs, including separate exact status and atomic lane-certificate decode
 contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
 fixture check, two `iroha_config` geometry modules, the two new `iroha_p2p`
 geometry modules, the shared-byte-budget module, the daemon genesis module,
@@ -1587,7 +1592,7 @@ bash scripts/run_sumeragi_v2_release_gates.sh --pr
 
 Before those longer scenarios, the PR gate inventories 813 exact production
 liveness tests and executes all 39 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 397-test
+profile additionally records nine G-UNIT legs executing a separate 402-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -2000,8 +2005,8 @@ without terminal validation it cannot publish external completion.
 
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
-evidence directory. That receipt binds the 82 pre-network corridor legs and
-their exact 813-test production inventory, the separate 397-test G-UNIT
+evidence directory. That receipt binds the 86 pre-network corridor legs and
+their exact 813-test production inventory, the separate 402-test G-UNIT
 inventory, semantic test names/counts, commands, logs, source-bound localnet
 binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos

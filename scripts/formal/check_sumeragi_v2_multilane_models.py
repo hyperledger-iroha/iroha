@@ -670,7 +670,29 @@ NATIVE_PREPUBLICATION_BINDINGS = (
             "State::native_amx_participant_frontier_markers",
             "token.authenticates_state_frontiers",
             "apply_without_execution_with_verified_v2_finality",
-            "state_block.commit",
+            "pending_autoscale_retirement_binding",
+            "Box<dyn StateBlockCommitAuthorization>",
+            "Box::new(checked_carrier_applications)",
+            "if carries_scale_in",
+            "lock_lane_retirement_observer",
+            "commit_with_state_commit_authorization_and_autoscale_retirement_queue_veto",
+            "commit_with_state_commit_authorization",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/state.rs",
+        "fn",
+        "commit_inner",
+        (
+            "state_commit_authorization: Option<Box<dyn StateBlockCommitAuthorization>>",
+            "let _state_commit_lock = state_ref.state_commit_lock.lock();",
+            "let autoscale_lifecycle_guard",
+            "autoscale_retirement_queue_veto.as_mut()",
+            "state_commit_authorization.take()",
+            ".consume_for_state_commit(",
+            "State commit authorization rejected the exact carrier transition",
+            "apply_committed_autoscale_lane_geometry",
+            "transactions.commit()",
         ),
     ),
 )
@@ -685,7 +707,26 @@ NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
             "State::native_amx_participant_frontier_markers(",
             "token.authenticates_state_frontiers(",
             ".apply_without_execution_with_verified_v2_finality(&committed_block, commit_topology)",
-            "state_block.commit().map_err",
+            ".pending_autoscale_retirement_binding()",
+            "Box::new(checked_carrier_applications)",
+            "if carries_scale_in {",
+            "self.queue.lock_lane_retirement_observer()",
+            ".commit_with_state_commit_authorization_and_autoscale_retirement_queue_veto(",
+            "state_block.commit_with_state_commit_authorization(state_commit_authorization)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/state.rs",
+        "fn",
+        "commit_inner",
+        (
+            "let _state_commit_lock = state_ref.state_commit_lock.lock();",
+            "let autoscale_lifecycle_guard",
+            "autoscale_retirement_queue_veto.as_mut()",
+            "state_commit_authorization.take()",
+            ".consume_for_state_commit(",
+            "state_ref.apply_committed_autoscale_lane_geometry(",
+            "transactions.commit()",
         ),
     ),
     (
@@ -708,6 +749,650 @@ NATIVE_PREPUBLICATION_RETENTION_WRITERS = (
     "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
     "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
     "write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard",
+)
+QUEUE_PLAN_PENDING_MEMBERSHIP_MODULE = "SumeragiV2QueuePlanAdmissionRegistry"
+QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE = "crates/iroha_core/src/state.rs"
+QUEUE_PLAN_PENDING_MEMBERSHIP_HOST_RELATIVE = (
+    "crates/iroha_core/src/smartcontracts/ivm/host.rs"
+)
+QUEUE_PLAN_PENDING_OPAQUE_PREFIXES = (
+    "queue_plan_pending_obligation_v1_",
+    "queue_plan_pending_route_member_v1_",
+)
+QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "struct",
+        "QueuePlanPendingRouteMemberV1",
+        (
+            "version",
+            "route",
+            "chain_id_digest",
+            "entrypoint_hash",
+            "binding_hash",
+            "member_identity",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_route_member_identity",
+        (
+            "Self::validate_queue_plan_pending_obligation_route(&route)?",
+            "obligation.version != QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1",
+            "obligation.chain_id_digest",
+            "obligation.entrypoint_hash",
+            "obligation.binding_hash",
+            ".routes.binary_search(&route).is_err()",
+            "Self::queue_plan_pending_route_member_identity_from_claim(",
+            "obligation.chain_id_digest",
+            "obligation.entrypoint_hash.clone()",
+            "obligation.binding_hash",
+            "route",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_route_member_identity_from_claim",
+        (
+            "entrypoint_hash: HashOf<TransactionEntrypoint>",
+            "Self::validate_queue_plan_pending_obligation_route(&route)?",
+            "chain_id_digest.as_ref().iter().all(|byte| *byte == 0)",
+            "entrypoint_hash.as_ref().iter().all(|byte| *byte == 0)",
+            "binding_hash.as_ref().iter().all(|byte| *byte == 0)",
+            "norito::to_bytes(&(",
+            "QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1",
+            "chain_id_digest",
+            "entrypoint_hash",
+            "binding_hash",
+            "route",
+            "QUEUE_PLAN_PENDING_ROUTE_MEMBER_DOMAIN_V1",
+            "Ok(*identity.as_ref())",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_route_member_from_obligation",
+        (
+            "version: QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1",
+            "route",
+            "chain_id_digest: obligation.chain_id_digest",
+            "entrypoint_hash: obligation.entrypoint_hash.clone()",
+            "binding_hash: obligation.binding_hash",
+            "queue_plan_pending_route_member_identity(obligation, route)?",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_route_member_marker_prefix",
+        (
+            "QUEUE_PLAN_PENDING_ROUTE_MEMBER_MARKER_PREFIX",
+            "route.lane_id.as_u32()",
+            "route.dataspace_id.as_u64()",
+            "route.lane_incarnation.as_ref()",
+            "let start = literal.parse()",
+            "Ok((literal, start))",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_route_member_marker_payload",
+        (
+            "marker.version != QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1",
+            "marker.chain_id_digest",
+            "marker.entrypoint_hash",
+            "marker.binding_hash",
+            "marker.member_identity",
+            "Self::queue_plan_pending_route_member_identity_from_claim(",
+            "marker.member_identity != expected_identity",
+            "payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "decode_exact_queue_plan_pending_route_member_marker",
+        (
+            "payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES",
+            "norito::decode_from_bytes::<QueuePlanPendingRouteMemberV1>(payload)",
+            "queue_plan_pending_route_member_marker_payload",
+            "queue_plan_pending_route_member_marker_key",
+            "canonical.as_slice() != payload || &expected_key != key",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "require_queue_plan_pending_route_member_marker",
+        (
+            "StorageReadOnly<StatePath, Vec<u8>>",
+            "queue_plan_pending_route_member_from_obligation",
+            "queue_plan_pending_route_member_marker_key",
+            "storage.get(&key).ok_or_else",
+            "decode_exact_queue_plan_pending_route_member_marker",
+            "marker != expected",
+            "Ok((key, marker))",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_route_members_from_storage",
+        (
+            "queue_plan_pending_route_members_from_storage_with_limit",
+            "MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_route_members_from_storage_with_limit",
+        (
+            "queue_plan_pending_route_member_marker_prefix",
+            "storage.range(start..)",
+            "key.as_ref().starts_with(&prefix)",
+            "members.len() == max_members",
+            "decode_exact_queue_plan_pending_route_member_marker",
+            "marker.route != route",
+            "queue_plan_pending_obligation_marker_key",
+            "storage.get(&obligation_key).is_none()",
+            "members.push((key.clone(), marker))",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_route_obligation_count_from_world",
+        (
+            "queue_plan_pending_route_members_from_storage",
+            ".len()",
+            "u64::try_from(count)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "validate_queue_plan_pending_obligation_route_member_in_storage",
+        (
+            "queue_plan_pending_route_members_from_storage(storage, route)?",
+            "require_queue_plan_pending_route_member_marker(storage, obligation, route)?",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "enum",
+        "QueuePlanAdmissionApplicationState",
+        (
+            "Pending",
+            "PendingStale",
+            "Applied",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_obligation_matches_active_lifecycle",
+        (
+            "obligation.binding.admission_context.proposal_height",
+            "obligation.routes.iter().all",
+            "state",
+            ".nexus()",
+            ".lane_catalog",
+            ".lanes()",
+            ".iter()",
+            "lane.id == route.lane_id",
+            "lane.dataspace_id == route.dataspace_id",
+            "state.lane_incarnation_at_height(route.lane_id, proposal_height)",
+            "Some(route.lane_incarnation)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_registry_owner_application_state_in_view",
+        (
+            "validate_queue_plan_pending_obligation_route_member",
+            "pending obligation `{key}` survived canonical transaction membership",
+            "queue_plan_pending_obligation_matches_active_lifecycle",
+            "QueuePlanAdmissionApplicationState::Pending",
+            "QueuePlanAdmissionApplicationState::PendingStale",
+            "None if committed => Ok(QueuePlanAdmissionApplicationState::Applied)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_binding_application_state",
+        (
+            "state.has_transaction",
+            "queue_plan_pending_obligation_matches_active_lifecycle",
+            "queue_plan_binding_application_state_in_storage",
+            "expected",
+            "committed",
+            "active",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_binding_application_state_in_storage",
+        (
+            "current != expected",
+            "validate_queue_plan_pending_obligation_route_member_in_storage",
+            "pending-obligation marker `{key}` survived canonical transaction membership",
+            "QueuePlanAdmissionApplicationState::Pending",
+            "QueuePlanAdmissionApplicationState::PendingStale",
+            "None if committed => Ok(QueuePlanAdmissionApplicationState::Applied)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "ensure_queue_plan_admission_registry_compatible",
+        (
+            "queue_plan_admission_application_state",
+            "== QueuePlanAdmissionApplicationState::PendingStale",
+            "retired or recreated lane incarnation",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_admission_registry_entrypoint_present",
+        (
+            "queue_plan_registry_owner_application_state_in_view",
+            "application_state == QueuePlanAdmissionApplicationState::PendingStale",
+            "retired or recreated lane incarnation",
+            "Ok(true)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_admission_binding_registry_match",
+        (
+            "queue_plan_binding_application_state",
+            "application_state == QueuePlanAdmissionApplicationState::PendingStale",
+            "retired or recreated lane incarnation",
+            "Ok(registry_match)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "classify_pending_queue_plan_admission",
+        (
+            "pending_queue_plan_admission_registry_lookup",
+            "QueuePlanAdmissionApplicationState::PendingStale",
+            "PendingQueuePlanAdmissionDisposition::Stale",
+            "QueuePlanAdmissionApplicationState::Pending",
+            "QueuePlanAdmissionApplicationState::Applied",
+            "PendingQueuePlanAdmissionDisposition::Exact",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_admission_registry_match_with_application_state_in_view",
+        (
+            "QueuePlanAdmissionRegistryKeyV2",
+            "decode_exact_queue_plan_admission_registry_marker",
+            "queue_plan_registry_owner_application_state_in_view",
+            "QueuePlanAdmissionRegistryMatch::Absent",
+            "QueuePlanAdmissionRegistryMatch::Exact",
+            "QueuePlanAdmissionRegistryMatch::Conflict",
+            "Some(application_state)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "stage_queue_plan_pending_obligation_marker_in_storage",
+        (
+            "&mut impl QueuePlanMarkerStorage",
+            "validate_queue_plan_pending_obligation_route_member_in_storage",
+            "queue_plan_pending_route_members_from_storage",
+            "members.len() == MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS",
+            "queue_plan_pending_route_member_from_obligation",
+            "queue_plan_pending_route_member_marker_key",
+            "decode_exact_queue_plan_pending_route_member_marker",
+            "queue_plan_pending_route_member_marker_payload",
+            "route_updates.push",
+            "insert_queue_plan_marker(obligation_key, obligation_payload)",
+            "insert_queue_plan_marker(member_key, member_payload)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "resolve_queue_plan_pending_obligation_in_storage",
+        (
+            "&mut impl QueuePlanMarkerStorage",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "decode_exact_queue_plan_admission_registry_marker",
+            "queue_plan_pending_route_members_from_storage",
+            "require_queue_plan_pending_route_member_marker",
+            "member_keys.push",
+            "remove_queue_plan_marker(obligation_key)",
+            "remove_queue_plan_marker(member_key)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "stage_queue_plan_admissions",
+        (
+            "validate_merge_queue_plan_admissions",
+            "queue_plan_pending_obligation_from_admission",
+            "queue_plan_pending_obligation_matches_active_lifecycle",
+            ".collect::<Result<Vec<_>, MergeLedgerCommitError>>()?",
+            "self.world.smart_contract_state.transaction()",
+            "queue_plan_binding_application_state_in_storage",
+            "markers.insert_queue_plan_marker(key, payload)",
+            "stage_queue_plan_pending_obligation_in_storage",
+            "markers.apply()",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "resolve_queue_plan_pending_obligations_for_entrypoints",
+        (
+            "self.world.smart_contract_state.transaction()",
+            "for entrypoint_hash in entrypoint_hashes",
+            "resolve_queue_plan_pending_obligation_in_storage",
+            "markers.apply()",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "resolve_required_queue_plan_pending_obligations",
+        (
+            "self.world.smart_contract_state.transaction()",
+            "for (entrypoint_hash, expected_binding_hash) in pending_obligations",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "obligation.binding_hash != expected_binding_hash",
+            "resolve_queue_plan_pending_obligation_in_storage",
+            "markers.apply()",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_HOST_RELATIVE,
+        "fn",
+        "contract_state_namespace_access",
+        (
+            "OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES",
+            "contract_state_key_matches_namespace",
+            "ContractStateNamespaceAccess::OpaqueSystem",
+            "READ_ONLY_SYSTEM_CONTRACT_STATE_PREFIXES",
+            "ContractStateNamespaceAccess::ReadOnlySystem",
+            "ContractStateNamespaceAccess::User",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_HOST_RELATIVE,
+        "fn",
+        "ensure_contract_state_read_allowed",
+        (
+            "contract_state_namespace_access",
+            "ContractStateNamespaceAccess::OpaqueSystem",
+            "ivm::VMError::PermissionDenied",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_HOST_RELATIVE,
+        "fn",
+        "ensure_contract_state_write_allowed",
+        (
+            "contract_state_namespace_access",
+            "ContractStateNamespaceAccess::User",
+            "ivm::VMError::PermissionDenied",
+        ),
+    ),
+)
+QUEUE_PLAN_PENDING_QUEUE_OWNERSHIP_FREE_FN = (
+    QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+    "queue_plan_admission_registry_match",
+    (
+        "State::queue_plan_admission_registry_match_with_application_state_in_view(",
+        "if registry_match == QueuePlanAdmissionRegistryMatch::Exact",
+        "&& application_state != Some(QueuePlanAdmissionApplicationState::Pending)",
+        "cannot authorize new Queue ownership",
+        "Ok(registry_match)",
+    ),
+)
+QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_obligation_matches_active_lifecycle",
+        (
+            "let proposal_height = obligation.binding.admission_context.proposal_height;",
+            "obligation.routes.iter().all(|route| {",
+            "state\n                .nexus()\n                .lane_catalog\n                .lanes()",
+            ".any(|lane| lane.id == route.lane_id && lane.dataspace_id == route.dataspace_id)",
+            "state.lane_incarnation_at_height(route.lane_id, proposal_height)",
+            "== Some(route.lane_incarnation)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_registry_owner_application_state_in_view",
+        (
+            "Self::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;",
+            "Self::validate_queue_plan_pending_obligation_route_member(",
+            "if committed {",
+            "Self::queue_plan_pending_obligation_matches_active_lifecycle(",
+            "Ok(QueuePlanAdmissionApplicationState::Pending)",
+            "Ok(QueuePlanAdmissionApplicationState::PendingStale)",
+            "None if committed => Ok(QueuePlanAdmissionApplicationState::Applied)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_binding_application_state",
+        (
+            "let committed = state.has_transaction(",
+            "Self::queue_plan_pending_obligation_matches_active_lifecycle(state, &expected);",
+            "Self::queue_plan_binding_application_state_in_storage(",
+            "expected,",
+            "committed,",
+            "active,",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_binding_application_state_in_storage",
+        (
+            "Self::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;",
+            "if current != expected {",
+            "Self::validate_queue_plan_pending_obligation_route_member_in_storage(",
+            "if committed {",
+            "if active {",
+            "Ok(QueuePlanAdmissionApplicationState::Pending)",
+            "Ok(QueuePlanAdmissionApplicationState::PendingStale)",
+            "None if committed => Ok(QueuePlanAdmissionApplicationState::Applied)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "classify_pending_queue_plan_admission",
+        (
+            "QueuePlanAdmissionApplicationState::PendingStale => {\n"
+            "                        PendingQueuePlanAdmissionDisposition::Stale\n"
+            "                    }",
+            "QueuePlanAdmissionApplicationState::Pending\n"
+            "                    | QueuePlanAdmissionApplicationState::Applied => {",
+            "PendingQueuePlanAdmissionDisposition::Exact",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "decode_exact_queue_plan_pending_route_member_marker",
+        (
+            "if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {",
+            "norito::decode_from_bytes::<QueuePlanPendingRouteMemberV1>(payload)",
+            "Self::queue_plan_pending_route_member_marker_payload(&marker)?;",
+            "Self::queue_plan_pending_route_member_marker_key(",
+            "if canonical.as_slice() != payload || &expected_key != key {",
+            "Ok(marker)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "require_queue_plan_pending_route_member_marker",
+        (
+            "Self::queue_plan_pending_route_member_from_obligation(obligation, route)?;",
+            "Self::queue_plan_pending_route_member_marker_key(route, expected.member_identity)?;",
+            "let payload = storage.get(&key).ok_or_else",
+            "Self::decode_exact_queue_plan_pending_route_member_marker(&key, payload)?;",
+            "if marker != expected {",
+            "Ok((key, marker))",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "queue_plan_pending_route_members_from_storage_with_limit",
+        (
+            "Self::queue_plan_pending_route_member_marker_prefix(route)?;",
+            "let mut members = Vec::new();",
+            "for (key, payload) in storage.range(start..) {",
+            "if !key.as_ref().starts_with(&prefix) {",
+            "break;",
+            "if members.len() == max_members {",
+            "Self::decode_exact_queue_plan_pending_route_member_marker(key, payload)?;",
+            "if marker.route != route {",
+            "let obligation_key = Self::queue_plan_pending_obligation_marker_key(",
+            "if storage.get(&obligation_key).is_none() {",
+            "members.push((key.clone(), marker));",
+            "Ok(members)",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "stage_queue_plan_pending_obligation_marker_in_storage",
+        (
+            "let obligation_payload = Self::queue_plan_pending_obligation_marker_payload(&obligation)?;",
+            "let mut route_updates = Vec::with_capacity(obligation.routes.len());",
+            "for route in &obligation.routes {",
+            "Self::queue_plan_pending_route_members_from_storage(storage, *route)?;",
+            "if members.len() == MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS {",
+            "Self::queue_plan_pending_route_member_from_obligation(&obligation, *route)?;",
+            "Self::queue_plan_pending_route_member_marker_key(*route, member.member_identity)?;",
+            "if let Some(payload) = storage.get(&member_key) {",
+            "Self::decode_exact_queue_plan_pending_route_member_marker(&member_key, payload)?;",
+            "Self::queue_plan_pending_route_member_marker_payload(&member)?;",
+            "route_updates.push((member_key, member_payload));",
+            "storage.insert_queue_plan_marker(obligation_key, obligation_payload);",
+            "for (member_key, member_payload) in route_updates {",
+            "storage.insert_queue_plan_marker(member_key, member_payload);",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "resolve_queue_plan_pending_obligation_in_storage",
+        (
+            "Self::decode_exact_queue_plan_pending_obligation_marker(",
+            "Self::decode_exact_queue_plan_admission_registry_marker(",
+            "let mut member_keys = Vec::with_capacity(obligation.routes.len());",
+            "for route in &obligation.routes {",
+            "Self::queue_plan_pending_route_members_from_storage(storage, *route)?;",
+            "Self::require_queue_plan_pending_route_member_marker(",
+            "member_keys.push(member_key);",
+            "storage.remove_queue_plan_marker(obligation_key);",
+            "for member_key in member_keys {",
+            "storage.remove_queue_plan_marker(member_key);",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "stage_queue_plan_admissions",
+        (
+            "self.state_ref.validate_merge_queue_plan_admissions(",
+            "State::queue_plan_pending_obligation_from_admission(&admission)?;",
+            ".collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;",
+            "let mut markers = self.world.smart_contract_state.transaction();",
+            "for (admission, obligation, committed, active) in admissions {",
+            "markers.insert_queue_plan_marker(key, payload);",
+            "State::stage_queue_plan_pending_obligation_in_storage(&mut markers, &admission)?;",
+            "markers.apply();",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "resolve_queue_plan_pending_obligations_for_entrypoints",
+        (
+            "let mut markers = self.world.smart_contract_state.transaction();",
+            "for entrypoint_hash in entrypoint_hashes {",
+            "State::resolve_queue_plan_pending_obligation_in_storage(",
+            "markers.apply();",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "fn",
+        "resolve_required_queue_plan_pending_obligations",
+        (
+            "let mut markers = self.world.smart_contract_state.transaction();",
+            "for (entrypoint_hash, expected_binding_hash) in pending_obligations {",
+            "State::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;",
+            "if obligation.binding_hash != expected_binding_hash {",
+            "State::resolve_queue_plan_pending_obligation_in_storage(",
+            "markers.apply();",
+        ),
+    ),
+)
+QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS = (
+    (
+        "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs",
+        "queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set",
+        (
+            "a later-route orphan member must abort the whole obligation stage",
+            "failed stage preflight must preserve the orphan marker for diagnosis",
+            "a second admission failure must roll back every earlier admission",
+            "failed whole-list staging must restore the exact prior overlay",
+            "failed whole-list staging leaked marker `{key}`",
+            "the same StateBlock remains reusable after rollback",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs",
+        "queue_plan_pending_resolution_corrupt_route_counts_fail_without_partial_mutation",
+        (
+            "failed resolution must retain the exact pending obligation",
+            "failed resolution must not partially remove any exact route member",
+            "a later-route failure must roll back an earlier successful resolution",
+            "failed whole-list resolution must restore the exact prior overlay",
+            "failed whole-list resolution removed `{key}`",
+            "the same StateBlock remains reusable after resolution rollback",
+        ),
+    ),
+    (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_HOST_RELATIVE,
+        "contract_state_namespace_access_covers_consensus_owned_prefixes",
+        (
+            "queue_plan_pending_obligation_v1_deadbeef_cafebabe",
+            "queue_plan_pending_route_member_v1_0_0_deadbeef_cafebabe",
+            "ContractStateNamespaceAccess::OpaqueSystem",
+            "must remain opaque to generic contract state syscalls",
+        ),
+    ),
 )
 QUEUE_PLAN_STARTUP_REPLAY_MODULE = "SumeragiV2QueuePlanAdmissionRegistry"
 QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
@@ -2886,6 +3571,269 @@ def _validate_native_prepublication_contract(
         )
 
 
+def _validate_queue_plan_pending_membership_contract(
+    root: Path, models: Any, errors: list[str]
+) -> None:
+    """Bind exact QueuePlan route members to bounded, all-route WSV updates."""
+
+    if not isinstance(models, list):
+        return
+    queue_models = [
+        model
+        for model in models
+        if isinstance(model, dict)
+        and model.get("module") == QUEUE_PLAN_PENDING_MEMBERSHIP_MODULE
+    ]
+    if len(queue_models) != 1:
+        errors.append(
+            "QueuePlan pending-membership source contract requires exactly one "
+            f"{QUEUE_PLAN_PENDING_MEMBERSHIP_MODULE} model"
+        )
+        return
+    production_symbols = queue_models[0].get("production_symbols")
+    if not isinstance(production_symbols, list):
+        return
+
+    for relative, kind, symbol, expected_tokens in (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS
+    ):
+        matches = [
+            binding
+            for binding in production_symbols
+            if isinstance(binding, dict)
+            and binding.get("path") == relative
+            and binding.get("kind") == kind
+            and binding.get("symbol") == symbol
+        ]
+        if len(matches) != 1:
+            errors.append(
+                f"{QUEUE_PLAN_PENDING_MEMBERSHIP_MODULE}: reviewed pending "
+                f"route-membership binding {relative}!{symbol} must occur "
+                f"exactly once, found {len(matches)}"
+            )
+            continue
+        actual_tokens = matches[0].get("required_tokens")
+        if (
+            not isinstance(actual_tokens, list)
+            or tuple(actual_tokens) != expected_tokens
+        ):
+            errors.append(
+                f"{QUEUE_PLAN_PENDING_MEMBERSHIP_MODULE}: reviewed pending "
+                f"route-membership tokens changed for {relative}!{symbol}"
+            )
+
+    state_path = root / QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    if _regular_file(
+        state_path,
+        "QueuePlan pending route-membership bounded decoder source",
+        errors,
+    ):
+        state_source = state_path.read_text(encoding="utf-8")
+        compact_bounds = tuple(
+            value.strip()
+            for value in re.findall(
+                r"(?m)^const MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES: usize = ([^;]+);$",
+                state_source,
+            )
+        )
+        if compact_bounds != ("1024",):
+            errors.append(
+                f"{state_path}: QueuePlan compact member decoder bound "
+                "must be the one exact reviewed 1024-byte declaration"
+            )
+        route_roster_bound = (
+            "const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize =\n"
+            "    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSIONS;"
+        )
+        if state_source.count(route_roster_bound) != 1:
+            errors.append(
+                f"{state_path}: QueuePlan authoritative route roster must use "
+                "the one exact merge-admission consensus bound"
+            )
+        for forbidden in (
+            "QUEUE_PLAN_PENDING_ROUTE_COUNT_MARKER_PREFIX",
+            "QueuePlanPendingRouteCountV1",
+            "queue_plan_pending_route_member_xor",
+            "queue_plan_pending_route_count_after_member_removal",
+            "member_identity_xor",
+        ):
+            if forbidden in state_source:
+                errors.append(
+                    f"{state_path}: QueuePlan exact route roster retains "
+                    f"forbidden count/XOR authority token {forbidden!r}"
+                )
+
+    host_path = root / QUEUE_PLAN_PENDING_MEMBERSHIP_HOST_RELATIVE
+    if _regular_file(
+        host_path,
+        "QueuePlan pending marker opaque contract-state namespace source",
+        errors,
+    ):
+        host_source = host_path.read_text(encoding="utf-8")
+        opaque_declarations = re.findall(
+            r"(?ms)^const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &\[&str\] = "
+            r"&\[(.*?)^\];$",
+            host_source,
+        )
+        if len(opaque_declarations) != 1:
+            errors.append(
+                f"{host_path}: opaque system contract-state namespace must "
+                "have one exact declaration"
+            )
+        else:
+            opaque_body = opaque_declarations[0]
+            for prefix in QUEUE_PLAN_PENDING_OPAQUE_PREFIXES:
+                if opaque_body.count(f'"{prefix}"') != 1:
+                    errors.append(
+                        f"{host_path}: QueuePlan native marker prefix "
+                        f"{prefix!r} must occur exactly once in the opaque "
+                        "system contract-state namespace"
+                    )
+
+    binding_items: dict[tuple[str, str, str], str] = {}
+    for relative, kind, symbol, tokens in (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS
+    ):
+        item = _rust_binding_item(
+            root,
+            relative,
+            kind,
+            symbol,
+            "QueuePlan pending route-membership production binding",
+            errors,
+        )
+        if item is None:
+            continue
+        binding_items[(relative, kind, symbol)] = item
+        for token in tokens:
+            if token not in item:
+                errors.append(
+                    f"{root / relative}: QueuePlan pending route-membership "
+                    f"item {symbol} is missing source-bound token {token!r}"
+                )
+
+    relative, symbol, tokens = QUEUE_PLAN_PENDING_QUEUE_OWNERSHIP_FREE_FN
+    queue_ownership_item = None
+    if state_path.is_file() and not state_path.is_symlink():
+        queue_ownership_matches = tuple(
+            item
+            for item in _extract_rust_binding_items(state_source, "fn", symbol)
+            if "cannot authorize new Queue ownership" in item
+        )
+        if len(queue_ownership_matches) != 1:
+            errors.append(
+                f"{state_path}: QueuePlan ownership free function {symbol} "
+                "must have one exact fail-closed implementation, found "
+                f"{len(queue_ownership_matches)}"
+            )
+        else:
+            queue_ownership_item = queue_ownership_matches[0]
+            cursor = -1
+            for token in tokens:
+                count = queue_ownership_item.count(token)
+                position = queue_ownership_item.find(token, cursor + 1)
+                if count != 1 or position < 0:
+                    errors.append(
+                        f"{state_path}: QueuePlan ownership free function "
+                        f"{symbol} token must occur exactly once and in order: "
+                        f"{token!r}; found {count}"
+                    )
+                    break
+                cursor = position
+
+    for relative, kind, symbol, tokens in (
+        QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS
+    ):
+        item = binding_items.get((relative, kind, symbol))
+        if item is None:
+            item = _rust_binding_item(
+                root,
+                relative,
+                kind,
+                symbol,
+                "ordered QueuePlan pending route-membership source binding",
+                errors,
+            )
+        if item is None:
+            continue
+        cursor = -1
+        for token in tokens:
+            count = item.count(token)
+            position = item.find(token, cursor + 1)
+            if count != 1 or position < 0:
+                errors.append(
+                    f"{root / relative}: ordered QueuePlan pending "
+                    f"route-membership item {symbol} token must occur exactly "
+                    f"once and in order: {token!r}; found {count}"
+                )
+                break
+            cursor = position
+
+    roster_item = binding_items.get(
+        (
+            QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+            "fn",
+            "queue_plan_pending_route_members_from_storage_with_limit",
+        )
+    )
+    if (
+        roster_item is not None
+        and "decode_exact_queue_plan_pending_obligation_marker" in roster_item
+    ):
+        errors.append(
+            f"{state_path}: QueuePlan bounded route-roster enumeration must "
+            "validate the compact canonical member and exact obligation-key "
+            "existence without decoding the full obligation payload"
+        )
+
+    mutation_re = re.compile(
+        r"(?:storage|world\s*\.\s*smart_contract_state)\s*\.\s*"
+        r"(?:insert_queue_plan_marker|remove_queue_plan_marker|insert|remove)\s*\("
+    )
+    preflight_contracts = (
+        (
+            "stage_queue_plan_pending_obligation_marker_in_storage",
+            "storage.insert_queue_plan_marker(obligation_key, obligation_payload);",
+        ),
+        (
+            "resolve_queue_plan_pending_obligation_in_storage",
+            "storage.remove_queue_plan_marker(obligation_key);",
+        ),
+    )
+    for symbol, mutation_token in preflight_contracts:
+        item = binding_items.get(
+            (QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE, "fn", symbol)
+        )
+        if item is None:
+            continue
+        mutation = item.find(mutation_token)
+        if mutation < 0:
+            continue
+        if mutation_re.search(item[:mutation]) is not None:
+            errors.append(
+                f"{state_path}: QueuePlan pending route-membership item "
+                f"{symbol} mutates WSV before completing all-route preflight"
+            )
+
+    for relative, symbol, tokens in QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS:
+        item = _rust_binding_item(
+            root,
+            relative,
+            "fn",
+            symbol,
+            "QueuePlan pending route-membership static negative-control test",
+            errors,
+        )
+        if item is None:
+            continue
+        for token in tokens:
+            if token not in item:
+                errors.append(
+                    f"{root / relative}: QueuePlan pending route-membership "
+                    f"test {symbol} is missing negative-control token {token!r}"
+                )
+
+
 def _validate_queue_plan_startup_replay_contract(
     root: Path, models: Any, errors: list[str]
 ) -> None:
@@ -3476,6 +4424,7 @@ def _validate_inflight_layout_contract(
             "`composed_state_action_relation_no_trace_extraction`",
             "fixed-width composed transition relation is implemented",
             "production trace extraction is not implemented",
+            "twenty-two exact TLC mutation witnesses",
         ):
             if token not in closure_source:
                 errors.append(
@@ -3636,6 +4585,7 @@ def validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
         root, models, errors
     )
     _validate_native_prepublication_contract(root, models, errors)
+    _validate_queue_plan_pending_membership_contract(root, models, errors)
     _validate_queue_plan_startup_replay_contract(root, models, errors)
     _validate_inflight_layout_contract(
         root,

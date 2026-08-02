@@ -22,6 +22,7 @@ use futures_util::{
 };
 use integration_tests::sandbox;
 use iroha::{
+    client::Client,
     crypto::{Algorithm, KeyPair},
     data_model::{
         Level,
@@ -1062,7 +1063,7 @@ async fn submit_ram_lfe_emails_paced(
             .into();
             let transaction = submit_account.clients[0]
                 .build_transaction_from_items([instruction], iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), realistic_load_metadata(index));
-            let payload = submit_account.clients[0].prepare_transaction_payload(&transaction);
+            let payload = Client::prepare_transaction_payload(&transaction);
             submit_prepared_to_accept_quorum(
                 &submit_account.clients,
                 &payload,
@@ -1145,7 +1146,7 @@ async fn submit_transfers_paced(
             .into();
             let transaction = source_account.clients[0]
                 .build_transaction_from_items([instruction], iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), realistic_load_metadata(index));
-            let payload = source_account.clients[0].prepare_transaction_payload(&transaction);
+            let payload = Client::prepare_transaction_payload(&transaction);
             submit_prepared_to_accept_quorum(
                 &source_account.clients,
                 &payload,

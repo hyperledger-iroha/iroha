@@ -37,11 +37,53 @@ PRODUCTION_TRACE_EXTRACTION_THEOREM = (
 )
 PRODUCTION_TRACE_EXTRACTION_CANONICAL_ENCODING = "utf8-json-sort-keys-compact-lf-v1"
 
+# These model actions still have no complete production extraction seam.  Keep
+# the debt explicit while individual, already-real linearization points are
+# added below; this tuple is not authority to certify a partial trace.
+PRODUCTION_TRACE_EXTRACTION_OPEN_MODEL_ACTIONS = (
+    "FanoutFromProducer",
+    "ServeLateBody",
+    "Crash",
+    "Recover",
+    "RecoverReservationSnapshot",
+    "RepairPostCarrierEvidence",
+)
+PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS = (
+    "SelectQueuePlanV4Conjunction",
+    "FsyncReservationV5",
+    "ActivateKura",
+    "FanoutFromProducer",
+    "ServeLateBody",
+    "PersistExecutionInput",
+    "AuthorizeReady",
+    "SignReady",
+    "PersistReadyQc",
+    "Crash",
+    "Recover",
+    "RecoverReservationSnapshot",
+    "ReleaseReservationDirect",
+    "LaneCommit",
+    "ApplyCarrier",
+    "PersistReservationCommitted",
+    "PersistPlanTombstone",
+    "ForgetReservationCommit",
+    "PersistKuraRetirement",
+    "AdvanceReleasePendingPrefix",
+    "PrepareReservationRelease",
+    "AdvanceReleasedPrefix",
+    "CompleteReservationRelease",
+    "RestoreReleasedFifo",
+    "ForgetReservationRelease",
+    "RepairPostCarrierEvidence",
+)
+
 # These are the concrete authorization seams which must consume the
 # composed transition checker before a layout proof can be promoted to a
 # production trace-extraction theorem.  Merely hashing these functions is not
 # sufficient: `_production_trace_extraction_source_snapshot` also requires the
-# exact action tags and a checked transition for every named model step.
+# exact action tags and a checked transition for every bound model step.  The
+# explicit open-action tuple above prevents those slices from being promoted
+# to a complete trace theorem.
 PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
     {
         "id": "queue_plan_selection_and_reservation_fsync",
@@ -107,6 +149,26 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "commit_lane_reservation",
             ),
         },
+    },
+    {
+        "id": "pre_kura_direct_reservation_release",
+        "path": "crates/iroha_core/src/queue.rs",
+        "impl": "Queue",
+        "symbol": "release_pre_kura_autonomous_reservation_batch",
+        "model_actions": ("ReleaseReservationDirect",),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "PreKuraDirectReleaseContext",
+            "revalidate_complete_live_pre_kura_group_locked",
+            "canonical_lane_queue_reservation_group_identity_projection",
+            "production_in_flight_first_release_terminal_owner",
+            "begin_durability_transition_locked",
+            "journal.release_batch",
+            "replace_fifo_locked",
+        ),
     },
     {
         "id": "producer_kura_activation",
@@ -420,7 +482,6 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "LaneQueueReleasePreparationGate",
                 "begin_durability_transition_locked",
                 "release_barrier_has_exact_fifo_ownership_locked",
-                "forgotten Queue release lacks exact ordinary FIFO ownership",
                 "check_production_in_flight_first_release_transition",
                 "journal.prepare_release(barrier.clone())",
                 "DurableLaneQueueReleaseBarrierAuthorization::durable",
@@ -451,7 +512,6 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "fifo_with_released_reservations_locked",
             "replace_fifo_locked",
             "release_barrier_has_exact_fifo_ownership_locked",
-            "Queue release completion did not publish exact ordinary FIFO ownership",
             "journal.forget_release(completion.barrier.clone())",
         ),
         "authorization_source": {
@@ -518,15 +578,93 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
         "checked_transition_count": 1,
         "additional_tokens": (
             "check_production_application_transition",
+            "CheckedCarrierApplications::for_block",
+            "checked_carrier_applications.bind_execution_batch",
+            "checked_carrier_applications.push(checked, projection)",
             "validate_and_apply",
             "finish_durable_apply_completion_against",
             "canonical_lane_queue_reservation_group_identity_projection",
         ),
-        "commit_sink": {
+        "checked_transition_consumer": {
+            "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+            "impl": "CheckedCarrierApplications",
+            "symbol": "consume_for_state_commit",
+            "required_tokens": (
+                "carrier_block_hash",
+                "staged_merge_entry",
+                "CertifiedMergeLedgerReference::new(entry)",
+                "batch.lanes.len()",
+                "checked.into_projection()",
+            ),
+            "ordered_tokens": (
+                "if carrier_block_hash != self.carrier_block_hash",
+                "let committed_execution_reference = staged_merge_entry",
+                "CertifiedMergeLedgerReference::new(entry)",
+                "batch.lanes.len()",
+                "match (self.execution_reference.as_ref()",
+                "for CheckedCarrierApplication",
+                "if checked.into_projection() != projection",
+            ),
+        },
+        "checked_transition_adapter": {
+            "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+            "impl": "StateBlockCommitAuthorization for CheckedCarrierApplications",
+            "symbol": "consume_for_state_commit",
+            "required_tokens": (
+                "self: Box<Self>",
+                "carrier_block_hash",
+                "staged_merge_entry",
+                "CheckedCarrierApplications::consume_for_state_commit",
+                "*self",
+                "map_err(str::to_owned)",
+            ),
+        },
+        "authorization_source": {
             "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
             "impl": "V2ApplyService",
             "symbol": "validate_and_apply",
-            "required_tokens": ("state_block.commit",),
+            "required_tokens": (
+                "pending_autoscale_retirement_binding",
+                "Box<dyn StateBlockCommitAuthorization>",
+                "Box::new(checked_carrier_applications)",
+                "if carries_scale_in",
+                "lock_lane_retirement_observer",
+                "commit_with_state_commit_authorization_and_autoscale_retirement_queue_veto",
+                "commit_with_state_commit_authorization",
+            ),
+            "ordered_tokens": (
+                "apply_without_execution_with_verified_v2_finality",
+                "pending_autoscale_retirement_binding",
+                "Box::new(checked_carrier_applications)",
+                "if carries_scale_in",
+                "lock_lane_retirement_observer",
+                "commit_with_state_commit_authorization_and_autoscale_retirement_queue_veto",
+                "state_block.commit_with_state_commit_authorization",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/state.rs",
+            "impl": None,
+            "symbol": "commit_inner",
+            "required_tokens": (
+                "state_commit_authorization: Option<Box<dyn StateBlockCommitAuthorization>>",
+                "let _state_commit_lock = state_ref.state_commit_lock.lock()",
+                "let autoscale_lifecycle_guard",
+                "autoscale_retirement_queue_veto.as_mut()",
+                "state_commit_authorization.take()",
+                "authorization.consume_for_state_commit",
+                "apply_committed_autoscale_lane_geometry",
+                "transactions.commit()",
+            ),
+            "ordered_tokens": (
+                "let _state_commit_lock = state_ref.state_commit_lock.lock()",
+                "let autoscale_lifecycle_guard",
+                "autoscale_retirement_queue_veto.as_mut()",
+                "state_commit_authorization.take()",
+                "authorization.consume_for_state_commit",
+                "state_ref.apply_committed_autoscale_lane_geometry",
+                "transactions.commit()",
+            ),
         },
     },
 )
@@ -80588,6 +80726,433 @@ def _production_liveness_release_inventory_errors(
             for line in body.splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         ]
+
+    canonical_grouped_sdk_suites = (
+        ("openapi", 7),
+        ("python", 58),
+        ("javascript", 56),
+        ("swift", 3),
+        ("kotlin", 6),
+        ("java", 5),
+    )
+    def indented_shell_array(name: str) -> list[str]:
+        matches = re.findall(
+            rf"^  {re.escape(name)}=\(\n((?:    [^\n]*\n)*)  \)$",
+            source,
+            flags=re.MULTILINE,
+        )
+        if len(matches) != 1:
+            errors.append(
+                f"{release_path}: release runner must contain one canonical "
+                f"indented {name} array"
+            )
+            return []
+        return [
+            line.strip()
+            for line in matches[0].splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+
+    runner_grouped_sdk_surfaces = indented_shell_array(
+        "native_amx_grouped_parity_surfaces"
+    )
+    runner_grouped_sdk_count_tokens = indented_shell_array(
+        "native_amx_grouped_parity_test_counts"
+    )
+    try:
+        runner_grouped_sdk_counts = tuple(
+            int(token) for token in runner_grouped_sdk_count_tokens
+        )
+    except ValueError:
+        runner_grouped_sdk_counts = ()
+        errors.append(
+            f"{release_path}: grouped Native AMX SDK runner counts must be integers"
+        )
+    runner_grouped_sdk_suites = tuple(
+        zip(
+            runner_grouped_sdk_surfaces,
+            runner_grouped_sdk_counts,
+        )
+    )
+    if runner_grouped_sdk_suites != canonical_grouped_sdk_suites:
+        errors.append(
+            f"{release_path}: grouped Native AMX SDK runner suite inventory must "
+            f"equal {canonical_grouped_sdk_suites!r}; found "
+            f"{runner_grouped_sdk_suites!r}"
+        )
+
+    receipt_path = repo_root / "scripts" / "write_sumeragi_v2_release_receipt.py"
+    receipt_grouped_sdk_suites: object = None
+    if not receipt_path.is_file() or receipt_path.is_symlink():
+        errors.append(
+            f"{receipt_path}: grouped Native AMX SDK receipt source must be a regular file"
+        )
+    else:
+        try:
+            receipt_tree = ast.parse(
+                receipt_path.read_text(encoding="utf-8"),
+                filename=str(receipt_path),
+            )
+        except (OSError, SyntaxError) as error:
+            errors.append(
+                f"{receipt_path}: grouped Native AMX SDK receipt source is invalid: {error}"
+            )
+        else:
+            assignments = [
+                node
+                for node in receipt_tree.body
+                if isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "_NATIVE_AMX_GROUPED_PARITY_SUITES"
+            ]
+            if len(assignments) != 1:
+                errors.append(
+                    f"{receipt_path}: grouped Native AMX SDK receipt suite inventory "
+                    f"must be assigned exactly once; found {len(assignments)}"
+                )
+            else:
+                try:
+                    receipt_grouped_sdk_suites = ast.literal_eval(
+                        assignments[0].value
+                    )
+                except (TypeError, ValueError) as error:
+                    errors.append(
+                        f"{receipt_path}: grouped Native AMX SDK receipt suite "
+                        f"inventory is not a literal: {error}"
+                    )
+    if receipt_grouped_sdk_suites != canonical_grouped_sdk_suites:
+        errors.append(
+            f"{receipt_path}: grouped Native AMX SDK receipt suite inventory must "
+            f"equal {canonical_grouped_sdk_suites!r}; found "
+            f"{receipt_grouped_sdk_suites!r}"
+        )
+
+    grouped_harness_path = (
+        repo_root / "ci" / "run_native_amx_v2_grouped_sdk_parity.sh"
+    )
+    harness_grouped_sdk_suites: list[tuple[str, int]] = []
+    if not grouped_harness_path.is_file() or grouped_harness_path.is_symlink():
+        errors.append(
+            f"{grouped_harness_path}: grouped Native AMX SDK harness must be a regular file"
+        )
+    else:
+        grouped_harness_source = grouped_harness_path.read_text(encoding="utf-8")
+        runtime_case_marker = 'observed_test_count=0\ncase "$surface" in\n'
+        if grouped_harness_source.count(runtime_case_marker) != 1:
+            errors.append(
+                f"{grouped_harness_path}: grouped Native AMX SDK harness must "
+                "contain one runtime surface dispatch"
+            )
+        else:
+            runtime_case = grouped_harness_source.split(runtime_case_marker, 1)[1]
+            for surface, _expected_count in canonical_grouped_sdk_suites:
+                branch_marker = f"  {surface})\n"
+                if runtime_case.count(branch_marker) != 1:
+                    errors.append(
+                        f"{grouped_harness_path}: grouped Native AMX SDK harness "
+                        f"must contain one {surface!r} branch"
+                    )
+                    continue
+                branch = runtime_case.split(branch_marker, 1)[1].split(
+                    "\n    ;;", 1
+                )[0]
+                matches = re.findall(
+                    r"^    observed_test_count=([0-9]+)$",
+                    branch,
+                    flags=re.MULTILINE,
+                )
+                if len(matches) != 1:
+                    errors.append(
+                        f"{grouped_harness_path}: grouped Native AMX SDK harness "
+                        f"branch {surface!r} must assign one exact test count"
+                    )
+                    continue
+                harness_grouped_sdk_suites.append((surface, int(matches[0])))
+    if tuple(harness_grouped_sdk_suites) != canonical_grouped_sdk_suites:
+        errors.append(
+            f"{grouped_harness_path}: grouped Native AMX SDK harness suite inventory "
+            f"must equal {canonical_grouped_sdk_suites!r}; found "
+            f"{tuple(harness_grouped_sdk_suites)!r}"
+        )
+
+    canonical_sdk_diagnostics_suites = (
+        ("python", 114),
+        ("javascript", 88),
+        ("swift", 17),
+        ("kotlin", 15),
+        ("java", 10),
+    )
+    runner_sdk_diagnostics_surfaces = indented_shell_array(
+        "sumeragi_v2_sdk_diagnostics_surfaces"
+    )
+    runner_sdk_diagnostics_count_tokens = indented_shell_array(
+        "sumeragi_v2_sdk_diagnostics_test_counts"
+    )
+    try:
+        runner_sdk_diagnostics_counts = tuple(
+            int(token) for token in runner_sdk_diagnostics_count_tokens
+        )
+    except ValueError:
+        runner_sdk_diagnostics_counts = ()
+        errors.append(
+            f"{release_path}: Sumeragi SDK diagnostics runner counts must be integers"
+        )
+    runner_sdk_diagnostics_suites = tuple(
+        zip(runner_sdk_diagnostics_surfaces, runner_sdk_diagnostics_counts)
+    )
+    if runner_sdk_diagnostics_suites != canonical_sdk_diagnostics_suites:
+        errors.append(
+            f"{release_path}: Sumeragi SDK diagnostics runner suite inventory must "
+            f"equal {canonical_sdk_diagnostics_suites!r}; found "
+            f"{runner_sdk_diagnostics_suites!r}"
+        )
+    for retired_fragment in (
+        "--test-name-pattern",
+        "status-javascript",
+        "status-python",
+    ):
+        if retired_fragment in source:
+            errors.append(
+                f"{release_path}: Sumeragi SDK diagnostics corridor retains retired "
+                f"ordinal/partial selector {retired_fragment!r}"
+            )
+
+    canonical_rust_sdk_diagnostics_tests = (
+        "client::tests::get_sumeragi_status_prefers_norito_and_handles_json",
+        "client::tests::get_sumeragi_status_rejects_unknown_json_fields",
+        "client::tests::get_sumeragi_status_rejects_structurally_impossible_norito_and_json",
+        "client::tests::get_sumeragi_status_json_requests_json_and_falls_back_to_norito",
+        "client::tests::get_sumeragi_diagnostics_verifies_lane_relay_envelopes",
+        "client::tests::get_sumeragi_diagnostics_rejects_invalid_lane_relay_hash",
+        "client::tests::get_sumeragi_diagnostics_rejects_malformed_autonomous_execution",
+        "client::tests::get_sumeragi_diagnostics_rejects_duplicate_autonomous_execution_identity",
+        "client::tests::get_sumeragi_diagnostics_rejects_malformed_native_amx_receipts_in_every_container",
+        "client::tests::get_sumeragi_diagnostics_rejects_malformed_json_payload",
+        "client::tests::get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields",
+        "client::tests::get_sumeragi_diagnostics_rejects_unknown_json_fields",
+        "client::tests::get_sumeragi_diagnostics_rejects_zero_npos_seed",
+        "client::tests::get_sumeragi_diagnostics_accepts_json_payload_without_content_type_header",
+    )
+    runner_rust_sdk_diagnostics_tests = tuple(
+        shell_array("rust_sdk_diagnostics_tests")
+    )
+    if runner_rust_sdk_diagnostics_tests != canonical_rust_sdk_diagnostics_tests:
+        errors.append(
+            f"{release_path}: Rust SDK diagnostics inventory must equal the "
+            f"reviewed fourteen-test contract; found "
+            f"{runner_rust_sdk_diagnostics_tests!r}"
+        )
+    rust_sdk_diagnostics_leg = (
+        "run_corridor_leg \\\n"
+        "  sumeragi-diagnostics-rust cargo-exact 14 \\\n"
+        '  "cargo test --locked --offline -p iroha --lib '
+        'client::tests::get_sumeragi_ -- --test-threads=1" \\\n'
+        "  run_cargo test --locked --offline -p iroha --lib \\\n"
+        "    client::tests::get_sumeragi_ -- --test-threads=1"
+    )
+    if source.count(rust_sdk_diagnostics_leg) != 1:
+        errors.append(
+            f"{release_path}: Rust SDK diagnostics must be one exact guarded "
+            "fourteen-test corridor leg"
+        )
+
+    receipt_sdk_diagnostics_suites: object = None
+    receipt_rust_sdk_diagnostics_tests: object = None
+    if receipt_path.is_file() and not receipt_path.is_symlink():
+        try:
+            sdk_receipt_tree = ast.parse(
+                receipt_path.read_text(encoding="utf-8"),
+                filename=str(receipt_path),
+            )
+        except (OSError, SyntaxError) as error:
+            errors.append(
+                f"{receipt_path}: Sumeragi SDK diagnostics receipt source is "
+                f"invalid: {error}"
+            )
+        else:
+            sdk_receipt_assignments = {
+                node.targets[0].id: node.value
+                for node in sdk_receipt_tree.body
+                if isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id
+                in {
+                    "_SUMERAGI_SDK_DIAGNOSTICS_SUITES",
+                    "_RUST_SDK_DIAGNOSTICS_TESTS",
+                }
+            }
+            try:
+                receipt_sdk_diagnostics_suites = ast.literal_eval(
+                    sdk_receipt_assignments["_SUMERAGI_SDK_DIAGNOSTICS_SUITES"]
+                )
+                receipt_rust_sdk_diagnostics_tests = ast.literal_eval(
+                    sdk_receipt_assignments["_RUST_SDK_DIAGNOSTICS_TESTS"]
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                errors.append(
+                    f"{receipt_path}: Sumeragi SDK diagnostics receipt inventories "
+                    f"must be unique literals: {error}"
+                )
+    if receipt_sdk_diagnostics_suites != canonical_sdk_diagnostics_suites:
+        errors.append(
+            f"{receipt_path}: Sumeragi SDK diagnostics receipt suite inventory "
+            f"must equal {canonical_sdk_diagnostics_suites!r}; found "
+            f"{receipt_sdk_diagnostics_suites!r}"
+        )
+    if receipt_rust_sdk_diagnostics_tests != canonical_rust_sdk_diagnostics_tests:
+        errors.append(
+            f"{receipt_path}: Rust SDK diagnostics receipt inventory must equal "
+            "the reviewed fourteen-test contract"
+        )
+
+    sdk_diagnostics_harness_path = (
+        repo_root / "ci" / "run_sumeragi_v2_sdk_diagnostics.sh"
+    )
+    harness_sdk_diagnostics_suites: list[tuple[str, int]] = []
+    if (
+        not sdk_diagnostics_harness_path.is_file()
+        or sdk_diagnostics_harness_path.is_symlink()
+    ):
+        errors.append(
+            f"{sdk_diagnostics_harness_path}: Sumeragi SDK diagnostics harness "
+            "must be a regular file"
+        )
+        sdk_diagnostics_harness_source = ""
+    else:
+        sdk_diagnostics_harness_source = sdk_diagnostics_harness_path.read_text(
+            encoding="utf-8"
+        )
+        runtime_case_marker = 'observed_test_count=0\ncase "$surface" in\n'
+        if sdk_diagnostics_harness_source.count(runtime_case_marker) != 1:
+            errors.append(
+                f"{sdk_diagnostics_harness_path}: Sumeragi SDK diagnostics harness "
+                "must contain one runtime surface dispatch"
+            )
+        else:
+            runtime_case = sdk_diagnostics_harness_source.split(
+                runtime_case_marker, 1
+            )[1]
+            for surface, _expected_count in canonical_sdk_diagnostics_suites:
+                branch_marker = f"  {surface})\n"
+                if runtime_case.count(branch_marker) != 1:
+                    errors.append(
+                        f"{sdk_diagnostics_harness_path}: Sumeragi SDK diagnostics "
+                        f"harness must contain one {surface!r} branch"
+                    )
+                    continue
+                branch = runtime_case.split(branch_marker, 1)[1].split(
+                    "\n    ;;", 1
+                )[0]
+                matches = re.findall(
+                    r"^    observed_test_count=([0-9]+)$",
+                    branch,
+                    flags=re.MULTILINE,
+                )
+                if len(matches) != 1:
+                    errors.append(
+                        f"{sdk_diagnostics_harness_path}: Sumeragi SDK diagnostics "
+                        f"branch {surface!r} must assign one exact test count"
+                    )
+                    continue
+                harness_sdk_diagnostics_suites.append(
+                    (surface, int(matches[0]))
+                )
+    if tuple(harness_sdk_diagnostics_suites) != canonical_sdk_diagnostics_suites:
+        errors.append(
+            f"{sdk_diagnostics_harness_path}: Sumeragi SDK diagnostics harness "
+            f"suite inventory must equal {canonical_sdk_diagnostics_suites!r}; "
+            f"found {tuple(harness_sdk_diagnostics_suites)!r}"
+        )
+    for no_skip_fragment in (
+        '      assert_node_tap "$javascript_transcript" 44',
+        'if tuple(totals) != (expected, 0, 0, 0):',
+        'any("skipped" in line.lower() for line in lines)',
+        'f"expected one exact no-skip {expected}-test pytest transcript"',
+    ):
+        if sdk_diagnostics_harness_source.count(no_skip_fragment) != 1:
+            errors.append(
+                f"{sdk_diagnostics_harness_path}: Sumeragi SDK diagnostics "
+                f"no-skip contract lacks exact fragment {no_skip_fragment!r}"
+            )
+    if sdk_diagnostics_harness_source.count(
+        '"${torii_test}::test_'
+    ) != 42:
+        errors.append(
+            f"{sdk_diagnostics_harness_path}: Python Torii diagnostics must use "
+            "exactly forty-two explicit node IDs"
+        )
+
+    js_diagnostics_test_path = (
+        repo_root
+        / "javascript"
+        / "iroha_js"
+        / "test"
+        / "sumeragiDiagnosticsContract.test.js"
+    )
+    js_torii_test_path = (
+        repo_root / "javascript" / "iroha_js" / "test" / "toriiClient.test.js"
+    )
+    if (
+        not js_diagnostics_test_path.is_file()
+        or js_diagnostics_test_path.is_symlink()
+        or not js_torii_test_path.is_file()
+        or js_torii_test_path.is_symlink()
+    ):
+        errors.append(
+            "JavaScript Sumeragi SDK diagnostics sources must be regular files"
+        )
+    else:
+        js_diagnostics_source = js_diagnostics_test_path.read_text(encoding="utf-8")
+        js_torii_test_source = js_torii_test_path.read_text(encoding="utf-8")
+        inventory_matches = re.findall(
+            r"export const SUMERAGI_DIAGNOSTICS_CONTRACT_TESTS = Object\.freeze\(\[\n"
+            r"((?:  \"[^\n]+\",\n)+)\]\);",
+            js_diagnostics_source,
+        )
+        js_diagnostics_tests = (
+            re.findall(r'^  "([^"]+)",$', inventory_matches[0], re.MULTILINE)
+            if len(inventory_matches) == 1
+            else []
+        )
+        if (
+            len(js_diagnostics_tests) != 44
+            or len(set(js_diagnostics_tests)) != 44
+            or "typed Sumeragi endpoints reject swapped status and diagnostics payloads"
+            not in js_diagnostics_tests
+        ):
+            errors.append(
+                f"{js_diagnostics_test_path}: dedicated JavaScript Sumeragi "
+                "diagnostics inventory must contain exactly 44 unique tests and "
+                "the swapped-endpoint negative"
+            )
+        elif any(
+            js_torii_test_source.count(f'test("{name}",') != 1
+            for name in js_diagnostics_tests
+        ):
+            errors.append(
+                f"{js_torii_test_path}: dedicated JavaScript Sumeragi diagnostics "
+                "inventory must map one-to-one onto real test registrations"
+            )
+        for focus_fragment, expected_occurrences in (
+            ("iroha.js.test.sumeragiDiagnosticsContract", 2),
+            (
+                "focused Sumeragi diagnostics test registrations must match the exact inventory",
+                1,
+            ),
+            ('"# skipped": 0,', 1),
+        ):
+            focus_sources = (
+                js_diagnostics_source
+                + js_torii_test_source
+                + sdk_diagnostics_harness_source
+            )
+            if focus_sources.count(focus_fragment) != expected_occurrences:
+                errors.append(
+                    "dedicated JavaScript Sumeragi diagnostics no-skip selector "
+                    f"lacks exact fragment {focus_fragment!r}"
+                )
 
     inventory = shell_array("required_production_liveness_tests")
     if len(inventory) != _PRODUCTION_LIVENESS_RELEASE_COUNT:

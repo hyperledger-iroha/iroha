@@ -17,6 +17,7 @@ categories = ["cryptography::cryptocurrencies"]
 docker_bins = [
     "iroha",
     "irohad",
+    "sorafs_governance_dag",
     "kagami",
     "attachment_sanitizer",
 ]

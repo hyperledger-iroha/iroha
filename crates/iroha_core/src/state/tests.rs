@@ -9335,6 +9335,31 @@ fn pending_drain_body_and_candidate_use_embedded_close_committee_after_roster_ch
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(_))
     ));
 
+    let mut mixed_queue_plan_candidate = candidate.clone();
+    mixed_queue_plan_candidate.queue_plan_admissions = vec![vec![0x00]];
+    assert!(matches!(
+        state.validate_merge_candidate_for_global_round(
+            &mixed_queue_plan_candidate,
+            &parent_header,
+            7,
+        ),
+        Err(MergeLedgerCommitError::ExecutionBatchInvalid(ref message))
+            if message.contains("QueuePlan admission controls")
+    ));
+    let mixed_queue_plan_qc = merge_qc_for_candidate(
+        &state,
+        &mixed_queue_plan_candidate,
+        &unrelated_keypairs,
+        &[0, 1, 2],
+    );
+    let mixed_queue_plan_entry =
+        merge_entry_from_candidate(mixed_queue_plan_candidate, mixed_queue_plan_qc);
+    assert!(matches!(
+        state.validate_certified_merge_entry_for_global_order(&mixed_queue_plan_entry),
+        Err(MergeLedgerCommitError::ExecutionBatchInvalid(ref message))
+            if message.contains("QueuePlan admission controls")
+    ));
+
     let qc = merge_qc_for_candidate(&state, &candidate, &unrelated_keypairs, &[0, 1, 2]);
     let entry = merge_entry_from_candidate(candidate.clone(), qc);
     state
@@ -9978,6 +10003,13 @@ fn insert_empty_transaction_block_for_state_commit(
     state_block
         .transactions
         .insert_block(std::collections::HashSet::new(), block_height);
+}
+
+fn commit_state_block_with_empty_autoscale_queue(
+    state_block: StateBlock<'_>,
+) -> Result<(), TransactionsBlockError> {
+    let mut queue_veto = |_: LaneId, _: DataSpaceId, _: Hash| Ok(());
+    state_block.commit_with_autoscale_retirement_queue_veto(&mut queue_veto)
 }
 
 fn manual_lane_lifecycle_payload() -> iroha_data_model::nexus::LaneLifecycleParameterV1 {
@@ -12487,8 +12519,7 @@ fn autoscale_commit_scale_in_rejects_tampered_pending_transition_metadata_before
             }
         }
 
-        let err = state_block
-            .commit()
+        let err = commit_state_block_with_empty_autoscale_queue(state_block)
             .expect_err("tampered pending autoscale scale-in transition must abort commit");
         assert!(matches!(
             err,
@@ -12588,8 +12619,7 @@ fn autoscale_commit_scale_in_rejects_tampered_pending_catalog_update_before_stor
             }
         }
 
-        let err = state_block
-            .commit()
+        let err = commit_state_block_with_empty_autoscale_queue(state_block)
             .expect_err("tampered pending autoscale scale-in catalog update must abort commit");
         assert!(matches!(
             err,
@@ -13704,8 +13734,7 @@ fn autoscale_commit_scale_in_kura_preflight_failure_does_not_publish_staged_da_o
         "block-local scale-in should prune retired-lane verified relay state"
     );
 
-    let err = state_block
-        .commit()
+    let err = commit_state_block_with_empty_autoscale_queue(state_block)
         .expect_err("Kura retire preflight failure must abort state commit");
     assert!(matches!(
         err,
@@ -13916,8 +13945,7 @@ fn autoscale_commit_scale_in_tiered_preflight_failure_does_not_publish_staged_da
         "autoscale tiered retire preflight failure",
     );
 
-    let err = state_block
-        .commit()
+    let err = commit_state_block_with_empty_autoscale_queue(state_block)
         .expect_err("tiered retire preflight failure must abort state commit");
     assert!(matches!(
         err,
@@ -16707,6 +16735,329 @@ fn autoscale_transition_scale_in_retires_to_default_route_floor() {
 }
 
 #[test]
+fn prospective_autoscale_retirement_binding_projects_exact_active_route_before_staging() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+    let retired_lane_id = LaneId::new(1);
+    state
+        .set_nexus(autoscale_transition_test_nexus(
+            vec![LaneConfig::default()],
+            1,
+            2,
+            200,
+        ))
+        .expect("apply prospective autoscale retirement test Nexus config");
+    state
+        .apply_lane_lifecycle_with_options(
+            &iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![autoscale_elastic_lane_config(
+                    retired_lane_id,
+                    DataSpaceId::UNIVERSAL,
+                    1,
+                )],
+                retire: Vec::new(),
+            },
+            false,
+            true,
+        )
+        .expect("seed prospective autoscale retirement lane");
+    let retired_lane_incarnation = state
+        .lane_incarnation(retired_lane_id)
+        .expect("prospective retirement lane has an active incarnation");
+    let retirement =
+        prepare_certified_autoscale_retirement_for_test(&mut state, &kura, retired_lane_id);
+
+    let mut state_block = state.block(retirement.header());
+    assert!(state_block.pending_autoscale_lifecycle.is_none());
+    assert_eq!(
+        state_block
+            .prospective_autoscale_retirement_binding(&retirement)
+            .expect("project exact prospective retirement binding"),
+        Some((
+            retired_lane_id,
+            DataSpaceId::UNIVERSAL,
+            retired_lane_incarnation,
+        )),
+        "the pre-vote projection must bind the same route and incarnation that scale-in will retire"
+    );
+    assert!(
+        state_block
+            .nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .any(|lane| lane.id == retired_lane_id),
+        "prospective projection must not mutate the block-local catalog"
+    );
+
+    let committed_retirement = ValidBlock::new_unverified_for_tests(retirement.clone())
+        .commit_unchecked()
+        .unpack(|_| {});
+    state_block.maybe_apply_nexus_autoscale(&committed_retirement);
+    let pending = state_block
+        .pending_autoscale_lifecycle
+        .as_ref()
+        .expect("the projected retirement must stage deterministically");
+    assert_eq!(pending.plan.retire, vec![retired_lane_id]);
+    assert!(matches!(
+        &pending.transition,
+        PendingAutoscaleTransition::ScaleIn { lane, .. } if *lane == retired_lane_id
+    ));
+    assert!(
+        state_block
+            .prospective_autoscale_retirement_binding(&retirement)
+            .expect("recheck projection after lifecycle staging")
+            .is_none(),
+        "an already-staged lifecycle must not be projected or vetoed twice"
+    );
+}
+
+#[test]
+fn prospective_autoscale_retirement_blocks_block_local_queue_plan_obligation() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+    let retired_lane_id = LaneId::new(1);
+    state
+        .set_nexus(autoscale_transition_test_nexus(
+            vec![LaneConfig::default()],
+            1,
+            2,
+            200,
+        ))
+        .expect("apply block-local QueuePlan retirement test Nexus config");
+    state
+        .apply_lane_lifecycle_with_options(
+            &iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![autoscale_elastic_lane_config(
+                    retired_lane_id,
+                    DataSpaceId::UNIVERSAL,
+                    1,
+                )],
+                retire: Vec::new(),
+            },
+            false,
+            true,
+        )
+        .expect("seed block-local QueuePlan retirement lane");
+    let retired_lane_incarnation = state
+        .lane_incarnation(retired_lane_id)
+        .expect("retiring lane has an active incarnation");
+    let retirement =
+        prepare_certified_autoscale_retirement_for_test(&mut state, &kura, retired_lane_id);
+    let mut state_block = state.block(retirement.header());
+
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        retired_lane_id,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let validator_set = vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())];
+    let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        &state.chain_id,
+        &queue_plan_entrypoint_for_state_test(&state, 0x5B),
+        &routing_plan,
+        crate::queue::QueuePlanAdmissionContextV2 {
+            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+            authority_height: 0,
+            proposal_height: 1,
+            predecessor_block_hash: None,
+            routing_plan_digest: routing_plan.digest(),
+            route_incarnations: vec![crate::queue::QueuePlanRouteIncarnationV2 {
+                leg: routing_plan.coordinator_leg(),
+                lane_incarnation: retired_lane_incarnation,
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_count: 1,
+                durability_threshold: 1,
+                validator_set,
+            }],
+        },
+        123,
+    )
+    .expect("block-local QueuePlan binding");
+    let obligation = State::queue_plan_pending_obligation_from_binding(&binding)
+        .expect("block-local QueuePlan obligation");
+    let route = obligation.routes[0];
+    let route_member = State::queue_plan_pending_route_member_from_obligation(&obligation, route)
+        .expect("block-local route member");
+    let route_member_key =
+        State::queue_plan_pending_route_member_marker_key(route, route_member.member_identity)
+            .expect("block-local route-member key");
+    let route_member_payload = State::queue_plan_pending_route_member_marker_payload(&route_member)
+        .expect("block-local route-member payload");
+    let chain_id_digest = binding.chain_id_digest;
+    let entrypoint_hash = binding.entrypoint_hash.clone();
+    let registry_key = binding.registry_key();
+    state_block.world.smart_contract_state.insert(
+        State::queue_plan_admission_registry_marker_key(&registry_key)
+            .expect("block-local registry key"),
+        State::queue_plan_admission_registry_marker_payload(&binding.registry_value())
+            .expect("block-local registry payload"),
+    );
+    state_block.world.smart_contract_state.insert(
+        State::queue_plan_pending_obligation_marker_key(chain_id_digest, entrypoint_hash)
+            .expect("block-local obligation key"),
+        State::queue_plan_pending_obligation_marker_payload(&obligation)
+            .expect("block-local obligation payload"),
+    );
+    state_block
+        .world
+        .smart_contract_state
+        .insert(route_member_key.clone(), route_member_payload);
+
+    assert!(
+        state_block
+            .prospective_autoscale_retirement_binding(&retirement)
+            .expect("inspect exact block-local QueuePlan obligation")
+            .is_none(),
+        "a same-carrier replicated QueuePlan obligation must veto prospective retirement"
+    );
+    let plan = iroha_data_model::nexus::LaneLifecyclePlan {
+        additions: Vec::new(),
+        retire: vec![retired_lane_id],
+    };
+    let transition = PendingAutoscaleTransition::ScaleIn {
+        lane: retired_lane_id,
+        active_lanes: 2,
+        autoscale_capacity_lanes: 2,
+        in_latency_ratio_permille: 0,
+        in_utilization_p95_permille: 0,
+    };
+    assert!(matches!(
+        state_block.apply_autoscale_lane_lifecycle(&plan, transition.clone()),
+        Err(LaneLifecycleError::UnsafeRetirement { lane, .. }) if lane == retired_lane_id
+    ));
+
+    state_block
+        .world
+        .smart_contract_state
+        .insert(route_member_key, vec![0x00]);
+    assert!(
+        state_block
+            .prospective_autoscale_retirement_binding(&retirement)
+            .expect("malformed block-local QueuePlan evidence fails closed")
+            .is_none()
+    );
+    assert!(matches!(
+        state_block.apply_autoscale_lane_lifecycle(&plan, transition),
+        Err(LaneLifecycleError::UnsafeRetirement { lane, .. }) if lane == retired_lane_id
+    ));
+
+    let committed_retirement = ValidBlock::new_unverified_for_tests(retirement)
+        .commit_unchecked()
+        .unpack(|_| {});
+    state_block.maybe_apply_nexus_autoscale(&committed_retirement);
+    assert!(state_block.pending_autoscale_lifecycle.is_none());
+    assert!(
+        state_block
+            .nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .any(|lane| lane.id == retired_lane_id),
+        "malformed block-local obligation evidence must leave the lane active"
+    );
+}
+
+#[test]
+fn autoscale_scale_in_commit_runs_queue_veto_inside_lifecycle_fence() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+    let retired_lane_id = LaneId::new(1);
+    state
+        .set_nexus(autoscale_transition_test_nexus(
+            vec![LaneConfig::default()],
+            1,
+            2,
+            200,
+        ))
+        .expect("apply final Queue-veto test Nexus config");
+    state
+        .apply_lane_lifecycle_with_options(
+            &iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![autoscale_elastic_lane_config(
+                    retired_lane_id,
+                    DataSpaceId::UNIVERSAL,
+                    1,
+                )],
+                retire: Vec::new(),
+            },
+            false,
+            true,
+        )
+        .expect("seed final Queue-veto retirement lane");
+    let retired_lane_incarnation = state
+        .lane_incarnation(retired_lane_id)
+        .expect("retiring lane has an active incarnation");
+    let retirement =
+        prepare_certified_autoscale_retirement_for_test(&mut state, &kura, retired_lane_id);
+    let mut state_block = state.block(retirement.header());
+    insert_empty_transaction_block_for_state_commit(&mut state_block, &retirement);
+    let committed_retirement = ValidBlock::new_unverified_for_tests(retirement.clone())
+        .commit_unchecked()
+        .unpack(|_| {});
+    let _events = state_block.apply_without_execution(&committed_retirement, Vec::new());
+    assert!(matches!(
+        state_block
+            .pending_autoscale_lifecycle
+            .as_ref()
+            .map(|pending| &pending.transition),
+        Some(PendingAutoscaleTransition::ScaleIn { lane, .. }) if *lane == retired_lane_id
+    ));
+    assert_eq!(
+        state_block
+            .commit()
+            .expect_err("live scale-in without a final Queue veto must fail closed"),
+        TransactionsBlockError::AutoscaleLaneLifecycle
+    );
+
+    let mut state_block = state.block(retirement.header());
+    insert_empty_transaction_block_for_state_commit(&mut state_block, &retirement);
+    let _events = state_block.apply_without_execution(&committed_retirement, Vec::new());
+    assert!(matches!(
+        state_block
+            .pending_autoscale_lifecycle
+            .as_ref()
+            .map(|pending| &pending.transition),
+        Some(PendingAutoscaleTransition::ScaleIn { lane, .. }) if *lane == retired_lane_id
+    ));
+
+    let mut observed_binding = None;
+    let mut queue_veto = |lane_id, dataspace_id, lane_incarnation| {
+        assert!(
+            state.lane_lifecycle_lock.try_lock().is_none(),
+            "the final Queue veto must execute inside the lifecycle commit fence"
+        );
+        observed_binding = Some((lane_id, dataspace_id, lane_incarnation));
+        Err("injected exact local Queue owner".to_owned())
+    };
+    let error = state_block
+        .commit_with_autoscale_retirement_queue_veto(&mut queue_veto)
+        .expect_err("an exact local Queue owner must veto final scale-in publication");
+    drop(queue_veto);
+    assert_eq!(error, TransactionsBlockError::AutoscaleLaneLifecycle);
+    assert_eq!(
+        observed_binding,
+        Some((
+            retired_lane_id,
+            DataSpaceId::UNIVERSAL,
+            retired_lane_incarnation,
+        ))
+    );
+    assert!(
+        state
+            .nexus_snapshot()
+            .lane_catalog
+            .lanes()
+            .iter()
+            .any(|lane| lane.id == retired_lane_id),
+        "a rejected final Queue veto must not publish the staged retirement"
+    );
+}
+
+#[test]
 fn certified_autoscale_scale_in_ignores_unvalidated_wrong_incarnation_relay_cache() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -16993,8 +17344,7 @@ fn autoscale_repeated_scale_in_retires_highest_safe_managed_lane_one_per_carrier
             );
         }
 
-        state_block
-            .commit()
+        commit_state_block_with_empty_autoscale_queue(state_block)
             .expect("commit repeated autoscale heartbeat and any staged lifecycle");
         if height >= 3 {
             assert!(
@@ -17332,8 +17682,7 @@ fn autoscale_transition_retires_managed_elastic_lane_when_window_is_cold() {
         .commit_unchecked()
         .unpack(|_| {});
     let _ = state_block.apply_without_execution(&committed_retirement, Vec::new());
-    state_block
-        .commit()
+    commit_state_block_with_empty_autoscale_queue(state_block)
         .expect("autoscale scale-in block scope commits cleanup");
 
     let nexus = state.nexus_snapshot();
@@ -17449,8 +17798,7 @@ fn autoscale_scale_in_height_mismatch_does_not_publish_block_local_cleanup() {
         "block-local scale-in staging must not prune committed retired-lane DA commitments"
     );
 
-    let err = state_block
-        .commit()
+    let err = commit_state_block_with_empty_autoscale_queue(state_block)
         .expect_err("height mismatch must abort staged scale-in cleanup");
     assert!(matches!(
         err,
@@ -17566,8 +17914,7 @@ fn certified_autoscale_scale_in_ignores_late_unvalidated_wrong_incarnation_relay
         .insert(late_relay.clone())
         .expect("inject unvalidated late relay cache noise");
 
-    state_block
-        .commit()
+    commit_state_block_with_empty_autoscale_queue(state_block)
         .expect("wrong-incarnation cache noise must not veto a certified retirement");
 
     let nexus = state.nexus_snapshot();
@@ -17633,6 +17980,9 @@ fn certified_autoscale_scale_in_rechecks_late_authenticated_unmerged_relay() {
         &state,
         sample_lane_relay_envelope_for_state(&state, 1, retired_lane_id, &validator_keypairs),
     );
+    state
+        .validate_embedded_lane_relay(&late_relay)
+        .expect("prevalidate delayed relay before the carrier owns the World write context");
 
     let mut state_block = state.block(retirement.header());
     insert_empty_transaction_block_for_state_commit(&mut state_block, &retirement);
@@ -17652,12 +18002,14 @@ fn certified_autoscale_scale_in_rechecks_late_authenticated_unmerged_relay() {
             .expect("retiring lane has an active incarnation"),
         "delayed relay must bind the exact retiring incarnation"
     );
-    assert_eq!(
-        state
-            .record_lane_relay(&late_relay)
-            .expect("authenticate delayed pre-close relay"),
-        LaneRelayInsert::Inserted
-    );
+    // Model the scheduling point after production ingress has authenticated
+    // the relay but before its cache insertion wins the lifecycle fence.
+    // Calling `record_lane_relay` here would try to reacquire a World read
+    // view while `state_block` deliberately owns the World write context.
+    let inserted = state
+        .publish_prevalidated_lane_relay(&late_relay, late_relay.block_header.height().get())
+        .expect("publish prevalidated delayed relay at the lifecycle race point");
+    assert_eq!(inserted, LaneRelayInsert::Inserted);
     assert!(
         state.lane_has_drain_blocking_evidence(
             retired_lane_id,
@@ -17667,8 +18019,7 @@ fn certified_autoscale_scale_in_rechecks_late_authenticated_unmerged_relay() {
         "authenticated pre-close relay must remain a drain blocker after the close height"
     );
 
-    let error = state_block
-        .commit()
+    let error = commit_state_block_with_empty_autoscale_queue(state_block)
         .expect_err("late authenticated unmerged work must veto retirement");
     assert!(matches!(
         error,
@@ -17754,8 +18105,7 @@ fn certified_autoscale_scale_in_rechecks_late_unapplied_certified_lane_block() {
         "test setup should inject unapplied certified lane-block progress after staging"
     );
 
-    let error = state_block
-        .commit()
+    let error = commit_state_block_with_empty_autoscale_queue(state_block)
         .expect_err("late active-incarnation certification must veto retirement");
     assert!(matches!(
         error,
@@ -17859,8 +18209,7 @@ fn certified_autoscale_scale_in_rechecks_late_unrepaired_direct_application_mark
         "fresh staging must observe the recovered marker and suppress retirement"
     );
     state_block.pending_autoscale_lifecycle = Some(staged_retirement);
-    let error = state_block
-        .commit()
+    let error = commit_state_block_with_empty_autoscale_queue(state_block)
         .expect_err("late unrepaired direct application evidence must veto retirement");
     assert!(matches!(
         error,
@@ -18096,8 +18445,7 @@ fn autoscale_scale_in_height_mismatch_does_not_publish_block_local_world_cleanup
         "block-local scale-in should retain surviving-lane verified relay state"
     );
 
-    let err = state_block
-        .commit()
+    let err = commit_state_block_with_empty_autoscale_queue(state_block)
         .expect_err("height mismatch must abort staged world cleanup");
     assert!(matches!(
         err,
@@ -18357,8 +18705,7 @@ fn autoscale_transition_drops_staged_verified_relay_for_retired_lane() {
         "autoscale scale-in must not prune spoofed contract-map siblings"
     );
     insert_empty_transaction_block_for_test(&mut state_block);
-    state_block
-        .commit()
+    commit_state_block_with_empty_autoscale_queue(state_block)
         .expect("autoscale scale-in block scope commits staged relay pruning");
 
     assert!(
@@ -18642,8 +18989,7 @@ fn autoscale_transition_drops_same_block_emergency_and_economic_state_for_retire
     );
 
     insert_empty_transaction_block_for_test(&mut state_block);
-    state_block
-        .commit()
+    commit_state_block_with_empty_autoscale_queue(state_block)
         .expect("autoscale scale-in commits same-block cleanup");
 
     let view = state.world.view();
@@ -19026,8 +19372,7 @@ fn autoscale_transition_drops_same_block_validator_and_axt_state_for_retired_lan
     );
 
     insert_empty_transaction_block_for_test(&mut state_block);
-    state_block
-        .commit()
+    commit_state_block_with_empty_autoscale_queue(state_block)
         .expect("autoscale scale-in commits same-block validator and replay cleanup");
 
     let view = state.world.view();
@@ -19298,8 +19643,7 @@ fn committed_autoscale_lifecycle_prunes_persistent_reset_lane_state() {
         "test setup must exercise the real autoscale scale-in transition"
     );
     insert_empty_transaction_block_for_test(&mut state_block);
-    state_block
-        .commit()
+    commit_state_block_with_empty_autoscale_queue(state_block)
         .expect("committed autoscale lifecycle must publish and prune persistent state");
 
     let nexus = state.nexus_snapshot();
@@ -20035,8 +20379,7 @@ fn autoscale_transition_prunes_retired_managed_lane_runtime_caches_and_pin_index
         .unpack(|_| {});
     state_block.maybe_apply_nexus_autoscale(&committed_retirement);
     insert_empty_transaction_block_for_test(&mut state_block);
-    state_block
-        .commit()
+    commit_state_block_with_empty_autoscale_queue(state_block)
         .expect("autoscale scale-in block scope commits runtime cleanup");
 
     let relay_snapshot = state.lane_relay_snapshot();
@@ -20226,8 +20569,7 @@ fn autoscale_scale_in_rejects_same_block_pin_intents_for_retired_lane() {
         "scale-in should retire the lane in the block-local Nexus snapshot"
     );
 
-    state_block
-        .commit()
+    commit_state_block_with_empty_autoscale_queue(state_block)
         .expect("autoscale scale-in with same-block pin intents commits");
 
     let pins = state.da_pin_intents();
@@ -20486,8 +20828,7 @@ fn autoscale_scale_in_hides_same_block_da_commitments_for_retired_lane() {
         "scale-in should retire the lane in the block-local Nexus snapshot"
     );
 
-    state_block
-        .commit()
+    commit_state_block_with_empty_autoscale_queue(state_block)
         .expect("autoscale scale-in with same-block DA commitments commits");
 
     let commitments = state.da_commitments();
@@ -20783,8 +21124,7 @@ fn autoscale_transition_exits_retired_managed_lane_public_validators() {
         .unpack(|_| {});
     state_block.maybe_apply_nexus_autoscale(&committed_retirement);
     insert_empty_transaction_block_for_test(&mut state_block);
-    state_block
-        .commit()
+    commit_state_block_with_empty_autoscale_queue(state_block)
         .expect("autoscale scale-in block scope commits validator cleanup");
 
     let view = state.world.view();
@@ -20864,8 +21204,7 @@ fn autoscale_transition_exits_public_validators_with_embedded_reset_lane() {
         .unpack(|_| {});
     state_block.maybe_apply_nexus_autoscale(&committed_retirement);
     insert_empty_transaction_block_for_test(&mut state_block);
-    state_block
-        .commit()
+    commit_state_block_with_empty_autoscale_queue(state_block)
         .expect("autoscale scale-in block scope commits embedded validator cleanup");
 
     let view = state.world.view();
@@ -20991,8 +21330,7 @@ fn autoscale_transition_prunes_public_lane_economic_state_for_retired_lane() {
     );
 
     insert_empty_transaction_block_for_test(&mut state_block);
-    state_block
-        .commit()
+    commit_state_block_with_empty_autoscale_queue(state_block)
         .expect("autoscale scale-in block scope commits public-lane economic cleanup");
     assert_public_lane_economic_state_presence(&state, &retired_keys, false);
     assert_public_lane_economic_state_presence(&state, &retained_keys, true);
@@ -21100,8 +21438,7 @@ fn autoscale_transition_prunes_public_lane_economic_records_with_embedded_reset_
     );
 
     insert_empty_transaction_block_for_test(&mut state_block);
-    state_block
-        .commit()
+    commit_state_block_with_empty_autoscale_queue(state_block)
         .expect("autoscale scale-in block scope commits embedded public-lane economic cleanup");
     let view = state.world.view();
     assert!(
@@ -21279,8 +21616,7 @@ fn autoscale_transition_removes_explicit_stale_axt_policy_after_retiring_target_
         "explicit AXT policy targeting a surviving lane should be preserved without directory data"
     );
     insert_empty_transaction_block_for_test(&mut state_block);
-    state_block
-        .commit()
+    commit_state_block_with_empty_autoscale_queue(state_block)
         .expect("autoscale scale-in block scope commits AXT cleanup");
 
     assert!(
@@ -21379,8 +21715,7 @@ fn autoscale_transition_prunes_axt_replay_ledger_for_retired_target_lane() {
         "replay entries keyed by surviving lanes must remain"
     );
     insert_empty_transaction_block_for_test(&mut state_block);
-    state_block
-        .commit()
+    commit_state_block_with_empty_autoscale_queue(state_block)
         .expect("autoscale scale-in block scope commits replay-ledger cleanup");
 
     let view = state.world.axt_replay_ledger.view();
@@ -55269,10 +55604,10 @@ include!("autonomous_merge_and_queue_plan_tests.rs");
 #[test]
 #[expect(
     clippy::too_many_lines,
-    reason = "one linear test covers participant, incarnation, conflict, and malformed durable evidence"
+    reason = "one linear test covers participant, incarnation, corrupt conflict, and malformed durable evidence"
 )]
 fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() {
-    let (state, validator_keypairs, _, _) = configured_two_lane_merge_state();
+    let (state, validator_keypairs, _, parent) = configured_two_lane_merge_state();
     let participant_lane = LaneId::new(1);
     let routing_plan = crate::queue::RoutingPlan::native_amx(
         crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -55333,6 +55668,21 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
         PendingQueuePlanAdmissionDisposition::Stale
     );
     assert!(
+        queue_plan_admission_registry_match(
+            &state.view(),
+            binding.entrypoint_hash.clone(),
+            binding.canonical_hash(),
+        )
+        .is_err(),
+        "Queue recovery must not reacquire an exact owner bound to incarnation A"
+    );
+    assert!(
+        state
+            .queue_plan_admission_binding_registry_match(&binding)
+            .is_err(),
+        "public binding acknowledgement must report a stale pending incarnation"
+    );
+    assert!(
         !state.lane_has_drain_blocking_evidence(
             participant_lane,
             DataSpaceId::UNIVERSAL,
@@ -55365,50 +55715,137 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
             .insert(registry_key.clone(), conflicting_payload);
         world.commit();
     }
-    assert_eq!(
+    assert!(
         state
             .classify_pending_queue_plan_admission(&certificate, 2)
-            .expect("well-formed conflicting evidence is classifiable")
-            .1,
-        PendingQueuePlanAdmissionDisposition::DefinitiveConflict
+            .is_err(),
+        "a conflicting registry hash without pending-or-applied owner evidence is corrupt"
     );
-    assert_eq!(
+    assert!(
         state
             .queue_plan_admission_binding_registry_match(&binding)
-            .expect("well-formed conflicting marker"),
-        QueuePlanAdmissionRegistryMatch::Conflict
+            .is_err(),
+        "a partial conflicting owner must not be reported as definitive"
     );
     let conflict_hash = state
         .kura
         .persist_pending_queue_plan_admission_certificate(&certificate)
         .expect("persist definitive conflict fixture");
     assert!(
-        !state.lane_has_drain_blocking_evidence(
+        state.lane_has_drain_blocking_evidence(
             participant_lane,
             DataSpaceId::UNIVERSAL,
             participant_incarnation,
         ),
-        "a different well-formed immutable owner makes the pending claim a definitive loser"
+        "corrupt conflicting ownership must fail closed for drain"
     );
     state
         .kura
         .remove_pending_queue_plan_admission_certificate(conflict_hash)
         .expect("remove conflict pending fixture");
-    {
-        let mut world = state.world.block();
-        world.smart_contract_state.insert(
-            registry_key.clone(),
-            State::queue_plan_admission_registry_marker_payload(&binding.registry_value())
-                .expect("exact fixture registry value"),
-        );
-        world.commit();
-    }
+    seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
     assert_eq!(
         state
             .queue_plan_admission_binding_registry_match(&binding)
             .expect("exact registry marker"),
         QueuePlanAdmissionRegistryMatch::Exact
     );
+    let obligation = State::queue_plan_pending_obligation_from_binding(&binding)
+        .expect("fixture exact pending obligation");
+    let participant_route = *obligation
+        .routes
+        .iter()
+        .find(|route| route.lane_id == participant_lane)
+        .expect("fixture exact participant route");
+    let participant_member_identity =
+        State::queue_plan_pending_route_member_identity(&obligation, participant_route)
+            .expect("fixture exact participant member identity");
+    let incarnation_a_member_key = State::queue_plan_pending_route_member_marker_key(
+        participant_route,
+        participant_member_identity,
+    )
+    .expect("fixture incarnation-A member key");
+    let incarnation_b_route = QueuePlanPendingObligationRouteV1 {
+        lane_incarnation: replacement_incarnation,
+        ..participant_route
+    };
+    let (incarnation_b_member_prefix, _) =
+        State::queue_plan_pending_route_member_marker_prefix(incarnation_b_route)
+            .expect("fixture incarnation-B member prefix");
+    assert!(
+        !incarnation_a_member_key
+            .as_ref()
+            .starts_with(&incarnation_b_member_prefix)
+    );
+    let _ = state
+        .lane_incarnations
+        .write()
+        .insert(participant_lane, replacement_incarnation);
+    {
+        let world = state.world.view();
+        assert!(
+            world
+                .smart_contract_state()
+                .get(&incarnation_a_member_key)
+                .is_some()
+        );
+        assert!(
+            State::queue_plan_pending_route_members_from_storage(
+                world.smart_contract_state(),
+                incarnation_b_route,
+            )
+            .expect("inspect exact incarnation-B member roster")
+            .is_empty()
+        );
+    }
+    assert!(
+        !state.lane_has_drain_blocking_evidence(
+            participant_lane,
+            DataSpaceId::UNIVERSAL,
+            replacement_incarnation,
+        ),
+        "incarnation-A WSV witnesses must not drain-block same-ID incarnation B"
+    );
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&certificate, 2)
+            .expect("delayed incarnation-A evidence remains classifiable")
+            .1,
+        PendingQueuePlanAdmissionDisposition::Stale
+    );
+    let lifecycle = state.lane_consensus_lifecycle_snapshot();
+    let active_lanes = lifecycle
+        .nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .map(|lane| MergeLaneBinding {
+            lane_id: lane.id,
+            dataspace_id: lane.dataspace_id,
+            lane_config_hash: merge_lane_config_hash(lane),
+            incarnation: lifecycle.incarnations[&lane.id],
+            activation_height: lifecycle.activation_heights[&lane.id].saturating_add(1),
+        })
+        .collect::<Vec<_>>();
+    let carrier = empty_global_block_after(Some(&parent));
+    let mut delayed_block = state.block(carrier.header());
+    let delayed_write_set_before = delayed_block.merge_execution_write_set_root();
+    assert!(
+        delayed_block
+            .stage_queue_plan_admissions(&[certificate.clone()], &active_lanes, 2)
+            .is_err(),
+        "the production StateBlock boundary must reject delayed incarnation-A evidence"
+    );
+    assert_eq!(
+        delayed_block.merge_execution_write_set_root(),
+        delayed_write_set_before,
+        "stale evidence rejection must not publish incarnation-B WSV writes"
+    );
+    drop(delayed_block);
+    let _ = state
+        .lane_incarnations
+        .write()
+        .insert(participant_lane, participant_incarnation);
     {
         let mut world = state.world.block();
         world.smart_contract_state.insert(registry_key, vec![0x00]);

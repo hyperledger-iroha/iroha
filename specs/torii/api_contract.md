@@ -160,25 +160,19 @@ whose marker appears on another route is replaced by the ordinary typed
 envelope. Errors after a stream has started follow that stream's terminal
 framing instead of the finite HTTP envelope.
 
-Offline readiness blocker messages follow the same exact human-text grammar as
-error messages. Their blocker `code`, not their message, is the stable SDK
-identifier. Readiness is a closed snapshot-bound object. It carries bridge ABI
-19, maximum hop count, canonical asset and scale, evaluated block height/hash,
-active transfer, top-up-shield, unshield, recursive-transition, and
-recursive-state verifier records, proof availability, recursive-lineage
-support, readiness, and blockers. Each verifier role must have the exact
-backend/name/circuit and must not share a registry id, key commitment, or
-public-input schema hash with another role.
+`GET /v1/offline/readiness` is retained as a compatibility name for universal
+offline-wallet capability discovery. It does not evaluate a validator, asset,
+domain, dataspace, escrow account, verifier catalog, or deployment profile.
+Every app-API build returns the same asset-neutral ABI-21/V4
+`cash_handoff_v1` contract with `mandatory: false`, `ready: true`, and empty
+`assets` and `blockers` arrays. Clients must not use this response, `/health`,
+or `/readyz` as an offline-feature admission gate.
 
-`active_transfer_verifier`, `active_topup_shield_verifier`,
-`active_unshield_verifier`, `active_recursive_step_eq_verifier`, and
-`active_recursive_step_ep_verifier` are separate required nullable fields from
-the same evaluated block snapshot. Each is null exactly when its corresponding
-`transfer_verifier_unavailable`, `topup_shield_verifier_unavailable`,
-`unshield_verifier_unavailable`, `recursive_step_eq_verifier_unavailable`,
-or `recursive_step_ep_verifier_unavailable` blocker is present; a non-null
-verifier must be active at `evaluated_block_height`, and `ready: true` requires
-all five roles.
+Proof, authority, balance, release, and lineage errors belong to the specific
+top-up or redemption command that references them. Such an error uses the
+ordinary typed error-envelope contract and cannot make the process or node
+unready. Legacy per-asset readiness records remain decodeable only for wire
+history; Torii does not synthesize or serve them as capability state.
 
 Every HTTP response carries `X-Request-Id`. A client may supply an identifier
 containing 1–128 ASCII letters, digits, `-`, `_`, `.`, or `:`; Torii echoes it.

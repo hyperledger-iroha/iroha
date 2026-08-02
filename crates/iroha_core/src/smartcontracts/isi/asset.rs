@@ -6002,7 +6002,7 @@ pub mod query {
         }
 
         #[test]
-        fn transfer_rejects_metadata_derived_offline_escrow_source() {
+        fn transfer_rejects_deterministically_derived_offline_escrow_source() {
             let chain_id: iroha_data_model::ChainId = "testnet".parse().expect("chain id");
             let domain_id: DomainId =
                 DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -6017,18 +6017,12 @@ pub mod query {
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let escrow_account_model = build_account_in_domain(&escrow_account, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let mut asset_def = {
+            let asset_def = {
                 let __asset_definition_id = asset_def_id.clone();
                 AssetDefinition::numeric(__asset_definition_id.clone())
                     .with_name(__asset_definition_id.name().to_string())
             }
             .build(&ALICE_ID);
-            asset_def.metadata_mut().insert(
-                iroha_data_model::offline::OFFLINE_ASSET_ENABLED_METADATA_KEY
-                    .parse()
-                    .expect("metadata key"),
-                Json::from(norito::json!(true)),
-            );
             let escrow_asset_id = AssetId::new(asset_def_id.clone(), escrow_account.clone());
             let escrow_asset = Asset::new(escrow_asset_id.clone(), Quantity::from(10_u32));
             let world = World::with_assets(
@@ -6053,7 +6047,7 @@ pub mod query {
 
             let err = Transfer::asset_quantity(escrow_asset_id.clone(), 1_u32, BOB_ID.clone())
                 .execute(&escrow_account, &mut stx)
-                .expect_err("metadata-derived escrow source must be rejected");
+                .expect_err("deterministically derived escrow source must be rejected");
             assert!(
                 err.to_string().contains("offline escrow account"),
                 "unexpected error: {err}"

@@ -11265,6 +11265,13 @@ pub(crate) mod valid {
                     entrypoints,
                     sccp_root_validation,
                 )?;
+                state_block
+                    .resolve_queue_plan_pending_obligations_from_block(block)
+                    .map_err(|error| {
+                        Self::execution_context_error(format!(
+                            "QueuePlan pending application obligation could not be resolved: {error}"
+                        ))
+                    })?;
                 return Ok(());
             }
 
@@ -15183,6 +15190,13 @@ pub(crate) mod valid {
                 timings.execution_tx_apply_results_ms = apply_results_ms;
                 timings.execution_tx_apply_other_ms = apply_ms.saturating_sub(known_apply_ms);
             }
+            state_block
+                .resolve_queue_plan_pending_obligations_from_block(block)
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "QueuePlan pending application obligation could not be resolved: {error}"
+                    ))
+                })?;
             Ok(())
         }
 
@@ -28794,6 +28808,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn da_proof_policy_sidecar_hash_mismatch_reports_both_hashes() {
+        let expected = Some(HashOf::<DaProofPolicyBundle>::from_untyped_unchecked(
+            Hash::prehashed([0x11; Hash::LENGTH]),
+        ));
+        let actual = Some(HashOf::<DaProofPolicyBundle>::from_untyped_unchecked(
+            Hash::prehashed([0x22; Hash::LENGTH]),
+        ));
+        let message =
+            BlockValidationError::DaProofPolicySidecarHashMismatch { expected, actual }.to_string();
+
+        assert!(message.contains(&format!("{expected:?}")));
+        assert!(message.contains(&format!("{actual:?}")));
+    }
+
     fn install_test_lane_manifests(state: &State) {
         let statuses = state
             .nexus_snapshot()
@@ -33512,12 +33541,12 @@ seiyaku MeteredFailure {
             &block_time_source,
             fee_payment,
         )
-            .with_instructions([Transfer::asset_quantity(
-                payer_transfer_asset.clone(),
-                1_u32,
-                recipient_id.clone(),
-            )])
-            .sign(payer_keypair.private_key());
+        .with_instructions([Transfer::asset_quantity(
+            payer_transfer_asset.clone(),
+            1_u32,
+            recipient_id.clone(),
+        )])
+        .sign(payer_keypair.private_key());
         let tx = AcceptedTransaction::accept_with_time_source(
             tx,
             &chain_id,

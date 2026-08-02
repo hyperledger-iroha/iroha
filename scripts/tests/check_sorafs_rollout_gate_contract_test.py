@@ -15382,6 +15382,30 @@ def test_public_storage_ingest_surface_cannot_be_resurrected() -> None:
     assert all(".ingest_manifest(" not in source for source in torii_storage_writers)
 
 
+def test_synthetic_stored_manifest_compatibility_surface_stays_retired() -> None:
+    store = read(REPO_ROOT / "crates/sorafs_node/src/store.rs")
+    blinded_resolver = read(
+        REPO_ROOT / "crates/iroha_torii/src/sorafs/blinded.rs"
+    )
+
+    for retired_surface in (
+        "StoredManifestParts",
+        "StoredPorTree",
+        "StoredManifest::from_parts",
+        "pub fn from_parts(parts:",
+    ):
+        assert retired_surface not in store
+        assert retired_surface not in blinded_resolver
+
+    for production_path in (
+        "StorageBackend::new(",
+        "ManifestBuilder::new()",
+        ".ingest_manifest(&manifest, &plan, &mut reader)",
+        ".manifest(&manifest_id)",
+    ):
+        assert production_path in blinded_resolver
+
+
 def test_provider_ingest_persists_and_reconciles_governed_signer_policy() -> None:
     pin_registry = read(
         REPO_ROOT
@@ -23968,6 +23992,33 @@ def test_production_evidence_viewer_service_surface_is_exposed_once() -> None:
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-access"
         not in catalog
     )
+    retired_viewer_routes = (
+        "/v1/sorafs/moderation/viewer-audit-reports",
+        "/v1/sorafs/moderation/viewer-audit-reports/publish-due",
+    )
+    for route in retired_viewer_routes:
+        assert route not in catalog
+        assert route not in torii
+        assert f'paths.insert(\n        "{route}".to_owned(),' not in openapi
+
+    read_only_appeal_finance_routes = (
+        "/v1/sorafs/appeals/finance/reports",
+        "/v1/sorafs/appeals/finance/weekly-rollups",
+    )
+    for spec_path in (
+        REPO_ROOT / "artifacts" / "openapi" / "torii.json",
+        REPO_ROOT
+        / "artifacts"
+        / "openapi"
+        / "versions"
+        / "current"
+        / "torii.json",
+    ):
+        paths = json.loads(read(spec_path))["paths"]
+        for route in retired_viewer_routes:
+            assert route not in paths
+        for route in read_only_appeal_finance_routes:
+            assert set(paths[route]) == {"get"}
 
 
 def test_evidence_viewer_canary_builder_is_checked_in() -> None:
@@ -25688,10 +25739,17 @@ def test_transparency_stock_broker_wiring_is_complete_and_deployment_backends_st
             "sorafs_governance_dag_checkpoint_store",
         ),
     )
+    for catalog_guard in (
+        "constfnstock_runtime_provider_slot_is_supported(slot:IrohaRuntimeProviderSlotV1)->bool",
+        "wire_id>=IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id()",
+        "wire_id<=IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id()",
+        "any(|binding|!stock_runtime_provider_slot_is_supported(binding.slot()))",
+        "protocol::resolve(bindings)",
+    ):
+        assert catalog_guard in broker_api
     for slot, wire_id, dependency in slots:
         assert f"{slot}={wire_id}," in registry
         assert f"IrohaRuntimeProviderSlotV1::{slot}" in binding_collection
-        assert f"IrohaRuntimeProviderSlotV1::{slot}" in broker_api
         direct_presence = f"Slot::{slot}=>deps.{dependency}.is_some()"
         braced_presence = f"Slot::{slot}=>{{deps.{dependency}.is_some()}}"
         assert direct_presence in dependency_scope or braced_presence in dependency_scope

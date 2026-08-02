@@ -156,11 +156,12 @@ proof, `validatePdpCommitmentChallenge(...)` or
 ## Offline cash SDK boundary
 
 The JavaScript package exposes the four stable Kagemusha Torii routes through
-`getKagemushaReadinessV4`, `submitKagemushaTopUpV4`,
+`getOfflineCapability`, `submitKagemushaTopUpV4`,
 `submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Readiness is
-accepted only for bridge ABI 21, a maximum of eight hops, and the authenticated
-manifest-V4 Eq/Ep verifier pair. ABI-19 and V3 responses are rejected rather
-than upgraded.
+an asset-neutral protocol capability compiled into every deployment. Discovery
+accepts only the exact `cash_handoff_v1`, bridge ABI 21, eight-hop universal
+`OfflineStatus` with `mandatory: false`, `ready: true`, and empty asset and
+blocker lists. No selector-taking readiness alias is exported.
 
 This is deliberately a transport-only boundary. Command helpers require an
 externally produced `{ version: 4, operationId, norito }` archive and never

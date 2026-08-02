@@ -52,16 +52,11 @@ def test_verify_soraswap_rollout_passes_expected_git_sha_to_mcp_check() -> None:
     assert 'mcp_cmd+=(--expected-git-sha "$EXPECTED_TAIRA_GIT_SHA")' in source
     assert "--validator-root)" in source
     assert 'mcp_cmd+=(--validator-root "$validator_root_spec")' in source
+    assert "--offline-asset-definition-id" not in source
+    assert "--offline-expected-identity" not in source
     assert (
-        'mcp_cmd+=(--offline-asset-definition-id "$OFFLINE_ASSET_DEFINITION_ID")'
-        in source
-    )
-    assert (
-        'mcp_cmd+=(--offline-expected-identity "$OFFLINE_EXPECTED_IDENTITY_PATH")'
-        in source
-    )
-    assert (
-        "public SoraSwap mutation/release paths cannot skip the mandatory Taira offline/fleet gate"
+        "public SoraSwap mutation/release paths cannot skip the "
+        "Taira build/finality/dataspace fleet gate"
         in source
     )
 
@@ -72,21 +67,43 @@ def test_rollout_bundle_manifest_followup_pins_mcp_and_soraswap_checks() -> None
     assert (
         "check_mcp_rollout.sh --public-root https://<public-torii-root> "
         "--validator-root <label>=<validator-url> (once per validator) "
-        "--require-all-validators --offline-asset-definition-id "
-        "<registered-scale-2-ds-asset-definition-id> "
-        "--offline-expected-identity "
-        "/run/secrets/taira-offline-release-identity.json "
-        "--write-config /run/secrets/taira-canary-client.toml --expected-git-sha "
+        "--require-all-validators --write-config "
+        "/run/secrets/taira-canary-client.toml --expected-git-sha "
         in source
     )
     assert (
         "verify_soraswap_rollout.sh --public-root https://<public-torii-root> "
         "--validator-root <label>=<validator-url> (once per validator) "
-        "--offline-asset-definition-id <registered-scale-2-ds-asset-definition-id> "
-        "--offline-expected-identity /run/secrets/taira-offline-release-identity.json "
         "--expected-git-sha " in source
     )
+    assert "--offline-asset-definition-id" not in source
+    assert "--offline-expected-identity" not in source
     assert '+ os.environ["GIT_HEAD"]' in source
+
+
+def test_rollout_bundle_has_no_backend_offline_proof_prerequisite() -> None:
+    builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(
+        encoding="utf-8"
+    )
+    workflow = (
+        ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
+    ).read_text(encoding="utf-8")
+
+    for obsolete in (
+        "KAGEMUSHA_RELEASE_POLICY",
+        "KAGEMUSHA_ARTIFACT_ROOT",
+        "--kagemusha-release-policy",
+        "--kagemusha-artifact-root",
+        "check_kagemusha_production_readiness.sh",
+        '"kagemusha/release-policy.norito"',
+        '"kagemusha/v4/"',
+    ):
+        assert obsolete not in builder
+        assert obsolete not in workflow
+    assert "prepare_taira_offline_reset_bundle.py" not in workflow
+    assert "prepare_taira_empty_reset_bundle.py" in workflow
+    assert "TAIRA_MACOS_OFFLINE_GENESIS_PATH" not in workflow
+    assert "TAIRA_MACOS_KAGEMUSHA_RELEASE_BUNDLE_PATH" not in workflow
 
 
 def test_taira_validator_release_uses_post_build_feature_isolated_native_evidence() -> (
@@ -814,22 +831,19 @@ def test_workflow_dispatch_inputs_never_enter_shell_source() -> None:
     assert "source-${TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256:0:12}" not in workflow
 
 
-def test_mcp_rollout_has_no_default_offline_asset_escape_hatch() -> None:
+def test_mcp_rollout_has_no_backend_offline_admission_gate() -> None:
     source = (TAIRA_DIR / "check_mcp_rollout.sh").read_text(encoding="utf-8")
 
-    assert 'OFFLINE_ASSET_DEFINITION_ID="${OFFLINE_ASSET_DEFINITION_ID:-}"' in source
-    assert (
-        'OFFLINE_EXPECTED_IDENTITY_PATH="${OFFLINE_EXPECTED_IDENTITY_PATH:-}"' in source
-    )
-    assert (
-        "OFFLINE_ASSET_DEFINITION_ID:-${ROLLOUT_CANARY_FAUCET_ASSET_ID}" not in source
-    )
-    assert (
-        "--offline-asset-definition-id must be one canonical unprefixed Base58 "
-        "asset-definition ID" in source
-    )
-    assert "--offline-expected-identity is mandatory" in source
-    assert "asset_scale is not exact Digital Shekel scale 2" in source
+    assert "/v1/offline/readiness" not in source
+    assert "--offline-asset-definition-id" not in source
+    assert "--offline-expected-identity" not in source
+    assert "OFFLINE_ASSET_DEFINITION_ID" not in source
+    assert "OFFLINE_EXPECTED_IDENTITY_PATH" not in source
+    assert 'EXPECTED_IS_ROUTE_ALIAS="${EXPECTED_IS_ROUTE_ALIAS:-external-poc}"' in source
+    assert 'EXPECTED_IS2_ROUTE_ALIAS="${EXPECTED_IS2_ROUTE_ALIAS:-boi-mobile}"' in source
+    assert '"$(normalize_root_url "$root")/health"' in source
+    assert '"$(normalize_root_url "$root")/readyz"' in source
+    assert '"$(normalize_root_url "$root")/v1/nexus/lifecycle"' in source
 
 
 def test_mcp_automatic_canary_threads_explicit_onboarding_token_file() -> None:
@@ -879,8 +893,8 @@ def test_readme_rollout_commands_are_executable_under_fail_closed_parser() -> No
     ]
     assert command_lines
     for line in command_lines:
-        assert "--offline-asset-definition-id" in line, line
-        assert "--offline-expected-identity" in line, line
+        assert "--offline-asset-definition-id" not in line, line
+        assert "--offline-expected-identity" not in line, line
         if "--public-root" in line:
             assert '"${TAIRA_VALIDATOR_ARGS[@]}"' in line, line
             assert "--require-all-validators" in line, line

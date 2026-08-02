@@ -42,6 +42,37 @@ def test_validate_release_automation_accepts_repository_contract() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("original", "replacement"),
+    [
+        (
+            "python3 scripts/check_sorafs_release_version_map.py | tee "
+            "version-map-summary.replay.json",
+            "printf '{}\\n' | tee version-map-summary.replay.json",
+        ),
+        (
+            "cmp version-map-summary.first.json version-map-summary.replay.json",
+            "true # removed version-map replay comparison",
+        ),
+    ],
+)
+def test_release_gate_requires_byte_identical_version_map_double_run(
+    tmp_path: Path,
+    original: str,
+    replacement: str,
+) -> None:
+    """The release version cannot come from a single or unchecked map pass."""
+
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    assert original in source
+    workflow.write_text(source.replace(original, replacement, 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="version map must be validated exactly twice"):
+        automation.validate_release_automation(tmp_path)
+
+
 def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     workflow = (
         REPO_ROOT / ".github" / "workflows" / "pr_csharp.yml"

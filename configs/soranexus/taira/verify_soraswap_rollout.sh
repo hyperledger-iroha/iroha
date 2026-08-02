@@ -12,8 +12,6 @@ WRITE_CONFIG="${WRITE_CONFIG:-}"
 WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-}"
 IROHA_BIN="${IROHA_BIN:-}"
 EXPECTED_TAIRA_GIT_SHA="${EXPECTED_TAIRA_GIT_SHA:-}"
-OFFLINE_ASSET_DEFINITION_ID="${OFFLINE_ASSET_DEFINITION_ID:-}"
-OFFLINE_EXPECTED_IDENTITY_PATH="${OFFLINE_EXPECTED_IDENTITY_PATH:-}"
 VALIDATOR_ROOT_SPECS=()
 TRADER_APP_API_PROBE_ATTEMPTS="${TRADER_APP_API_PROBE_ATTEMPTS:-6}"
 TRADER_APP_API_PROBE_INTERVAL_SECS="${TRADER_APP_API_PROBE_INTERVAL_SECS:-1}"
@@ -36,8 +34,6 @@ Usage: verify_soraswap_rollout.sh --public-root URL [--write-config PATH]
                                   [--iroha-bin PATH]
                                   [--expected-git-sha 40_HEX_SHA]
                                   [--validator-root LABEL=URL]...
-                                  [--offline-asset-definition-id ASSET_DEFINITION_ID]
-                                  [--offline-expected-identity ABSOLUTE_JSON_PATH]
                                   [--run-deploy]
                                   [--run-smoke]
                                   [--run-release-checklist]
@@ -52,7 +48,8 @@ Usage: verify_soraswap_rollout.sh --public-root URL [--write-config PATH]
 Run the post-upgrade public-Taira validation chain in the canonical order:
   1. local `iroha_core` regressions for SoraSwap universal deploy routing and three-hop nested transfers
   2. fail-closed `check_mcp_rollout.sh` on the chosen public node, pinned to
-     the full git SHA, all four validators, and the reviewed offline identity
+     the full git SHA, all four validators, ordinary health/finality, and the
+     exact `is`/`is2` dataspace routing identities
   3. `check_sorafs_rollout.sh` on the chosen public node
   4. trader app-api CID probe from `deployments/testnet/trader_api_bundle.latest.json` when present
   5. `make testnet-nested-call-probe` in `../soraswap`
@@ -132,22 +129,6 @@ while [[ $# -gt 0 ]]; do
       VALIDATOR_ROOT_SPECS+=("$2")
       shift 2
       ;;
-    --offline-asset-definition-id)
-      [[ $# -ge 2 ]] || {
-        echo "missing value for --offline-asset-definition-id" >&2
-        exit 1
-      }
-      OFFLINE_ASSET_DEFINITION_ID="$2"
-      shift 2
-      ;;
-    --offline-expected-identity)
-      [[ $# -ge 2 ]] || {
-        echo "missing value for --offline-expected-identity" >&2
-        exit 1
-      }
-      OFFLINE_EXPECTED_IDENTITY_PATH="$2"
-      shift 2
-      ;;
     --run-deploy)
       RUN_DEPLOY=1
       shift
@@ -205,7 +186,7 @@ if [[ $RUN_SMOKE -eq 1 ]]; then
 fi
 
 if [[ $RUN_DEPLOY -eq 1 && $SKIP_MCP_CHECK -eq 1 ]]; then
-  echo "public SoraSwap mutation/release paths cannot skip the mandatory Taira offline/fleet gate" >&2
+  echo "public SoraSwap mutation/release paths cannot skip the Taira build/finality/dataspace fleet gate" >&2
   exit 1
 fi
 
@@ -372,12 +353,6 @@ if [[ $SKIP_MCP_CHECK -ne 1 ]]; then
   for validator_root_spec in "${VALIDATOR_ROOT_SPECS[@]+"${VALIDATOR_ROOT_SPECS[@]}"}"; do
     mcp_cmd+=(--validator-root "$validator_root_spec")
   done
-  if [[ -n "$OFFLINE_ASSET_DEFINITION_ID" ]]; then
-    mcp_cmd+=(--offline-asset-definition-id "$OFFLINE_ASSET_DEFINITION_ID")
-  fi
-  if [[ -n "$OFFLINE_EXPECTED_IDENTITY_PATH" ]]; then
-    mcp_cmd+=(--offline-expected-identity "$OFFLINE_EXPECTED_IDENTITY_PATH")
-  fi
   if [[ -n "$WRITE_CONFIG" ]]; then
     mcp_cmd+=(--write-config "$WRITE_CONFIG")
   fi

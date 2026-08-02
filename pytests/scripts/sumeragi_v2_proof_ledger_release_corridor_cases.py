@@ -8,10 +8,10 @@ def test_release_inventory_constants_match_current_source_seal() -> None:
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
         "708e0ed0221056b20b9d9f03f1ea8cd07225b0c84c39ad18dd25402e090fb30f"
     )
-    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 397
-    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 398
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 418
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 419
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "69306f32aa225e45c9f3374966884a4d0f47c7320eb8ea516f1b39543182bbf8"
+        "d395aec773c5d0482cc1f4af970267424243f9362d1e1153c9ea7887db885fa7"
     )
 
     receipt_spec = importlib.util.spec_from_file_location(
@@ -24,9 +24,9 @@ def test_release_inventory_constants_match_current_source_seal() -> None:
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
     assert receipt_module._PRODUCTION_TEST_COUNT == 813
-    assert receipt_module._G_UNIT_TEST_COUNT == 397
+    assert receipt_module._G_UNIT_TEST_COUNT == 418
     assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 813
-    assert sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS) == 397
+    assert sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS) == 418
 
 
 def test_release_corridor_rejects_network_skips_and_zero_test_filters(
@@ -2227,6 +2227,128 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
         in mutated.stderr
     )
     assert canonical in mutated.stderr
+
+
+def test_multilane_inventory_checker_rejects_stale_or_duplicated_sdk_manifest_digest(
+    tmp_path: Path,
+) -> None:
+    """The standalone inventory guard binds SDK hashes to the closure ledger."""
+
+    checker = ROOT_DIR / "ci" / "check_sumeragi_v2_multilane_release_inventory.sh"
+    checker_source = checker.read_text(encoding="utf-8")
+    helper_start = checker_source.index("require_exact_digest_occurrences() {")
+    helper_end = checker_source.index("\n}\n", helper_start) + 3
+    helper = checker_source[helper_start:helper_end]
+    manifest_guard = (
+        "require_exact_digest_occurrences \\\n"
+        '  "$closure_ledger" \\\n'
+        '  "$grouped_suite_source_manifest_sha256" \\\n'
+        "  2 \\\n"
+        '  "grouped Native AMX V2 suite-source manifest SHA-256"'
+    )
+    assert checker_source.count(manifest_guard) == 1
+
+    fixture_digest = "a" * 64
+    manifest_digest = "b" * 64
+    stale_manifest_digest = "c" * 64
+    ledger = tmp_path / "sumeragi_v2_multilane_closure_ledger.md"
+    ledger.write_text(
+        "\n".join(
+            (
+                fixture_digest,
+                fixture_digest,
+                manifest_digest,
+                manifest_digest,
+            )
+        ),
+        encoding="utf-8",
+    )
+    probe = "\n".join(
+        (
+            "set -euo pipefail",
+            helper,
+            'readonly closure_ledger="$1"',
+            'readonly grouped_fixture_sha256="$2"',
+            'readonly grouped_suite_source_manifest_sha256="$3"',
+            'require_exact_digest_occurrences "$closure_ledger" "$grouped_fixture_sha256" 2 "grouped Native AMX V2 fixture SHA-256"',
+            'require_exact_digest_occurrences "$closure_ledger" "$grouped_suite_source_manifest_sha256" 2 "grouped Native AMX V2 suite-source manifest SHA-256"',
+        )
+    )
+    bash = shutil.which("bash")
+    assert bash is not None
+
+    baseline = subprocess.run(
+        [
+            bash,
+            "-c",
+            probe,
+            "inventory-sdk-digest-probe",
+            str(ledger),
+            fixture_digest,
+            manifest_digest,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert baseline.returncode == 0, baseline.stderr
+
+    source = ledger.read_text(encoding="utf-8")
+    ledger.write_text(
+        source.replace(manifest_digest, stale_manifest_digest, 1),
+        encoding="utf-8",
+    )
+    mutated = subprocess.run(
+        [
+            bash,
+            "-c",
+            probe,
+            "inventory-sdk-digest-probe",
+            str(ledger),
+            fixture_digest,
+            manifest_digest,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert mutated.returncode != 0
+    assert "must publish the current grouped Native AMX V2 suite-source manifest" in (
+        mutated.stderr
+    )
+
+    ledger.write_text(
+        "\n".join(
+            (
+                fixture_digest,
+                fixture_digest,
+                manifest_digest + manifest_digest,
+                manifest_digest,
+            )
+        ),
+        encoding="utf-8",
+    )
+    oversupplied = subprocess.run(
+        [
+            bash,
+            "-c",
+            probe,
+            "inventory-sdk-digest-probe",
+            str(ledger),
+            fixture_digest,
+            manifest_digest,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert oversupplied.returncode != 0
+    assert "must publish the current grouped Native AMX V2 suite-source manifest" in (
+        oversupplied.stderr
+    )
 
 
 def test_tlaps_runner_rejects_backend_failure_even_when_tlapm_exits_zero() -> None:

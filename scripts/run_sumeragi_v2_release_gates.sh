@@ -940,7 +940,14 @@ elif kind == "pytest":
 elif kind == "node":
     passed = [re.fullmatch(r"# pass ([0-9]+)", line) for line in lines]
     passed = [match for match in passed if match]
-    if len(passed) != 1 or lines.count("# fail 0") != 1:
+    if (
+        len(passed) != 1
+        or lines.count(f"# tests {passed[0].group(1)}") != 1
+        or lines.count("# fail 0") != 1
+        or lines.count("# cancelled 0") != 1
+        or lines.count("# skipped 0") != 1
+        or lines.count("# todo 0") != 1
+    ):
         raise SystemExit("ambiguous Node test transcript")
     print(passed[0].group(1))
 elif kind == "native-amx-sdk":
@@ -957,6 +964,19 @@ elif kind == "native-amx-sdk":
     if len(matches) != 1:
         raise SystemExit("ambiguous grouped Native AMX V2 SDK transcript")
     print(matches[0].group(1))
+elif kind == "sdk-diagnostics":
+    matches = [
+        re.fullmatch(
+            r"sumeragi-v2-sdk-diagnostics surface=[a-z]+ tests=([0-9]+) "
+            r"suite_source_manifest_sha256=[0-9a-f]{64}",
+            line,
+        )
+        for line in lines
+    ]
+    matches = [match for match in matches if match]
+    if len(matches) != 1:
+        raise SystemExit("ambiguous Sumeragi v2 SDK diagnostics transcript")
+    print(matches[0].group(1))
 elif kind == "command":
     print(0)
 else:
@@ -972,6 +992,14 @@ PY
     expected_marker="native-amx-v2-grouped-parity surface=${expected_surface} tests=${observed_test_count} fixture_sha256=${native_amx_grouped_fixture_sha256:-} suite_source_manifest_sha256=${native_amx_grouped_suite_source_manifest_sha256:-}"
     if [[ "$(grep -Fxc -- "$expected_marker" "$log_path" || true)" != 1 ]]; then
       echo "release corridor leg ${leg_id} is not bound to the exact grouped Native AMX V2 corpus and suite sources" >&2
+      return 1
+    fi
+  elif [[ "$kind" == "sdk-diagnostics" ]]; then
+    local expected_surface="${leg_id#sumeragi-diagnostics-}"
+    local expected_marker
+    expected_marker="sumeragi-v2-sdk-diagnostics surface=${expected_surface} tests=${observed_test_count} suite_source_manifest_sha256=${sumeragi_v2_sdk_diagnostics_suite_source_manifest_sha256:-}"
+    if [[ "$(grep -Fxc -- "$expected_marker" "$log_path" || true)" != 1 ]]; then
+      echo "release corridor leg ${leg_id} is not bound to the exact Sumeragi v2 SDK diagnostics suite sources" >&2
       return 1
     fi
   fi
@@ -1964,6 +1992,8 @@ required_multilane_core_focus_tests=(
   kura::tests::native_amx_retention_window_advances_base_and_bounds_index
   kura::tests::native_amx_startup_retention_waits_for_complete_post_wsv_evidence
   kura::tests::native_amx_prepublication_retains_previous_pair_until_post_wsv_cleanup
+  kura::tests::native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable
+  kura::tests::native_amx_prevote_pair_geometry_rejects_empty_hard_cap_and_overflow
   kura::tests::native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scanning
   kura::tests::native_amx_latest_index_startup_rejects_oversized_aggregate_data_before_scanning
   kura::tests::native_amx_latest_index_startup_truncates_unindexed_append_tail
@@ -1997,6 +2027,7 @@ required_multilane_core_focus_tests=(
   kura::tests::pending_queue_plan_admission_survives_retired_purge_and_process_reopen
   kura::lane_geometry::tests::first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotion
   sumeragi::v2_lane_work::tests::native_amx_request_rejects_same_next_height_wrong_coordinator_predecessor_hash
+  sumeragi::v2_lane_work::tests::grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or_wsv_mutation
   sumeragi::v2_lane_work::tests::normal_lane_adapter_serves_certificate_free_canonical_executed_block_chunks
   sumeragi::v2_lane_work::tests::canonical_executed_block_recovery_rejects_drift_rotates_signers_and_caches_exact_body
   sumeragi::v2_lane_work::tests::canonical_executed_block_multichunk_restarts_whole_wire_after_byzantine_signer
@@ -2007,6 +2038,7 @@ required_multilane_core_focus_tests=(
   sumeragi::v2_core::refinement::tests::in_flight_first_release_dynamic_committees_bind_masks_custody_and_canonical_quorum
   queue::reservation_journal::tests::crash_at_every_operation_frame_write_boundary_is_prefix_atomic
   queue::tests::concurrent_lane_reserve_attempts_cannot_duplicate_one_transaction
+  queue::tests::lane_retirement_observer_holds_transition_before_lifecycle_fence
   queue::tests::lane_reservation_group_diagnostics_follow_durable_commit_forget_boundary
   kura::tests::committed_merge_entry_lookup_reconstructs_from_canonical_indexes_after_restart
   kura::tests::merge_frontier_startup_requires_geometry_only_after_committed_execution
@@ -2026,11 +2058,14 @@ required_multilane_core_focus_tests=(
   sumeragi::v2_lane_work::tests::autonomous_local_author_reserves_fifo_before_durable_hint_free_publication
   sumeragi::v2_lane_work::tests::autonomous_restart_hydrates_durable_hint_free_payload_and_queue_owner
   sumeragi::v2_apply::tests::native_amx_prepublication_failure_leaves_wsv_unchanged
+  sumeragi::v2_apply::tests::native_amx_prevote_byte_failures_have_precommit_error_classification
+  sumeragi::v2_apply::tests::checked_apply_carrier_authorization_binds_exact_state_entry
   sumeragi::v2_apply::tests::live_merge_publication_persists_application_receipt_before_retry
   sumeragi::v2_apply::tests::committed_merge_reservation_is_finalized_exactly_once
   sumeragi::v2_apply::tests::startup_reconciliation_consumes_replayed_committed_merge_reservation
   sumeragi::v2_apply::tests::autonomous_release_rejects_missing_queue_owner_while_kura_claims_are_pending
   sumeragi::v2_apply::tests::autonomous_reservation_cross_store_crash_matrix_preserves_fifo_exactly_once
+  sumeragi::v2_apply::tests::prospective_autoscale_retirement_queue_veto_rejects_exact_reserved_route
   queue::tests::forgotten_release_requires_exact_fifo_membership_and_relative_order
   kura::tests::terminal_frontier_compaction_retains_every_later_pending_slot
   kura::tests::terminal_frontier_compaction_fails_before_replacing_malformed_pending_slot
@@ -2040,9 +2075,20 @@ required_multilane_core_focus_tests=(
   state::tests::certified_autoscale_scale_in_rechecks_late_authenticated_unmerged_relay
   state::tests::certified_autoscale_scale_in_rechecks_late_unapplied_certified_lane_block
   state::tests::certified_autoscale_scale_in_rechecks_late_unrepaired_direct_application_marker
+  state::tests::prospective_autoscale_retirement_binding_projects_exact_active_route_before_staging
+  state::tests::prospective_autoscale_retirement_blocks_block_local_queue_plan_obligation
+  state::tests::autoscale_scale_in_commit_runs_queue_veto_inside_lifecycle_fence
   state::tests::autonomous_lane_diagnostic_same_identity_drift_is_conflict
   state::tests::autonomous_lane_diagnostic_certified_payload_without_bundle_reports_exact_stall
   state::tests::pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers
+  state::tests::queue_plan_registry_absence_rejects_an_orphan_pending_obligation
+  state::tests::queue_plan_conflict_requires_pending_or_applied_owner_evidence
+  state::tests::queue_plan_native_pending_obligations_count_all_unique_routes_and_block_drain
+  state::tests::queue_plan_same_route_roles_share_one_pending_route_counter
+  state::tests::queue_plan_pending_obligation_authenticates_copies_before_counter_mutation
+  state::tests::queue_plan_pending_resolution_decrements_only_exact_bound_route_counts
+  state::tests::queue_plan_pending_resolution_corrupt_route_counts_fail_without_partial_mutation
+  state::tests::queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomically
   state::tests::queue_plan_only_carriers_require_exact_committed_active_lane_bindings
   state::tests::queue_plan_registry_presence_is_bounded_and_malformed_markers_fail_closed
   state::tests::queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set
@@ -2135,6 +2181,7 @@ required_multilane_core_focus_tests=(
   block::valid::tests::autonomous_merge_carrier_content_gate_accepts_only_exact_empty_carrier
   block::tests::merge_capable_validation_paths_source_bind_post_effect_authorization
   state::tests::canonical_wsv_authorization_commits_exact_autonomous_execution_once
+  state::tests::autonomous_execution_commit_rejects_missing_apply_carrier_authorization
   state::tests::autonomous_execution_commit_rejects_missing_wsv_authorization
   state::tests::autonomous_execution_commit_rejects_missing_carrier_metadata_authorization
   state::tests::autonomous_execution_commit_rejects_mismatched_wsv_authorization
@@ -2366,7 +2413,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=399
+readonly expected_multilane_focus_test_count=418
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2537,7 +2584,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 397-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 418-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2645,8 +2692,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 398 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 397 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 419 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 418 focused tests" >&2
     exit 1
   fi
 fi
@@ -3052,8 +3099,8 @@ if [[ "$profile" == "--release" ]]; then
   )
   native_amx_grouped_parity_test_counts=(
     7
+    58
     56
-    54
     3
     6
     5
@@ -3072,40 +3119,81 @@ if [[ "$profile" == "--release" ]]; then
   done
 fi
 
-js_status_contract_file="javascript/iroha_js/test/toriiClient.test.js"
-required_js_status_contract_tests=(
-  "getSumeragiStatusTyped validates and normalizes authoritative v2 status"
-  "getSumeragiStatusTyped accepts the local-control liveness blocker"
-  "getSumeragiStatusTyped accepts the unsafe-proposal ignore reason"
-  "getSumeragiStatusTyped accepts all twelve ignore reasons at the bound"
+rust_sdk_diagnostics_tests=(
+  client::tests::get_sumeragi_status_prefers_norito_and_handles_json
+  client::tests::get_sumeragi_status_rejects_unknown_json_fields
+  client::tests::get_sumeragi_status_rejects_structurally_impossible_norito_and_json
+  client::tests::get_sumeragi_status_json_requests_json_and_falls_back_to_norito
+  client::tests::get_sumeragi_diagnostics_verifies_lane_relay_envelopes
+  client::tests::get_sumeragi_diagnostics_rejects_invalid_lane_relay_hash
+  client::tests::get_sumeragi_diagnostics_rejects_malformed_autonomous_execution
+  client::tests::get_sumeragi_diagnostics_rejects_duplicate_autonomous_execution_identity
+  client::tests::get_sumeragi_diagnostics_rejects_malformed_native_amx_receipts_in_every_container
+  client::tests::get_sumeragi_diagnostics_rejects_malformed_json_payload
+  client::tests::get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields
+  client::tests::get_sumeragi_diagnostics_rejects_unknown_json_fields
+  client::tests::get_sumeragi_diagnostics_rejects_zero_npos_seed
+  client::tests::get_sumeragi_diagnostics_accepts_json_payload_without_content_type_header
 )
-for required_test in "${required_js_status_contract_tests[@]}"; do
-  if ! grep -Fq -- "test(\"${required_test}\"," "$js_status_contract_file"; then
-    echo "missing required JavaScript Sumeragi v2 status-contract test: ${required_test}" >&2
+rust_sdk_diagnostics_list="$(
+  run_cargo test --locked --offline -p iroha --lib -- --list
+)"
+rust_sdk_diagnostics_ignored_list="$(
+  run_cargo test --locked --offline -p iroha --lib -- --list --ignored
+)"
+for required_test in "${rust_sdk_diagnostics_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$rust_sdk_diagnostics_list"; then
+    echo "missing required Rust Sumeragi v2 SDK diagnostics test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" <<<"$rust_sdk_diagnostics_ignored_list"; then
+    echo "required Rust Sumeragi v2 SDK diagnostics test is ignored: ${required_test}" >&2
     exit 1
   fi
 done
-readonly js_status_pattern='getSumeragiStatusTyped (validates and normalizes authoritative v2 status|accepts the local-control liveness blocker|accepts the unsafe-proposal ignore reason|accepts all twelve ignore reasons at the bound)'
 run_corridor_leg \
-  status-javascript node 4 \
-  "node --test --test-reporter=tap --test-name-pattern=${js_status_pattern} ${js_status_contract_file}" \
-  node --test --test-reporter=tap --test-name-pattern="$js_status_pattern" "$js_status_contract_file"
+  sumeragi-diagnostics-rust cargo-exact 14 \
+  "cargo test --locked --offline -p iroha --lib client::tests::get_sumeragi_ -- --test-threads=1" \
+  run_cargo test --locked --offline -p iroha --lib \
+    client::tests::get_sumeragi_ -- --test-threads=1
 
-if ! python3 -c 'import pytest, requests' >/dev/null 2>&1; then
-  echo "Python Sumeragi v2 status-contract tests require the pinned scripts/requirements.txt dependencies to be installed before this offline gate" >&2
+readonly sumeragi_v2_sdk_diagnostics_harness="ci/run_sumeragi_v2_sdk_diagnostics.sh"
+sumeragi_v2_sdk_diagnostics_suite_source_manifest_sha256="$(
+  bash "$sumeragi_v2_sdk_diagnostics_harness" --suite-source-manifest-sha256
+)"
+if [[ ! "$sumeragi_v2_sdk_diagnostics_suite_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "Sumeragi v2 SDK diagnostics harness returned an invalid source digest" >&2
   exit 1
 fi
-python_status_tests=(
-  python/iroha_torii_client/tests/test_client.py::test_get_sumeragi_status_parses_authoritative_v2_snapshot
-  python/iroha_torii_client/tests/test_client.py::test_get_sumeragi_status_accepts_local_control_pending_liveness_blocker
-  python/iroha_torii_client/tests/test_client.py::test_get_sumeragi_status_accepts_unsafe_proposal_ignore_reason
-  python/iroha_torii_client/tests/test_client.py::test_get_sumeragi_status_accepts_all_twelve_ignore_reasons_at_the_bound
-)
-run_corridor_leg \
-  status-python pytest 4 \
-  "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${python_status_tests[*]}" \
-  env PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 \
-    python3 -m pytest -q -p no:cacheprovider "${python_status_tests[@]}"
+readonly sumeragi_v2_sdk_diagnostics_suite_source_manifest_sha256
+if [[ "$profile" == "--release" ]]; then
+  sumeragi_v2_sdk_diagnostics_surfaces=(
+    python
+    javascript
+    swift
+    kotlin
+    java
+  )
+  sumeragi_v2_sdk_diagnostics_test_counts=(
+    114
+    88
+    17
+    15
+    10
+  )
+  for sumeragi_v2_sdk_diagnostics_index in \
+    "${!sumeragi_v2_sdk_diagnostics_surfaces[@]}"; do
+    sumeragi_v2_sdk_diagnostics_surface="${sumeragi_v2_sdk_diagnostics_surfaces[$sumeragi_v2_sdk_diagnostics_index]}"
+    sumeragi_v2_sdk_diagnostics_test_count="${sumeragi_v2_sdk_diagnostics_test_counts[$sumeragi_v2_sdk_diagnostics_index]}"
+    run_corridor_leg \
+      "sumeragi-diagnostics-${sumeragi_v2_sdk_diagnostics_surface}" \
+      sdk-diagnostics \
+      "$sumeragi_v2_sdk_diagnostics_test_count" \
+      "bash ${sumeragi_v2_sdk_diagnostics_harness} ${sumeragi_v2_sdk_diagnostics_surface}" \
+      bash "$sumeragi_v2_sdk_diagnostics_harness" \
+        "$sumeragi_v2_sdk_diagnostics_surface"
+  done
+fi
 
 # The release identity must include every checkout source plus the ignored
 # workspace lockfile, reject active Git operations and unresolved entries, and
@@ -3458,7 +3546,7 @@ publish_corridor_completion() {
   # + 5 Taira contracts + 1 cross-SDK Rust leg + 1 Native AMX fixture check
   # + 6 grouped SDK parity legs + 2 status SDK legs + 11 contract preflights
   # + 6 final workspace-verification legs.
-  readonly expected_corridor_leg_count=82
+  readonly expected_corridor_leg_count=86
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
@@ -3842,4 +3930,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-  echo "Sumeragi v2 production release gates passed, including exact 397/397 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+  echo "Sumeragi v2 production release gates passed, including exact 418/418 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

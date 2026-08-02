@@ -6608,15 +6608,19 @@ fn mirror_index_value(
     );
     archive.insert(
         "blake3".into(),
-        (archive_head.generation != 0)
-            .then(|| JsonValue::from(hex::encode(archive_head.digest)))
-            .unwrap_or(JsonValue::Null),
+        if archive_head.generation != 0 {
+            JsonValue::from(hex::encode(archive_head.digest))
+        } else {
+            JsonValue::Null
+        },
     );
     archive.insert(
         "ipfs_cid".into(),
-        (archive_head.generation != 0)
-            .then(|| JsonValue::from(archive_head.ipfs_cid.clone()))
-            .unwrap_or(JsonValue::Null),
+        if archive_head.generation != 0 {
+            JsonValue::from(archive_head.ipfs_cid.clone())
+        } else {
+            JsonValue::Null
+        },
     );
     let mut root = JsonMap::new();
     root.insert("schema".into(), JsonValue::from(MIRROR_INDEX_SCHEMA));
@@ -7107,15 +7111,19 @@ async fn checkpoint_handler(State(state): State<ApiState>, headers: HeaderMap) -
     );
     value.insert(
         "archive_blake3_hex".into(),
-        (checkpoint.archive_head.generation != 0)
-            .then(|| JsonValue::from(hex::encode(checkpoint.archive_head.digest)))
-            .unwrap_or(JsonValue::Null),
+        if checkpoint.archive_head.generation != 0 {
+            JsonValue::from(hex::encode(checkpoint.archive_head.digest))
+        } else {
+            JsonValue::Null
+        },
     );
     value.insert(
         "archive_ipfs_cid".into(),
-        (checkpoint.archive_head.generation != 0)
-            .then(|| JsonValue::from(checkpoint.archive_head.ipfs_cid.clone()))
-            .unwrap_or(JsonValue::Null),
+        if checkpoint.archive_head.generation != 0 {
+            JsonValue::from(checkpoint.archive_head.ipfs_cid.clone())
+        } else {
+            JsonValue::Null
+        },
     );
     value.insert(
         "published_at_unix".into(),
@@ -7217,16 +7225,16 @@ mod tests {
     #[test]
     fn service_default_request_bound_covers_single_entry_archive_ceiling() {
         let service = SorafsGovernanceDagService::default();
-        assert_eq!(
-            service.max_request_bytes.0,
-            u64::try_from(BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1)
-                .expect("single-entry archive request ceiling fits u64")
-        );
+        let max_request_bytes = usize::try_from(service.max_request_bytes.0)
+            .expect("default request ceiling fits usize");
+        assert_eq!(max_request_bytes, BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1);
         assert!(
-            BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1 > GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1,
+            max_request_bytes > GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1,
             "archive publication has an explicit wrapper allowance"
         );
-        assert!(CANONICAL_DECODE_MAX_TOTAL_ELEMENTS > MAX_REPUTATION_TRUST_EDGES);
+        let archive_decode_limits =
+            block_prefix_archive_decode_limits(BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1);
+        assert!(archive_decode_limits.max_total_elements() > MAX_REPUTATION_TRUST_EDGES);
     }
 
     #[test]
@@ -7485,10 +7493,28 @@ mod tests {
             .collect()
     }
 
+    struct TestBackendRequest<'a> {
+        canonical: &'a GovernanceDagCanonicalRequestV1,
+        authentication_headers: &'a [(String, Vec<u8>)],
+        body: &'a [u8],
+    }
+
+    impl<'a> TestBackendRequest<'a> {
+        fn new(
+            canonical: &'a GovernanceDagCanonicalRequestV1,
+            authentication_headers: &'a [(String, Vec<u8>)],
+            body: &'a [u8],
+        ) -> Self {
+            Self {
+                canonical,
+                authentication_headers,
+                body,
+            }
+        }
+    }
+
     fn verify_request_before_test_backend(
-        request: &GovernanceDagCanonicalRequestV1,
-        headers: &[(String, Vec<u8>)],
-        body: &[u8],
+        request: TestBackendRequest<'_>,
         expected_scope: GovernanceDagAuthenticationScope,
         policy: &GovernanceDagRequestAuthenticationPolicyV1,
         now: u64,
@@ -7502,21 +7528,23 @@ mod tests {
             replay_cache,
         )?;
         let verified_request = receiver.verify_http_request(
-            request.method(),
-            request.canonical_url(),
+            request.canonical.method(),
+            request.canonical.canonical_url(),
             request
+                .canonical
                 .selected_headers()
                 .iter()
                 .map(|header| (header.name(), header.value().as_bytes()))
                 .chain(
-                    headers
+                    request
+                        .authentication_headers
                         .iter()
                         .map(|(name, value)| (name.as_str(), value.as_slice())),
                 ),
-            body,
+            request.body,
             now,
         )?;
-        if verified_request != *request {
+        if verified_request != *request.canonical {
             return Err(GovernanceDagRequestAuthenticationErrorV1::RequestMismatch);
         }
         backend_calls.fetch_add(1, AtomicOrdering::SeqCst);
@@ -12203,9 +12231,7 @@ enabled = false
                 }
             };
             verify_request_before_test_backend(
-                &request,
-                &headers,
-                body,
+                TestBackendRequest::new(&request, &headers, body),
                 scope,
                 policy,
                 now,
@@ -12308,9 +12334,7 @@ enabled = false
         ];
         for (fields, expected) in cases {
             let error = verify_request_before_test_backend(
-                &request,
-                &fields,
-                b"",
+                TestBackendRequest::new(&request, &fields, b""),
                 GovernanceDagAuthenticationScope::Ipfs,
                 &policy,
                 now,
@@ -12331,9 +12355,7 @@ enabled = false
             let mut fields = canonical.clone();
             fields[index].1 = value;
             let error = verify_request_before_test_backend(
-                &request,
-                &fields,
-                b"",
+                TestBackendRequest::new(&request, &fields, b""),
                 GovernanceDagAuthenticationScope::Ipfs,
                 &policy,
                 now,
@@ -12466,9 +12488,7 @@ enabled = false
                 b"head-v7".as_slice()
             };
             let error = verify_request_before_test_backend(
-                tampered_request,
-                &headers,
-                body,
+                TestBackendRequest::new(tampered_request, &headers, body),
                 GovernanceDagAuthenticationScope::SignedHead,
                 &policy,
                 now,
@@ -12482,9 +12502,7 @@ enabled = false
             );
         }
         let error = verify_request_before_test_backend(
-            &request,
-            &headers,
-            b"head-v7",
+            TestBackendRequest::new(&request, &headers, b"head-v7"),
             GovernanceDagAuthenticationScope::Ipfs,
             &policy,
             now,
@@ -12503,9 +12521,7 @@ enabled = false
         )
         .expect("alternate valid receiver key");
         let error = verify_request_before_test_backend(
-            &request,
-            &headers,
-            b"head-v7",
+            TestBackendRequest::new(&request, &headers, b"head-v7"),
             GovernanceDagAuthenticationScope::SignedHead,
             &wrong_key_policy,
             now,
@@ -12554,9 +12570,7 @@ enabled = false
                 nonce,
             );
             let error = verify_request_before_test_backend(
-                &request,
-                &request_auth_header_fields(&envelope),
-                b"",
+                TestBackendRequest::new(&request, &request_auth_header_fields(&envelope), b""),
                 GovernanceDagAuthenticationScope::Ipfs,
                 &policy,
                 now,
@@ -12580,9 +12594,7 @@ enabled = false
         let mut zero_nonce_headers = request_auth_header_fields(&valid);
         zero_nonce_headers[4].1 = "00".repeat(32).into_bytes();
         let error = verify_request_before_test_backend(
-            &request,
-            &zero_nonce_headers,
-            b"",
+            TestBackendRequest::new(&request, &zero_nonce_headers, b""),
             GovernanceDagAuthenticationScope::Ipfs,
             &policy,
             now,
@@ -12600,9 +12612,7 @@ enabled = false
         invalid_signature[32..].fill(0);
         bad_signature_headers[7].1 = hex::encode(invalid_signature).into_bytes();
         let error = verify_request_before_test_backend(
-            &request,
-            &bad_signature_headers,
-            b"",
+            TestBackendRequest::new(&request, &bad_signature_headers, b""),
             GovernanceDagAuthenticationScope::Ipfs,
             &policy,
             now,
@@ -12619,9 +12629,7 @@ enabled = false
         let headers = request_auth_header_fields(&valid);
         let mut replay_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
         verify_request_before_test_backend(
-            &request,
-            &headers,
-            b"",
+            TestBackendRequest::new(&request, &headers, b""),
             GovernanceDagAuthenticationScope::Ipfs,
             &policy,
             now,
@@ -12630,9 +12638,7 @@ enabled = false
         )
         .expect("first nonce use reaches backend");
         let error = verify_request_before_test_backend(
-            &request,
-            &headers,
-            b"",
+            TestBackendRequest::new(&request, &headers, b""),
             GovernanceDagAuthenticationScope::Ipfs,
             &policy,
             now,
@@ -12659,9 +12665,7 @@ enabled = false
                 .expect("one-entry replay cache");
         let capacity_backend_calls = AtomicU64::new(0);
         verify_request_before_test_backend(
-            &request,
-            &headers,
-            b"",
+            TestBackendRequest::new(&request, &headers, b""),
             GovernanceDagAuthenticationScope::Ipfs,
             &policy,
             now,
@@ -12670,9 +12674,7 @@ enabled = false
         )
         .expect("first live nonce fits bounded cache");
         let error = verify_request_before_test_backend(
-            &request,
-            &request_auth_header_fields(&second),
-            b"",
+            TestBackendRequest::new(&request, &request_auth_header_fields(&second), b""),
             GovernanceDagAuthenticationScope::Ipfs,
             &policy,
             now,
@@ -12720,9 +12722,7 @@ enabled = false
         let mut replay_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
         let backend_calls = AtomicU64::new(0);
         let error = verify_request_before_test_backend(
-            &request,
-            &ambiguous_headers,
-            body,
+            TestBackendRequest::new(&request, &ambiguous_headers, body),
             GovernanceDagAuthenticationScope::SignedHead,
             &policy,
             now,
@@ -12737,9 +12737,7 @@ enabled = false
         assert_eq!(backend_calls.load(AtomicOrdering::SeqCst), 0);
 
         verify_request_before_test_backend(
-            &request,
-            &request_auth_header_fields(&envelope),
-            body,
+            TestBackendRequest::new(&request, &request_auth_header_fields(&envelope), body),
             GovernanceDagAuthenticationScope::SignedHead,
             &policy,
             now,

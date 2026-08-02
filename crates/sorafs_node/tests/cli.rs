@@ -40,6 +40,51 @@ fn build_manifest(
 }
 
 #[test]
+fn sorafs_node_cli_help_documents_only_canonical_ingest_spellings()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut command = cargo_bin_cmd!("sorafs-node");
+    let assertion = command.arg("--help").assert().success();
+    let stderr = String::from_utf8(assertion.get_output().stderr.clone())?;
+
+    assert!(stderr.contains(
+        "ingest --data-dir=<dir> --manifest=<path> --payload=<path> [--plan-json-out=<path>]"
+    ));
+    assert!(stderr.contains(
+        "ingest por --data-dir=<dir> --challenge=<path> --proof=<path> [--verdict=<path>] [--manifest-id=<hex>] [--json-out=<path>]"
+    ));
+    assert!(!stderr.contains("ingest [manifest]"));
+
+    Ok(())
+}
+
+#[test]
+fn sorafs_node_cli_rejects_manifest_subcommand_alias() -> Result<(), Box<dyn std::error::Error>> {
+    let mut command = cargo_bin_cmd!("sorafs-node");
+    let assertion = command.arg("ingest").arg("manifest").assert().failure();
+    let stderr = String::from_utf8(assertion.get_output().stderr.clone())?;
+
+    assert_eq!(stderr, "error: unknown option: manifest\n");
+
+    Ok(())
+}
+
+#[test]
+fn sorafs_node_cli_rejects_por_manifest_option_alias() -> Result<(), Box<dyn std::error::Error>> {
+    let mut command = cargo_bin_cmd!("sorafs-node");
+    let assertion = command
+        .arg("ingest")
+        .arg("por")
+        .arg("--manifest=00")
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(assertion.get_output().stderr.clone())?;
+
+    assert_eq!(stderr, "error: unknown option: --manifest=00\n");
+
+    Ok(())
+}
+
+#[test]
 fn sorafs_node_cli_ingest_and_export_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
     if !ingest_tests_enabled() {
         eprintln!("skipping ingest roundtrip (SORAFS_NODE_SKIP_INGEST_TESTS=1)");

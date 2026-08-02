@@ -247,6 +247,10 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
         "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
         "scripts/check_sorafs_release_version_map.py",
+        "version-map-summary.first.json",
+        "version-map-summary.replay.json",
+        "cmp version-map-summary.first.json version-map-summary.replay.json",
+        "cp version-map-summary.first.json version-map-summary.json",
         "scripts/check_sorafs_reference_sdk_release_evidence.py",
         "scripts/build_sorafs_reference_sdk_release_canary.py",
         '- "scripts/build_sorafs_reference_sdk_supply_chain_sources.py"',
@@ -961,6 +965,7 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 f"{relative}: candidate downloads must preserve exactly five "
                 "artifact-name directories"
             )
+        release_gate_job = _workflow_job(source, "release-gate")
         prepare_job = _workflow_job(source, "prepare-release-manifest")
         auth_job = _workflow_job(source, "verify-release-auth")
         promotion_job = _workflow_job(source, "sign")
@@ -972,6 +977,22 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             "if: ${{ startsWith(github.ref, 'refs/tags/sorafs-cli-v') "
             "|| inputs.sign_artifacts }}"
         )
+        if release_gate_job is None:
+            errors.append(f"{relative}: missing release gate job")
+        elif (
+            release_gate_job.count(
+                "python3 scripts/check_sorafs_release_version_map.py"
+            )
+            != 2
+            or "cmp version-map-summary.first.json version-map-summary.replay.json"
+            not in release_gate_job
+            or "cp version-map-summary.first.json version-map-summary.json"
+            not in release_gate_job
+        ):
+            errors.append(
+                f"{relative}: version map must be validated exactly twice with "
+                "byte-identical summaries before its release version is consumed"
+            )
         if prepare_job is None:
             errors.append(f"{relative}: missing foundational-manifest preparation job")
         else:

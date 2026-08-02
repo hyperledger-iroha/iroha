@@ -498,6 +498,28 @@ def validate_replay_manifest(
     return errors
 
 
+def validate_published_replay_manifest(
+    path: Path,
+    rendered_manifest: str,
+    snapshot: InputDigestSnapshot,
+    replay: ReplayAggregate,
+) -> list[str]:
+    """Require exact bounded readback of the published replay manifest."""
+
+    try:
+        raw = read_evidence_bytes(path, MAX_SUMMARY_BYTES)
+        manifest = decode_evidence_json(raw)
+    except (OSError, RuntimeError, UnicodeDecodeError, ValueError):
+        return [
+            "deterministic replay manifest publication failed exact bounded readback"
+        ]
+    if raw != rendered_manifest.encode("utf-8"):
+        return [
+            "deterministic replay manifest readback must match the exact published bytes"
+        ]
+    return validate_replay_manifest(manifest, snapshot, replay)
+
+
 def execute_deterministic_replay(
     args: argparse.Namespace,
     plan: Sequence[CommandPlan],
@@ -573,7 +595,7 @@ def execute_deterministic_replay(
             manifest_errors,
         )
         return 1
-    _, write_errors = render_and_write_checker_summary(
+    rendered_manifest, write_errors = render_and_write_checker_summary(
         replay_manifest_path(args),
         manifest,
     )
@@ -581,6 +603,18 @@ def execute_deterministic_replay(
         emit_runner_error_block(
             "SoraFS deterministic replay manifest publication failed:",
             write_errors,
+        )
+        return 1
+    readback_errors = validate_published_replay_manifest(
+        replay_manifest_path(args),
+        rendered_manifest,
+        before,
+        replay,
+    )
+    if readback_errors:
+        emit_runner_error_block(
+            "SoraFS deterministic replay manifest publication failed:",
+            readback_errors,
         )
         return 1
     return 0

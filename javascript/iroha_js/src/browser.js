@@ -102,17 +102,17 @@ export {
 } from "./toriiBrowserClient.js";
 
 export {
+  KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
   KAGEMUSHA_MANIFEST_VERSION,
   KAGEMUSHA_MAX_HOPS,
   KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
   KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
-  normalizeKagemushaAssetSelector,
   normalizeKagemushaOperationId,
   normalizeKagemushaOperationReference,
   normalizeKagemushaOperationStatus,
   normalizeKagemushaRedeemRequestV4,
-  normalizeKagemushaReadinessV4,
+  normalizeOfflineStatus,
   normalizeKagemushaTopUpRequestV4,
 } from "./kagemushaOffline.js";
 

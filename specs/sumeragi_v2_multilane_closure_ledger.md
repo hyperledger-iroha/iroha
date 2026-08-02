@@ -152,8 +152,20 @@ reservation-batch direct-release path uses the same complete-group predicate and
 its checked `DirectReleased` projection under the Queue transition and FIFO
 locks immediately before the durable release append. Existing bounded
 consumers also recheck durable execution input/READY QC/lane Commit at merge
-source admission, canonical `ApplyCarrier` before the WSV commit sink, and the
-three ordered post-carrier Queue cleanup prefixes. Complete production trace extraction is not implemented.
+source admission. Canonical `ApplyCarrier` projections remain in a move-only
+batch that V2 boxes as a `StateBlockCommitAuthorization`; State consumes the
+exact block/merge/cardinality-bound batch under `state_commit_lock` and the
+lifecycle fence when present, after the final scale-in Queue veto and before
+geometry or transaction publication. V2 takes the Queue observer only for an
+exact pending scale-in. The three ordered post-carrier Queue cleanup prefixes
+remain separately checked. The complete production trace extraction is not implemented.
+The source-certificate contract now includes the
+already-implemented pre-Kura direct release linearization point. Six named
+actions remain deliberately open rather
+than inferred: `FanoutFromProducer`, `ServeLateBody`, `Crash`, `Recover`,
+`RecoverReservationSnapshot`, and `RepairPostCarrierEvidence`. In particular,
+the abstract snapshot stutter is not yet a proof that concrete startup replay
+preserves the composed abstraction.
 **Closure:** Open.
 **Evidence:** Current schema-5 structural/source binding, local checked
 reservation-journal transition evidence, and Rust/Verus composed relation.
@@ -680,7 +692,7 @@ output backpressure, successful durable-handoff urgent wake-up, predecessor
 drop, successor retry, frozen exact recipients, and final Kura revalidation.
 Fresh same-day isolated Rust 1.93.1 locked/offline slices passed the 18 exact
 Kura replica tests and four exact configuration tests. Those focused runs and
-source anchors are not the complete 397-test `G-UNIT` receipt, and no
+source anchors are not the complete 418-test `G-UNIT` receipt, and no
 multi-peer body-pruning corridor was run, so this row's evidence remains Open.
 
 **Formal obligation and mutation.** `ML-MUT-KURA-01` now owns the source-bound
@@ -716,7 +728,33 @@ the coordinator quorum. `persist_and_wait_for_queue_plan_admission` and
 `submit_signed_transaction_for_ingress_globally_synced` in
 `crates/iroha_torii/src/lib.rs` persist the certificate before wakeup and wait
 for the exact replicated WSV registry value before returning public acceptance.
-`State::stage_queue_plan_admissions` owns the immutable global CAS.
+`State::stage_queue_plan_admissions` owns the immutable global CAS and stages a
+V1 pending obligation plus one exact member for each deduplicated
+route/incarnation. The lexically ordered route-member key range is the
+authoritative roster; its consensus cap is exactly
+`MAX_MERGE_QUEUE_PLAN_ADMISSIONS`, and no count/XOR summary is removal or drain
+authority. Each member payload binds the route, chain digest, typed entrypoint,
+binding hash, and domain-separated member identity. Its decoder rejects empty
+or greater-than-1,024-byte payloads before Norito decoding, then requires exact
+canonical bytes and the exact derived key. Bounded prefix enumeration rejects
+cap overflow, malformed or wrong-route members, and any member without its
+exact pending obligation. Registry/application-state reads enumerate that
+roster and require the obligation's exact member instead of trusting a lossy
+summary. The obligation and all of its members are inserted or removed through
+one nested MV transaction; whole-list admission staging, ordinary bulk
+resolution, and autonomous required resolution call `apply` only after every
+item succeeds. Both native marker prefixes are in
+`OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES`, so generic contracts cannot read,
+forge, overwrite, enumerate, or delete either half of the paired state.
+
+Pending application state is lifecycle-aware. It is `Pending` only when every
+bound lane/dataspace remains in the current Nexus catalog and
+`lane_incarnation_at_height` matches the admission proposal height; a coherent
+obligation on a retired or recreated incarnation is `PendingStale`. Queue
+ownership and the public binding/presence APIs reject `PendingStale`, while the
+authenticated durable-certificate reconciler classifies it as `Stale` for
+exact cleanup. An already-applied registry owner remains historical `Applied`
+and is not reclassified by current lane geometry.
 `Queue::reserve_transactions_for_lane_bounded`, queue replay/expiry, and
 `V2LaneWorkAdapter::refresh_merge_candidates` admit autonomous ownership only
 for the exact binding, preserve the durable tombstone across restart/TTL, and
@@ -728,14 +766,34 @@ certificate to be durable, its wakeup to be published, and the matching WSV
 registry value to be visible. Autonomous reservation and execution require
 that exact immutable binding. Restart, local expiry, cancellation, guard drop,
 or a deferred path must neither erase the durable owner nor bypass the global
-CAS; a conflicting binding must fail closed and can never execute.
+CAS; a conflicting binding must fail closed and can never execute. Every
+pending obligation contributes exactly one member to every deduplicated bound
+route and may be removed only with that exact member. The bounded lexical
+roster validates every enumerated compact canonical member claim and requires
+its exact obligation key to exist without decoding a potentially 2 MiB
+obligation per roster item. Target application and resolution still decode and
+compare the exact obligation/member pair, and every known obligation is checked
+for its exact member on each bound route.
+Missing, phantom, orphaned, malformed, oversized, wrong-key, or over-cap
+evidence must fail closed without publishing a stage or resolution prefix;
+same-route coordinator and participant roles contribute only one route member.
+The drain path performs this bounded authoritative route-range check, not an
+unbounded reverse history scan. Arbitrary coordinated mutation of opaque
+post-state is rejected by canonical WSV/block-root validation. A lane-ID
+recreation must make the old still-pending owner stale and must never authorize
+ownership on the new incarnation.
 
 **Focused and adversarial tests.** Cover split-route public acceptance,
 execution before global CAS, two conflicting CAS attempts, restart ABA, local
 TTL expiry, deferred ingress, cancellation, guard drop, missing or mismatched
 binding material, and duplicate execution. Inject every crash boundary between
 certificate persistence, wakeup, WSV publication, queue reservation, carrier
-application, and authenticated loser cleanup.
+application, and authenticated loser cleanup. Also cover a later-route orphan
+member during all-route stage preflight, two obligations sharing one route,
+missing and wrong-key exact members, malformed and greater-than-1,024-byte
+member payloads, a phantom roster member, an omitted real member, cap plus one,
+exact last-member removal, same-ID incarnation recreation, and byte-identical
+state after any failed whole-list stage or bulk-resolution preflight.
 
 **Formal obligation and mutation.** The bounded
 `SumeragiV2QueuePlanAdmissionRegistry` kernel checks
@@ -746,7 +804,17 @@ application, and authenticated loser cleanup.
 only to the ten QueuePlan `_bug.cfg` controls recorded in
 `multilane_source_bindings.json`; each must produce its exact named TLC
 counterexample. The positive Apalache run checks the fixed kernel only and is
-not a mutation runner or deductive proof.
+not a mutation runner or deductive proof. The structural refinement guard
+source-binds the concrete exact-member identity, the 1,024-byte pre-decode cap,
+the merge-admission roster cap, compact canonical member validation plus exact
+obligation-key existence without full-obligation decoding during enumeration,
+exact-member checks for known obligations, the opaque native namespaces, the
+active-incarnation classifier and all of its Queue/public/cleanup consumers,
+and the apply-only-after-complete-preflight stage and resolution order. It
+also rejects any return to count/XOR authority and does not invent an
+unbounded drain-time history scan. These source guards preserve the existing
+formal action inventory; they do not claim a new TLC transition or close
+`G-FORMAL`.
 
 **Release gates.** `G-UNIT`, `G-FORMAL`, `G-4P`, `G-12P`, and `G-FINAL`.
 
@@ -992,7 +1060,7 @@ regression (`1/1`), the startup-replay binding regressions (`2/2`), the bounded
 historical namespace/accounting suite (`6/6`), first-merge crash-window repair
 (`1/1`), Native post-WSV retention (`1/1`), and authenticated geometry refresh
 (`1/1`) under isolated Rust 1.93.1 locked/offline execution. These 12 focused
-tests are mapped row evidence, not the complete 397-test `G-UNIT` receipt, so
+tests are mapped row evidence, not the complete 418-test `G-UNIT` receipt, so
 this row's evidence remains Open.
 
 **Formal obligation and mutation.** Invariant `MLRestartOwnershipPartition`
@@ -1282,6 +1350,16 @@ fields, invalid enum states, malformed hashes/integers, over-bound vectors, and
 nondeterministic order. Run source and generated/distribution JavaScript tests,
 Swift tests, Kotlin core-jvm tests, and mirrored Java tests.
 
+The source-sealed release corridor now owns exact no-skip inventories for the
+Rust client (`14`), both Python client layers (`114`), JavaScript source plus a
+freshly generated distribution (`88`, split `44 + 44`), Swift (`17`), Kotlin
+core-jvm (`15`), and mirrored Java (`10`). JavaScript uses the dedicated
+`sumeragiDiagnosticsContract.test.js` entrypoint instead of a monolithic
+name-pattern filter, and the inventory includes an explicit swapped
+status/diagnostics payload negative. The suite-source manifest SHA-256 is
+`712bec0bf752ed650346c7588963d7e77117120c20f1c926e69f6ce21c3677b7`.
+These source contracts do not close the still-unrun aggregate `G-SDK` gate.
+
 **Differential release invariant and negative control.**
 `MLApiAuthoritySeparation` states that no diagnostics-only field can satisfy an
 authoritative status claim. This is not a TLA+ invariant: the source-bound
@@ -1347,7 +1425,7 @@ bound release inventory both require that exact count. The synchronized
 fixture SHA-256 is
 `0fb9bf6a490f4974e65a5a03985bfe75321e3de1f54be064c3b088ccffc061d1`
 and the current suite-source manifest SHA-256 is
-`2962648895668a3fef1d1055473541695cc4bfab2f301213e369a40dfb53a521`.
+`5cf86f7b08fdcb1bb95d144548e55efb18daa81f9194d8b9dd599313f7fc6d39`.
 Direct OpenAPI, Python, and JavaScript grouped checks provide partial evidence
 recorded under `G-SDK`; Rust, Swift, Kotlin, Java, and one complete archived
 harness replay remain unexecuted, so this row's evidence is still Open.
@@ -1447,13 +1525,17 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The focused source inventory is now internally consistent. The nine arrays in
-`scripts/run_sumeragi_v2_release_gates.sh` contain exactly 397 unique required
-tests: 194 core, 140 queue-journal, 13 configuration, eight data-model, 39
+`scripts/run_sumeragi_v2_release_gates.sh` contain exactly 418 unique required
+tests: 215 core, 140 queue-journal, 13 configuration, eight data-model, 39
 Torii, one Torii-shared, and two integration. The runner and
 `ci/check_sumeragi_v2_multilane_release_inventory.sh` both require that exact
-397-row shape, including the current authenticated replica-advert focus cases.
-The static checker passes exact `397/397` and also source-binds the synchronized
-52-control grouped corpus. On 2026-07-31, pinned Rust 1.93.1 locked/offline
+418-row shape, including grouped Native prevote-budget rejection before
+Kura/WSV mutation, exact durable QueuePlan obligation authentication and route
+accumulation, registry corruption checks, ApplyCarrier authorization, and the
+retirement transition/lifecycle-fence lock order. The G-UNIT static inventory
+checks establish exact `418/418` source consistency and also
+source-binds the synchronized 52-control grouped corpus. On 2026-07-31, pinned
+Rust 1.93.1 locked/offline
 execution from isolated source `/tmp/iroha-kura-final3.dvOYAN` and isolated
 target `/tmp/iroha-kura-target2.Llklru` passed 12 current-source focused tests:
 six bounded historical namespace/accounting cases, two startup-replay binding
@@ -1463,7 +1545,7 @@ isolated checkpoint also passed `cargo check -p iroha_core --lib`; the
 post-reader-refactor reruns covered startup binding and B/A/B recovery. Earlier
 same-day isolated slices passed the 18 Kura replica tests and four
 configuration tests. These are focused partial results, not a fresh archived
-execution of all 397 required tests, so `G-UNIT` stays Open.
+execution of all 418 required tests, so `G-UNIT` stays Open.
 
 ### G-FORMAL — source-bound models and expected mutations
 
@@ -1510,7 +1592,7 @@ fresh Rust or network execution result.
 
 The separate in-flight carrier contract has a composed state/action relation
 but remains release-classified as layout-only until production trace
-extraction exists. Its twenty exact TLC mutation witnesses and sixth positive
+extraction exists. Its twenty-two exact TLC mutation witnesses and sixth positive
 Apalache row are mandatory release evidence after the five refinement rows,
 but they do not promote the missing extraction theorem.
 
@@ -1526,7 +1608,7 @@ release execution receipt. The isolated Python source-contract suite passed all
 13 Kura cases, including the TTL floor, owner-minimum, scan-start deadline, and
 durable-handoff wake-up negative controls; those are structural checks, not
 Rust execution evidence. The fresh aggregate structural/model-source suite
-passed `100/100`, the proof-ledger release-inventory subset passed `42/42`, and
+passed `100/100`, the proof-ledger release-inventory subset passed `54/54`, and
 the static Apalache runner contract passed all 14 fail-closed controls. None
 executes TLC or Apalache.
 
@@ -1607,10 +1689,14 @@ count, and static release inventory are now synchronized. The grouped corpus
 contains exactly 52 negative controls and hashes to
 `0fb9bf6a490f4974e65a5a03985bfe75321e3de1f54be064c3b088ccffc061d1`;
 the source-suite manifest hashes to
-`2962648895668a3fef1d1055473541695cc4bfab2f301213e369a40dfb53a521`.
+`5cf86f7b08fdcb1bb95d144548e55efb18daa81f9194d8b9dd599313f7fc6d39`.
 Fresh direct results pass OpenAPI `7/7`, Python `58/58`, JavaScript grouped
 parity `56/56`, and the separate JavaScript status/diagnostics contract
-`43/43`. These are partial results, not the complete source-and-distribution
+`44/44`. The exact no-skip diagnostics release inventories are Rust `14`,
+Python `114`, JavaScript source/distribution `88`, Swift `17`, Kotlin `15`, and
+Java `10`; their suite-source manifest SHA-256 is
+`712bec0bf752ed650346c7588963d7e77117120c20f1c926e69f6ce21c3677b7`.
+These are partial results, not the complete source-and-distribution
 release harness: no Rust, Swift, Kotlin, or Java parity suite and no full
 aggregate harness replay was run for this evidence refresh. `G-SDK` therefore
 stays Open despite the resolved generation drift and passing direct subsets.
@@ -1667,10 +1753,10 @@ diagnostics must be added here or mapped to a ledger row before release.
   implementation gaps are resolved and source-bound. Their focused Rust,
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
-- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain open even though the exact 397-row
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain open even though the exact 418-row
   inventory, 52-control corpus, partial direct SDK subsets, and structural
   formal checker now pass. Focused Rust subsets now pass, but no complete
-  397-test execution, complete SDK harness, or formal-engine result was
+  418-test execution, complete SDK harness, or formal-engine result was
   produced by this refresh, and no static source list or focused slice is a
   release execution receipt.
 

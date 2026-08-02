@@ -8,7 +8,12 @@ RELEASE_RECEIPT_COMPONENT_FILES = (
 def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[Path, ...]:
     """Expand reviewed Rust parents to their exact include-component closure."""
 
-    expanded: list[Path] = []
+    expanded: list[Path] = [
+        Path("ci/run_native_amx_v2_grouped_sdk_parity.sh"),
+        Path("ci/run_sumeragi_v2_sdk_diagnostics.sh"),
+        Path("javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js"),
+        Path("javascript/iroha_js/test/toriiClient.test.js"),
+    ]
     for relative in paths:
         expanded.append(relative)
         expanded.extend(
@@ -57,26 +62,41 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
             "45-mutation typed rollover contract fragment",
         ),
         (
-            "readonly expected_multilane_focus_test_count=397",
-            "readonly expected_multilane_focus_test_count=396",
-            "multilane G-UNIT source count must be sealed as 397",
+            "readonly expected_multilane_focus_test_count=418",
+            "readonly expected_multilane_focus_test_count=417",
+            "multilane G-UNIT source count must be sealed as 418",
         ),
         (
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-                """'[:space:]')" != 398 ]]; then""",
+                """'[:space:]')" != 419 ]]; then""",
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 397 ]]; then""",
-            "G-UNIT TSV guard must require one header plus exactly 397 focus rows",
+                """'[:space:]')" != 418 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 418 focus rows",
         ),
         (
-            "The canonical 397-row TSV is",
-            "The canonical 396-row TSV is",
-            "G-UNIT inventory comment must seal 397 rows",
+            "The canonical 418-row TSV is",
+            "The canonical 417-row TSV is",
+            "G-UNIT inventory comment must seal 418 rows",
         ),
         (
-            "including exact 397/397 G-UNIT,",
-            "including exact 396/397 G-UNIT,",
-            "terminal success text must seal exact 397/397 G-UNIT",
+            "including exact 418/418 G-UNIT,",
+            "including exact 417/418 G-UNIT,",
+            "terminal success text must seal exact 418/418 G-UNIT",
+        ),
+        (
+            "  kura::tests::native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable\n",
+            "  kura::tests::native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  kura::tests::native_amx_prevote_pair_geometry_rejects_empty_hard_cap_and_overflow\n",
+            "  kura::tests::native_amx_prevote_pair_geometry_rejects_empty_hard_cap_and_overflow_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  sumeragi::v2_apply::tests::native_amx_prevote_byte_failures_have_precommit_error_classification\n",
+            "  sumeragi::v2_apply::tests::native_amx_prevote_byte_failures_have_precommit_error_classification_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
         ),
         (
             "  sumeragi::v2_core::refinement::tests::"
@@ -221,6 +241,163 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
     source = release_path.read_text(encoding="utf-8")
     assert source.count(old) == 1, old
     release_path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+    errors = module._production_liveness_release_inventory_errors(tmp_path)
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("relative", "old", "new", "expected_error"),
+    (
+        (
+            Path("scripts/run_sumeragi_v2_release_gates.sh"),
+            "  native_amx_grouped_parity_test_counts=(\n"
+            "    7\n"
+            "    58\n"
+            "    56\n",
+            "  native_amx_grouped_parity_test_counts=(\n"
+            "    7\n"
+            "    57\n"
+            "    56\n",
+            "grouped Native AMX SDK runner suite inventory must equal",
+        ),
+        (
+            Path("ci/run_native_amx_v2_grouped_sdk_parity.sh"),
+            "  python)\n    observed_test_count=58\n",
+            "  python)\n    observed_test_count=57\n",
+            "grouped Native AMX SDK harness suite inventory must equal",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '    ("python", 58),\n',
+            '    ("python", 57),\n',
+            "grouped Native AMX SDK receipt suite inventory must equal",
+        ),
+    ),
+)
+def test_production_release_inventory_rejects_grouped_sdk_count_drift(
+    tmp_path: Path,
+    relative: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    fixture_paths = _release_inventory_fixture_paths(
+        module,
+        (
+            Path("scripts/run_sumeragi_v2_release_gates.sh"),
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            Path("scripts/bootstrap_sumeragi_v2_release.py"),
+            Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
+            Path("formal/sumeragi_v2/README.md"),
+            Path("formal/sumeragi_v2/PROOF.md"),
+            Path("specs/sumeragi_v2_liveness.md"),
+            Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
+            Path("integration_tests/tests/sumeragi_v2_runner.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
+            Path("ci/run_native_amx_v2_grouped_sdk_parity.sh"),
+        ),
+    )
+    for fixture_relative in fixture_paths:
+        destination = tmp_path / fixture_relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / fixture_relative, destination)
+
+    baseline_errors = module._production_liveness_release_inventory_errors(tmp_path)
+    assert baseline_errors == [], baseline_errors
+    target = tmp_path / relative
+    source = target.read_text(encoding="utf-8")
+    assert source.count(old) == 1, old
+    target.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+    errors = module._production_liveness_release_inventory_errors(tmp_path)
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("relative", "old", "new", "expected_error"),
+    (
+        (
+            Path("scripts/run_sumeragi_v2_release_gates.sh"),
+            "  sumeragi_v2_sdk_diagnostics_test_counts=(\n"
+            "    114\n"
+            "    88\n",
+            "  sumeragi_v2_sdk_diagnostics_test_counts=(\n"
+            "    113\n"
+            "    88\n",
+            "Sumeragi SDK diagnostics runner suite inventory must equal",
+        ),
+        (
+            Path("ci/run_sumeragi_v2_sdk_diagnostics.sh"),
+            "  python)\n    observed_test_count=114\n",
+            "  python)\n    observed_test_count=113\n",
+            "Sumeragi SDK diagnostics harness suite inventory must equal",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '    ("python", 114),\n',
+            '    ("python", 113),\n',
+            "Sumeragi SDK diagnostics receipt suite inventory must equal",
+        ),
+        (
+            Path("javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js"),
+            '  "typed Sumeragi endpoints reject swapped status and diagnostics payloads",\n',
+            "",
+            "dedicated JavaScript Sumeragi diagnostics inventory must contain exactly 44",
+        ),
+        (
+            Path("ci/run_sumeragi_v2_sdk_diagnostics.sh"),
+            '    "# skipped": 0,\n',
+            '    "# skipped": 1,\n',
+            "no-skip selector lacks exact fragment",
+        ),
+        (
+            Path("scripts/run_sumeragi_v2_release_gates.sh"),
+            "# Execute every maintained consumer of the Rust-owned grouped Native AMX V2\n",
+            "# --test-name-pattern is retired; execute every maintained consumer.\n",
+            "retains retired ordinal/partial selector '--test-name-pattern'",
+        ),
+    ),
+)
+def test_production_release_inventory_rejects_sdk_diagnostics_drift(
+    tmp_path: Path,
+    relative: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    fixture_paths = _release_inventory_fixture_paths(
+        module,
+        (
+            Path("scripts/run_sumeragi_v2_release_gates.sh"),
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            Path("scripts/bootstrap_sumeragi_v2_release.py"),
+            Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
+            Path("formal/sumeragi_v2/README.md"),
+            Path("formal/sumeragi_v2/PROOF.md"),
+            Path("specs/sumeragi_v2_liveness.md"),
+            Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
+            Path("integration_tests/tests/sumeragi_v2_runner.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
+        ),
+    )
+    for fixture_relative in fixture_paths:
+        destination = tmp_path / fixture_relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / fixture_relative, destination)
+
+    baseline_errors = module._production_liveness_release_inventory_errors(tmp_path)
+    assert baseline_errors == [], baseline_errors
+    target = tmp_path / relative
+    source = target.read_text(encoding="utf-8")
+    assert source.count(old) == 1, old
+    target.write_text(source.replace(old, new, 1), encoding="utf-8")
 
     errors = module._production_liveness_release_inventory_errors(tmp_path)
     assert any(expected_error in error for error in errors), errors
@@ -467,26 +644,26 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
             Path("formal/sumeragi_v2/README.md"),
             "current inventory to 813 tests across 39 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
-            "corridor contains 82 legs.",
+            "corridor contains 86 legs.",
             "current inventory to 813 tests across 39 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
-            "corridor contains 81 legs.",
+            "corridor contains 85 legs.",
         ),
         (
             Path("formal/sumeragi_v2/PROOF.md"),
             "current 813-test,\n39-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
-            "contains 82 legs",
+            "contains 86 legs",
             "current 813-test,\n39-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
-            "contains 81 legs",
+            "contains 85 legs",
         ),
         (
             Path("specs/sumeragi_v2_liveness.md"),
             "current source-bound inventory to 813 exact tests "
-            "across\n39 modules and 82 pre-network legs.",
+            "across\n39 modules and 86 pre-network legs.",
             "current source-bound inventory to 813 exact tests "
-            "across\n39 modules and 81 pre-network legs.",
+            "across\n39 modules and 85 pre-network legs.",
         ),
     ),
 )
@@ -602,9 +779,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
-            "  readonly expected_corridor_leg_count=82",
-            "  readonly expected_corridor_leg_count=81",
-            "sealed at 82 legs",
+            "  readonly expected_corridor_leg_count=86",
+            "  readonly expected_corridor_leg_count=85",
+            "sealed at 86 legs",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),

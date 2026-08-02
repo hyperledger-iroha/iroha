@@ -2005,6 +2005,336 @@
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
+    async fn appeal_finance_publication_routes_are_read_only() {
+        use std::{
+            fs,
+            path::{Path, PathBuf},
+        };
+
+        use axum::{
+            body::Body,
+            extract::ConnectInfo,
+            http::{Method, Request, StatusCode},
+        };
+        use sorafs_node::{
+            GovernanceDagRuntimeProviderQualificationV1, GovernanceDagRuntimeSigner, NodeHandle,
+            NodeRuntimeDeps, GovernanceDagSealedCheckpointStore, GovernanceDagSealedStateRecord,
+            GovernanceDagSealedStateSlot,
+        };
+        use tower::ServiceExt as _;
+
+        #[derive(Debug)]
+        struct RouterGovernanceDagSigner {
+            key_pair: KeyPair,
+        }
+
+        impl RouterGovernanceDagSigner {
+            const HANDLE: &'static str = "pkcs11:governance-dag:retired-appeal-route-primary";
+            const PEER_ID: &'static [u8] = b"12D3KooWRetiredAppealRoutePublisher";
+
+            fn new() -> Self {
+                Self {
+                    key_pair: KeyPair::try_from_seed(vec![0x4D; 32], Algorithm::Ed25519)
+                        .expect("derive retired-route Governance DAG signer"),
+                }
+            }
+
+            fn public_key_bytes(&self) -> [u8; 32] {
+                let (algorithm, bytes) = self
+                    .key_pair
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("serialize retired-route Governance DAG public key");
+                assert_eq!(algorithm, Algorithm::Ed25519);
+                bytes.try_into().expect("Ed25519 public key width")
+            }
+
+            fn expected_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
+                GovernanceDagRuntimeProviderQualificationV1::new(1, [0x85; 32])
+            }
+        }
+
+        impl GovernanceDagRuntimeSigner for RouterGovernanceDagSigner {
+            fn handle(&self) -> &str {
+                Self::HANDLE
+            }
+
+            fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+                Ok(Self::expected_qualification())
+            }
+
+            fn publisher_peer_id(&self) -> &[u8] {
+                Self::PEER_ID
+            }
+
+            fn public_key(&self) -> [u8; 32] {
+                self.public_key_bytes()
+            }
+
+            fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
+                Signature::try_new(self.key_pair.private_key(), payload)
+                    .map_err(|_| "retired-route Governance DAG signing failed".to_owned())?
+                    .payload()
+                    .try_into()
+                    .map_err(|_| "retired-route Governance DAG signature width changed".to_owned())
+            }
+        }
+
+        #[derive(Debug)]
+        struct RouterGovernanceDagCheckpointState {
+            records: [Option<GovernanceDagSealedStateRecord>; 6],
+            generation_floors: [u64; 6],
+        }
+
+        impl Default for RouterGovernanceDagCheckpointState {
+            fn default() -> Self {
+                Self {
+                    records: std::array::from_fn(|_| None),
+                    generation_floors: [0; 6],
+                }
+            }
+        }
+
+        #[derive(Debug, Default)]
+        struct RouterGovernanceDagCheckpointStore {
+            state: std::sync::Mutex<RouterGovernanceDagCheckpointState>,
+        }
+
+        impl RouterGovernanceDagCheckpointStore {
+            const HANDLE: &'static str =
+                "sealed:governance-dag:retired-appeal-route-primary";
+            const POLICY_DIGEST: [u8; 32] = [0x86; 32];
+
+            const fn slot_index(slot: GovernanceDagSealedStateSlot) -> usize {
+                match slot {
+                    GovernanceDagSealedStateSlot::Checkpoint => 0,
+                    GovernanceDagSealedStateSlot::PublishIntent => 1,
+                    GovernanceDagSealedStateSlot::ProducerCheckpoint => 2,
+                    GovernanceDagSealedStateSlot::ProducerPublishIntent => 3,
+                    GovernanceDagSealedStateSlot::IpfsRequestReplay => 4,
+                    GovernanceDagSealedStateSlot::SignedHeadRequestReplay => 5,
+                }
+            }
+
+            fn expected_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
+                GovernanceDagRuntimeProviderQualificationV1::new(1, Self::POLICY_DIGEST)
+            }
+        }
+
+        impl GovernanceDagSealedCheckpointStore for RouterGovernanceDagCheckpointStore {
+            fn handle(&self) -> &str {
+                Self::HANDLE
+            }
+
+            fn qualification(
+                &self,
+            ) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+                Ok(Self::expected_qualification())
+            }
+
+            fn load(
+                &self,
+                slot: GovernanceDagSealedStateSlot,
+            ) -> Result<Option<GovernanceDagSealedStateRecord>, String> {
+                let state = self.state.lock().map_err(|_| "poisoned".to_owned())?;
+                Ok(state.records[Self::slot_index(slot)].clone())
+            }
+
+            fn compare_and_swap(
+                &self,
+                slot: GovernanceDagSealedStateSlot,
+                expected_revision: Option<[u8; 32]>,
+                next: GovernanceDagSealedStateRecord,
+            ) -> Result<(), String> {
+                let index = Self::slot_index(slot);
+                let mut state = self.state.lock().map_err(|_| "poisoned".to_owned())?;
+                if state.records[index].as_ref().map(|record| record.revision)
+                    != expected_revision
+                {
+                    return Err("compare-and-swap conflict".to_owned());
+                }
+                if next.generation <= state.generation_floors[index]
+                    || next.payload.is_empty()
+                    || !next.has_valid_revision(slot)
+                {
+                    return Err("invalid or non-monotonic record".to_owned());
+                }
+                state.generation_floors[index] = next.generation;
+                state.records[index] = Some(next);
+                Ok(())
+            }
+
+            fn delete(
+                &self,
+                slot: GovernanceDagSealedStateSlot,
+                expected_revision: [u8; 32],
+            ) -> Result<(), String> {
+                let index = Self::slot_index(slot);
+                let mut state = self.state.lock().map_err(|_| "poisoned".to_owned())?;
+                if state.records[index].as_ref().map(|record| record.revision)
+                    != Some(expected_revision)
+                {
+                    return Err("delete conflict".to_owned());
+                }
+                state.records[index] = None;
+                Ok(())
+            }
+        }
+
+        fn snapshot_files(root: &Path) -> Vec<(PathBuf, Option<Vec<u8>>)> {
+            fn visit(
+                root: &Path,
+                directory: &Path,
+                snapshot: &mut Vec<(PathBuf, Option<Vec<u8>>)>,
+            ) {
+                let mut entries = fs::read_dir(directory)
+                    .unwrap_or_else(|error| {
+                        panic!("read snapshot directory {}: {error}", directory.display())
+                    })
+                    .map(|entry| entry.expect("read snapshot entry"))
+                    .collect::<Vec<_>>();
+                entries.sort_by_key(std::fs::DirEntry::path);
+                for entry in entries {
+                    let path = entry.path();
+                    let relative = path
+                        .strip_prefix(root)
+                        .expect("snapshot path is rooted")
+                        .to_path_buf();
+                    if entry
+                        .file_type()
+                        .expect("read snapshot entry type")
+                        .is_dir()
+                    {
+                        snapshot.push((relative, None));
+                        visit(root, &path, snapshot);
+                    } else {
+                        snapshot.push((
+                            relative,
+                            Some(fs::read(&path).unwrap_or_else(|error| {
+                                panic!("read snapshot file {}: {error}", path.display())
+                            })),
+                        ));
+                    }
+                }
+            }
+
+            let mut snapshot = Vec::new();
+            visit(root, root, &mut snapshot);
+            snapshot
+        }
+
+        let cfg = crate::test_utils::mk_minimal_root_cfg();
+        let (kiso, _child) = KisoHandle::start(cfg.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(IrohaState::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+        let queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
+            capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
+            transaction_time_to_live: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+        let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
+        let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+        let _ = peers_tx;
+        let storage_dir = tempfile::tempdir().expect("appeal publication storage tempdir");
+        let storage_root = storage_dir
+            .path()
+            .canonicalize()
+            .expect("canonical appeal publication storage root");
+        let signer = Arc::new(RouterGovernanceDagSigner::new());
+        let checkpoint_store = Arc::new(RouterGovernanceDagCheckpointStore::default());
+        let sorafs_node = NodeHandle::try_new_with_runtime_deps(
+            sorafs_node::config::StorageConfig::builder()
+                .enabled(true)
+                .data_dir(storage_root.join("storage"))
+                .governance_dir(Some(storage_root.join("governance")))
+                .governance_dag_publisher_peer_id(Some(
+                    String::from_utf8(RouterGovernanceDagSigner::PEER_ID.to_vec())
+                        .expect("retired-route publisher peer id is UTF-8"),
+                ))
+                .governance_dag_signer_handle(Some(RouterGovernanceDagSigner::HANDLE.to_owned()))
+                .governance_dag_signer_qualification(Some(
+                    RouterGovernanceDagSigner::expected_qualification(),
+                ))
+                .governance_dag_checkpoint_store_handle(Some(
+                    RouterGovernanceDagCheckpointStore::HANDLE.to_owned(),
+                ))
+                .governance_dag_checkpoint_store_qualification(Some(
+                    RouterGovernanceDagCheckpointStore::expected_qualification(),
+                ))
+                .governance_dag_publisher_public_key_hex(Some(hex::encode(
+                    signer.public_key_bytes(),
+                )))
+                .build(),
+            NodeRuntimeDeps::default()
+                .with_governance_dag_signer(signer)
+                .with_governance_dag_checkpoint_store(checkpoint_store),
+        )
+        .expect("initialise runtime-signed Governance DAG publisher");
+        assert!(sorafs_node.has_governance_publisher());
+
+        let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
+            .with_sorafs_node(sorafs_node.clone());
+        let torii = Torii::new_with_handle(
+            ChainId::from("sorafs-retired-appeal-publication-router-test"),
+            kiso,
+            cfg.torii.clone(),
+            queue,
+            tokio::sync::broadcast::channel(1).0,
+            LiveQueryStore::start_test(),
+            kura,
+            state,
+            cfg.common.key_pair.clone(),
+            OnlinePeersProvider::new(peers_rx),
+            None,
+            runtime_deps,
+        );
+        let router = torii.api_router_for_tests();
+        let files_before = snapshot_files(&storage_root);
+        let pending_before = sorafs_node.pending_governance_publication_count();
+
+        for path in [
+            "/v1/sorafs/appeals/finance/reports",
+            "/v1/sorafs/appeals/finance/weekly-rollups",
+        ] {
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .expect("retired appeal-finance publication route probe");
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("retired appeal-finance publication route response");
+            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED, "{path}");
+        }
+
+        assert_eq!(
+            sorafs_node.pending_governance_publication_count(),
+            pending_before,
+            "retired publication routes must not enqueue durable Governance work"
+        );
+        assert_eq!(
+            snapshot_files(&storage_root),
+            files_before,
+            "retired publication routes must not mutate the Governance DAG, publish index, or durable outbox"
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
     async fn contracts_aliases_route_is_mounted_in_api_router() {
         use axum::{
             body::Body,
@@ -2186,6 +2516,8 @@
             "/v1/sorafs/storage/por-challenge",
             "/v1/sorafs/storage/por-proof",
             "/v1/sorafs/storage/por-verdict",
+            "/v1/sorafs/moderation/viewer-audit-reports",
+            "/v1/sorafs/moderation/viewer-audit-reports/publish-due",
         ] {
             let mut request = Request::builder()
                 .method(Method::POST)
@@ -2212,6 +2544,8 @@
             (Method::GET, "/v1/sorafs/por/status"),
             (Method::GET, "/v1/sorafs/por/export"),
             (Method::GET, "/v1/sorafs/por/report/2026-W01"),
+            (Method::GET, "/v1/evidence/audit"),
+            (Method::GET, "/v1/evidence/status"),
         ] {
             let mut request = Request::builder()
                 .method(method.clone())
@@ -2231,7 +2565,7 @@
             assert_ne!(
                 response.status(),
                 StatusCode::NOT_FOUND,
-                "live PoR route was removed accidentally: {method} {path}"
+                "live SoraFS route was removed accidentally: {method} {path}"
             );
         }
     }

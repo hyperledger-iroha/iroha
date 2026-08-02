@@ -6,6 +6,7 @@ struct MockCheckpointStore {
     >,
     latest: Mutex<Option<ModerationCheckpointStoreRecordV1>>,
     attestation_signing_key: SigningKey,
+    attestation_calls: AtomicUsize,
     next_cas_behavior: AtomicUsize,
 }
 
@@ -18,6 +19,7 @@ impl Default for MockCheckpointStore {
             attestation_signing_key: SigningKey::from_bytes(
                 &CHECKPOINT_STORE_ATTESTATION_SIGNING_SEED,
             ),
+            attestation_calls: AtomicUsize::new(0),
             next_cas_behavior: AtomicUsize::new(0),
         }
     }
@@ -46,12 +48,20 @@ impl MockCheckpointStore {
             .store(behavior, AtomicOrdering::SeqCst);
     }
 
+    fn fail_cas_after_one_success(&self) {
+        self.next_cas_behavior.store(4, AtomicOrdering::SeqCst);
+    }
+
     fn latest(&self) -> ModerationCheckpointStoreRecordV1 {
         self.latest
             .lock()
             .expect("checkpoint latest")
             .clone()
             .expect("committed checkpoint")
+    }
+
+    fn attestation_calls(&self) -> usize {
+        self.attestation_calls.load(AtomicOrdering::SeqCst)
     }
 
     fn replace_latest(&self, record: ModerationCheckpointStoreRecordV1) {
@@ -101,6 +111,11 @@ impl ModerationCheckpointStoreV1 for MockCheckpointStore {
             return Err(ModerationCheckpointStoreExternalErrorV1::Rejected);
         }
         *latest = Some(next.clone());
+        if behavior == 4 {
+            // Let a caller seal its write-ahead reservation, then model an
+            // unapplied ambiguous failure at the following commit boundary.
+            self.next_cas_behavior.store(3, AtomicOrdering::SeqCst);
+        }
         if behavior == 2 {
             Err(ModerationCheckpointStoreExternalErrorV1::Ambiguous)
         } else {
@@ -112,6 +127,7 @@ impl ModerationCheckpointStoreV1 for MockCheckpointStore {
         &self,
         statement: &ModerationPanelNotificationSourceAttestationV1,
     ) -> Result<[u8; 64], ModerationCheckpointStoreExternalErrorV1> {
+        self.attestation_calls.fetch_add(1, AtomicOrdering::SeqCst);
         let latest = self.latest.lock().expect("checkpoint latest");
         let Some(latest) = latest.as_ref() else {
             return Err(ModerationCheckpointStoreExternalErrorV1::Rejected);

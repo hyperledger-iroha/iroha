@@ -842,7 +842,8 @@ pub struct AppealFinanceTransactionForwarder {
 
 impl AppealFinanceTransactionForwarder {
     /// Construct a non-persistent forwarder for focused tests.
-    pub fn in_memory(
+    #[cfg(test)]
+    fn in_memory(
         policy: AppealFinanceTransactionForwarderPolicyV1,
     ) -> Result<Self, AppealFinanceTransactionForwarderError> {
         policy.validate()?;

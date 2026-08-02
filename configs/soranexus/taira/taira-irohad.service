@@ -59,16 +59,7 @@ ExecStartPre=/usr/bin/test -d /etc/iroha/taira-validator/sorafs_admission
 ExecStartPre=/usr/bin/test ! -L /etc/iroha/taira-validator/sorafs_admission
 ExecStartPre=/usr/bin/test -r /etc/iroha/taira-validator/sorafs_admission
 ExecStartPre=/usr/bin/test -x /etc/iroha/taira-validator/sorafs_admission
-ExecStartPre=/usr/bin/test -d /etc/iroha/taira-validator/kagemusha
-ExecStartPre=/usr/bin/test ! -L /etc/iroha/taira-validator/kagemusha
-ExecStartPre=/usr/bin/test -s /etc/iroha/taira-validator/kagemusha/release-policy.norito
-ExecStartPre=/usr/bin/test ! -L /etc/iroha/taira-validator/kagemusha/release-policy.norito
-ExecStartPre=/usr/bin/test -r /etc/iroha/taira-validator/kagemusha/release-policy.norito
-ExecStartPre=/usr/bin/test -d /var/lib/iroha/taira-validator/kagemusha/v4
-ExecStartPre=/usr/bin/test ! -L /var/lib/iroha/taira-validator/kagemusha/v4
-ExecStartPre=/usr/bin/test -r /var/lib/iroha/taira-validator/kagemusha/v4
-ExecStartPre=/usr/bin/test -x /var/lib/iroha/taira-validator/kagemusha/v4
-ExecStartPre=/usr/bin/env -- IROHA_TAIRA_KAGEMUSHA_ARTIFACT_DIR=/var/lib/iroha/taira-validator/kagemusha/v4 /opt/iroha/scripts/docker_entrypoint.sh --validate-taira-production-config /etc/iroha/taira-validator/config.toml
+ExecStartPre=/opt/iroha/scripts/docker_entrypoint.sh --validate-taira-production-config /etc/iroha/taira-validator/config.toml
 ExecStartPre=/usr/bin/env -- ${IROHA_TAIRA_INROU_PREREQ_CHECK}
 ExecStart=/usr/bin/env -- ${IROHA_TAIRA_IROHAD_BIN} --sora --config /etc/iroha/taira-validator/config.toml --genesis-manifest-json ${IROHA_TAIRA_GENESIS}
 Restart=on-failure

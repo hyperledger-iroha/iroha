@@ -298,6 +298,8 @@ pub(super) struct ProviderBindingWireV1 {
     pub(super) por_replay_archive_proof_limits: Option<PorReplayArchiveProofLimitsWireV1>,
     pub(super) potr_runtime_binding: Option<PotrRuntimeBindingWireV1>,
     pub(super) native_signer_binding: Option<NativeTransactionSignerBindingWireV1>,
+    pub(super) governance_dag_publisher_peer_id: Option<Vec<u8>>,
+    pub(super) governance_dag_publisher_public_key: Option<[u8; 32]>,
     pub(super) governance_request_auth_public_key: Option<[u8; 32]>,
     pub(super) governance_request_auth_max_body_bytes: Option<u64>,
     pub(super) provider_ingest_signer_binding: Option<ProviderIngestSignerBindingWireV1>,

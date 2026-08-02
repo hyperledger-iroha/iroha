@@ -425,7 +425,7 @@ certificate round.
   wake-up, predecessor drop, successor retry, frozen recipients, and Kura
   revalidation. Fresh isolated Rust 1.93.1 locked/offline slices passed the 18
   exact Kura replica tests and four exact configuration tests; the complete
-  397-test `G-UNIT` run, formal-engine receipts, and network corridors remain
+  402-test `G-UNIT` run, formal-engine receipts, and network corridors remain
   separate release obligations.
   Seventy-three `_bug.cfg` controls deliberately weaken one boundary each and
   must produce the named invariant counterexample.
@@ -1258,7 +1258,7 @@ owner separately from every physical queue occurrence. Seven physical-cut,
 adapter-capability, aggregate-rebase, and ineligible-driver regressions bring
 the current inventory to 813 tests across 39 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 82 legs. The
+corridor contains 86 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
 The first-release sidecar keeps wire protocol version 1 and uses positive
 `NonZeroU64` responder generation, requester epoch, and per-stream semantic
@@ -1368,7 +1368,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The five integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 82 legs, including separate exact
+the complete pre-network corridor now spans 86 legs, including separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, the daemon genesis
 module, and source-sealed command-success legs. Its finality, offline compact-QC,
@@ -1453,7 +1453,7 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 82 pre-network legs and the exact
+binds original HEAD/tree/`Cargo.lock`, all 86 pre-network legs and the exact
 813-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable

@@ -465,6 +465,59 @@
         }
     }
 
+    #[cfg(unix)]
+    fn bound_progress_directory_binding_allows_child_mutation_but_rejects_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
+        let sidecar_dir = kura.store_root().join("progress-directory-binding");
+        fs::create_dir_all(&sidecar_dir).expect("create progress namespace");
+        let data_path = sidecar_dir.join("progress.data");
+        let index_path = sidecar_dir.join("progress.index");
+        let namespace = kura
+            .open_bound_progress_namespace(&data_path, &index_path)
+            .expect("bind progress namespace");
+        let bound_metadata = namespace.directories[0].metadata.clone();
+
+        fs::write(sidecar_dir.join("concurrent-child"), b"published")
+            .expect("publish an unrelated child in the bound directory");
+        let after_child = fs::symlink_metadata(&sidecar_dir).expect("stat mutated directory");
+        assert!(
+            Kura::sidecar_directory_binding_unchanged(&bound_metadata, &after_child),
+            "a child publication must not change the bound directory object"
+        );
+        assert!(
+            kura.bound_progress_namespace_unchanged(&namespace),
+            "ordinary child publication must keep the descriptor-bound namespace valid"
+        );
+
+        let displaced = kura.store_root().join("displaced-progress-directory");
+        fs::rename(&sidecar_dir, &displaced).expect("displace the bound directory");
+        fs::create_dir(&sidecar_dir).expect("install a different directory at the bound path");
+        let replacement = fs::symlink_metadata(&sidecar_dir).expect("stat replacement directory");
+        assert!(
+            !Kura::sidecar_directory_binding_unchanged(&bound_metadata, &replacement),
+            "a replacement directory must have a different filesystem identity"
+        );
+        assert!(
+            !kura.bound_progress_namespace_unchanged(&namespace),
+            "an inode substitution must invalidate the descriptor-bound namespace"
+        );
+
+        fs::remove_dir(&sidecar_dir).expect("remove replacement directory");
+        symlink(&displaced, &sidecar_dir).expect("install namespace symlink");
+        assert!(
+            !kura.bound_progress_namespace_unchanged(&namespace),
+            "a symlink substitution must invalidate the descriptor-bound namespace"
+        );
+        assert!(
+            Kura::open_bound_progress_directory(&kura.store_root(), &sidecar_dir).is_err(),
+            "a new binding must reject a symlinked progress directory"
+        );
+    }
+
     fn absent_progress_namespace_requires_every_directory_barrier() {
         for (label, failure) in strict_progress_sidecar_failure_modes().into_iter().skip(2) {
             let temp_dir = TempDir::new().expect("create temp dir");
@@ -2441,6 +2494,13 @@
         #[test]
         fn progress_sidecar_mutation_rejects_symlinks_without_external_writes() {
             super::progress_sidecar_mutation_rejects_symlinks_without_external_writes();
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn bound_progress_directory_binding_allows_child_mutation_but_rejects_replacement() {
+            super::bound_progress_directory_binding_allows_child_mutation_but_rejects_replacement(
+            );
         }
 
         #[cfg(unix)]

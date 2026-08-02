@@ -385,9 +385,10 @@ Artifact installation requires the canonical candidate-bound promotion record th
 `ReleaseAuthentication`, in addition to the trusted policy, attestation, benchmark evidence, and
 cryptographic review. An authenticated-but-unpromoted release cannot become active.
 
-`newToriiClient(...)` exposes only `getReadiness`, `submitTopUp`, `submitRedeem`, and
-`getOperation`. Commands send the typed Norito request directly with `application/x-norito` and the
-signed lowercase operation id as `Idempotency-Key`; responses must be typed Norito as well. Top-up
+`newToriiClient(...)` exposes the query-free, asset-neutral `getOfflineCapability`,
+`getRecipientRegistrationLineage`, `submitTopUp`, `submitRedeem`, and `getOperation`. Commands send
+the typed Norito request directly with `application/x-norito` and the signed lowercase operation id
+as `Idempotency-Key`; responses must be typed Norito as well. Top-up
 bodies are limited to 512 KiB and redemption bodies to 48 MiB, exposed as
 `MAX_TORII_TOP_UP_REQUEST_BYTES_V4` and `MAX_TORII_REDEEM_REQUEST_BYTES_V4`.
 `projectReadiness` returns the live asset scale, committed height/hash, all role-specific verifier

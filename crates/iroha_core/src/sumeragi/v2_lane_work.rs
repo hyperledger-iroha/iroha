@@ -13271,6 +13271,7 @@ fn proposal_from_ownership(
 /// Shared durable-lane fixtures and lane-work unit tests.
 pub(super) mod tests {
     use std::{
+        borrow::Cow,
         cell::Cell,
         collections::{BTreeMap, BTreeSet},
         num::{NonZeroU32, NonZeroU64, NonZeroUsize},
@@ -13285,7 +13286,7 @@ pub(super) mod tests {
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
-        ChainId, Level,
+        ChainId, Level, Registrable,
         account::{AccountDetails, AccountId, AccountValue},
         block::{
             BlockExecutionContextBundle, BlockHeader, BlockSignature, ExternalExecutionContext,
@@ -13298,7 +13299,8 @@ pub(super) mod tests {
             consensus_v2 as wire,
         },
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
-        isi::Log,
+        domain::{Domain, DomainId},
+        isi::{InstructionBox, Log, Register},
         nexus::{
             AxtFastpqBinding, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
             LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneConfig, LaneFastpqProofMaterial,
@@ -13335,6 +13337,7 @@ pub(super) mod tests {
                 },
             },
         },
+        tx::AcceptedTransaction,
     };
 
     #[test]
@@ -25056,25 +25059,9 @@ pub(super) mod tests {
         state: &State,
         binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
     ) {
-        let registry_key = binding.registry_key();
-        let marker_key = format!(
-            "queue_plan_admission_v2_{}_{}",
-            hex::encode(registry_key.chain_id_digest.as_ref()),
-            hex::encode(registry_key.entrypoint_hash.as_ref()),
-        )
-        .parse()
-        .expect("autonomous fixture registry marker key");
-        let marker_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV2 {
-            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
-            binding_hash: binding.canonical_hash(),
-        };
-        let marker_payload =
-            norito::to_bytes(&marker_value).expect("encode autonomous fixture registry marker");
-        let mut world = state.world.block();
-        world
-            .smart_contract_state
-            .insert(marker_key, marker_payload);
-        world.commit();
+        state
+            .install_queue_plan_pending_binding_for_test(binding)
+            .expect("install complete autonomous fixture QueuePlan owner evidence");
     }
 
     fn autonomous_test_candidate_limits(

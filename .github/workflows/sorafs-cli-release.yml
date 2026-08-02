@@ -138,9 +138,12 @@ jobs:
         id: version
         run: |
           python3 scripts/check_sorafs_release_automation.py | tee release-automation-summary.json
-          python3 scripts/check_sorafs_release_version_map.py | tee version-map-summary.json
+          python3 scripts/check_sorafs_release_version_map.py | tee version-map-summary.first.json
+          python3 scripts/check_sorafs_release_version_map.py | tee version-map-summary.replay.json
+          cmp version-map-summary.first.json version-map-summary.replay.json
+          cp version-map-summary.first.json version-map-summary.json
           python3 scripts/check_workflow_action_pins.py
-          release_version="$(python3 -c 'from scripts.check_sorafs_release_version_map import validate_version_map; from pathlib import Path; print(validate_version_map(Path.cwd())["release_version"])')"
+          release_version="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["release_version"])' < version-map-summary.json)"
           echo "version=${release_version}" >> "$GITHUB_OUTPUT"
           if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" != "sorafs-cli-v${release_version}" ]]; then
             echo "tag ${GITHUB_REF_NAME} does not match version-map release ${release_version}" >&2
@@ -177,6 +180,8 @@ jobs:
           path: |
             release-automation-summary.json
             version-map-summary.json
+            version-map-summary.first.json
+            version-map-summary.replay.json
             artifacts/sorafs-release/sorafs-release.spdx.json
             artifacts/sorafs-release/sorafs-release-vulnerabilities.sarif
           if-no-files-found: error

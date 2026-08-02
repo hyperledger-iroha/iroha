@@ -3709,8 +3709,8 @@
         },
         {
           "path": "crates/iroha_core/src/queue.rs",
-          "kind": "fn",
-          "symbol": "lane_has_pending_work",
+          "kind": "method",
+          "symbol": "Queue::lane_has_pending_work",
           "required_tokens": [
             "transaction_selection_durability_faulted",
             "commit_barriers",
@@ -5290,11 +5290,23 @@
           "symbol": "lane_artifact_required_bytes_for_block",
           "required_tokens": [
             "NativeAmxApplicationManifestV1::from_result_bearing_block",
-            "NativeAmxParticipantApplicationManifestArtifactV1",
-            "NativeAmxParticipantApplicationReceiptArtifact::new",
+            "native_amx_participant_application_artifacts",
             "NativeAmxParticipantReceiptLatestIndexV2::from_receipt",
             "native_prune_intent_routes.insert",
             "native_amx_evidence_prune_intent_max_bytes"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "native_amx_participant_application_artifacts",
+          "required_tokens": [
+            "NativeAmxParticipantApplicationManifestArtifactV1",
+            "NativeAmxParticipantApplicationReceiptArtifact::new",
+            "manifest.proof",
+            "manifest.root",
+            "manifest.count",
+            "finality_artifact_hash"
           ]
         },
         {
@@ -5360,7 +5372,29 @@
             "State::native_amx_participant_frontier_markers",
             "token.authenticates_state_frontiers",
             "apply_without_execution_with_verified_v2_finality",
-            "state_block.commit"
+            "pending_autoscale_retirement_binding",
+            "Box<dyn StateBlockCommitAuthorization>",
+            "Box::new(checked_carrier_applications)",
+            "if carries_scale_in",
+            "lock_lane_retirement_observer",
+            "commit_with_state_commit_authorization_and_autoscale_retirement_queue_veto",
+            "commit_with_state_commit_authorization"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "commit_inner",
+          "required_tokens": [
+            "state_commit_authorization: Option<Box<dyn StateBlockCommitAuthorization>>",
+            "let _state_commit_lock = state_ref.state_commit_lock.lock();",
+            "let autoscale_lifecycle_guard",
+            "autoscale_retirement_queue_veto.as_mut()",
+            "state_commit_authorization.take()",
+            ".consume_for_state_commit(",
+            "State commit authorization rejected the exact carrier transition",
+            "apply_committed_autoscale_lane_geometry",
+            "transactions.commit()"
           ]
         },
         {
@@ -6727,27 +6761,396 @@
         },
         {
           "path": "crates/iroha_core/src/state.rs",
-          "kind": "fn",
-          "symbol": "stage_queue_plan_admissions",
+          "kind": "struct",
+          "symbol": "QueuePlanPendingRouteMemberV1",
           "required_tokens": [
-            "validate_merge_queue_plan_admissions",
-            "queue_plan_admission_registry_marker_key",
-            "queue_plan_admission_registry_marker_payload",
-            "decode_exact_queue_plan_admission_registry_marker",
-            "ExecutionMarkerConflict",
-            "smart_contract_state.insert"
+            "version",
+            "route",
+            "chain_id_digest",
+            "entrypoint_hash",
+            "binding_hash",
+            "member_identity"
           ]
         },
         {
           "path": "crates/iroha_core/src/state.rs",
           "kind": "fn",
-          "symbol": "queue_plan_admission_registry_match_in_view",
+          "symbol": "queue_plan_pending_route_member_identity",
+          "required_tokens": [
+            "Self::validate_queue_plan_pending_obligation_route(&route)?",
+            "obligation.version != QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1",
+            "obligation.chain_id_digest",
+            "obligation.entrypoint_hash",
+            "obligation.binding_hash",
+            ".routes.binary_search(&route).is_err()",
+            "Self::queue_plan_pending_route_member_identity_from_claim(",
+            "obligation.chain_id_digest",
+            "obligation.entrypoint_hash.clone()",
+            "obligation.binding_hash",
+            "route"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_pending_route_member_identity_from_claim",
+          "required_tokens": [
+            "entrypoint_hash: HashOf<TransactionEntrypoint>",
+            "Self::validate_queue_plan_pending_obligation_route(&route)?",
+            "chain_id_digest.as_ref().iter().all(|byte| *byte == 0)",
+            "entrypoint_hash.as_ref().iter().all(|byte| *byte == 0)",
+            "binding_hash.as_ref().iter().all(|byte| *byte == 0)",
+            "norito::to_bytes(&(",
+            "QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1",
+            "chain_id_digest",
+            "entrypoint_hash",
+            "binding_hash",
+            "route",
+            "QUEUE_PLAN_PENDING_ROUTE_MEMBER_DOMAIN_V1",
+            "Ok(*identity.as_ref())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_pending_route_member_from_obligation",
+          "required_tokens": [
+            "version: QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1",
+            "route",
+            "chain_id_digest: obligation.chain_id_digest",
+            "entrypoint_hash: obligation.entrypoint_hash.clone()",
+            "binding_hash: obligation.binding_hash",
+            "queue_plan_pending_route_member_identity(obligation, route)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_pending_route_member_marker_prefix",
+          "required_tokens": [
+            "QUEUE_PLAN_PENDING_ROUTE_MEMBER_MARKER_PREFIX",
+            "route.lane_id.as_u32()",
+            "route.dataspace_id.as_u64()",
+            "route.lane_incarnation.as_ref()",
+            "let start = literal.parse()",
+            "Ok((literal, start))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_pending_route_member_marker_payload",
+          "required_tokens": [
+            "marker.version != QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1",
+            "marker.chain_id_digest",
+            "marker.entrypoint_hash",
+            "marker.binding_hash",
+            "marker.member_identity",
+            "Self::queue_plan_pending_route_member_identity_from_claim(",
+            "marker.member_identity != expected_identity",
+            "payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "decode_exact_queue_plan_pending_route_member_marker",
+          "required_tokens": [
+            "payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES",
+            "norito::decode_from_bytes::<QueuePlanPendingRouteMemberV1>(payload)",
+            "queue_plan_pending_route_member_marker_payload",
+            "queue_plan_pending_route_member_marker_key",
+            "canonical.as_slice() != payload || &expected_key != key"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "require_queue_plan_pending_route_member_marker",
+          "required_tokens": [
+            "StorageReadOnly<StatePath, Vec<u8>>",
+            "queue_plan_pending_route_member_from_obligation",
+            "queue_plan_pending_route_member_marker_key",
+            "storage.get(&key).ok_or_else",
+            "decode_exact_queue_plan_pending_route_member_marker",
+            "marker != expected",
+            "Ok((key, marker))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_pending_route_members_from_storage",
+          "required_tokens": [
+            "queue_plan_pending_route_members_from_storage_with_limit",
+            "MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_pending_route_members_from_storage_with_limit",
+          "required_tokens": [
+            "queue_plan_pending_route_member_marker_prefix",
+            "storage.range(start..)",
+            "key.as_ref().starts_with(&prefix)",
+            "members.len() == max_members",
+            "decode_exact_queue_plan_pending_route_member_marker",
+            "marker.route != route",
+            "queue_plan_pending_obligation_marker_key",
+            "storage.get(&obligation_key).is_none()",
+            "members.push((key.clone(), marker))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_pending_route_obligation_count_from_world",
+          "required_tokens": [
+            "queue_plan_pending_route_members_from_storage",
+            ".len()",
+            "u64::try_from(count)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "validate_queue_plan_pending_obligation_route_member_in_storage",
+          "required_tokens": [
+            "queue_plan_pending_route_members_from_storage(storage, route)?",
+            "require_queue_plan_pending_route_member_marker(storage, obligation, route)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "enum",
+          "symbol": "QueuePlanAdmissionApplicationState",
+          "required_tokens": [
+            "Pending",
+            "PendingStale",
+            "Applied"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_pending_obligation_matches_active_lifecycle",
+          "required_tokens": [
+            "obligation.binding.admission_context.proposal_height",
+            "obligation.routes.iter().all",
+            "state",
+            ".nexus()",
+            ".lane_catalog",
+            ".lanes()",
+            ".iter()",
+            "lane.id == route.lane_id",
+            "lane.dataspace_id == route.dataspace_id",
+            "state.lane_incarnation_at_height(route.lane_id, proposal_height)",
+            "Some(route.lane_incarnation)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_registry_owner_application_state_in_view",
+          "required_tokens": [
+            "validate_queue_plan_pending_obligation_route_member",
+            "pending obligation `{key}` survived canonical transaction membership",
+            "queue_plan_pending_obligation_matches_active_lifecycle",
+            "QueuePlanAdmissionApplicationState::Pending",
+            "QueuePlanAdmissionApplicationState::PendingStale",
+            "None if committed => Ok(QueuePlanAdmissionApplicationState::Applied)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_binding_application_state",
+          "required_tokens": [
+            "state.has_transaction",
+            "queue_plan_pending_obligation_matches_active_lifecycle",
+            "queue_plan_binding_application_state_in_storage",
+            "expected",
+            "committed",
+            "active"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_binding_application_state_in_storage",
+          "required_tokens": [
+            "current != expected",
+            "validate_queue_plan_pending_obligation_route_member_in_storage",
+            "pending-obligation marker `{key}` survived canonical transaction membership",
+            "QueuePlanAdmissionApplicationState::Pending",
+            "QueuePlanAdmissionApplicationState::PendingStale",
+            "None if committed => Ok(QueuePlanAdmissionApplicationState::Applied)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "ensure_queue_plan_admission_registry_compatible",
+          "required_tokens": [
+            "queue_plan_admission_application_state",
+            "== QueuePlanAdmissionApplicationState::PendingStale",
+            "retired or recreated lane incarnation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_admission_registry_entrypoint_present",
+          "required_tokens": [
+            "queue_plan_registry_owner_application_state_in_view",
+            "application_state == QueuePlanAdmissionApplicationState::PendingStale",
+            "retired or recreated lane incarnation",
+            "Ok(true)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_admission_binding_registry_match",
+          "required_tokens": [
+            "queue_plan_binding_application_state",
+            "application_state == QueuePlanAdmissionApplicationState::PendingStale",
+            "retired or recreated lane incarnation",
+            "Ok(registry_match)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "classify_pending_queue_plan_admission",
+          "required_tokens": [
+            "pending_queue_plan_admission_registry_lookup",
+            "QueuePlanAdmissionApplicationState::PendingStale",
+            "PendingQueuePlanAdmissionDisposition::Stale",
+            "QueuePlanAdmissionApplicationState::Pending",
+            "QueuePlanAdmissionApplicationState::Applied",
+            "PendingQueuePlanAdmissionDisposition::Exact"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_admission_registry_match_with_application_state_in_view",
           "required_tokens": [
             "QueuePlanAdmissionRegistryKeyV2",
             "decode_exact_queue_plan_admission_registry_marker",
+            "queue_plan_registry_owner_application_state_in_view",
             "QueuePlanAdmissionRegistryMatch::Absent",
             "QueuePlanAdmissionRegistryMatch::Exact",
-            "QueuePlanAdmissionRegistryMatch::Conflict"
+            "QueuePlanAdmissionRegistryMatch::Conflict",
+            "Some(application_state)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "stage_queue_plan_pending_obligation_marker_in_storage",
+          "required_tokens": [
+            "&mut impl QueuePlanMarkerStorage",
+            "validate_queue_plan_pending_obligation_route_member_in_storage",
+            "queue_plan_pending_route_members_from_storage",
+            "members.len() == MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS",
+            "queue_plan_pending_route_member_from_obligation",
+            "queue_plan_pending_route_member_marker_key",
+            "decode_exact_queue_plan_pending_route_member_marker",
+            "queue_plan_pending_route_member_marker_payload",
+            "route_updates.push",
+            "insert_queue_plan_marker(obligation_key, obligation_payload)",
+            "insert_queue_plan_marker(member_key, member_payload)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "resolve_queue_plan_pending_obligation_in_storage",
+          "required_tokens": [
+            "&mut impl QueuePlanMarkerStorage",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "decode_exact_queue_plan_admission_registry_marker",
+            "queue_plan_pending_route_members_from_storage",
+            "require_queue_plan_pending_route_member_marker",
+            "member_keys.push",
+            "remove_queue_plan_marker(obligation_key)",
+            "remove_queue_plan_marker(member_key)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "stage_queue_plan_admissions",
+          "required_tokens": [
+            "validate_merge_queue_plan_admissions",
+            "queue_plan_pending_obligation_from_admission",
+            "queue_plan_pending_obligation_matches_active_lifecycle",
+            ".collect::<Result<Vec<_>, MergeLedgerCommitError>>()?",
+            "self.world.smart_contract_state.transaction()",
+            "queue_plan_binding_application_state_in_storage",
+            "markers.insert_queue_plan_marker(key, payload)",
+            "stage_queue_plan_pending_obligation_in_storage",
+            "markers.apply()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "resolve_queue_plan_pending_obligations_for_entrypoints",
+          "required_tokens": [
+            "self.world.smart_contract_state.transaction()",
+            "for entrypoint_hash in entrypoint_hashes",
+            "resolve_queue_plan_pending_obligation_in_storage",
+            "markers.apply()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "resolve_required_queue_plan_pending_obligations",
+          "required_tokens": [
+            "self.world.smart_contract_state.transaction()",
+            "for (entrypoint_hash, expected_binding_hash) in pending_obligations",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "obligation.binding_hash != expected_binding_hash",
+            "resolve_queue_plan_pending_obligation_in_storage",
+            "markers.apply()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "kind": "fn",
+          "symbol": "contract_state_namespace_access",
+          "required_tokens": [
+            "OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES",
+            "contract_state_key_matches_namespace",
+            "ContractStateNamespaceAccess::OpaqueSystem",
+            "READ_ONLY_SYSTEM_CONTRACT_STATE_PREFIXES",
+            "ContractStateNamespaceAccess::ReadOnlySystem",
+            "ContractStateNamespaceAccess::User"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "kind": "fn",
+          "symbol": "ensure_contract_state_read_allowed",
+          "required_tokens": [
+            "contract_state_namespace_access",
+            "ContractStateNamespaceAccess::OpaqueSystem",
+            "ivm::VMError::PermissionDenied"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+          "kind": "fn",
+          "symbol": "ensure_contract_state_write_allowed",
+          "required_tokens": [
+            "contract_state_namespace_access",
+            "ContractStateNamespaceAccess::User",
+            "ivm::VMError::PermissionDenied"
           ]
         },
         {

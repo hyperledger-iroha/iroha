@@ -362,6 +362,13 @@ fn collect_appeal_finance_bindings(
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
     let appeal_finance = &config.torii.sorafs_appeal_finance_settlement;
+    if appeal_finance.submitter_signers.len()
+        > iroha_config::parameters::SORAFS_APPEAL_FINANCE_MAX_SUBMITTER_SIGNERS_V1
+    {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+            IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner,
+        ));
+    }
     for binding in &appeal_finance.submitter_signers {
         bindings.push(IrohaRuntimeProviderBindingV1::try_new_appeal_finance_signer(binding)?);
     }
@@ -440,6 +447,17 @@ fn collect_moderation_viewer_bindings(
     let storage = &config.torii.sorafs_storage;
     if let Some(runtime) = storage.moderation_orchestrator.as_ref() {
         validate_moderation_strict_ingress_binding(runtime)?;
+        let archive_slot = IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive;
+        if runtime.checkpoint_store_handle == runtime.panel_notification_archive_handle
+            || runtime.checkpoint_store_attestation_public_key
+                == runtime.panel_notification_archive_bootstrap_public_key
+            || runtime.checkpoint_store_attestation_public_key
+                == runtime.panel_notification_archive_public_key
+        {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                archive_slot,
+            ));
+        }
         bindings.push(IrohaRuntimeProviderBindingV1::try_new_moderation_checkpoint_store(runtime)?);
         bindings.push(
             IrohaRuntimeProviderBindingV1::try_new_moderation_panel_notification_archive(runtime)?,

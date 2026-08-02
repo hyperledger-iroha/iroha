@@ -1954,6 +1954,8 @@
             "the startup audit must verify every artifact exactly once"
         );
         kura.install_v2_startup_finality_verification_inventory(inventory);
+        kura.refresh_v2_startup_replay_auxiliary_binding()
+            .expect("bind startup auxiliary sidecar identities");
         kura.clear_v2_finality_verification_cache_for_test();
 
         let session = kura

@@ -772,7 +772,8 @@ pub struct ReserveTransactionForwarder {
 
 impl ReserveTransactionForwarder {
     /// Construct a non-persistent forwarder for focused composition tests.
-    pub fn in_memory(
+    #[cfg(test)]
+    fn in_memory(
         policy: ReserveTransactionForwarderPolicyV1,
     ) -> Result<Self, ReserveTransactionForwarderError> {
         policy.validate()?;

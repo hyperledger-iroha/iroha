@@ -562,6 +562,129 @@
     }
 
     #[test]
+    fn native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable() {
+        let block = crate::sumeragi::exec::result_bearing_native_manifest_block_for_tests();
+        let manifest =
+            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
+                &block,
+            )
+            .expect("build multi-route Native byte-budget manifest");
+        assert!(
+            manifest.entries().len() > 1,
+            "byte-budget fixture must cover independent routes"
+        );
+        let placeholder_artifacts = native_amx_participant_application_artifacts(
+            &manifest,
+            native_amx_participant_application_finality_placeholder_hash(),
+        )
+        .expect("build placeholder Native artifact pairs");
+        let actual_finality_hash: HashOf<V2FinalityArtifact> =
+            HashOf::from_untyped_unchecked(Hash::new(
+                b"actual Native finality artifact hash fixture",
+            ));
+        let actual_artifacts =
+            native_amx_participant_application_artifacts(&manifest, actual_finality_hash)
+                .expect("build actual-hash Native artifact pairs");
+        let mut pair_lengths = Vec::with_capacity(placeholder_artifacts.len());
+        for (placeholder, actual) in placeholder_artifacts.iter().zip(&actual_artifacts) {
+            let placeholder_bytes = native_amx_participant_application_pair_framed_bytes(
+                &placeholder.0,
+                &placeholder.1,
+            )
+            .expect("frame placeholder Native artifact pair");
+            let actual_bytes = native_amx_participant_application_pair_framed_bytes(
+                &actual.0,
+                &actual.1,
+            )
+            .expect("frame actual-hash Native artifact pair");
+            assert_eq!(
+                (placeholder_bytes.0.len(), placeholder_bytes.1.len()),
+                (actual_bytes.0.len(), actual_bytes.1.len()),
+                "typed finality hash substitution must preserve exact artifact lengths"
+            );
+            pair_lengths.push(
+                placeholder_bytes
+                    .0
+                    .len()
+                    .checked_add(placeholder_bytes.1.len())
+                    .expect("fixture pair length fits usize"),
+            );
+        }
+
+        let largest_pair = pair_lengths
+            .iter()
+            .copied()
+            .max()
+            .expect("multi-route fixture has artifact pairs");
+        let all_pair_bytes = pair_lengths
+            .iter()
+            .try_fold(0_usize, |total, pair| total.checked_add(*pair))
+            .expect("fixture carrier artifact lengths fit usize");
+        assert!(
+            all_pair_bytes > largest_pair,
+            "the configured bound must apply independently per route, not to the carrier sum"
+        );
+        let temp_dir = TempDir::new().expect("Native pre-vote byte-budget directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (mut kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("initialize Native pre-vote byte-budget Kura");
+        Arc::get_mut(&mut kura)
+            .expect("byte-budget fixture has one Kura owner")
+            .pending_control_sidecar_limits
+            .aggregate_bytes = largest_pair;
+        kura.validate_native_amx_participant_application_evidence_byte_budget(&manifest, None)
+            .expect("largest exact route pair must fit its exact configured bound");
+        kura.validate_native_amx_participant_application_evidence_byte_budget(
+            &manifest,
+            Some(actual_finality_hash),
+        )
+        .expect("actual finality identity must preserve the pre-vote byte decision");
+
+        Arc::get_mut(&mut kura)
+            .expect("byte-budget fixture still has one Kura owner")
+            .pending_control_sidecar_limits
+            .aggregate_bytes = largest_pair
+            .checked_sub(1)
+            .expect("Native artifact pair is non-empty");
+        let error = kura
+            .validate_native_amx_participant_application_evidence_byte_budget(&manifest, None)
+            .expect_err("one byte below the largest route pair must fail closed");
+        assert!(
+            matches!(
+                &error,
+                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(_)
+            ) && error.to_string().contains("configured shared stable aggregate"),
+            "unexpected exact route-pair budget error: {error}"
+        );
+    }
+
+    #[test]
+    fn native_amx_prevote_pair_geometry_rejects_empty_hard_cap_and_overflow() {
+        let kura = Kura::blank_kura_for_testing();
+        let empty = kura
+            .validate_native_amx_participant_application_pair_byte_lengths(
+                0,
+                1,
+                STRICT_INIT_MAX_BLOCK_BYTES,
+            )
+            .expect_err("empty Native manifest framing must fail closed");
+        assert!(empty.to_string().contains("manifest framing is empty"));
+
+        let standalone = kura
+            .validate_native_amx_participant_application_pair_byte_lengths(2, 1, 1)
+            .expect_err("an individually oversized Native manifest must fail closed");
+        assert!(
+            standalone
+                .to_string()
+                .contains("manifest is 2 bytes, exceeding the standalone payload budget")
+        );
+
+        let overflow = checked_native_amx_participant_application_pair_bytes(u64::MAX, 1)
+            .expect_err("Native pair length overflow must fail closed");
+        assert!(overflow.to_string().contains("byte length overflowed"));
+    }
+
+    #[test]
     fn native_amx_manifest_temp_requires_qc_authenticated_finality_before_promotion() {
         let temp_dir = TempDir::new().expect("forged Native manifest temporary directory");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);

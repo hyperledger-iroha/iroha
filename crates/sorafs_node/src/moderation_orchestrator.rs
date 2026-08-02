@@ -4137,7 +4137,6 @@ impl ModerationOrchestratorV1 {
         {
             if reservation.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
                 || reservation.records.is_empty()
-                || reservation.records.len() > maximum_records
                 || available_records.len() < reservation.records.len()
                 || available_records[..reservation.records.len()] != reservation.records
                 || safe_terminal_archive_prefix_len(&available_records, reservation.records.len())?
@@ -4818,7 +4817,9 @@ impl ModerationOrchestratorV1 {
         if current_checkpoint_bytes != source_checkpoint_bytes
             || current_record != source_record
             || state.panel_notification_archive_head.as_ref() != Some(&latest_head)
-            || state.panel_notification_archive_pending_publication.is_some()
+            || state
+                .panel_notification_archive_pending_publication
+                .is_some()
             || state.panel_notification_archive_published_head.as_ref() != Some(&latest_head)
         {
             return Err(ModerationOrchestratorError::PanelNotificationArchiveRejected);
@@ -6280,7 +6281,7 @@ impl ModerationOrchestratorV1 {
                 ));
             };
             let outcome = snapshot
-                .case(&case_id, &round_id)
+                .case(case_id, round_id)
                 .and_then(|case| case.outcome.as_ref())
                 .ok_or_else(|| {
                     ModerationOrchestratorError::InvalidFinalizedSnapshot(
@@ -7672,18 +7673,23 @@ fn external_work_claim_is_valid(
         && external_work_lease_token(identity, claim) == claim.lease_token
 }
 
+#[derive(Clone, Copy)]
+struct RetainedDeadLetterResolutionExpectationV1 {
+    signature: [u8; 64],
+    source_record_digest: [u8; 32],
+    identity: [u8; 32],
+    kind: ModerationDeadLetterKindV1,
+    incident_time: u64,
+}
+
 fn validate_retained_dead_letter_resolution(
     resolution: &ModerationDeadLetterResolutionV1,
-    signature: [u8; 64],
-    expected_source_record_digest: [u8; 32],
-    expected_identity: [u8; 32],
-    expected_kind: ModerationDeadLetterKindV1,
-    incident_time: u64,
+    expected: RetainedDeadLetterResolutionExpectationV1,
     state: &ModerationOrchestratorCheckpointV1,
     config: &ModerationOrchestratorConfigV1,
     chain_id: &iroha_data_model::ChainId,
 ) -> Result<(), ModerationOrchestratorError> {
-    verify_dead_letter_resolution_signature(resolution, signature)?;
+    verify_dead_letter_resolution_signature(resolution, expected.signature)?;
     let finalized_time = state
         .finalized_snapshot
         .as_ref()
@@ -7698,10 +7704,10 @@ fn validate_retained_dead_letter_resolution(
             != checkpoint_store::checkpoint_namespace(chain_id)
         || resolution.checkpoint_generation == 0
         || resolution.checkpoint_generation >= state.generation
-        || resolution.identity != expected_identity
-        || resolution.kind != expected_kind
-        || resolution.source_record_digest != expected_source_record_digest
-        || resolution.authorized_at_unix_ms < incident_time
+        || resolution.identity != expected.identity
+        || resolution.kind != expected.kind
+        || resolution.source_record_digest != expected.source_record_digest
+        || resolution.authorized_at_unix_ms < expected.incident_time
         || resolution.authorized_at_unix_ms > finalized_time
         || resolution.attestor_handle != config.checkpoint_store_handle
         || resolution.attestor_revision != config.expected_checkpoint_store_qualification.revision()
@@ -8356,11 +8362,13 @@ fn validate_checkpoint(
             (Some(resolution), Some(signature)) => {
                 validate_retained_dead_letter_resolution(
                     resolution,
-                    signature,
-                    source_record_digest,
-                    entry.identity,
-                    expected_kind,
-                    entry.dead_lettered_at_unix_ms,
+                    RetainedDeadLetterResolutionExpectationV1 {
+                        signature,
+                        source_record_digest,
+                        identity: entry.identity,
+                        kind: expected_kind,
+                        incident_time: entry.dead_lettered_at_unix_ms,
+                    },
                     state,
                     config,
                     chain_id,
@@ -8568,11 +8576,13 @@ fn validate_checkpoint(
         }
         validate_retained_dead_letter_resolution(
             &entry.resolution,
-            entry.resolution_signature,
-            entry.terminal_record.source_record_digest,
-            entry.terminal_record.notification_id,
-            ModerationDeadLetterKindV1::PanelNotification,
-            dead_lettered_at_unix_ms,
+            RetainedDeadLetterResolutionExpectationV1 {
+                signature: entry.resolution_signature,
+                source_record_digest: entry.terminal_record.source_record_digest,
+                identity: entry.terminal_record.notification_id,
+                kind: ModerationDeadLetterKindV1::PanelNotification,
+                incident_time: dead_lettered_at_unix_ms,
+            },
             state,
             config,
             chain_id,
@@ -11630,8 +11640,8 @@ fn safe_terminal_archive_prefix_len(
 
 fn panel_notification_archive_decode_limits(max_bytes: usize, max_records: usize) -> DecodeLimits {
     DecodeLimits::new(
-        max_bytes,
         max_records.max(MODERATION_PANEL_NOTIFICATION_ARCHIVE_MAX_SIGNER_EPOCHS_V1),
+        max_bytes,
         max_bytes.saturating_mul(2),
         max_bytes.saturating_mul(2),
         128,
@@ -13831,12 +13841,14 @@ mod tests {
         }
     }
 
+    type MockPanelNotificationArchiveArtifacts =
+        BTreeMap<[u8; 32], ([u8; 32], ModerationPanelNotificationArchiveReadbackV1)>;
+
     struct MockPanelNotificationArchive {
         provider: MockRuntimeProvider,
         archive_id: [u8; 32],
         signing_key: Mutex<SigningKey>,
-        artifacts:
-            Mutex<BTreeMap<[u8; 32], ([u8; 32], ModerationPanelNotificationArchiveReadbackV1)>>,
+        artifacts: Mutex<MockPanelNotificationArchiveArtifacts>,
         install_calls: AtomicUsize,
         read_calls: AtomicUsize,
         next_install_behavior: AtomicUsize,
@@ -14945,6 +14957,16 @@ mod tests {
             timing,
             entry.state,
         )
+    }
+
+    fn sign_dead_letter_resolution(resolution: &ModerationDeadLetterResolutionV1) -> [u8; 64] {
+        SigningKey::from_bytes(&CHECKPOINT_STORE_ATTESTATION_SIGNING_SEED)
+            .sign(
+                &resolution
+                    .signing_message()
+                    .expect("canonical dead-letter resolution message"),
+            )
+            .to_bytes()
     }
 
     fn assert_finalized_authority_rejection_has_no_native_mutation(
@@ -17039,12 +17061,280 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn signed_native_redrive_preserves_incident_and_splits_a_new_unresolved_failure() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let orchestrator = ModerationOrchestratorV1::open(
+            config(&temp, "native-dead-letter-resolution.norito"),
+            deps(
+                Arc::clone(&reader),
+                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
+            ),
+        )
+        .expect("orchestrator");
+        let operation_id = seed_ready_operation_without_delivery(
+            &orchestrator,
+            account(1),
+            policy_action(policy(1)),
+            [0xD1; 32],
+        );
+        {
+            let mut state = orchestrator.state.lock().expect("orchestrator state");
+            orchestrator
+                .dead_letter_submission_locked(
+                    &mut state,
+                    0,
+                    StoredDeadLetterReasonV1::PermanentRejection,
+                )
+                .expect("first native incident");
+        }
+
+        let redrive = orchestrator
+            .prepare_dead_letter_resolution(
+                operation_id,
+                ModerationDeadLetterKindV1::NativeSubmission,
+                ModerationDeadLetterResolutionActionV1::Redrive,
+                1,
+            )
+            .expect("prepare exact native redrive");
+        orchestrator
+            .apply_dead_letter_resolution(redrive.clone(), sign_dead_letter_resolution(&redrive))
+            .expect("apply signed native redrive");
+        {
+            let mut state = orchestrator.state.lock().expect("orchestrator state");
+            assert_eq!(state.outbox.len(), 1);
+            assert_eq!(state.outbox[0].operation_id, operation_id);
+            assert_eq!(state.outbox[0].state, StoredOutboxStateV1::Ready);
+            orchestrator
+                .dead_letter_submission_locked(
+                    &mut state,
+                    0,
+                    StoredDeadLetterReasonV1::PermanentRejection,
+                )
+                .expect("second native incident");
+        }
+
+        {
+            let state = orchestrator.state.lock().expect("orchestrator state");
+            assert_eq!(state.dead_letters.len(), 2);
+            assert_eq!(state.dead_letters[0].incident_sequence, 1);
+            assert!(state.dead_letters[0].resolution.is_some());
+            assert_eq!(state.dead_letters[1].incident_sequence, 2);
+            assert!(state.dead_letters[1].resolution.is_none());
+            let records = collect_terminal_archive_records(&state)
+                .expect("collect only the resolved native incident");
+            let [
+                ModerationTerminalArchiveRecordV1::DurableDeadLetter {
+                    incident_sequence,
+                    resolution,
+                    operation_source_record_digest,
+                    ..
+                },
+            ] = records.as_slice()
+            else {
+                panic!("only the first resolved native incident is archive eligible");
+            };
+            assert_eq!(*incident_sequence, 1);
+            assert_eq!(
+                resolution.action,
+                ModerationDeadLetterResolutionActionV1::Redrive
+            );
+            assert!(operation_source_record_digest.is_none());
+        }
+        assert_eq!(
+            orchestrator
+                .durable_health()
+                .expect("unresolved native incident health")
+                .durable_dead_letters,
+            1
+        );
+
+        let acknowledge = orchestrator
+            .prepare_dead_letter_resolution(
+                operation_id,
+                ModerationDeadLetterKindV1::NativeSubmission,
+                ModerationDeadLetterResolutionActionV1::Acknowledge,
+                1,
+            )
+            .expect("prepare latest native acknowledgement");
+        orchestrator
+            .apply_dead_letter_resolution(
+                acknowledge.clone(),
+                sign_dead_letter_resolution(&acknowledge),
+            )
+            .expect("apply latest native acknowledgement");
+        let state = orchestrator.state.lock().expect("orchestrator state");
+        let records = collect_terminal_archive_records(&state)
+            .expect("collect both resolved native incidents");
+        assert_eq!(records.len(), 2);
+        for record in records {
+            let ModerationTerminalArchiveRecordV1::DurableDeadLetter {
+                incident_sequence,
+                operation_source_record_digest,
+                ..
+            } = record
+            else {
+                panic!("native resolution must archive as a durable dead letter");
+            };
+            if incident_sequence == 1 {
+                assert!(operation_source_record_digest.is_none());
+            } else {
+                assert_eq!(incident_sequence, 2);
+                assert!(operation_source_record_digest.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn signed_panel_and_terminal_resolutions_apply_exact_dispositions() {
+        let panel_temp = tempfile::tempdir().expect("panel tempdir");
+        let governance = account(99);
+        let (panel_snapshot, _) = awaiting_acceptance_snapshot(2, [0x31; 32], governance.clone());
+        let panel = ModerationOrchestratorV1::open(
+            config(&panel_temp, "panel-dead-letter-resolution.norito"),
+            deps(
+                Arc::new(MockSnapshotReader::new(panel_snapshot)),
+                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
+            ),
+        )
+        .expect("panel orchestrator");
+        panel.reconcile().expect("queue panel notifications");
+        let claim = panel
+            .claim_panel_notifications([0xD2; 32], 30, 1)
+            .expect("claim panel notification")
+            .into_iter()
+            .next()
+            .expect("one panel notification");
+        panel
+            .release_panel_notification_claim(
+                claim.notification.notification_id,
+                claim.worker_id,
+                claim.lease_token,
+                ModerationPanelNotificationFailureV1::Permanent,
+                31,
+            )
+            .expect("dead-letter panel notification");
+        let panel_acknowledgement = panel
+            .prepare_dead_letter_resolution(
+                claim.notification.notification_id,
+                ModerationDeadLetterKindV1::PanelNotification,
+                ModerationDeadLetterResolutionActionV1::Acknowledge,
+                31,
+            )
+            .expect("prepare exact panel acknowledgement");
+        panel
+            .apply_dead_letter_resolution(
+                panel_acknowledgement.clone(),
+                sign_dead_letter_resolution(&panel_acknowledgement),
+            )
+            .expect("apply signed panel acknowledgement");
+        assert_eq!(
+            panel
+                .panel_notification_status(claim.notification.notification_id)
+                .expect("resolved panel status"),
+            None
+        );
+        let panel_state = panel.state.lock().expect("panel state");
+        assert!(matches!(
+            collect_terminal_archive_records(&panel_state)
+                .expect("collect resolved panel incident")
+                .as_slice(),
+            [ModerationTerminalArchiveRecordV1::ResolvedPanelDeadLetter {
+                resolution,
+                ..
+            }] if resolution.action == ModerationDeadLetterResolutionActionV1::Acknowledge
+        ));
+        drop(panel_state);
+
+        let terminal_temp = tempfile::tempdir().expect("terminal tempdir");
+        let finalized = finalized_case_snapshot(
+            activated_case_snapshot(2, [2; 32], governance.clone()),
+            3,
+            [3; 32],
+            governance,
+        );
+        let terminal = ModerationOrchestratorV1::open(
+            config(&terminal_temp, "terminal-dead-letter-resolution.norito"),
+            deps(
+                Arc::new(MockSnapshotReader::new(finalized)),
+                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
+            ),
+        )
+        .expect("terminal orchestrator");
+        let (snapshot, digest) = terminal
+            .read_validated_finalized_snapshot()
+            .expect("read terminal finalized snapshot");
+        {
+            let mut state = terminal.state.lock().expect("terminal state");
+            terminal
+                .install_finalized_snapshot_locked(&mut state, snapshot, digest)
+                .expect("queue terminal handoffs");
+        }
+        let (handoff, claim) = {
+            let mut state = terminal.state.lock().expect("terminal state");
+            match terminal
+                .prepare_next_external_work_locked(&mut state, &BTreeSet::new(), &BTreeSet::new())
+                .expect("prepare terminal handoff")
+                .expect("one terminal handoff")
+            {
+                PreparedExternalWorkV1::Handoff { handoff, claim, .. } => (handoff, claim),
+                _ => panic!("terminal handoff must be selected"),
+            }
+        };
+        terminal
+            .finalize_handoff_work(&claim, Err(ModerationHandoffFailureV1::Permanent))
+            .expect("dead-letter terminal handoff");
+        let terminal_redrive = terminal
+            .prepare_dead_letter_resolution(
+                handoff.handoff_id,
+                ModerationDeadLetterKindV1::TerminalHandoff,
+                ModerationDeadLetterResolutionActionV1::Redrive,
+                61,
+            )
+            .expect("prepare exact terminal redrive");
+        terminal
+            .apply_dead_letter_resolution(
+                terminal_redrive.clone(),
+                sign_dead_letter_resolution(&terminal_redrive),
+            )
+            .expect("apply signed terminal redrive");
+        let terminal_state = terminal.state.lock().expect("terminal state");
+        assert!(
+            terminal_state
+                .pending_handoffs
+                .iter()
+                .any(|entry| entry.handoff == handoff)
+        );
+        assert!(
+            collect_terminal_archive_records(&terminal_state)
+                .expect("collect resolved terminal incident")
+                .iter()
+                .any(|record| matches!(
+                    record,
+                    ModerationTerminalArchiveRecordV1::DurableDeadLetter {
+                        identity,
+                        resolution,
+                        handoff_kind: Some(kind),
+                        handoff_outcome_digest: Some(outcome_digest),
+                        handoff_finalized_cursor: Some(cursor),
+                        ..
+                    } if *identity == handoff.handoff_id
+                        && resolution.action == ModerationDeadLetterResolutionActionV1::Redrive
+                        && *kind == handoff.kind
+                        && *outcome_digest == handoff.outcome_digest
+                        && *cursor == handoff.finalized_cursor
+                ))
+        );
+    }
+
     struct SaturatedPanelNotificationFixture {
         bounds: ModerationOrchestratorConfigV1,
         governance: AccountId,
         reader: Arc<MockSnapshotReader>,
         checkpoint_store: Arc<MockCheckpointStore>,
         archive: Arc<MockPanelNotificationArchive>,
+        publication_sink: Arc<MockHandoffSink>,
         orchestrator: ModerationOrchestratorV1,
     }
 
@@ -17067,6 +17357,7 @@ mod tests {
         bounds.max_handoffs = 3;
         let checkpoint_store = Arc::new(MockCheckpointStore::default());
         let archive = Arc::new(MockPanelNotificationArchive::default());
+        let publication_sink = Arc::new(MockHandoffSink::default());
         let archive_dependency: Arc<dyn ModerationPanelNotificationArchiveV1> = match probe {
             Some(probe) => Arc::new(ProbedPanelNotificationArchive {
                 inner: archive.clone(),
@@ -17081,7 +17372,7 @@ mod tests {
                 submitter: Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
                 snapshot_reader: reader.clone(),
                 settlement_sink: Arc::new(MockHandoffSink::default()),
-                publication_sink: Arc::new(MockHandoffSink::default()),
+                publication_sink: publication_sink.clone(),
                 panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
                 panel_notification_archive: archive_dependency,
             },
@@ -17122,8 +17413,60 @@ mod tests {
             reader,
             checkpoint_store,
             archive,
+            publication_sink,
             orchestrator,
         }
+    }
+
+    fn audited_two_generation_panel_notification_archive(
+        temp: &TempDir,
+        checkpoint_name: &str,
+    ) -> (
+        SaturatedPanelNotificationFixture,
+        ModerationPanelNotificationArchiveHeadV1,
+        ModerationPanelNotificationArchiveHeadV1,
+    ) {
+        let fixture = saturated_delivered_panel_notifications(temp, checkpoint_name);
+        let first = fixture
+            .orchestrator
+            .compact_panel_notification_receipts(2)
+            .expect("first archive compaction")
+            .expect("first archive head");
+        assert!(
+            fixture
+                .orchestrator
+                .reconcile_panel_notification_archive_publication()
+                .expect("publish first archive head")
+        );
+        let second = fixture
+            .orchestrator
+            .compact_panel_notification_receipts(1)
+            .expect("second archive compaction")
+            .expect("second archive head");
+        assert!(
+            fixture
+                .orchestrator
+                .reconcile_panel_notification_archive_publication()
+                .expect("publish second archive head")
+        );
+        let trusted = fixture
+            .orchestrator
+            .audit_panel_notification_archive(
+                MODERATION_PANEL_NOTIFICATION_ARCHIVE_AUDIT_PAGE_MAX_V1,
+            )
+            .expect("establish trusted archive progress");
+        assert_eq!(trusted.verified_heads, 2);
+        assert_eq!(trusted.target_generation, 2);
+        assert_eq!(trusted.last_completed_generation, 2);
+        assert!(trusted.cycle_complete);
+        assert!(
+            fixture
+                .orchestrator
+                .durable_health()
+                .expect("trusted archive health")
+                .archive_is_fresh()
+        );
+        (fixture, first, second)
     }
 
     #[test]
@@ -17132,6 +17475,7 @@ mod tests {
         let SaturatedPanelNotificationFixture {
             governance,
             reader,
+            checkpoint_store,
             archive,
             orchestrator,
             ..
@@ -17147,12 +17491,42 @@ mod tests {
 
         let before = orchestrator.state.lock().expect("state").clone();
         archive.fail_next_read(1);
+        let first_attempt = orchestrator.compact_panel_notification_receipts(2);
+        let after_first_attempt = orchestrator.state.lock().expect("state").clone();
+        assert!(
+            after_first_attempt
+                .panel_notification_archive_compaction_reservation
+                .is_some(),
+            "write-ahead reservation was not retained before {first_attempt:?}"
+        );
+        assert!(
+            checkpoint_store.latest().checkpoint_generation > before.generation,
+            "write-ahead reservation was not sealed before {first_attempt:?}"
+        );
         assert_eq!(
-            orchestrator.compact_panel_notification_receipts(2),
+            checkpoint_store.attestation_calls(),
+            1,
+            "terminal-set attestation did not complete before {first_attempt:?}"
+        );
+        assert_eq!(
+            archive.artifact_count(),
+            1,
+            "archive install did not complete before {first_attempt:?}"
+        );
+        assert_eq!(
+            first_attempt,
             Err(ModerationOrchestratorError::PanelNotificationArchiveUnavailable)
         );
-        assert_eq!(orchestrator.state.lock().expect("state").clone(), before);
-        assert_eq!(archive.artifact_count(), 1);
+        assert!(after_first_attempt.generation > before.generation);
+        assert_eq!(
+            after_first_attempt
+                .panel_notification_archive_compaction_reservation
+                .as_ref()
+                .expect("sealed archive reservation")
+                .records
+                .len(),
+            2
+        );
 
         let head = orchestrator
             .compact_panel_notification_receipts(2)
@@ -17425,6 +17799,184 @@ mod tests {
     }
 
     #[test]
+    fn panel_notification_archive_full_history_audit_resumes_after_restart() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (fixture, _, _) = audited_two_generation_panel_notification_archive(
+            &temp,
+            "panel-archive-full-history-restart.norito",
+        );
+        let first_page = fixture
+            .orchestrator
+            .audit_panel_notification_archive_full_history(1)
+            .expect("seal and audit the first full-history page");
+        assert_eq!(first_page.verified_heads, 1);
+        assert_eq!(first_page.target_generation, 2);
+        assert_eq!(first_page.last_completed_generation, 0);
+        assert!(!first_page.cycle_complete);
+
+        let incomplete_health = fixture
+            .orchestrator
+            .durable_health()
+            .expect("incomplete full-history health");
+        assert_eq!(incomplete_health.panel_notification_archive_generation, 2);
+        assert_eq!(
+            incomplete_health.panel_notification_archive_published_generation,
+            2
+        );
+        assert_eq!(
+            incomplete_health.panel_notification_archive_audited_generation,
+            0
+        );
+        assert!(!incomplete_health.archive_is_fresh());
+
+        let SaturatedPanelNotificationFixture {
+            bounds,
+            reader,
+            checkpoint_store,
+            archive,
+            publication_sink,
+            orchestrator,
+            ..
+        } = fixture;
+        drop(orchestrator);
+        let restarted = ModerationOrchestratorV1::open(
+            bounds,
+            ModerationOrchestratorDepsV1 {
+                checkpoint_store,
+                submitter: Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
+                snapshot_reader: reader,
+                settlement_sink: Arc::new(MockHandoffSink::default()),
+                publication_sink,
+                panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
+                panel_notification_archive: archive,
+            },
+        )
+        .expect("restart with the sealed full-history cursor");
+        assert_eq!(
+            restarted
+                .durable_health()
+                .expect("restarted incomplete full-history health"),
+            incomplete_health
+        );
+
+        let completed = restarted
+            .audit_panel_notification_archive(1)
+            .expect("resume and complete the sealed full-history audit");
+        assert_eq!(completed.verified_heads, 1);
+        assert_eq!(completed.target_generation, 2);
+        assert_eq!(completed.last_completed_generation, 2);
+        assert!(completed.cycle_complete);
+        let completed_health = restarted
+            .durable_health()
+            .expect("completed full-history health");
+        assert_eq!(
+            completed_health.panel_notification_archive_audited_generation,
+            2
+        );
+        assert!(completed_health.archive_is_fresh());
+    }
+
+    #[test]
+    fn panel_notification_archive_full_history_corrupt_predecessor_fails_closed_after_restart() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (fixture, first, _) = audited_two_generation_panel_notification_archive(
+            &temp,
+            "panel-archive-full-history-corrupt-restart.norito",
+        );
+        let first_page = fixture
+            .orchestrator
+            .audit_panel_notification_archive_full_history(1)
+            .expect("seal and audit the current archive head");
+        assert_eq!(first_page.verified_heads, 1);
+        assert_eq!(first_page.last_completed_generation, 0);
+        assert!(!first_page.cycle_complete);
+
+        let mut corrupt_predecessor = fixture.archive.artifact(first.operation_id);
+        corrupt_predecessor.push(0);
+        fixture
+            .archive
+            .replace_artifact(first.operation_id, corrupt_predecessor.clone());
+        let sealed_incomplete_record = fixture.checkpoint_store.latest();
+        let SaturatedPanelNotificationFixture {
+            bounds,
+            reader,
+            checkpoint_store,
+            archive,
+            publication_sink,
+            orchestrator,
+            ..
+        } = fixture;
+        drop(orchestrator);
+        assert!(matches!(
+            ModerationOrchestratorV1::open(
+                bounds,
+                ModerationOrchestratorDepsV1 {
+                    checkpoint_store: checkpoint_store.clone(),
+                    submitter: Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown,)),
+                    snapshot_reader: reader,
+                    settlement_sink: Arc::new(MockHandoffSink::default()),
+                    publication_sink,
+                    panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
+                    panel_notification_archive: archive.clone(),
+                },
+            ),
+            Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid)
+        ));
+        assert_eq!(checkpoint_store.latest(), sealed_incomplete_record);
+        assert_eq!(archive.artifact(first.operation_id), corrupt_predecessor);
+    }
+
+    #[test]
+    fn panel_notification_archive_full_history_invalid_bounds_preserve_trusted_progress() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (fixture, _, _) = audited_two_generation_panel_notification_archive(
+            &temp,
+            "panel-archive-full-history-bounds.norito",
+        );
+        let trusted_health = fixture
+            .orchestrator
+            .durable_health()
+            .expect("trusted archive health");
+        let trusted_record = fixture.checkpoint_store.latest();
+        let trusted_cursor = fixture
+            .orchestrator
+            .state
+            .lock()
+            .expect("orchestrator state")
+            .panel_notification_archive_audit_cursor
+            .clone();
+
+        for maximum_heads in [0, 17] {
+            assert!(matches!(
+                fixture
+                    .orchestrator
+                    .audit_panel_notification_archive_full_history(maximum_heads),
+                Err(ModerationOrchestratorError::ResourceExhausted {
+                    resource: "panel notification archive audit page",
+                    limit: 16,
+                })
+            ));
+            assert_eq!(
+                fixture
+                    .orchestrator
+                    .durable_health()
+                    .expect("trusted health after rejected bound"),
+                trusted_health
+            );
+            assert_eq!(fixture.checkpoint_store.latest(), trusted_record);
+            assert_eq!(
+                fixture
+                    .orchestrator
+                    .state
+                    .lock()
+                    .expect("orchestrator state")
+                    .panel_notification_archive_audit_cursor,
+                trusted_cursor
+            );
+        }
+    }
+
+    #[test]
     fn panel_notification_archive_broker_fixture_is_canonical_and_source_bound() {
         let fixture = moderation_panel_notification_archive_broker_fixture_v1()
             .expect("deterministic broker fixture");
@@ -17632,7 +18184,8 @@ mod tests {
     }
 
     #[test]
-    fn panel_notification_archive_crash_boundary_replays_exact_batch_after_restart() {
+    fn panel_notification_archive_crash_boundary_replays_exact_batch_after_restart_with_smaller_hint()
+     {
         let temp = tempfile::tempdir().expect("tempdir");
         let SaturatedPanelNotificationFixture {
             bounds,
@@ -17643,7 +18196,7 @@ mod tests {
             ..
         } = saturated_delivered_panel_notifications(&temp, "panel-archive-crash.norito");
         archive.fail_next_install(2);
-        checkpoint_store.fail_next_cas(3);
+        checkpoint_store.fail_cas_after_one_success();
         assert_eq!(
             orchestrator.compact_panel_notification_receipts(2),
             Err(ModerationOrchestratorError::CheckpointStoreFenced)
@@ -17665,10 +18218,11 @@ mod tests {
         )
         .expect("restart from pre-prune sealed checkpoint");
         let recovered = restarted
-            .compact_panel_notification_receipts(2)
-            .expect("replay exact archived batch")
+            .compact_panel_notification_receipts(1)
+            .expect("replay exact archived batch despite a smaller page-size hint")
             .expect("recovered archive head");
         assert_eq!(recovered.generation, 1);
+        assert_eq!(recovered.terminal_record_count, 2);
         assert_eq!(archive.artifact_count(), 1);
         assert_eq!(archive.install_calls(), 2);
     }

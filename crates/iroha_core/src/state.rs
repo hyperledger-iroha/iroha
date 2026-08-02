@@ -214,6 +214,23 @@ const MERGE_EXECUTION_LANE_MARKER_PREFIX: &str = "merge_execution_lane_applied_"
 const MERGE_EXECUTION_LANE_FRONTIER_MARKER_PREFIX: &str = "merge_lane_frontier_v1_";
 const NATIVE_AMX_PARTICIPANT_FRONTIER_MARKER_PREFIX: &str = "native_amx_participant_frontier_v2_";
 const QUEUE_PLAN_ADMISSION_REGISTRY_MARKER_PREFIX: &str = "queue_plan_admission_v2_";
+const QUEUE_PLAN_PENDING_OBLIGATION_MARKER_PREFIX: &str = "queue_plan_pending_obligation_v1_";
+const QUEUE_PLAN_PENDING_ROUTE_MEMBER_MARKER_PREFIX: &str = "queue_plan_pending_route_member_v1_";
+const QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1: u16 = 1;
+const QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1: u16 = 1;
+const QUEUE_PLAN_PENDING_ROUTE_MEMBER_DOMAIN_V1: &[u8] =
+    b"iroha:queue-plan:pending-route-member:v1\0";
+// One bounded admission certificate supplies the embedded binding. A second
+// certificate-sized envelope conservatively covers fixed identity copies and
+// at most 256 compact, deduplicated route projections.
+const MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES: usize =
+    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES * 2;
+const MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES: usize = 1024;
+// One carrier can authenticate at most this many QueuePlan controls. Reusing
+// the same consensus ceiling for an exact route roster gives deterministic
+// backpressure and bounds every route-prefix scan.
+const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize =
+    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSIONS;
 /// Maximum canonical drain-state bytes stored in one lane metadata value.
 const MAX_AUTOSCALE_DRAIN_STATE_BYTES: usize = 32 * 1024;
 /// Maximum canonical pinned-committee bytes stored in one lane metadata value.
@@ -541,234 +558,273 @@ impl<T: MvValue> CellVecExt<T> for CellTransaction<'_, '_, Vec<T>> {
     }
 }
 
-macro_rules! build_world_block {
-    ($state:expr, $method:ident) => {
+// Keep the overlay field inventory centralized: constructors for block, transaction, and
+// read-only scopes must evolve together. The privacy ledger fields are intentionally absent
+// from WorldView; privacy admission reads them only through mutable execution scopes.
+macro_rules! with_world_overlay_fields {
+    ($callback:ident $(, $arg:tt)*) => {
+        $callback!(
+            $($arg),*;
+            [
+            parameters,
+            peers,
+            consensus_keys,
+            consensus_keys_by_pk,
+            domain_committees,
+            domain_endorsement_policies,
+            domain_endorsements,
+            domain_endorsements_by_domain,
+            domains,
+            domains_by_owner,
+            domain_selectors,
+            accounts,
+            uaid_accounts,
+            account_aliases,
+            account_aliases_by_account,
+            account_scope_directory,
+            account_scope_accounts,
+            opaque_uaids,
+            ram_lfe_program_policies,
+            identifier_policies,
+            fee_sponsor_programs,
+            fee_sponsor_program_revisions,
+            fee_sponsor_enrollments,
+            fee_sponsor_vaults,
+            fee_sponsor_budget_counters,
+            identifier_claims,
+            account_rekey_records,
+            account_recovery_policies,
+            account_recovery_requests,
+            asset_definitions,
+            asset_definition_aliases,
+            asset_definition_alias_bindings,
+            contract_aliases,
+            contract_alias_bindings,
+            domain_asset_definitions,
+            asset_definitions_by_owner,
+            asset_definition_holders,
+            asset_definition_assets,
+            asset_definition_nonzero_holders,
+            assets,
+            asset_metadata,
+            nfts,
+            nfts_by_owner,
+            rwas,
+            rwas_by_owner,
+            rwas_by_status,
+            rwas_by_frozen,
+            roles,
+            account_permissions,
+            account_roles,
+            oracle_feeds,
+            oracle_observations,
+            oracle_history,
+            oracle_provider_stats,
+            oracle_disputes,
+            oracle_changes,
+            defi_oracle_attestations,
+            twitter_bindings,
+            twitter_bindings_by_uaid,
+            viral_reward_budget,
+            viral_campaign_budget,
+            viral_daily_counters,
+            viral_binding_claims,
+            viral_escrows,
+            viral_bonus_paid,
+            asset_escrows,
+            asset_escrows_by_seller,
+            asset_escrows_by_buyer,
+            asset_escrows_by_status,
+            anonymous_asset_escrows,
+            anonymous_asset_escrows_by_seller,
+            anonymous_asset_escrows_by_buyer,
+            anonymous_asset_escrows_by_status,
+            vpn_leases,
+            uaid_dataspaces,
+            space_directory_manifests,
+            axt_policies,
+            axt_replay_ledger,
+            sccp_registry,
+            sccp_outbound_pending_usage,
+            sccp_outbound_pending_messages,
+            sccp_outbound_message_locator,
+            sccp_outbound_message_index,
+            sccp_outbound_proofs,
+            sccp_inbound_messages,
+            sccp_inbound_anchor_high_water,
+            tx_sequences,
+            triggers,
+            executor,
+            executor_data_model,
+            verifying_keys,
+            verifying_keys_by_circuit,
+            pedersen_params,
+            poseidon_params,
+            runtime_upgrades,
+            privacy_consensus_policy,
+            privacy_activations,
+            ]
+            [
+            privacy_pgc_accounts,
+            privacy_pgc_pool_invariants,
+            privacy_nullifiers,
+            privacy_commitments,
+            privacy_roots,
+            privacy_root_heads,
+            ]
+            [
+            proofs,
+            proofs_by_status,
+            proof_tags,
+            proofs_by_tag,
+            commit_qcs,
+            consensus_evidence,
+            contract_manifests,
+            contract_code,
+            contract_code_uploads,
+            contract_code_upload_chunks,
+            contract_instances,
+            contract_subject_bindings,
+            contract_subject_addresses,
+            smart_contract_state,
+            soracloud_service_revisions,
+            soracloud_service_deployments,
+            soracloud_app_infra_states,
+            soracloud_service_runtime,
+            soracloud_inrou_replica_runtime,
+            soracloud_service_audit_events,
+            soracloud_app_infra_audit_events,
+            soracloud_service_state_entries,
+            soracloud_decryption_request_records,
+            soracloud_agent_apartments,
+            soracloud_agent_apartment_audit_events,
+            soracloud_training_jobs,
+            soracloud_training_job_audit_events,
+            soracloud_model_registries,
+            soracloud_model_weight_versions,
+            soracloud_model_weight_audit_events,
+            soracloud_model_artifacts,
+            soracloud_model_artifact_audit_events,
+            soracloud_uploaded_model_bundles,
+            soracloud_model_host_capabilities,
+            soracloud_inrou_host_capabilities,
+            soracloud_hf_sources,
+            soracloud_hf_shared_lease_pools,
+            soracloud_hf_shared_lease_members,
+            soracloud_hf_shared_lease_audit_events,
+            soracloud_model_host_violation_evidence,
+            soracloud_hf_placements,
+            soracloud_inrou_service_placements,
+            soracloud_mailbox_messages,
+            soracloud_runtime_receipts,
+            soracloud_private_uploaded_model_execution_receipts,
+            capacity_declarations,
+            capacity_fee_ledger,
+            capacity_disputes,
+            sorafs_pricing,
+            provider_credit_ledger,
+            provider_owners,
+            provider_ingest_completion_authorities,
+            da_pin_intents_by_ticket,
+            da_pin_intents_by_alias,
+            da_pin_intents_by_manifest,
+            da_pin_intents_by_lane_epoch,
+            pin_manifests,
+            manifest_aliases,
+            replication_orders,
+            content_bundles,
+            content_chunks,
+            soradns_directory_records,
+            soradns_directory_pending,
+            soradns_directory_latest,
+            soradns_directory_history,
+            soradns_directory_prev_of,
+            soradns_directory_revocations,
+            soradns_release_signers,
+            soradns_rotation_policy,
+            soradns_last_publish_ms,
+            soradns_history_len,
+            repo_agreements,
+            repo_agreements_by_initiator,
+            repo_agreements_by_counterparty,
+            repo_agreements_by_custodian,
+            settlement_receipts,
+            kagemusha_replay_keys,
+            direct_lane_block_application_markers,
+            public_lane_validators,
+            public_lane_stake_shares,
+            public_lane_rewards,
+            public_lane_reward_claims,
+            lane_relay_emergency_validators,
+            zk_assets,
+            elections,
+            citizens,
+            ministry_agenda_proposals,
+            governance_proposals,
+            governance_referenda,
+            governance_stage_approvals,
+            governance_locks,
+            governance_slashes,
+            governance_last_unlock_sweep_height,
+            council,
+            parliament_bodies,
+            vrf_epochs,
+            merge_hint_roots,
+            merge_global_state_root,
+            ]
+        )
+    };
+}
+
+macro_rules! build_world_block_from_fields {
+    (
+        $state:expr,
+        $method:ident;
+        [$($prefix:ident,)*]
+        [$($privacy:ident,)*]
+        [$($suffix:ident,)*]
+    ) => {
         WorldBlock {
             dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
-            parameters: $state.parameters.$method(),
-            peers: $state.peers.$method(),
-            consensus_keys: $state.consensus_keys.$method(),
-            consensus_keys_by_pk: $state.consensus_keys_by_pk.$method(),
-            domain_committees: $state.domain_committees.$method(),
-            domain_endorsement_policies: $state.domain_endorsement_policies.$method(),
-            domain_endorsements: $state.domain_endorsements.$method(),
-            domain_endorsements_by_domain: $state.domain_endorsements_by_domain.$method(),
-            domains: $state.domains.$method(),
-            domains_by_owner: $state.domains_by_owner.$method(),
-            domain_selectors: $state.domain_selectors.$method(),
-            accounts: $state.accounts.$method(),
-            uaid_accounts: $state.uaid_accounts.$method(),
-            account_aliases: $state.account_aliases.$method(),
-            account_aliases_by_account: $state.account_aliases_by_account.$method(),
-            account_scope_directory: $state.account_scope_directory.$method(),
-            account_scope_accounts: $state.account_scope_accounts.$method(),
-            opaque_uaids: $state.opaque_uaids.$method(),
-            ram_lfe_program_policies: $state.ram_lfe_program_policies.$method(),
-            identifier_policies: $state.identifier_policies.$method(),
-            fee_sponsor_programs: $state.fee_sponsor_programs.$method(),
-            fee_sponsor_program_revisions: $state.fee_sponsor_program_revisions.$method(),
-            fee_sponsor_enrollments: $state.fee_sponsor_enrollments.$method(),
-            fee_sponsor_vaults: $state.fee_sponsor_vaults.$method(),
-            fee_sponsor_budget_counters: $state.fee_sponsor_budget_counters.$method(),
-            identifier_claims: $state.identifier_claims.$method(),
-            account_rekey_records: $state.account_rekey_records.$method(),
-            account_recovery_policies: $state.account_recovery_policies.$method(),
-            account_recovery_requests: $state.account_recovery_requests.$method(),
-            asset_definitions: $state.asset_definitions.$method(),
-            asset_definition_aliases: $state.asset_definition_aliases.$method(),
-            asset_definition_alias_bindings: $state.asset_definition_alias_bindings.$method(),
-            contract_aliases: $state.contract_aliases.$method(),
-            contract_alias_bindings: $state.contract_alias_bindings.$method(),
-            domain_asset_definitions: $state.domain_asset_definitions.$method(),
-            asset_definitions_by_owner: $state.asset_definitions_by_owner.$method(),
-            asset_definition_holders: $state.asset_definition_holders.$method(),
-            asset_definition_assets: $state.asset_definition_assets.$method(),
-            asset_definition_nonzero_holders: $state.asset_definition_nonzero_holders.$method(),
-            assets: $state.assets.$method(),
-            asset_metadata: $state.asset_metadata.$method(),
-            nfts: $state.nfts.$method(),
-            nfts_by_owner: $state.nfts_by_owner.$method(),
-            rwas: $state.rwas.$method(),
-            rwas_by_owner: $state.rwas_by_owner.$method(),
-            rwas_by_status: $state.rwas_by_status.$method(),
-            rwas_by_frozen: $state.rwas_by_frozen.$method(),
-            roles: $state.roles.$method(),
-            account_permissions: $state.account_permissions.$method(),
-            account_roles: $state.account_roles.$method(),
-            oracle_feeds: $state.oracle_feeds.$method(),
-            oracle_observations: $state.oracle_observations.$method(),
-            oracle_history: $state.oracle_history.$method(),
-            oracle_provider_stats: $state.oracle_provider_stats.$method(),
-            oracle_disputes: $state.oracle_disputes.$method(),
-            oracle_changes: $state.oracle_changes.$method(),
-            defi_oracle_attestations: $state.defi_oracle_attestations.$method(),
-            twitter_bindings: $state.twitter_bindings.$method(),
-            twitter_bindings_by_uaid: $state.twitter_bindings_by_uaid.$method(),
-            viral_reward_budget: $state.viral_reward_budget.$method(),
-            viral_campaign_budget: $state.viral_campaign_budget.$method(),
-            viral_daily_counters: $state.viral_daily_counters.$method(),
-            viral_binding_claims: $state.viral_binding_claims.$method(),
-            viral_escrows: $state.viral_escrows.$method(),
-            viral_bonus_paid: $state.viral_bonus_paid.$method(),
-            asset_escrows: $state.asset_escrows.$method(),
-            asset_escrows_by_seller: $state.asset_escrows_by_seller.$method(),
-            asset_escrows_by_buyer: $state.asset_escrows_by_buyer.$method(),
-            asset_escrows_by_status: $state.asset_escrows_by_status.$method(),
-            anonymous_asset_escrows: $state.anonymous_asset_escrows.$method(),
-            anonymous_asset_escrows_by_seller: $state.anonymous_asset_escrows_by_seller.$method(),
-            anonymous_asset_escrows_by_buyer: $state.anonymous_asset_escrows_by_buyer.$method(),
-            anonymous_asset_escrows_by_status: $state.anonymous_asset_escrows_by_status.$method(),
-            vpn_leases: $state.vpn_leases.$method(),
-            uaid_dataspaces: $state.uaid_dataspaces.$method(),
-            space_directory_manifests: $state.space_directory_manifests.$method(),
-            axt_policies: $state.axt_policies.$method(),
-            axt_replay_ledger: $state.axt_replay_ledger.$method(),
-            sccp_registry: $state.sccp_registry.$method(),
-            sccp_outbound_pending_usage: $state.sccp_outbound_pending_usage.$method(),
-            sccp_outbound_pending_messages: $state.sccp_outbound_pending_messages.$method(),
-            sccp_outbound_message_locator: $state.sccp_outbound_message_locator.$method(),
-            sccp_outbound_message_index: $state.sccp_outbound_message_index.$method(),
-            sccp_outbound_proofs: $state.sccp_outbound_proofs.$method(),
-            sccp_inbound_messages: $state.sccp_inbound_messages.$method(),
-            sccp_inbound_anchor_high_water: $state.sccp_inbound_anchor_high_water.$method(),
-            tx_sequences: $state.tx_sequences.$method(),
-            triggers: $state.triggers.$method(),
-            executor: $state.executor.$method(),
-            executor_data_model: $state.executor_data_model.$method(),
-            verifying_keys: $state.verifying_keys.$method(),
-            verifying_keys_by_circuit: $state.verifying_keys_by_circuit.$method(),
-            pedersen_params: $state.pedersen_params.$method(),
-            poseidon_params: $state.poseidon_params.$method(),
-            runtime_upgrades: $state.runtime_upgrades.$method(),
-            privacy_consensus_policy: $state.privacy_consensus_policy.$method(),
-            privacy_activations: $state.privacy_activations.$method(),
-            privacy_pgc_accounts: $state.privacy_pgc_accounts.$method(),
-            privacy_pgc_pool_invariants: $state.privacy_pgc_pool_invariants.$method(),
-            privacy_nullifiers: $state.privacy_nullifiers.$method(),
-            privacy_commitments: $state.privacy_commitments.$method(),
-            privacy_roots: $state.privacy_roots.$method(),
-            privacy_root_heads: $state.privacy_root_heads.$method(),
-            proofs: $state.proofs.$method(),
-            proofs_by_status: $state.proofs_by_status.$method(),
-            proof_tags: $state.proof_tags.$method(),
-            proofs_by_tag: $state.proofs_by_tag.$method(),
-            commit_qcs: $state.commit_qcs.$method(),
-            consensus_evidence: $state.consensus_evidence.$method(),
-            contract_manifests: $state.contract_manifests.$method(),
-            contract_code: $state.contract_code.$method(),
-            contract_code_uploads: $state.contract_code_uploads.$method(),
-            contract_code_upload_chunks: $state.contract_code_upload_chunks.$method(),
-            contract_instances: $state.contract_instances.$method(),
-            contract_subject_bindings: $state.contract_subject_bindings.$method(),
-            contract_subject_addresses: $state.contract_subject_addresses.$method(),
-            smart_contract_state: $state.smart_contract_state.$method(),
-            soracloud_service_revisions: $state.soracloud_service_revisions.$method(),
-            soracloud_service_deployments: $state.soracloud_service_deployments.$method(),
-            soracloud_app_infra_states: $state.soracloud_app_infra_states.$method(),
-            soracloud_service_runtime: $state.soracloud_service_runtime.$method(),
-            soracloud_inrou_replica_runtime: $state.soracloud_inrou_replica_runtime.$method(),
-            soracloud_service_audit_events: $state.soracloud_service_audit_events.$method(),
-            soracloud_app_infra_audit_events: $state.soracloud_app_infra_audit_events.$method(),
-            soracloud_service_state_entries: $state.soracloud_service_state_entries.$method(),
-            soracloud_decryption_request_records: $state
-                .soracloud_decryption_request_records
-                .$method(),
-            soracloud_agent_apartments: $state.soracloud_agent_apartments.$method(),
-            soracloud_agent_apartment_audit_events: $state
-                .soracloud_agent_apartment_audit_events
-                .$method(),
-            soracloud_training_jobs: $state.soracloud_training_jobs.$method(),
-            soracloud_training_job_audit_events: $state
-                .soracloud_training_job_audit_events
-                .$method(),
-            soracloud_model_registries: $state.soracloud_model_registries.$method(),
-            soracloud_model_weight_versions: $state.soracloud_model_weight_versions.$method(),
-            soracloud_model_weight_audit_events: $state
-                .soracloud_model_weight_audit_events
-                .$method(),
-            soracloud_model_artifacts: $state.soracloud_model_artifacts.$method(),
-            soracloud_model_artifact_audit_events: $state
-                .soracloud_model_artifact_audit_events
-                .$method(),
-            soracloud_uploaded_model_bundles: $state.soracloud_uploaded_model_bundles.$method(),
-            soracloud_model_host_capabilities: $state.soracloud_model_host_capabilities.$method(),
-            soracloud_inrou_host_capabilities: $state.soracloud_inrou_host_capabilities.$method(),
-            soracloud_hf_sources: $state.soracloud_hf_sources.$method(),
-            soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.$method(),
-            soracloud_hf_shared_lease_members: $state.soracloud_hf_shared_lease_members.$method(),
-            soracloud_hf_shared_lease_audit_events: $state
-                .soracloud_hf_shared_lease_audit_events
-                .$method(),
-            soracloud_model_host_violation_evidence: $state
-                .soracloud_model_host_violation_evidence
-                .$method(),
-            soracloud_hf_placements: $state.soracloud_hf_placements.$method(),
-            soracloud_inrou_service_placements: $state.soracloud_inrou_service_placements.$method(),
-            soracloud_mailbox_messages: $state.soracloud_mailbox_messages.$method(),
-            soracloud_runtime_receipts: $state.soracloud_runtime_receipts.$method(),
-            soracloud_private_uploaded_model_execution_receipts: $state
-                .soracloud_private_uploaded_model_execution_receipts
-                .$method(),
-            capacity_declarations: $state.capacity_declarations.$method(),
-            capacity_fee_ledger: $state.capacity_fee_ledger.$method(),
-            capacity_disputes: $state.capacity_disputes.$method(),
-            sorafs_pricing: $state.sorafs_pricing.$method(),
-            provider_credit_ledger: $state.provider_credit_ledger.$method(),
-            provider_owners: $state.provider_owners.$method(),
-            provider_ingest_completion_authorities: $state
-                .provider_ingest_completion_authorities
-                .$method(),
-            da_pin_intents_by_ticket: $state.da_pin_intents_by_ticket.$method(),
-            da_pin_intents_by_alias: $state.da_pin_intents_by_alias.$method(),
-            da_pin_intents_by_manifest: $state.da_pin_intents_by_manifest.$method(),
-            da_pin_intents_by_lane_epoch: $state.da_pin_intents_by_lane_epoch.$method(),
-            pin_manifests: $state.pin_manifests.$method(),
-            manifest_aliases: $state.manifest_aliases.$method(),
-            replication_orders: $state.replication_orders.$method(),
-            content_bundles: $state.content_bundles.$method(),
-            content_chunks: $state.content_chunks.$method(),
-            soradns_directory_records: $state.soradns_directory_records.$method(),
-            soradns_directory_pending: $state.soradns_directory_pending.$method(),
-            soradns_directory_latest: $state.soradns_directory_latest.$method(),
-            soradns_directory_history: $state.soradns_directory_history.$method(),
-            soradns_directory_prev_of: $state.soradns_directory_prev_of.$method(),
-            soradns_directory_revocations: $state.soradns_directory_revocations.$method(),
-            soradns_release_signers: $state.soradns_release_signers.$method(),
-            soradns_rotation_policy: $state.soradns_rotation_policy.$method(),
-            soradns_last_publish_ms: $state.soradns_last_publish_ms.$method(),
-            soradns_history_len: $state.soradns_history_len.$method(),
-            repo_agreements: $state.repo_agreements.$method(),
-            repo_agreements_by_initiator: $state.repo_agreements_by_initiator.$method(),
-            repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.$method(),
-            repo_agreements_by_custodian: $state.repo_agreements_by_custodian.$method(),
-            settlement_receipts: $state.settlement_receipts.$method(),
-            kagemusha_replay_keys: $state.kagemusha_replay_keys.$method(),
-            direct_lane_block_application_markers: $state
-                .direct_lane_block_application_markers
-                .$method(),
-            public_lane_validators: $state.public_lane_validators.$method(),
-            public_lane_stake_shares: $state.public_lane_stake_shares.$method(),
-            public_lane_rewards: $state.public_lane_rewards.$method(),
-            public_lane_reward_claims: $state.public_lane_reward_claims.$method(),
-            lane_relay_emergency_validators: $state.lane_relay_emergency_validators.$method(),
-            zk_assets: $state.zk_assets.$method(),
-            elections: $state.elections.$method(),
-            citizens: $state.citizens.$method(),
-            ministry_agenda_proposals: $state.ministry_agenda_proposals.$method(),
-            governance_proposals: $state.governance_proposals.$method(),
-            governance_referenda: $state.governance_referenda.$method(),
-            governance_stage_approvals: $state.governance_stage_approvals.$method(),
-            governance_locks: $state.governance_locks.$method(),
-            governance_slashes: $state.governance_slashes.$method(),
-            governance_last_unlock_sweep_height: $state
-                .governance_last_unlock_sweep_height
-                .$method(),
-            council: $state.council.$method(),
-            parliament_bodies: $state.parliament_bodies.$method(),
-            vrf_epochs: $state.vrf_epochs.$method(),
-            merge_hint_roots: $state.merge_hint_roots.$method(),
-            merge_global_state_root: $state.merge_global_state_root.$method(),
+            $($prefix: $state.$prefix.$method(),)*
+            $($privacy: $state.$privacy.$method(),)*
+            $($suffix: $state.$suffix.$method(),)*
             external_event_buf: Vec::new(),
+        }
+    };
+}
+
+macro_rules! build_world_block {
+    ($state:expr, $method:ident) => {
+        with_world_overlay_fields!(build_world_block_from_fields, $state, $method)
+    };
+}
+
+macro_rules! build_world_transaction_from_fields {
+    (
+        $state:expr,
+        $telemetry:expr,
+        $axt_lane_config:expr,
+        $axt_current_slot:expr,
+        $axt_lane_map:expr;
+        [$($prefix:ident,)*]
+        [$($privacy:ident,)*]
+        [$($suffix:ident,)*]
+    ) => {
+        WorldTransaction {
+            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
+            $($prefix: $state.$prefix.transaction(),)*
+            $($privacy: $state.$privacy.transaction(),)*
+            $($suffix: $state.$suffix.transaction(),)*
+            axt_lane_config: $axt_lane_config,
+            axt_current_slot: $axt_current_slot,
+            axt_lane_map: $axt_lane_map,
+            current_dataspace_id: None,
+            external_event_sink: &mut $state.external_event_buf,
+            external_event_buf: Vec::new(),
+            #[cfg(feature = "telemetry")]
+            telemetry: $telemetry,
+            internal_event_buf: Vec::new(),
         }
     };
 }
@@ -781,253 +837,35 @@ macro_rules! build_world_transaction {
         $axt_current_slot:expr,
         $axt_lane_map:expr
     ) => {
-        WorldTransaction {
+        with_world_overlay_fields!(
+            build_world_transaction_from_fields,
+            $state,
+            $telemetry,
+            $axt_lane_config,
+            $axt_current_slot,
+            $axt_lane_map
+        )
+    };
+}
+
+macro_rules! build_world_view_from_fields {
+    (
+        $state:expr;
+        [$($prefix:ident,)*]
+        [$($_privacy:ident,)*]
+        [$($suffix:ident,)*]
+    ) => {
+        WorldView {
             dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
-            parameters: $state.parameters.transaction(),
-            peers: $state.peers.transaction(),
-            consensus_keys: $state.consensus_keys.transaction(),
-            consensus_keys_by_pk: $state.consensus_keys_by_pk.transaction(),
-            domain_committees: $state.domain_committees.transaction(),
-            domain_endorsement_policies: $state.domain_endorsement_policies.transaction(),
-            domain_endorsements: $state.domain_endorsements.transaction(),
-            domain_endorsements_by_domain: $state.domain_endorsements_by_domain.transaction(),
-            domains: $state.domains.transaction(),
-            domains_by_owner: $state.domains_by_owner.transaction(),
-            domain_selectors: $state.domain_selectors.transaction(),
-            accounts: $state.accounts.transaction(),
-            uaid_accounts: $state.uaid_accounts.transaction(),
-            account_aliases: $state.account_aliases.transaction(),
-            account_aliases_by_account: $state.account_aliases_by_account.transaction(),
-            account_scope_directory: $state.account_scope_directory.transaction(),
-            account_scope_accounts: $state.account_scope_accounts.transaction(),
-            opaque_uaids: $state.opaque_uaids.transaction(),
-            ram_lfe_program_policies: $state.ram_lfe_program_policies.transaction(),
-            identifier_policies: $state.identifier_policies.transaction(),
-            fee_sponsor_programs: $state.fee_sponsor_programs.transaction(),
-            fee_sponsor_program_revisions: $state.fee_sponsor_program_revisions.transaction(),
-            fee_sponsor_enrollments: $state.fee_sponsor_enrollments.transaction(),
-            fee_sponsor_vaults: $state.fee_sponsor_vaults.transaction(),
-            fee_sponsor_budget_counters: $state.fee_sponsor_budget_counters.transaction(),
-            identifier_claims: $state.identifier_claims.transaction(),
-            account_rekey_records: $state.account_rekey_records.transaction(),
-            account_recovery_policies: $state.account_recovery_policies.transaction(),
-            account_recovery_requests: $state.account_recovery_requests.transaction(),
-            asset_definitions: $state.asset_definitions.transaction(),
-            asset_definition_aliases: $state.asset_definition_aliases.transaction(),
-            asset_definition_alias_bindings: $state.asset_definition_alias_bindings.transaction(),
-            contract_aliases: $state.contract_aliases.transaction(),
-            contract_alias_bindings: $state.contract_alias_bindings.transaction(),
-            domain_asset_definitions: $state.domain_asset_definitions.transaction(),
-            asset_definitions_by_owner: $state.asset_definitions_by_owner.transaction(),
-            asset_definition_holders: $state.asset_definition_holders.transaction(),
-            asset_definition_assets: $state.asset_definition_assets.transaction(),
-            asset_definition_nonzero_holders: $state.asset_definition_nonzero_holders.transaction(),
-            assets: $state.assets.transaction(),
-            asset_metadata: $state.asset_metadata.transaction(),
-            nfts: $state.nfts.transaction(),
-            nfts_by_owner: $state.nfts_by_owner.transaction(),
-            rwas: $state.rwas.transaction(),
-            rwas_by_owner: $state.rwas_by_owner.transaction(),
-            rwas_by_status: $state.rwas_by_status.transaction(),
-            rwas_by_frozen: $state.rwas_by_frozen.transaction(),
-            roles: $state.roles.transaction(),
-            account_permissions: $state.account_permissions.transaction(),
-            account_roles: $state.account_roles.transaction(),
-            oracle_feeds: $state.oracle_feeds.transaction(),
-            oracle_observations: $state.oracle_observations.transaction(),
-            oracle_history: $state.oracle_history.transaction(),
-            oracle_provider_stats: $state.oracle_provider_stats.transaction(),
-            oracle_disputes: $state.oracle_disputes.transaction(),
-            oracle_changes: $state.oracle_changes.transaction(),
-            defi_oracle_attestations: $state.defi_oracle_attestations.transaction(),
-            twitter_bindings: $state.twitter_bindings.transaction(),
-            twitter_bindings_by_uaid: $state.twitter_bindings_by_uaid.transaction(),
-            viral_reward_budget: $state.viral_reward_budget.transaction(),
-            viral_campaign_budget: $state.viral_campaign_budget.transaction(),
-            viral_daily_counters: $state.viral_daily_counters.transaction(),
-            viral_binding_claims: $state.viral_binding_claims.transaction(),
-            viral_escrows: $state.viral_escrows.transaction(),
-            viral_bonus_paid: $state.viral_bonus_paid.transaction(),
-            asset_escrows: $state.asset_escrows.transaction(),
-            asset_escrows_by_seller: $state.asset_escrows_by_seller.transaction(),
-            asset_escrows_by_buyer: $state.asset_escrows_by_buyer.transaction(),
-            asset_escrows_by_status: $state.asset_escrows_by_status.transaction(),
-            anonymous_asset_escrows: $state.anonymous_asset_escrows.transaction(),
-            anonymous_asset_escrows_by_seller: $state
-                .anonymous_asset_escrows_by_seller
-                .transaction(),
-            anonymous_asset_escrows_by_buyer: $state.anonymous_asset_escrows_by_buyer.transaction(),
-            anonymous_asset_escrows_by_status: $state
-                .anonymous_asset_escrows_by_status
-                .transaction(),
-            vpn_leases: $state.vpn_leases.transaction(),
-            uaid_dataspaces: $state.uaid_dataspaces.transaction(),
-            space_directory_manifests: $state.space_directory_manifests.transaction(),
-            axt_policies: $state.axt_policies.transaction(),
-            axt_replay_ledger: $state.axt_replay_ledger.transaction(),
-            sccp_registry: $state.sccp_registry.transaction(),
-            sccp_outbound_pending_usage: $state.sccp_outbound_pending_usage.transaction(),
-            sccp_outbound_pending_messages: $state.sccp_outbound_pending_messages.transaction(),
-            sccp_outbound_message_locator: $state.sccp_outbound_message_locator.transaction(),
-            sccp_outbound_message_index: $state.sccp_outbound_message_index.transaction(),
-            sccp_outbound_proofs: $state.sccp_outbound_proofs.transaction(),
-            sccp_inbound_messages: $state.sccp_inbound_messages.transaction(),
-            sccp_inbound_anchor_high_water: $state.sccp_inbound_anchor_high_water.transaction(),
-            tx_sequences: $state.tx_sequences.transaction(),
-            triggers: $state.triggers.transaction(),
-            executor: $state.executor.transaction(),
-            executor_data_model: $state.executor_data_model.transaction(),
-            verifying_keys: $state.verifying_keys.transaction(),
-            verifying_keys_by_circuit: $state.verifying_keys_by_circuit.transaction(),
-            pedersen_params: $state.pedersen_params.transaction(),
-            poseidon_params: $state.poseidon_params.transaction(),
-            runtime_upgrades: $state.runtime_upgrades.transaction(),
-            privacy_consensus_policy: $state.privacy_consensus_policy.transaction(),
-            privacy_activations: $state.privacy_activations.transaction(),
-            privacy_pgc_accounts: $state.privacy_pgc_accounts.transaction(),
-            privacy_pgc_pool_invariants: $state.privacy_pgc_pool_invariants.transaction(),
-            privacy_nullifiers: $state.privacy_nullifiers.transaction(),
-            privacy_commitments: $state.privacy_commitments.transaction(),
-            privacy_roots: $state.privacy_roots.transaction(),
-            privacy_root_heads: $state.privacy_root_heads.transaction(),
-            proofs: $state.proofs.transaction(),
-            proofs_by_status: $state.proofs_by_status.transaction(),
-            proof_tags: $state.proof_tags.transaction(),
-            proofs_by_tag: $state.proofs_by_tag.transaction(),
-            commit_qcs: $state.commit_qcs.transaction(),
-            consensus_evidence: $state.consensus_evidence.transaction(),
-            contract_manifests: $state.contract_manifests.transaction(),
-            contract_code: $state.contract_code.transaction(),
-            contract_code_uploads: $state.contract_code_uploads.transaction(),
-            contract_code_upload_chunks: $state.contract_code_upload_chunks.transaction(),
-            contract_instances: $state.contract_instances.transaction(),
-            contract_subject_bindings: $state.contract_subject_bindings.transaction(),
-            contract_subject_addresses: $state.contract_subject_addresses.transaction(),
-            smart_contract_state: $state.smart_contract_state.transaction(),
-            soracloud_service_revisions: $state.soracloud_service_revisions.transaction(),
-            soracloud_service_deployments: $state.soracloud_service_deployments.transaction(),
-            soracloud_app_infra_states: $state.soracloud_app_infra_states.transaction(),
-            soracloud_service_runtime: $state.soracloud_service_runtime.transaction(),
-            soracloud_inrou_replica_runtime: $state.soracloud_inrou_replica_runtime.transaction(),
-            soracloud_service_audit_events: $state.soracloud_service_audit_events.transaction(),
-            soracloud_app_infra_audit_events: $state.soracloud_app_infra_audit_events.transaction(),
-            soracloud_service_state_entries: $state.soracloud_service_state_entries.transaction(),
-            soracloud_decryption_request_records: $state
-                .soracloud_decryption_request_records
-                .transaction(),
-            soracloud_agent_apartments: $state.soracloud_agent_apartments.transaction(),
-            soracloud_agent_apartment_audit_events: $state
-                .soracloud_agent_apartment_audit_events
-                .transaction(),
-            soracloud_training_jobs: $state.soracloud_training_jobs.transaction(),
-            soracloud_training_job_audit_events: $state
-                .soracloud_training_job_audit_events
-                .transaction(),
-            soracloud_model_registries: $state.soracloud_model_registries.transaction(),
-            soracloud_model_weight_versions: $state.soracloud_model_weight_versions.transaction(),
-            soracloud_model_weight_audit_events: $state
-                .soracloud_model_weight_audit_events
-                .transaction(),
-            soracloud_model_artifacts: $state.soracloud_model_artifacts.transaction(),
-            soracloud_model_artifact_audit_events: $state
-                .soracloud_model_artifact_audit_events
-                .transaction(),
-            soracloud_uploaded_model_bundles: $state.soracloud_uploaded_model_bundles.transaction(),
-            soracloud_model_host_capabilities: $state
-                .soracloud_model_host_capabilities
-                .transaction(),
-            soracloud_inrou_host_capabilities: $state
-                .soracloud_inrou_host_capabilities
-                .transaction(),
-            soracloud_hf_sources: $state.soracloud_hf_sources.transaction(),
-            soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.transaction(),
-            soracloud_hf_shared_lease_members: $state
-                .soracloud_hf_shared_lease_members
-                .transaction(),
-            soracloud_hf_shared_lease_audit_events: $state
-                .soracloud_hf_shared_lease_audit_events
-                .transaction(),
-            soracloud_model_host_violation_evidence: $state
-                .soracloud_model_host_violation_evidence
-                .transaction(),
-            soracloud_hf_placements: $state.soracloud_hf_placements.transaction(),
-            soracloud_inrou_service_placements: $state
-                .soracloud_inrou_service_placements
-                .transaction(),
-            soracloud_mailbox_messages: $state.soracloud_mailbox_messages.transaction(),
-            soracloud_runtime_receipts: $state.soracloud_runtime_receipts.transaction(),
-            soracloud_private_uploaded_model_execution_receipts: $state
-                .soracloud_private_uploaded_model_execution_receipts
-                .transaction(),
-            capacity_declarations: $state.capacity_declarations.transaction(),
-            capacity_fee_ledger: $state.capacity_fee_ledger.transaction(),
-            capacity_disputes: $state.capacity_disputes.transaction(),
-            sorafs_pricing: $state.sorafs_pricing.transaction(),
-            provider_credit_ledger: $state.provider_credit_ledger.transaction(),
-            provider_owners: $state.provider_owners.transaction(),
-            provider_ingest_completion_authorities: $state
-                .provider_ingest_completion_authorities
-                .transaction(),
-            da_pin_intents_by_ticket: $state.da_pin_intents_by_ticket.transaction(),
-            da_pin_intents_by_alias: $state.da_pin_intents_by_alias.transaction(),
-            da_pin_intents_by_manifest: $state.da_pin_intents_by_manifest.transaction(),
-            da_pin_intents_by_lane_epoch: $state.da_pin_intents_by_lane_epoch.transaction(),
-            pin_manifests: $state.pin_manifests.transaction(),
-            manifest_aliases: $state.manifest_aliases.transaction(),
-            replication_orders: $state.replication_orders.transaction(),
-            content_bundles: $state.content_bundles.transaction(),
-            content_chunks: $state.content_chunks.transaction(),
-            soradns_directory_records: $state.soradns_directory_records.transaction(),
-            soradns_directory_pending: $state.soradns_directory_pending.transaction(),
-            soradns_directory_latest: $state.soradns_directory_latest.transaction(),
-            soradns_directory_history: $state.soradns_directory_history.transaction(),
-            soradns_directory_prev_of: $state.soradns_directory_prev_of.transaction(),
-            soradns_directory_revocations: $state.soradns_directory_revocations.transaction(),
-            soradns_release_signers: $state.soradns_release_signers.transaction(),
-            soradns_rotation_policy: $state.soradns_rotation_policy.transaction(),
-            soradns_last_publish_ms: $state.soradns_last_publish_ms.transaction(),
-            soradns_history_len: $state.soradns_history_len.transaction(),
-            repo_agreements: $state.repo_agreements.transaction(),
-            repo_agreements_by_initiator: $state.repo_agreements_by_initiator.transaction(),
-            repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.transaction(),
-            repo_agreements_by_custodian: $state.repo_agreements_by_custodian.transaction(),
-            settlement_receipts: $state.settlement_receipts.transaction(),
-            kagemusha_replay_keys: $state.kagemusha_replay_keys.transaction(),
-            direct_lane_block_application_markers: $state
-                .direct_lane_block_application_markers
-                .transaction(),
-            public_lane_validators: $state.public_lane_validators.transaction(),
-            public_lane_stake_shares: $state.public_lane_stake_shares.transaction(),
-            public_lane_rewards: $state.public_lane_rewards.transaction(),
-            public_lane_reward_claims: $state.public_lane_reward_claims.transaction(),
-            lane_relay_emergency_validators: $state.lane_relay_emergency_validators.transaction(),
-            zk_assets: $state.zk_assets.transaction(),
-            elections: $state.elections.transaction(),
-            citizens: $state.citizens.transaction(),
-            ministry_agenda_proposals: $state.ministry_agenda_proposals.transaction(),
-            governance_proposals: $state.governance_proposals.transaction(),
-            governance_referenda: $state.governance_referenda.transaction(),
-            governance_stage_approvals: $state.governance_stage_approvals.transaction(),
-            governance_locks: $state.governance_locks.transaction(),
-            governance_slashes: $state.governance_slashes.transaction(),
-            governance_last_unlock_sweep_height: $state
-                .governance_last_unlock_sweep_height
-                .transaction(),
-            council: $state.council.transaction(),
-            parliament_bodies: $state.parliament_bodies.transaction(),
-            vrf_epochs: $state.vrf_epochs.transaction(),
-            merge_hint_roots: $state.merge_hint_roots.transaction(),
-            merge_global_state_root: $state.merge_global_state_root.transaction(),
-            axt_lane_config: $axt_lane_config,
-            axt_current_slot: $axt_current_slot,
-            axt_lane_map: $axt_lane_map,
-            current_dataspace_id: None,
-            external_event_sink: &mut $state.external_event_buf,
-            external_event_buf: Vec::new(),
-            #[cfg(feature = "telemetry")]
-            telemetry: $telemetry,
-            internal_event_buf: Vec::new(),
+            $($prefix: $state.$prefix.view(),)*
+            $($suffix: $state.$suffix.view(),)*
         }
+    };
+}
+
+macro_rules! build_world_view {
+    ($state:expr) => {
+        with_world_overlay_fields!(build_world_view_from_fields, $state)
     };
 }
 
@@ -1739,6 +1577,77 @@ struct AppliedMergeLaneFrontierMarker {
     lane_block_descriptor_hash: Hash,
 }
 
+/// One exact lane incarnation that remains responsible for globally admitted
+/// QueuePlan work until its canonical carrier commits the entrypoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct QueuePlanPendingObligationRouteV1 {
+    version: u16,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+}
+
+/// Replicated pending application obligation for one immutable QueuePlan
+/// admission. The optional signed identity covers the legacy all-external
+/// transaction index while the typed entrypoint identity covers heterogeneous
+/// and authority-free carriers. Every compact identity and deduplicated route
+/// is checked against the embedded, registry-hash-authenticated admission
+/// binding whenever the marker is decoded.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct QueuePlanPendingObligationV1 {
+    version: u16,
+    chain_id_digest: Hash,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    signed_transaction_hash: Option<HashOf<SignedTransaction>>,
+    binding_hash: Hash,
+    binding: crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    routes: Vec<QueuePlanPendingObligationRouteV1>,
+}
+
+/// Exact replicated membership witness for one pending QueuePlan obligation
+/// on one deduplicated route. Route-prefixed keys form the authoritative,
+/// canonically ordered roster; bounded prefix enumeration replaces the lossy
+/// count/XOR summary and keeps drain/removal exact.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct QueuePlanPendingRouteMemberV1 {
+    version: u16,
+    route: QueuePlanPendingObligationRouteV1,
+    chain_id_digest: Hash,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    binding_hash: Hash,
+    member_identity: [u8; Hash::LENGTH],
+}
+
+/// Mutable QueuePlan marker storage used by both block overlays and their
+/// nested failure-atomic transactions.
+trait QueuePlanMarkerStorage: StorageReadOnly<StatePath, Vec<u8>> {
+    fn insert_queue_plan_marker(&mut self, key: StatePath, payload: Vec<u8>);
+    fn remove_queue_plan_marker(&mut self, key: StatePath);
+}
+
+impl QueuePlanMarkerStorage for StorageBlock<'_, StatePath, Vec<u8>> {
+    fn insert_queue_plan_marker(&mut self, key: StatePath, payload: Vec<u8>) {
+        let _ = self.insert(key, payload);
+    }
+
+    fn remove_queue_plan_marker(&mut self, key: StatePath) {
+        let _ = self.remove(key);
+    }
+}
+
+impl QueuePlanMarkerStorage for StorageTransaction<'_, '_, StatePath, Vec<u8>> {
+    fn insert_queue_plan_marker(&mut self, key: StatePath, payload: Vec<u8>) {
+        let _ = self.insert(key, payload);
+    }
+
+    fn remove_queue_plan_marker(&mut self, key: StatePath) {
+        let _ = self.remove(key);
+    }
+}
+
 /// Replicated Native AMX participant-control frontier. Presence certifies that
 /// the global block committed the exact control QCs; the independently durable
 /// Kura application receipt determines whether its effects are published.
@@ -2428,6 +2337,16 @@ pub enum QueuePlanAdmissionRegistryMatch {
     Conflict,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueuePlanAdmissionApplicationState {
+    /// The obligation is pending on every currently active bound incarnation.
+    Pending,
+    /// The obligation is coherent but names a retired/recreated incarnation.
+    PendingStale,
+    /// Canonical transaction membership proves global application.
+    Applied,
+}
+
 /// Durable disposition of one authenticated pending QueuePlan certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PendingQueuePlanAdmissionDisposition {
@@ -2447,15 +2366,25 @@ pub(crate) enum PendingQueuePlanAdmissionDisposition {
 /// transition. Malformed keys or values return an error so callers retain the
 /// only durable queue owner while failing closed.
 pub(crate) fn queue_plan_admission_registry_match(
-    state_view: &impl StateReadOnly,
+    state_view: &impl StateReadOnlyWithTransactions,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     expected_binding_hash: Hash,
 ) -> Result<QueuePlanAdmissionRegistryMatch, String> {
-    State::queue_plan_admission_registry_match_in_view(
-        state_view,
-        entrypoint_hash,
-        expected_binding_hash,
-    )
+    let (registry_match, application_state) =
+        State::queue_plan_admission_registry_match_with_application_state_in_view(
+            state_view,
+            entrypoint_hash,
+            expected_binding_hash,
+        )?;
+    if registry_match == QueuePlanAdmissionRegistryMatch::Exact
+        && application_state != Some(QueuePlanAdmissionApplicationState::Pending)
+    {
+        return Err(
+            "QueuePlan registry owner is already applied and cannot authorize new Queue ownership"
+                .to_owned(),
+        );
+    }
+    Ok(registry_match)
 }
 
 impl MergeLedgerPublicationMode {
@@ -10948,6 +10877,22 @@ struct CanonicalCarrierCommitMetadataAuthorization {
     autoscale_sample: AutoscaleSampleRecord,
 }
 
+/// Move-only authorization consumed at the canonical State commit boundary.
+///
+/// Implementations must bind the finalized carrier identity to the exact
+/// autonomous merge entry staged in this [`StateBlock`]. State consumes the
+/// authorization while holding `state_commit_lock`, after the final lane
+/// retirement veto and before any lane geometry or WSV storage is published.
+pub(crate) trait StateBlockCommitAuthorization {
+    /// Consume and validate this authorization against State's exact commit
+    /// identity.
+    fn consume_for_state_commit(
+        self: Box<Self>,
+        carrier_block_hash: HashOf<BlockHeader>,
+        staged_merge_entry: Option<&MergeLedgerEntry>,
+    ) -> Result<(), String>;
+}
+
 /// Struct for block's aggregated changes
 pub struct StateBlock<'state> {
     state_ref: &'state State,
@@ -11126,6 +11071,21 @@ impl<'state> StateBlock<'state> {
     /// Return the block-local autoscale history exactly as commit would publish it.
     pub(crate) fn autoscale_sample_history_for_snapshot(&self) -> &VecDeque<AutoscaleSampleRecord> {
         &self.autoscale_sample_history
+    }
+
+    /// Return the exact pending scale-in identity, when this block carries one.
+    ///
+    /// Callers use this read-only projection to acquire the Queue retirement
+    /// observer only for a real scale-in. State re-derives and checks the same
+    /// binding under its lifecycle fence during commit.
+    pub(crate) fn pending_autoscale_retirement_binding(
+        &self,
+    ) -> Result<Option<(LaneId, DataSpaceId, Hash)>, LaneLifecycleError> {
+        self.pending_autoscale_lifecycle
+            .as_ref()
+            .map(PendingAutoscaleLaneLifecycle::exact_scale_in_binding)
+            .transpose()
+            .map(Option::flatten)
     }
 
     /// Serialize transaction membership exactly as this block commit would publish it.
@@ -19027,221 +18987,9 @@ impl World {
         build_world_block!(self, block_and_revert)
     }
 
-    /// Create point in time view of the [`Self`]
-    #[allow(clippy::too_many_lines)]
+    /// Create a point-in-time view of this world.
     pub fn view(&self) -> WorldView<'_> {
-        WorldView {
-            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
-            parameters: self.parameters.view(),
-            peers: self.peers.view(),
-            consensus_keys: self.consensus_keys.view(),
-            consensus_keys_by_pk: self.consensus_keys_by_pk.view(),
-            domain_committees: self.domain_committees.view(),
-            domain_endorsement_policies: self.domain_endorsement_policies.view(),
-            domain_endorsements: self.domain_endorsements.view(),
-            domain_endorsements_by_domain: self.domain_endorsements_by_domain.view(),
-            domains: self.domains.view(),
-            domains_by_owner: self.domains_by_owner.view(),
-            domain_selectors: self.domain_selectors.view(),
-            accounts: self.accounts.view(),
-            uaid_accounts: self.uaid_accounts.view(),
-            account_aliases: self.account_aliases.view(),
-            account_aliases_by_account: self.account_aliases_by_account.view(),
-            account_scope_directory: self.account_scope_directory.view(),
-            account_scope_accounts: self.account_scope_accounts.view(),
-            opaque_uaids: self.opaque_uaids.view(),
-            ram_lfe_program_policies: self.ram_lfe_program_policies.view(),
-            identifier_policies: self.identifier_policies.view(),
-            fee_sponsor_programs: self.fee_sponsor_programs.view(),
-            fee_sponsor_program_revisions: self.fee_sponsor_program_revisions.view(),
-            fee_sponsor_enrollments: self.fee_sponsor_enrollments.view(),
-            fee_sponsor_vaults: self.fee_sponsor_vaults.view(),
-            fee_sponsor_budget_counters: self.fee_sponsor_budget_counters.view(),
-            identifier_claims: self.identifier_claims.view(),
-            account_rekey_records: self.account_rekey_records.view(),
-            account_recovery_policies: self.account_recovery_policies.view(),
-            account_recovery_requests: self.account_recovery_requests.view(),
-            asset_definitions: self.asset_definitions.view(),
-            asset_definition_aliases: self.asset_definition_aliases.view(),
-            asset_definition_alias_bindings: self.asset_definition_alias_bindings.view(),
-            contract_aliases: self.contract_aliases.view(),
-            contract_alias_bindings: self.contract_alias_bindings.view(),
-            domain_asset_definitions: self.domain_asset_definitions.view(),
-            asset_definitions_by_owner: self.asset_definitions_by_owner.view(),
-            asset_definition_holders: self.asset_definition_holders.view(),
-            asset_definition_assets: self.asset_definition_assets.view(),
-            asset_definition_nonzero_holders: self.asset_definition_nonzero_holders.view(),
-            assets: self.assets.view(),
-            asset_metadata: self.asset_metadata.view(),
-            nfts: self.nfts.view(),
-            nfts_by_owner: self.nfts_by_owner.view(),
-            rwas: self.rwas.view(),
-            rwas_by_owner: self.rwas_by_owner.view(),
-            rwas_by_status: self.rwas_by_status.view(),
-            rwas_by_frozen: self.rwas_by_frozen.view(),
-            roles: self.roles.view(),
-            account_permissions: self.account_permissions.view(),
-            account_roles: self.account_roles.view(),
-            oracle_feeds: self.oracle_feeds.view(),
-            oracle_observations: self.oracle_observations.view(),
-            oracle_history: self.oracle_history.view(),
-            oracle_provider_stats: self.oracle_provider_stats.view(),
-            oracle_disputes: self.oracle_disputes.view(),
-            oracle_changes: self.oracle_changes.view(),
-            defi_oracle_attestations: self.defi_oracle_attestations.view(),
-            twitter_bindings: self.twitter_bindings.view(),
-            twitter_bindings_by_uaid: self.twitter_bindings_by_uaid.view(),
-            viral_reward_budget: self.viral_reward_budget.view(),
-            viral_campaign_budget: self.viral_campaign_budget.view(),
-            viral_daily_counters: self.viral_daily_counters.view(),
-            viral_binding_claims: self.viral_binding_claims.view(),
-            viral_escrows: self.viral_escrows.view(),
-            viral_bonus_paid: self.viral_bonus_paid.view(),
-            asset_escrows: self.asset_escrows.view(),
-            asset_escrows_by_seller: self.asset_escrows_by_seller.view(),
-            asset_escrows_by_buyer: self.asset_escrows_by_buyer.view(),
-            asset_escrows_by_status: self.asset_escrows_by_status.view(),
-            anonymous_asset_escrows: self.anonymous_asset_escrows.view(),
-            anonymous_asset_escrows_by_seller: self.anonymous_asset_escrows_by_seller.view(),
-            anonymous_asset_escrows_by_buyer: self.anonymous_asset_escrows_by_buyer.view(),
-            anonymous_asset_escrows_by_status: self.anonymous_asset_escrows_by_status.view(),
-            vpn_leases: self.vpn_leases.view(),
-            uaid_dataspaces: self.uaid_dataspaces.view(),
-            space_directory_manifests: self.space_directory_manifests.view(),
-            axt_policies: self.axt_policies.view(),
-            axt_replay_ledger: self.axt_replay_ledger.view(),
-            sccp_registry: self.sccp_registry.view(),
-            sccp_outbound_pending_usage: self.sccp_outbound_pending_usage.view(),
-            sccp_outbound_pending_messages: self.sccp_outbound_pending_messages.view(),
-            sccp_outbound_message_locator: self.sccp_outbound_message_locator.view(),
-            sccp_outbound_message_index: self.sccp_outbound_message_index.view(),
-            sccp_outbound_proofs: self.sccp_outbound_proofs.view(),
-            sccp_inbound_messages: self.sccp_inbound_messages.view(),
-            sccp_inbound_anchor_high_water: self.sccp_inbound_anchor_high_water.view(),
-            tx_sequences: self.tx_sequences.view(),
-            triggers: self.triggers.view(),
-            executor: self.executor.view(),
-            executor_data_model: self.executor_data_model.view(),
-            verifying_keys: self.verifying_keys.view(),
-            verifying_keys_by_circuit: self.verifying_keys_by_circuit.view(),
-            pedersen_params: self.pedersen_params.view(),
-            poseidon_params: self.poseidon_params.view(),
-            runtime_upgrades: self.runtime_upgrades.view(),
-            privacy_consensus_policy: self.privacy_consensus_policy.view(),
-            privacy_activations: self.privacy_activations.view(),
-            proofs: self.proofs.view(),
-            proofs_by_status: self.proofs_by_status.view(),
-            proof_tags: self.proof_tags.view(),
-            proofs_by_tag: self.proofs_by_tag.view(),
-            commit_qcs: self.commit_qcs.view(),
-            consensus_evidence: self.consensus_evidence.view(),
-            contract_manifests: self.contract_manifests.view(),
-            contract_code: self.contract_code.view(),
-            contract_code_uploads: self.contract_code_uploads.view(),
-            contract_code_upload_chunks: self.contract_code_upload_chunks.view(),
-            contract_instances: self.contract_instances.view(),
-            contract_subject_bindings: self.contract_subject_bindings.view(),
-            contract_subject_addresses: self.contract_subject_addresses.view(),
-            smart_contract_state: self.smart_contract_state.view(),
-            soracloud_service_revisions: self.soracloud_service_revisions.view(),
-            soracloud_service_deployments: self.soracloud_service_deployments.view(),
-            soracloud_app_infra_states: self.soracloud_app_infra_states.view(),
-            soracloud_service_runtime: self.soracloud_service_runtime.view(),
-            soracloud_inrou_replica_runtime: self.soracloud_inrou_replica_runtime.view(),
-            soracloud_service_audit_events: self.soracloud_service_audit_events.view(),
-            soracloud_app_infra_audit_events: self.soracloud_app_infra_audit_events.view(),
-            soracloud_service_state_entries: self.soracloud_service_state_entries.view(),
-            soracloud_decryption_request_records: self.soracloud_decryption_request_records.view(),
-            soracloud_agent_apartments: self.soracloud_agent_apartments.view(),
-            soracloud_agent_apartment_audit_events: self
-                .soracloud_agent_apartment_audit_events
-                .view(),
-            soracloud_training_jobs: self.soracloud_training_jobs.view(),
-            soracloud_training_job_audit_events: self.soracloud_training_job_audit_events.view(),
-            soracloud_model_registries: self.soracloud_model_registries.view(),
-            soracloud_model_weight_versions: self.soracloud_model_weight_versions.view(),
-            soracloud_model_weight_audit_events: self.soracloud_model_weight_audit_events.view(),
-            soracloud_model_artifacts: self.soracloud_model_artifacts.view(),
-            soracloud_model_artifact_audit_events: self
-                .soracloud_model_artifact_audit_events
-                .view(),
-            soracloud_uploaded_model_bundles: self.soracloud_uploaded_model_bundles.view(),
-            soracloud_model_host_capabilities: self.soracloud_model_host_capabilities.view(),
-            soracloud_inrou_host_capabilities: self.soracloud_inrou_host_capabilities.view(),
-            soracloud_hf_sources: self.soracloud_hf_sources.view(),
-            soracloud_hf_shared_lease_pools: self.soracloud_hf_shared_lease_pools.view(),
-            soracloud_hf_shared_lease_members: self.soracloud_hf_shared_lease_members.view(),
-            soracloud_hf_shared_lease_audit_events: self
-                .soracloud_hf_shared_lease_audit_events
-                .view(),
-            soracloud_model_host_violation_evidence: self
-                .soracloud_model_host_violation_evidence
-                .view(),
-            soracloud_hf_placements: self.soracloud_hf_placements.view(),
-            soracloud_inrou_service_placements: self.soracloud_inrou_service_placements.view(),
-            soracloud_mailbox_messages: self.soracloud_mailbox_messages.view(),
-            soracloud_runtime_receipts: self.soracloud_runtime_receipts.view(),
-            soracloud_private_uploaded_model_execution_receipts: self
-                .soracloud_private_uploaded_model_execution_receipts
-                .view(),
-            capacity_declarations: self.capacity_declarations.view(),
-            capacity_fee_ledger: self.capacity_fee_ledger.view(),
-            capacity_disputes: self.capacity_disputes.view(),
-            sorafs_pricing: self.sorafs_pricing.view(),
-            provider_credit_ledger: self.provider_credit_ledger.view(),
-            provider_owners: self.provider_owners.view(),
-            provider_ingest_completion_authorities: self
-                .provider_ingest_completion_authorities
-                .view(),
-            da_pin_intents_by_ticket: self.da_pin_intents_by_ticket.view(),
-            da_pin_intents_by_alias: self.da_pin_intents_by_alias.view(),
-            da_pin_intents_by_manifest: self.da_pin_intents_by_manifest.view(),
-            da_pin_intents_by_lane_epoch: self.da_pin_intents_by_lane_epoch.view(),
-            pin_manifests: self.pin_manifests.view(),
-            manifest_aliases: self.manifest_aliases.view(),
-            replication_orders: self.replication_orders.view(),
-            content_bundles: self.content_bundles.view(),
-            content_chunks: self.content_chunks.view(),
-            soradns_directory_records: self.soradns_directory_records.view(),
-            soradns_directory_pending: self.soradns_directory_pending.view(),
-            soradns_directory_latest: self.soradns_directory_latest.view(),
-            soradns_directory_history: self.soradns_directory_history.view(),
-            soradns_directory_prev_of: self.soradns_directory_prev_of.view(),
-            soradns_directory_revocations: self.soradns_directory_revocations.view(),
-            soradns_release_signers: self.soradns_release_signers.view(),
-            soradns_rotation_policy: self.soradns_rotation_policy.view(),
-            soradns_last_publish_ms: self.soradns_last_publish_ms.view(),
-            soradns_history_len: self.soradns_history_len.view(),
-            repo_agreements: self.repo_agreements.view(),
-            repo_agreements_by_initiator: self.repo_agreements_by_initiator.view(),
-            repo_agreements_by_counterparty: self.repo_agreements_by_counterparty.view(),
-            repo_agreements_by_custodian: self.repo_agreements_by_custodian.view(),
-            settlement_receipts: self.settlement_receipts.view(),
-            kagemusha_replay_keys: self.kagemusha_replay_keys.view(),
-            direct_lane_block_application_markers: self
-                .direct_lane_block_application_markers
-                .view(),
-            public_lane_validators: self.public_lane_validators.view(),
-            public_lane_stake_shares: self.public_lane_stake_shares.view(),
-            public_lane_rewards: self.public_lane_rewards.view(),
-            public_lane_reward_claims: self.public_lane_reward_claims.view(),
-            lane_relay_emergency_validators: self.lane_relay_emergency_validators.view(),
-            zk_assets: self.zk_assets.view(),
-            elections: self.elections.view(),
-            citizens: self.citizens.view(),
-            ministry_agenda_proposals: self.ministry_agenda_proposals.view(),
-            governance_proposals: self.governance_proposals.view(),
-            governance_referenda: self.governance_referenda.view(),
-            governance_stage_approvals: self.governance_stage_approvals.view(),
-            governance_locks: self.governance_locks.view(),
-            governance_slashes: self.governance_slashes.view(),
-            governance_last_unlock_sweep_height: self.governance_last_unlock_sweep_height.view(),
-            council: self.council.view(),
-            parliament_bodies: self.parliament_bodies.view(),
-            vrf_epochs: self.vrf_epochs.view(),
-            merge_hint_roots: self.merge_hint_roots.view(),
-            merge_global_state_root: self.merge_global_state_root.view(),
-        }
+        build_world_view!(self)
     }
 }
 
@@ -24656,12 +24404,13 @@ impl State {
     /// Fence queue admission and durable reservation ownership against lane
     /// lifecycle publication.
     ///
-    /// Callers must acquire this guard before any queue ownership lock and
-    /// retain it through the final state-bound route/incarnation validation
-    /// and queue mutation. Lifecycle commit follows the same
-    /// `lane_lifecycle_lock -> queue ownership` order conceptually, so a queue
-    /// operation either becomes visible before a drain closes or validates
-    /// against the fully published post-transition catalog.
+    /// Callers that also need the Queue reservation-transition lock must
+    /// acquire that Queue guard first. They then retain this guard through the
+    /// final state-bound route/incarnation validation and queue mutation. The
+    /// shared order is `reservation transition -> lane lifecycle -> queue
+    /// ownership`, so a queue operation either becomes visible before a drain
+    /// closes or validates against the fully published post-transition
+    /// catalog.
     pub(crate) fn lock_lane_lifecycle_work_admission(&self) -> parking_lot::MutexGuard<'_, ()> {
         self.lane_lifecycle_lock.lock()
     }
@@ -30119,10 +29868,13 @@ impl State {
                     ));
                 }
                 if !entry.lane_drain_certificates.is_empty()
-                    && (entry.execution_batch.is_some() || !entry.lane_snapshots.is_empty())
+                    && (entry.execution_batch.is_some()
+                        || !entry.lane_snapshots.is_empty()
+                        || !entry.queue_plan_admissions.is_empty())
                 {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "durable lane drain entry mixes snapshots or execution".to_owned(),
+                        "durable lane drain entry mixes snapshots, execution, or QueuePlan admission controls"
+                            .to_owned(),
                     ));
                 }
                 if entry.lane_snapshots.is_empty()
@@ -30292,7 +30044,58 @@ impl State {
         self.settled_nexus_fee_receipts.write().clear();
         let committed_block_hashes = self.block_hashes.view().iter().copied().collect::<Vec<_>>();
         let committed_height = u64::try_from(committed_block_hashes.len()).unwrap_or(u64::MAX);
-        for entry in self.kura.merge_ledger_all_entries()? {
+        let entries = self.kura.merge_ledger_all_entries()?;
+
+        // Transaction membership is an auxiliary index outside `World`. Repair
+        // every authenticated, marker-complete execution before classifying
+        // earlier QueuePlan admissions: a later execution atomically removes
+        // their pending WSV obligations, so chronological classification must
+        // not mistake a crash-delayed membership index for lost work.
+        for entry in entries
+            .iter()
+            .filter(|entry| entry.execution_batch.is_some())
+        {
+            let entry_hash = entry.canonical_hash();
+            let carrier = self
+                .kura
+                .merge_carrier_for_entry(entry_hash)?
+                .ok_or_else(|| {
+                    MergeLedgerCommitError::ExecutionStatePublication(format!(
+                        "durable merge execution {entry_hash} has no canonical global carrier"
+                    ))
+                })?;
+            if carrier.block_height > committed_height {
+                continue;
+            }
+            let committed_carrier_hash = usize::try_from(carrier.block_height)
+                .ok()
+                .and_then(|height| height.checked_sub(1))
+                .and_then(|index| committed_block_hashes.get(index).copied());
+            if committed_carrier_hash != Some(carrier.block_hash)
+                || self
+                    .kura
+                    .merge_entry_for_carrier(carrier.block_height, carrier.block_hash)?
+                    .as_ref()
+                    != Some(entry)
+            {
+                return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
+                    "merge execution {entry_hash} carrier is not present in committed State history"
+                )));
+            }
+            let batch = entry
+                .execution_batch
+                .as_ref()
+                .expect("filtered to execution entries");
+            if !self.merge_execution_already_applied(entry, batch)? {
+                return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
+                    "merge execution {entry_hash} is durable at carrier {} but absent from WSV; replay the exact carrier block",
+                    carrier.block_height
+                )));
+            }
+            self.repair_merge_execution_transaction_membership(entry, &carrier)?;
+        }
+
+        for entry in entries {
             let entry_hash = entry.canonical_hash();
             let carrier = self
                 .kura
@@ -32456,15 +32259,33 @@ impl State {
             self.verify_lane_relay_fastpq_record(envelope)?;
         }
 
-        // Serialize only the final authenticated lifecycle recheck and cache
+        if !persist {
+            return Ok(None);
+        }
+
+        self.publish_prevalidated_lane_relay(envelope, relay_proposal_height)
+            .map(Some)
+    }
+
+    /// Publish a fully authenticated relay under the lane-lifecycle fence.
+    ///
+    /// Callers must complete the QC, authority, and effect-record validation
+    /// above before entering this final stage. Keeping the final stage
+    /// separate lets the retirement race regression pause after
+    /// authentication without inventing a test-only cache insertion path.
+    fn publish_prevalidated_lane_relay(
+        &self,
+        envelope: &LaneRelayEnvelope,
+        relay_proposal_height: u64,
+    ) -> core::result::Result<LaneRelayInsert, LaneRelayError> {
+        // Serialize the final authenticated lifecycle recheck and cache
         // insertion with geometry archive/removal, catalog publication, and
-        // lane-scoped cache pruning. Expensive QC/PoP verification above does
-        // not stall lifecycle progress. If admission wins this fence,
-        // retirement observes the relay as a drain blocker. If retirement
-        // wins, this post-fence snapshot rejects the retired incarnation.
-        // Raw/unvalidated cache noise never crosses this fence and therefore
-        // cannot veto Byzantine-tolerant retirement.
-        let lifecycle_guard = persist.then(|| self.lane_lifecycle_lock.lock());
+        // lane-scoped cache pruning. If admission wins this fence, retirement
+        // observes the relay as a drain blocker. If retirement wins, this
+        // post-fence snapshot rejects the retired incarnation. Raw/unvalidated
+        // cache noise never crosses this fence and therefore cannot veto
+        // Byzantine-tolerant retirement.
+        let lifecycle_guard = self.lane_lifecycle_lock.lock();
         let current_lifecycle = self.lane_consensus_lifecycle_snapshot();
         let current_incarnation = current_lifecycle
             .incarnations
@@ -32495,10 +32316,6 @@ impl State {
             });
         }
 
-        if !persist {
-            return Ok(None);
-        }
-
         let inserted = {
             let mut guard = self.lane_relays.write();
             guard.insert(envelope.clone())?
@@ -32515,7 +32332,7 @@ impl State {
                 self.telemetry.record_lane_relay_finality(
                     envelope.lane_id,
                     envelope.dataspace_id,
-                    proposal_height,
+                    relay_proposal_height,
                     head_height,
                     envelope.rbc_bytes_total,
                 );
@@ -32523,7 +32340,7 @@ impl State {
 
             crate::sumeragi::status::push_lane_relay_envelope(envelope.clone());
         }
-        Ok(Some(inserted))
+        Ok(inserted)
     }
 
     fn merge_execution_source_from_embedded(
@@ -32673,6 +32490,7 @@ impl State {
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let mut seen_entrypoints = BTreeSet::new();
         let mut seen_reservations = BTreeSet::new();
+        let mut pending_obligations = Vec::new();
         let mut executions = Vec::with_capacity(sources.len());
 
         for source in sources {
@@ -32783,6 +32601,10 @@ impl State {
                         "autonomous merge reservation or routing-plan binding mismatch".to_owned(),
                     ));
                 }
+                pending_obligations.push((
+                    reservation.entrypoint_hash.clone(),
+                    reservation.queue_plan_admission_binding_hash,
+                ));
                 if !crate::native_amx::receipt_shape_matches_coordinator_payload(
                     native_amx_receipt.as_ref(),
                     bound_plan,
@@ -32943,6 +32765,7 @@ impl State {
             execution.settlement_commitment = commitment;
             executions.push(execution);
         }
+        state_block.resolve_required_queue_plan_pending_obligations(pending_obligations)?;
         state_block.stage_merge_execution_nexus_fee_settlement(&executions)?;
         Ok(executions)
     }
@@ -33238,6 +33061,15 @@ impl State {
         pending: Vec<Vec<u8>>,
     ) -> Result<Option<crate::merge::MergeLedgerCandidate>, MergeLedgerCommitError> {
         if pending.is_empty() {
+            return Ok(base);
+        }
+        if base
+            .as_ref()
+            .is_some_and(|candidate| !candidate.lane_drain_certificates.is_empty())
+        {
+            // Drain certificates are intentionally standalone. Admission is
+            // fenced once the drain closes, and any pre-existing pending
+            // certificate already blocks drain-certificate production.
             return Ok(base);
         }
         let consensus = self.merge_consensus_snapshot();
@@ -33837,10 +33669,45 @@ impl State {
                 dataspace_id,
                 lane_incarnation,
             )
+            || self.queue_plan_pending_route_obligation_blocks_lane_drain(
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+            )
             || self
                 .kura
                 .pending_certified_merge_work_for_lane(lane_id, dataspace_id, lane_incarnation)
                 .unwrap_or(true)
+    }
+
+    fn queue_plan_pending_route_obligation_blocks_lane_drain(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> bool {
+        Self::queue_plan_pending_route_obligation_blocks_lane_drain_in_world(
+            &self.world.view(),
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        )
+    }
+
+    fn queue_plan_pending_route_obligation_blocks_lane_drain_in_world(
+        world: &impl WorldReadOnly,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> bool {
+        let route = QueuePlanPendingObligationRouteV1 {
+            version: QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        };
+        Self::queue_plan_pending_route_obligation_count_from_world(world, route)
+            .map_or(true, |count| count > 0)
     }
 
     /// Return whether a durable, not-yet-applied QueuePlan admission certificate
@@ -34131,15 +33998,38 @@ impl State {
         &self,
         admissions: &[crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2],
     ) -> Result<(), MergeLedgerCommitError> {
-        let world = self.world.view();
+        let state_view = self.view();
         for admission in admissions {
             let key = Self::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
-            if let Some(payload) = world.smart_contract_state().get(&key) {
+            if let Some(payload) = state_view.world().smart_contract_state().get(&key) {
                 let current =
                     Self::decode_exact_queue_plan_admission_registry_marker(&key, payload)?;
                 if current != admission.registry_value {
                     return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                         "queue-plan admission registry key is claimed by a different binding: `{key}`"
+                    )));
+                }
+                if Self::queue_plan_admission_application_state(&state_view, admission)?
+                    == QueuePlanAdmissionApplicationState::PendingStale
+                {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "queue-plan admission registry owner names a retired or recreated lane incarnation: `{key}`"
+                    )));
+                }
+            } else {
+                let obligation = Self::queue_plan_pending_obligation_from_admission(admission)?;
+                let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+                    obligation.chain_id_digest,
+                    obligation.entrypoint_hash,
+                )?;
+                if state_view
+                    .world()
+                    .smart_contract_state()
+                    .get(&obligation_key)
+                    .is_some()
+                {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "queue-plan pending obligation exists without registry owner: `{obligation_key}`"
                     )));
                 }
             }
@@ -34167,19 +34057,16 @@ impl State {
                     "pending queue-plan admission certificate is invalid: {error}"
                 ))
             })?;
-        let key = Self::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
-        let lookup = match self.world.view().smart_contract_state().get(&key) {
-            None => QueuePlanAdmissionRegistryMatch::Absent,
-            Some(payload) => {
-                let current =
-                    Self::decode_exact_queue_plan_admission_registry_marker(&key, payload)?;
-                if current != admission.registry_value {
-                    QueuePlanAdmissionRegistryMatch::Conflict
-                } else {
-                    QueuePlanAdmissionRegistryMatch::Exact
-                }
-            }
-        };
+        let state_view = self.view();
+        let lookup = Self::queue_plan_admission_registry_match_in_view(
+            &state_view,
+            admission.registry_key.entrypoint_hash.clone(),
+            admission.registry_value.binding_hash,
+        )
+        .map_err(MergeLedgerCommitError::ExecutionMarkerConflict)?;
+        if lookup == QueuePlanAdmissionRegistryMatch::Exact {
+            Self::queue_plan_admission_application_state(&state_view, &admission)?;
+        }
         Ok((admission, lookup))
     }
 
@@ -34204,7 +34091,18 @@ impl State {
         let (admission, registry_match) =
             self.pending_queue_plan_admission_registry_lookup(bytes)?;
         let disposition = match registry_match {
-            QueuePlanAdmissionRegistryMatch::Exact => PendingQueuePlanAdmissionDisposition::Exact,
+            QueuePlanAdmissionRegistryMatch::Exact => {
+                let state_view = self.view();
+                match Self::queue_plan_admission_application_state(&state_view, &admission)? {
+                    QueuePlanAdmissionApplicationState::PendingStale => {
+                        PendingQueuePlanAdmissionDisposition::Stale
+                    }
+                    QueuePlanAdmissionApplicationState::Pending
+                    | QueuePlanAdmissionApplicationState::Applied => {
+                        PendingQueuePlanAdmissionDisposition::Exact
+                    }
+                }
+            }
             QueuePlanAdmissionRegistryMatch::Conflict => {
                 PendingQueuePlanAdmissionDisposition::DefinitiveConflict
             }
@@ -34320,10 +34218,13 @@ impl State {
             ));
         }
         if !candidate.lane_drain_certificates.is_empty()
-            && (candidate.execution_batch.is_some() || !candidate.lane_snapshots.is_empty())
+            && (candidate.execution_batch.is_some()
+                || !candidate.lane_snapshots.is_empty()
+                || !candidate.queue_plan_admissions.is_empty())
         {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "lane drain certificate entries must not mix snapshots or execution".to_owned(),
+                "lane drain certificate entries must not mix snapshots, execution, or QueuePlan admission controls"
+                    .to_owned(),
             ));
         }
         if candidate.execution_batch.is_some() && !candidate.lane_snapshots.is_empty() {
@@ -37134,7 +37035,7 @@ impl State {
     }
 
     /// Compare an expected QueuePlan binding hash with the immutable WSV
-    /// registry using one bounded read.
+    /// registry and its protocol-bounded pending-or-applied evidence.
     ///
     /// # Errors
     ///
@@ -37146,8 +37047,9 @@ impl State {
         entrypoint_hash: HashOf<TransactionEntrypoint>,
         expected_binding_hash: Hash,
     ) -> Result<QueuePlanAdmissionRegistryMatch, String> {
+        let state_view = self.view();
         Self::queue_plan_admission_registry_match_in_view(
-            &self.view(),
+            &state_view,
             entrypoint_hash,
             expected_binding_hash,
         )
@@ -37187,10 +37089,38 @@ impl State {
             .map_err(|error| error.to_string())?;
         let state_view = self.view();
         let Some(payload) = state_view.world().smart_contract_state().get(&key) else {
+            let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+                registry_key.chain_id_digest,
+                registry_key.entrypoint_hash,
+            )
+            .map_err(|error| error.to_string())?;
+            if state_view
+                .world()
+                .smart_contract_state()
+                .get(&obligation_key)
+                .is_some()
+            {
+                return Err(
+                    "QueuePlan pending obligation exists without an immutable registry owner"
+                        .to_owned(),
+                );
+            }
             return Ok(false);
         };
-        Self::decode_exact_queue_plan_admission_registry_marker(&key, payload)
+        let registry_value = Self::decode_exact_queue_plan_admission_registry_marker(&key, payload)
             .map_err(|error| error.to_string())?;
+        let application_state = Self::queue_plan_registry_owner_application_state_in_view(
+            &state_view,
+            registry_key.chain_id_digest,
+            registry_key.entrypoint_hash,
+            registry_value.binding_hash,
+        )
+        .map_err(|error| error.to_string())?;
+        if application_state == QueuePlanAdmissionApplicationState::PendingStale {
+            return Err(
+                "QueuePlan registry owner names a retired or recreated lane incarnation".to_owned(),
+            );
+        }
         Ok(true)
     }
 
@@ -37215,17 +37145,51 @@ impl State {
         if binding.chain_id_digest != expected_chain_id_digest {
             return Err("QueuePlan admission binding belongs to another chain".to_owned());
         }
-        self.queue_plan_admission_registry_match(
+        let state_view = self.view();
+        let registry_match = Self::queue_plan_admission_registry_match_in_view(
+            &state_view,
             binding.entrypoint_hash.clone(),
             binding.canonical_hash(),
-        )
+        )?;
+        if registry_match == QueuePlanAdmissionRegistryMatch::Exact {
+            let expected = Self::queue_plan_pending_obligation_from_binding(binding)
+                .map_err(|error| error.to_string())?;
+            let application_state =
+                Self::queue_plan_binding_application_state(&state_view, binding, expected)
+                    .map_err(|error| error.to_string())?;
+            if application_state == QueuePlanAdmissionApplicationState::PendingStale {
+                return Err(
+                    "QueuePlan binding names a retired or recreated lane incarnation".to_owned(),
+                );
+            }
+        }
+        Ok(registry_match)
     }
 
     fn queue_plan_admission_registry_match_in_view(
-        state_view: &impl StateReadOnly,
+        state_view: &impl StateReadOnlyWithTransactions,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
         expected_binding_hash: Hash,
     ) -> Result<QueuePlanAdmissionRegistryMatch, String> {
+        Self::queue_plan_admission_registry_match_with_application_state_in_view(
+            state_view,
+            entrypoint_hash,
+            expected_binding_hash,
+        )
+        .map(|(registry_match, _)| registry_match)
+    }
+
+    fn queue_plan_admission_registry_match_with_application_state_in_view(
+        state_view: &impl StateReadOnlyWithTransactions,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        expected_binding_hash: Hash,
+    ) -> Result<
+        (
+            QueuePlanAdmissionRegistryMatch,
+            Option<QueuePlanAdmissionApplicationState>,
+        ),
+        String,
+    > {
         if entrypoint_hash.as_ref().iter().all(|byte| *byte == 0)
             || expected_binding_hash.as_ref().iter().all(|byte| *byte == 0)
         {
@@ -37241,15 +37205,39 @@ impl State {
         let key = Self::queue_plan_admission_registry_marker_key(&registry_key)
             .map_err(|error| error.to_string())?;
         let Some(payload) = state_view.world().smart_contract_state().get(&key) else {
-            return Ok(QueuePlanAdmissionRegistryMatch::Absent);
+            let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+                registry_key.chain_id_digest,
+                registry_key.entrypoint_hash,
+            )
+            .map_err(|error| error.to_string())?;
+            if state_view
+                .world()
+                .smart_contract_state()
+                .get(&obligation_key)
+                .is_some()
+            {
+                return Err(
+                    "QueuePlan pending obligation exists without an immutable registry owner"
+                        .to_owned(),
+                );
+            }
+            return Ok((QueuePlanAdmissionRegistryMatch::Absent, None));
         };
         let value = Self::decode_exact_queue_plan_admission_registry_marker(&key, payload)
             .map_err(|error| error.to_string())?;
-        Ok(if value.binding_hash == expected_binding_hash {
+        let application_state = Self::queue_plan_registry_owner_application_state_in_view(
+            state_view,
+            registry_key.chain_id_digest,
+            registry_key.entrypoint_hash,
+            value.binding_hash,
+        )
+        .map_err(|error| error.to_string())?;
+        let registry_match = if value.binding_hash == expected_binding_hash {
             QueuePlanAdmissionRegistryMatch::Exact
         } else {
             QueuePlanAdmissionRegistryMatch::Conflict
-        })
+        };
+        Ok((registry_match, Some(application_state)))
     }
 
     fn queue_plan_admission_registry_marker_key(
@@ -37298,17 +37286,28 @@ impl State {
                 "queue-plan admission registry value is malformed".to_owned(),
             ));
         }
-        norito::to_bytes(registry_value).map_err(|error| {
+        let payload = norito::to_bytes(registry_value).map_err(|error| {
             MergeLedgerCommitError::ExecutionBatchInvalid(format!(
                 "queue-plan admission registry value cannot be encoded: {error}"
             ))
-        })
+        })?;
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "queue-plan admission registry value is empty or oversized".to_owned(),
+            ));
+        }
+        Ok(payload)
     }
 
     fn decode_exact_queue_plan_admission_registry_marker(
         key: &StatePath,
         payload: &[u8],
     ) -> Result<crate::torii_proxy::QueuePlanAdmissionRegistryValueV2, MergeLedgerCommitError> {
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "queue-plan admission registry marker `{key}` is empty or oversized"
+            )));
+        }
         let value = norito::decode_from_bytes::<
             crate::torii_proxy::QueuePlanAdmissionRegistryValueV2,
         >(payload)
@@ -37324,6 +37323,840 @@ impl State {
             )));
         }
         Ok(value)
+    }
+
+    fn queue_plan_pending_obligation_from_admission(
+        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2,
+    ) -> Result<QueuePlanPendingObligationV1, MergeLedgerCommitError> {
+        let binding = &admission.certificate.binding;
+        if admission.binding_hash != binding.canonical_hash()
+            || admission.registry_key != binding.registry_key()
+            || admission.registry_value != binding.registry_value()
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "validated QueuePlan admission projections disagree".to_owned(),
+            ));
+        }
+        Self::queue_plan_pending_obligation_from_binding(binding)
+    }
+
+    fn queue_plan_pending_obligation_from_binding(
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    ) -> Result<QueuePlanPendingObligationV1, MergeLedgerCommitError> {
+        let routes = Self::queue_plan_pending_obligation_routes_from_binding(binding)?;
+        let obligation = QueuePlanPendingObligationV1 {
+            version: QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1,
+            chain_id_digest: binding.chain_id_digest,
+            entrypoint_hash: binding.entrypoint_hash.clone(),
+            signed_transaction_hash: binding.signed_transaction_hash,
+            binding_hash: binding.canonical_hash(),
+            binding: binding.clone(),
+            routes,
+        };
+        Self::validate_queue_plan_pending_obligation(&obligation)?;
+        Ok(obligation)
+    }
+
+    fn queue_plan_pending_obligation_routes_from_binding(
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    ) -> Result<Vec<QueuePlanPendingObligationRouteV1>, MergeLedgerCommitError> {
+        binding.validate_structure().map_err(|reason| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending obligation contains a malformed admission binding: {reason}"
+            ))
+        })?;
+        let mut routes = binding
+            .admission_context
+            .route_incarnations
+            .iter()
+            .map(|bound| QueuePlanPendingObligationRouteV1 {
+                version: QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1,
+                lane_id: bound.leg.route.lane_id,
+                dataspace_id: bound.leg.route.dataspace_id,
+                lane_incarnation: bound.lane_incarnation,
+            })
+            .collect::<Vec<_>>();
+        routes.sort_unstable();
+        routes.dedup();
+        Ok(routes)
+    }
+
+    fn validate_queue_plan_pending_obligation_route(
+        route: &QueuePlanPendingObligationRouteV1,
+    ) -> Result<(), MergeLedgerCommitError> {
+        if route.version != QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1
+            || route
+                .lane_incarnation
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-obligation route is malformed".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_queue_plan_pending_obligation(
+        obligation: &QueuePlanPendingObligationV1,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let max_routes = crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_LEGS.saturating_add(1);
+        if obligation.version != QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1
+            || obligation
+                .chain_id_digest
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || obligation
+                .entrypoint_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || obligation
+                .binding_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || obligation
+                .signed_transaction_hash
+                .as_ref()
+                .is_some_and(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
+            || obligation.routes.is_empty()
+            || obligation.routes.len() > max_routes
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-obligation marker is malformed".to_owned(),
+            ));
+        }
+        for route in &obligation.routes {
+            Self::validate_queue_plan_pending_obligation_route(route)?;
+        }
+        if obligation
+            .routes
+            .windows(2)
+            .any(|window| window[0] >= window[1])
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-obligation routes are duplicated or not canonical".to_owned(),
+            ));
+        }
+        let expected_routes =
+            Self::queue_plan_pending_obligation_routes_from_binding(&obligation.binding)?;
+        if obligation.chain_id_digest != obligation.binding.chain_id_digest
+            || obligation.entrypoint_hash != obligation.binding.entrypoint_hash
+            || obligation.signed_transaction_hash != obligation.binding.signed_transaction_hash
+            || obligation.binding_hash != obligation.binding.canonical_hash()
+            || obligation.routes != expected_routes
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-obligation copies do not match its authenticated admission binding"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn queue_plan_pending_obligation_marker_key(
+        chain_id_digest: Hash,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<StatePath, MergeLedgerCommitError> {
+        if chain_id_digest.as_ref().iter().all(|byte| *byte == 0)
+            || entrypoint_hash.as_ref().iter().all(|byte| *byte == 0)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-obligation key contains a zero identity".to_owned(),
+            ));
+        }
+        format!(
+            "{QUEUE_PLAN_PENDING_OBLIGATION_MARKER_PREFIX}{}_{}",
+            hex::encode(chain_id_digest.as_ref()),
+            hex::encode(entrypoint_hash.as_ref()),
+        )
+        .parse()
+        .map_err(|_| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-obligation key cannot be represented in WSV".to_owned(),
+            )
+        })
+    }
+
+    fn queue_plan_pending_obligation_marker_payload(
+        obligation: &QueuePlanPendingObligationV1,
+    ) -> Result<Vec<u8>, MergeLedgerCommitError> {
+        Self::validate_queue_plan_pending_obligation(obligation)?;
+        let payload = norito::to_bytes(obligation).map_err(|error| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-obligation marker cannot be encoded: {error}"
+            ))
+        })?;
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-obligation marker is empty or oversized".to_owned(),
+            ));
+        }
+        Ok(payload)
+    }
+
+    fn decode_exact_queue_plan_pending_obligation_marker(
+        key: &StatePath,
+        payload: &[u8],
+    ) -> Result<QueuePlanPendingObligationV1, MergeLedgerCommitError> {
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-obligation marker `{key}` is empty or oversized"
+            )));
+        }
+        let decode_limits = norito::DecodeLimits::new(
+            iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1,
+            MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES,
+            MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES,
+            MAX_QUEUE_PLAN_PENDING_OBLIGATION_BYTES.saturating_mul(4),
+            64,
+        );
+        let obligation = norito::decode_canonical_with_limits::<QueuePlanPendingObligationV1>(
+            payload,
+            decode_limits,
+        )
+        .map_err(|_| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-obligation marker `{key}` is not exact canonical Norito"
+            ))
+        })?;
+        let canonical = Self::queue_plan_pending_obligation_marker_payload(&obligation)?;
+        let expected_key = Self::queue_plan_pending_obligation_marker_key(
+            obligation.chain_id_digest,
+            obligation.entrypoint_hash.clone(),
+        )?;
+        if canonical.as_slice() != payload || &expected_key != key {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-obligation marker `{key}` is not canonical"
+            )));
+        }
+        Ok(obligation)
+    }
+
+    fn queue_plan_pending_route_member_identity(
+        obligation: &QueuePlanPendingObligationV1,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<[u8; Hash::LENGTH], MergeLedgerCommitError> {
+        Self::validate_queue_plan_pending_obligation_route(&route)?;
+        if obligation.version != QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1
+            || obligation
+                .chain_id_digest
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || obligation
+                .entrypoint_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || obligation
+                .binding_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || obligation.routes.binary_search(&route).is_err()
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member has a malformed or absent obligation identity"
+                    .to_owned(),
+            ));
+        }
+        Self::queue_plan_pending_route_member_identity_from_claim(
+            obligation.chain_id_digest,
+            obligation.entrypoint_hash.clone(),
+            obligation.binding_hash,
+            route,
+        )
+    }
+
+    fn queue_plan_pending_route_member_identity_from_claim(
+        chain_id_digest: Hash,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        binding_hash: Hash,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<[u8; Hash::LENGTH], MergeLedgerCommitError> {
+        Self::validate_queue_plan_pending_obligation_route(&route)?;
+        if chain_id_digest.as_ref().iter().all(|byte| *byte == 0)
+            || entrypoint_hash.as_ref().iter().all(|byte| *byte == 0)
+            || binding_hash.as_ref().iter().all(|byte| *byte == 0)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member claim contains a zero identity".to_owned(),
+            ));
+        }
+        let encoded = norito::to_bytes(&(
+            QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1,
+            chain_id_digest,
+            entrypoint_hash,
+            binding_hash,
+            route,
+        ))
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-route member identity cannot be encoded: {error}"
+            ))
+        })?;
+        let identity = Hash::new_from_chunks(&[
+            QUEUE_PLAN_PENDING_ROUTE_MEMBER_DOMAIN_V1,
+            encoded.as_slice(),
+        ]);
+        if identity.as_ref().iter().all(|byte| *byte == 0) {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member identity is zero".to_owned(),
+            ));
+        }
+        Ok(*identity.as_ref())
+    }
+
+    fn queue_plan_pending_route_member_from_obligation(
+        obligation: &QueuePlanPendingObligationV1,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<QueuePlanPendingRouteMemberV1, MergeLedgerCommitError> {
+        Ok(QueuePlanPendingRouteMemberV1 {
+            version: QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1,
+            route,
+            chain_id_digest: obligation.chain_id_digest,
+            entrypoint_hash: obligation.entrypoint_hash.clone(),
+            binding_hash: obligation.binding_hash,
+            member_identity: Self::queue_plan_pending_route_member_identity(obligation, route)?,
+        })
+    }
+
+    fn queue_plan_pending_route_member_marker_prefix(
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<(String, StatePath), MergeLedgerCommitError> {
+        Self::validate_queue_plan_pending_obligation_route(&route)?;
+        let literal = format!(
+            "{QUEUE_PLAN_PENDING_ROUTE_MEMBER_MARKER_PREFIX}{}_{}_{}_",
+            route.lane_id.as_u32(),
+            route.dataspace_id.as_u64(),
+            hex::encode(route.lane_incarnation.as_ref()),
+        );
+        let start = literal.parse().map_err(|_| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member prefix cannot be represented in WSV".to_owned(),
+            )
+        })?;
+        Ok((literal, start))
+    }
+
+    fn queue_plan_pending_route_member_marker_key(
+        route: QueuePlanPendingObligationRouteV1,
+        member_identity: [u8; Hash::LENGTH],
+    ) -> Result<StatePath, MergeLedgerCommitError> {
+        Self::validate_queue_plan_pending_obligation_route(&route)?;
+        if member_identity.iter().all(|byte| *byte == 0) {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member key contains a zero identity".to_owned(),
+            ));
+        }
+        format!(
+            "{QUEUE_PLAN_PENDING_ROUTE_MEMBER_MARKER_PREFIX}{}_{}_{}_{}",
+            route.lane_id.as_u32(),
+            route.dataspace_id.as_u64(),
+            hex::encode(route.lane_incarnation.as_ref()),
+            hex::encode(member_identity),
+        )
+        .parse()
+        .map_err(|_| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member key cannot be represented in WSV".to_owned(),
+            )
+        })
+    }
+
+    fn queue_plan_pending_route_member_marker_payload(
+        marker: &QueuePlanPendingRouteMemberV1,
+    ) -> Result<Vec<u8>, MergeLedgerCommitError> {
+        Self::validate_queue_plan_pending_obligation_route(&marker.route)?;
+        if marker.version != QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1
+            || marker
+                .chain_id_digest
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || marker
+                .entrypoint_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || marker.binding_hash.as_ref().iter().all(|byte| *byte == 0)
+            || marker.member_identity.iter().all(|byte| *byte == 0)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member marker is malformed".to_owned(),
+            ));
+        }
+        let expected_identity = Self::queue_plan_pending_route_member_identity_from_claim(
+            marker.chain_id_digest,
+            marker.entrypoint_hash.clone(),
+            marker.binding_hash,
+            marker.route,
+        )?;
+        if marker.member_identity != expected_identity {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member marker has a forged identity".to_owned(),
+            ));
+        }
+        let payload = norito::to_bytes(marker).map_err(|error| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-route member marker cannot be encoded: {error}"
+            ))
+        })?;
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route member marker is empty or oversized".to_owned(),
+            ));
+        }
+        Ok(payload)
+    }
+
+    fn decode_exact_queue_plan_pending_route_member_marker(
+        key: &StatePath,
+        payload: &[u8],
+    ) -> Result<QueuePlanPendingRouteMemberV1, MergeLedgerCommitError> {
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-route member marker `{key}` is empty or oversized"
+            )));
+        }
+        let marker =
+            norito::decode_from_bytes::<QueuePlanPendingRouteMemberV1>(payload).map_err(|_| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-route member marker `{key}` is not exact canonical Norito"
+                ))
+            })?;
+        let canonical = Self::queue_plan_pending_route_member_marker_payload(&marker)?;
+        let expected_key =
+            Self::queue_plan_pending_route_member_marker_key(marker.route, marker.member_identity)?;
+        if canonical.as_slice() != payload || &expected_key != key {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-route member marker `{key}` is not canonical"
+            )));
+        }
+        Ok(marker)
+    }
+
+    fn require_queue_plan_pending_route_member_marker(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        obligation: &QueuePlanPendingObligationV1,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<(StatePath, QueuePlanPendingRouteMemberV1), MergeLedgerCommitError> {
+        let expected = Self::queue_plan_pending_route_member_from_obligation(obligation, route)?;
+        let key =
+            Self::queue_plan_pending_route_member_marker_key(route, expected.member_identity)?;
+        let payload = storage.get(&key).ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending obligation lacks exact route-member marker `{key}`"
+            ))
+        })?;
+        let marker = Self::decode_exact_queue_plan_pending_route_member_marker(&key, payload)?;
+        if marker != expected {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-route member marker `{key}` binds another obligation"
+            )));
+        }
+        Ok((key, marker))
+    }
+
+    fn queue_plan_pending_route_members_from_storage(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<Vec<(StatePath, QueuePlanPendingRouteMemberV1)>, MergeLedgerCommitError> {
+        Self::queue_plan_pending_route_members_from_storage_with_limit(
+            storage,
+            route,
+            MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS,
+        )
+    }
+
+    fn queue_plan_pending_route_members_from_storage_with_limit(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        route: QueuePlanPendingObligationRouteV1,
+        max_members: usize,
+    ) -> Result<Vec<(StatePath, QueuePlanPendingRouteMemberV1)>, MergeLedgerCommitError> {
+        let (prefix, start) = Self::queue_plan_pending_route_member_marker_prefix(route)?;
+        let mut members = Vec::new();
+        for (key, payload) in storage.range(start..) {
+            if !key.as_ref().starts_with(&prefix) {
+                break;
+            }
+            if members.len() == max_members {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-route member roster `{prefix}` exceeds its consensus bound"
+                )));
+            }
+            let marker = Self::decode_exact_queue_plan_pending_route_member_marker(key, payload)?;
+            if marker.route != route {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-route member marker `{key}` binds another route"
+                )));
+            }
+            let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+                marker.chain_id_digest,
+                marker.entrypoint_hash.clone(),
+            )?;
+            if storage.get(&obligation_key).is_none() {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-route member marker `{key}` has no exact obligation `{obligation_key}`"
+                )));
+            }
+            members.push((key.clone(), marker));
+        }
+        Ok(members)
+    }
+
+    fn queue_plan_pending_route_obligation_count_from_world(
+        world: &impl WorldReadOnly,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<u64, MergeLedgerCommitError> {
+        let count = Self::queue_plan_pending_route_members_from_storage(
+            world.smart_contract_state(),
+            route,
+        )?
+        .len();
+        u64::try_from(count).map_err(|_| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending-route roster count exceeds u64".to_owned(),
+            )
+        })
+    }
+
+    fn queue_plan_entrypoint_membership_hash(
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> HashOf<SignedTransaction> {
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash))
+    }
+
+    fn validate_queue_plan_pending_obligation_route_member(
+        world: &impl WorldReadOnly,
+        obligation: &QueuePlanPendingObligationV1,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<(), MergeLedgerCommitError> {
+        Self::validate_queue_plan_pending_obligation_route_member_in_storage(
+            world.smart_contract_state(),
+            obligation,
+            route,
+        )
+    }
+
+    fn validate_queue_plan_pending_obligation_route_member_in_storage(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        obligation: &QueuePlanPendingObligationV1,
+        route: QueuePlanPendingObligationRouteV1,
+    ) -> Result<(), MergeLedgerCommitError> {
+        Self::queue_plan_pending_route_members_from_storage(storage, route)?;
+        Self::require_queue_plan_pending_route_member_marker(storage, obligation, route)?;
+        Ok(())
+    }
+
+    fn queue_plan_pending_obligation_matches_active_lifecycle(
+        state: &impl StateReadOnly,
+        obligation: &QueuePlanPendingObligationV1,
+    ) -> bool {
+        let proposal_height = obligation.binding.admission_context.proposal_height;
+        obligation.routes.iter().all(|route| {
+            state
+                .nexus()
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.id == route.lane_id && lane.dataspace_id == route.dataspace_id)
+                && state.lane_incarnation_at_height(route.lane_id, proposal_height)
+                    == Some(route.lane_incarnation)
+        })
+    }
+
+    fn queue_plan_registry_owner_application_state_in_view(
+        state: &impl StateReadOnlyWithTransactions,
+        chain_id_digest: Hash,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        registry_binding_hash: Hash,
+    ) -> Result<QueuePlanAdmissionApplicationState, MergeLedgerCommitError> {
+        let key = Self::queue_plan_pending_obligation_marker_key(
+            chain_id_digest,
+            entrypoint_hash.clone(),
+        )?;
+        let membership_hash = Self::queue_plan_entrypoint_membership_hash(entrypoint_hash.clone());
+        let committed = state.has_transaction(membership_hash);
+        match state.world().smart_contract_state().get(&key) {
+            Some(payload) => {
+                let obligation =
+                    Self::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;
+                if obligation.chain_id_digest != chain_id_digest
+                    || obligation.entrypoint_hash != entrypoint_hash
+                    || obligation.binding_hash != registry_binding_hash
+                {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "QueuePlan registry owner conflicts with pending obligation `{key}`"
+                    )));
+                }
+                for route in &obligation.routes {
+                    Self::validate_queue_plan_pending_obligation_route_member(
+                        state.world(),
+                        &obligation,
+                        *route,
+                    )?;
+                }
+                if committed {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "QueuePlan pending obligation `{key}` survived canonical transaction membership"
+                    )));
+                }
+                if Self::queue_plan_pending_obligation_matches_active_lifecycle(state, &obligation)
+                {
+                    Ok(QueuePlanAdmissionApplicationState::Pending)
+                } else {
+                    Ok(QueuePlanAdmissionApplicationState::PendingStale)
+                }
+            }
+            None if committed => Ok(QueuePlanAdmissionApplicationState::Applied),
+            None => Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan registry owner `{key}` has neither a pending obligation nor canonical transaction membership"
+            ))),
+        }
+    }
+
+    fn queue_plan_admission_application_state(
+        state: &impl StateReadOnlyWithTransactions,
+        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2,
+    ) -> Result<QueuePlanAdmissionApplicationState, MergeLedgerCommitError> {
+        let expected = Self::queue_plan_pending_obligation_from_admission(admission)?;
+        Self::queue_plan_binding_application_state(state, &admission.certificate.binding, expected)
+    }
+
+    fn queue_plan_binding_application_state(
+        state: &impl StateReadOnlyWithTransactions,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        expected: QueuePlanPendingObligationV1,
+    ) -> Result<QueuePlanAdmissionApplicationState, MergeLedgerCommitError> {
+        let committed = state.has_transaction(Self::queue_plan_entrypoint_membership_hash(
+            binding.entrypoint_hash.clone(),
+        ));
+        let active = Self::queue_plan_pending_obligation_matches_active_lifecycle(state, &expected);
+        Self::queue_plan_binding_application_state_in_storage(
+            state.world().smart_contract_state(),
+            expected,
+            committed,
+            active,
+        )
+    }
+
+    fn queue_plan_binding_application_state_in_storage(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        expected: QueuePlanPendingObligationV1,
+        committed: bool,
+        active: bool,
+    ) -> Result<QueuePlanAdmissionApplicationState, MergeLedgerCommitError> {
+        let key = Self::queue_plan_pending_obligation_marker_key(
+            expected.chain_id_digest,
+            expected.entrypoint_hash.clone(),
+        )?;
+        match storage.get(&key) {
+            Some(payload) => {
+                let current =
+                    Self::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;
+                if current != expected {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "QueuePlan pending-obligation marker `{key}` conflicts with its immutable admission"
+                    )));
+                }
+                for route in &current.routes {
+                    Self::validate_queue_plan_pending_obligation_route_member_in_storage(
+                        storage, &current, *route,
+                    )?;
+                }
+                if committed {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "QueuePlan pending-obligation marker `{key}` survived canonical transaction membership"
+                    )));
+                }
+                if active {
+                    Ok(QueuePlanAdmissionApplicationState::Pending)
+                } else {
+                    Ok(QueuePlanAdmissionApplicationState::PendingStale)
+                }
+            }
+            None if committed => Ok(QueuePlanAdmissionApplicationState::Applied),
+            None => Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan admission `{key}` has neither a pending obligation nor canonical transaction membership"
+            ))),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_queue_plan_pending_binding_for_test(
+        &self,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let obligation = Self::queue_plan_pending_obligation_from_binding(binding)?;
+        let registry_key = Self::queue_plan_admission_registry_marker_key(&binding.registry_key())?;
+        let mut world = self.world.block();
+        world.smart_contract_state.insert(
+            registry_key,
+            Self::queue_plan_admission_registry_marker_payload(&binding.registry_value())?,
+        );
+        Self::stage_queue_plan_pending_obligation_marker_in_storage(
+            &mut world.smart_contract_state,
+            obligation,
+        )?;
+        world.commit();
+        Ok(())
+    }
+
+    fn stage_queue_plan_pending_obligation_in_storage(
+        storage: &mut impl QueuePlanMarkerStorage,
+        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let obligation = Self::queue_plan_pending_obligation_from_admission(admission)?;
+        let registry_key = Self::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
+        let registry_payload = storage.get(&registry_key).ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending obligation has no immutable registry owner: `{registry_key}`"
+            ))
+        })?;
+        let registry_value = Self::decode_exact_queue_plan_admission_registry_marker(
+            &registry_key,
+            registry_payload,
+        )?;
+        if registry_value != admission.registry_value {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending obligation conflicts with registry owner `{registry_key}`"
+            )));
+        }
+
+        Self::stage_queue_plan_pending_obligation_marker_in_storage(storage, obligation)
+    }
+
+    fn stage_queue_plan_pending_obligation_marker_in_storage(
+        storage: &mut impl QueuePlanMarkerStorage,
+        obligation: QueuePlanPendingObligationV1,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+            obligation.chain_id_digest,
+            obligation.entrypoint_hash.clone(),
+        )?;
+        if let Some(payload) = storage.get(&obligation_key) {
+            let current =
+                Self::decode_exact_queue_plan_pending_obligation_marker(&obligation_key, payload)?;
+            if current != obligation {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-obligation key has a conflicting owner: `{obligation_key}`"
+                )));
+            }
+            for route in &current.routes {
+                Self::validate_queue_plan_pending_obligation_route_member_in_storage(
+                    storage, &current, *route,
+                )?;
+            }
+            return Ok(());
+        }
+
+        let obligation_payload = Self::queue_plan_pending_obligation_marker_payload(&obligation)?;
+        let mut route_updates = Vec::with_capacity(obligation.routes.len());
+        for route in &obligation.routes {
+            let members = Self::queue_plan_pending_route_members_from_storage(storage, *route)?;
+            if members.len() == MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-route member roster for lane `{}` dataspace `{}` is full",
+                    route.lane_id.as_u32(),
+                    route.dataspace_id.as_u64(),
+                )));
+            }
+            let member =
+                Self::queue_plan_pending_route_member_from_obligation(&obligation, *route)?;
+            let member_key =
+                Self::queue_plan_pending_route_member_marker_key(*route, member.member_identity)?;
+            if let Some(payload) = storage.get(&member_key) {
+                Self::decode_exact_queue_plan_pending_route_member_marker(&member_key, payload)?;
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-route member marker `{member_key}` exists without its obligation"
+                )));
+            }
+            let member_payload = Self::queue_plan_pending_route_member_marker_payload(&member)?;
+            route_updates.push((member_key, member_payload));
+        }
+        storage.insert_queue_plan_marker(obligation_key, obligation_payload);
+        for (member_key, member_payload) in route_updates {
+            storage.insert_queue_plan_marker(member_key, member_payload);
+        }
+        Ok(())
+    }
+
+    fn resolve_queue_plan_pending_obligation_in_storage(
+        storage: &mut impl QueuePlanMarkerStorage,
+        chain_id_digest: Hash,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<bool, MergeLedgerCommitError> {
+        let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+            chain_id_digest,
+            entrypoint_hash.clone(),
+        )?;
+        let obligation = if let Some(obligation_payload) = storage.get(&obligation_key) {
+            Self::decode_exact_queue_plan_pending_obligation_marker(
+                &obligation_key,
+                obligation_payload,
+            )?
+        } else {
+            let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
+                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+                chain_id_digest,
+                entrypoint_hash,
+            };
+            let registry_marker_key =
+                Self::queue_plan_admission_registry_marker_key(&registry_key)?;
+            if storage.get(&registry_marker_key).is_some() {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan registry owner `{registry_marker_key}` lacks its pending obligation"
+                )));
+            }
+            return Ok(false);
+        };
+        if obligation.chain_id_digest != chain_id_digest
+            || obligation.entrypoint_hash != entrypoint_hash
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending-obligation marker `{obligation_key}` binds another entrypoint"
+            )));
+        }
+
+        let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            chain_id_digest,
+            entrypoint_hash: obligation.entrypoint_hash.clone(),
+        };
+        let registry_marker_key = Self::queue_plan_admission_registry_marker_key(&registry_key)?;
+        let registry_payload = storage.get(&registry_marker_key).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending obligation has no immutable registry owner: `{registry_marker_key}`"
+                ))
+            })?;
+        let registry_value = Self::decode_exact_queue_plan_admission_registry_marker(
+            &registry_marker_key,
+            registry_payload,
+        )?;
+        if registry_value.binding_hash != obligation.binding_hash {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending obligation conflicts with registry owner `{registry_marker_key}`"
+            )));
+        }
+
+        let mut member_keys = Vec::with_capacity(obligation.routes.len());
+        for route in &obligation.routes {
+            Self::queue_plan_pending_route_members_from_storage(storage, *route)?;
+            let (member_key, _) =
+                Self::require_queue_plan_pending_route_member_marker(storage, &obligation, *route)?;
+            member_keys.push(member_key);
+        }
+
+        storage.remove_queue_plan_marker(obligation_key);
+        for member_key in member_keys {
+            storage.remove_queue_plan_marker(member_key);
+        }
+        Ok(true)
     }
 
     fn nexus_fee_receipt_marker_key(
@@ -37974,11 +38807,11 @@ impl State {
             entry.merge_qc.carrier_height,
             false,
         )?;
-        let world = self.world.view();
+        let state_view = self.view();
         let mut present = 0_usize;
         for admission in &admissions {
             let key = Self::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
-            let Some(payload) = world.smart_contract_state().get(&key) else {
+            let Some(payload) = state_view.world().smart_contract_state().get(&key) else {
                 continue;
             };
             present = present.saturating_add(1);
@@ -37988,6 +38821,7 @@ impl State {
                     "queue-plan admission registry marker `{key}` has a conflicting binding"
                 )));
             }
+            Self::queue_plan_admission_application_state(&state_view, admission)?;
         }
         if present == 0 {
             return Ok(admissions.is_empty());
@@ -39134,16 +39968,22 @@ impl State {
                 .into_iter()
                 .next()
                 .expect("one entrypoint produces one membership hash");
+                let registry_match = if validate_live_authority {
+                    queue_plan_admission_registry_match(
+                        &authority,
+                        reservation.entrypoint_hash.clone(),
+                        reservation.queue_plan_admission_binding_hash,
+                    )
+                } else {
+                    Self::queue_plan_admission_registry_match_in_view(
+                        &authority,
+                        reservation.entrypoint_hash.clone(),
+                        reservation.queue_plan_admission_binding_hash,
+                    )
+                };
                 if reservation.signed_transaction_hash != transaction_hash
                     || Hash::from(reservation.entrypoint_hash) != *expected_hash
-                    || !matches!(
-                        queue_plan_admission_registry_match(
-                            &authority,
-                            reservation.entrypoint_hash.clone(),
-                            reservation.queue_plan_admission_binding_hash,
-                        ),
-                        Ok(QueuePlanAdmissionRegistryMatch::Exact)
-                    )
+                    || !matches!(registry_match, Ok(QueuePlanAdmissionRegistryMatch::Exact))
                     || reservation.routing_plan_digest != routing_plan.digest()
                     || reservation.coordinator_leg != routing_plan.coordinator_leg()
                     || reservation.lane_id != descriptor.lane_id
@@ -39320,10 +40160,13 @@ impl State {
             ));
         }
         if !entry.lane_drain_certificates.is_empty()
-            && (entry.execution_batch.is_some() || !entry.lane_snapshots.is_empty())
+            && (entry.execution_batch.is_some()
+                || !entry.lane_snapshots.is_empty()
+                || !entry.queue_plan_admissions.is_empty())
         {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "lane drain certificate entries must not mix snapshots or execution".to_owned(),
+                "lane drain certificate entries must not mix snapshots, execution, or QueuePlan admission controls"
+                    .to_owned(),
             ));
         }
         if entry.execution_batch.is_none()
@@ -39655,6 +40498,10 @@ impl State {
             let payload =
                 Self::queue_plan_admission_registry_marker_payload(&admission.registry_value)?;
             world.smart_contract_state.insert(key, payload);
+            Self::stage_queue_plan_pending_obligation_in_storage(
+                &mut world.smart_contract_state,
+                &admission,
+            )?;
         }
         world.commit();
         self.update_merge_metadata(entry);
@@ -43517,6 +44364,37 @@ struct PendingAutoscaleLaneLifecycle {
     transition: PendingAutoscaleTransition,
     transition_height: u64,
     expected_incarnation_root: Hash,
+}
+
+impl PendingAutoscaleLaneLifecycle {
+    fn exact_scale_in_binding(
+        &self,
+    ) -> Result<Option<(LaneId, DataSpaceId, Hash)>, LaneLifecycleError> {
+        let PendingAutoscaleTransition::ScaleIn { lane, .. } = &self.transition else {
+            return Ok(None);
+        };
+        ensure_autoscale_transition_matches_plan(&self.plan, &self.transition)?;
+        let previous_lane = self
+            .catalog_update
+            .previous_catalog
+            .lanes()
+            .iter()
+            .find(|candidate| candidate.id == *lane)
+            .ok_or(LaneLifecycleError::InvalidAutoscaleManagedLane {
+                lane: *lane,
+                reason: "final Queue veto cannot resolve the retiring lane in the previous catalog",
+            })?;
+        let incarnation = self
+            .catalog_update
+            .previous_lane_incarnations
+            .get(lane)
+            .copied()
+            .ok_or(LaneLifecycleError::InvalidAutoscaleManagedLane {
+                lane: *lane,
+                reason: "final Queue veto cannot resolve the retiring lane incarnation",
+            })?;
+        Ok(Some((*lane, previous_lane.dataspace_id, incarnation)))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49171,11 +50049,27 @@ impl<'state> StateBlock<'state> {
             carrier_height,
             true,
         )?;
-        for admission in admissions {
+        let admissions = admissions
+            .into_iter()
+            .map(|admission| {
+                let obligation = State::queue_plan_pending_obligation_from_admission(&admission)?;
+                let committed = self.has_transaction(State::queue_plan_entrypoint_membership_hash(
+                    admission.certificate.binding.entrypoint_hash.clone(),
+                ));
+                let active = State::queue_plan_pending_obligation_matches_active_lifecycle(
+                    self,
+                    &obligation,
+                );
+                Ok((admission, obligation, committed, active))
+            })
+            .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
+
+        let mut markers = self.world.smart_contract_state.transaction();
+        for (admission, obligation, committed, active) in admissions {
             let key = State::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
             let payload =
                 State::queue_plan_admission_registry_marker_payload(&admission.registry_value)?;
-            if let Some(current_payload) = self.world.smart_contract_state.get(&key) {
+            if let Some(current_payload) = markers.get(&key) {
                 let current = State::decode_exact_queue_plan_admission_registry_marker(
                     &key,
                     current_payload,
@@ -49185,11 +50079,88 @@ impl<'state> StateBlock<'state> {
                         "queue-plan admission registry key has a conflicting binding: `{key}`"
                     )));
                 }
+                State::queue_plan_binding_application_state_in_storage(
+                    &markers, obligation, committed, active,
+                )?;
                 continue;
             }
-            self.world.smart_contract_state.insert(key, payload);
+            if committed {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "queue-plan admission registry key `{key}` was absent after its transaction committed"
+                )));
+            }
+            markers.insert_queue_plan_marker(key, payload);
+            State::stage_queue_plan_pending_obligation_in_storage(&mut markers, &admission)?;
         }
+        markers.apply();
         Ok(())
+    }
+
+    fn resolve_queue_plan_pending_obligations_for_entrypoints(
+        &mut self,
+        entrypoint_hashes: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let chain_id_digest =
+            crate::torii_proxy::queue_plan_admission_chain_id_digest(&self.chain_id);
+        let mut markers = self.world.smart_contract_state.transaction();
+        for entrypoint_hash in entrypoint_hashes {
+            State::resolve_queue_plan_pending_obligation_in_storage(
+                &mut markers,
+                chain_id_digest,
+                entrypoint_hash,
+            )?;
+        }
+        markers.apply();
+        Ok(())
+    }
+
+    fn resolve_required_queue_plan_pending_obligations(
+        &mut self,
+        pending_obligations: impl IntoIterator<Item = (HashOf<TransactionEntrypoint>, Hash)>,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let chain_id_digest =
+            crate::torii_proxy::queue_plan_admission_chain_id_digest(&self.chain_id);
+        let mut markers = self.world.smart_contract_state.transaction();
+        for (entrypoint_hash, expected_binding_hash) in pending_obligations {
+            let key = State::queue_plan_pending_obligation_marker_key(
+                chain_id_digest,
+                entrypoint_hash.clone(),
+            )?;
+            let payload = markers.get(&key).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "autonomous QueuePlan entrypoint has no pending obligation: `{key}`"
+                ))
+            })?;
+            let obligation =
+                State::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;
+            if obligation.binding_hash != expected_binding_hash {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "autonomous QueuePlan entrypoint conflicts with pending obligation `{key}`"
+                )));
+            }
+            if !State::resolve_queue_plan_pending_obligation_in_storage(
+                &mut markers,
+                chain_id_digest,
+                entrypoint_hash,
+            )? {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "autonomous QueuePlan pending obligation disappeared before resolution: `{key}`"
+                )));
+            }
+        }
+        markers.apply();
+        Ok(())
+    }
+
+    pub(crate) fn resolve_queue_plan_pending_obligations_from_block(
+        &mut self,
+        block: &SignedBlock,
+    ) -> Result<(), MergeLedgerCommitError> {
+        self.resolve_queue_plan_pending_obligations_for_entrypoints(
+            block
+                .external_entrypoints_cloned()
+                .map(|entrypoint| entrypoint.hash()),
+        )
     }
 
     fn stage_merge_execution_markers(
@@ -49636,10 +50607,47 @@ impl<'state> StateBlock<'state> {
     /// # Errors
     /// Returns [`TransactionsBlockError`] when flushing the transaction batch fails.
     pub fn commit(self) -> Result<(), TransactionsBlockError> {
-        self.commit_inner()
+        self.commit_inner(None, None)
     }
 
-    fn commit_inner(mut self) -> Result<(), TransactionsBlockError> {
+    /// Commit with a move-only authorization consumed inside State's exact
+    /// linearization boundary.
+    pub(crate) fn commit_with_state_commit_authorization(
+        self,
+        authorization: Box<dyn StateBlockCommitAuthorization>,
+    ) -> Result<(), TransactionsBlockError> {
+        self.commit_inner(Some(authorization), None)
+    }
+
+    /// Commit with one final local Queue veto for an exact autoscale scale-in.
+    ///
+    /// The callback runs under the same lane-lifecycle guard that publishes the
+    /// catalog update. It must not try to acquire that guard recursively.
+    #[cfg(test)]
+    pub(crate) fn commit_with_autoscale_retirement_queue_veto(
+        self,
+        veto: &mut (dyn FnMut(LaneId, DataSpaceId, Hash) -> Result<(), String> + '_),
+    ) -> Result<(), TransactionsBlockError> {
+        self.commit_inner(None, Some(veto))
+    }
+
+    /// Commit with both the exact State authorization and final Queue scale-in
+    /// veto. The authorization is consumed only after the veto succeeds.
+    pub(crate) fn commit_with_state_commit_authorization_and_autoscale_retirement_queue_veto(
+        self,
+        authorization: Box<dyn StateBlockCommitAuthorization>,
+        veto: &mut (dyn FnMut(LaneId, DataSpaceId, Hash) -> Result<(), String> + '_),
+    ) -> Result<(), TransactionsBlockError> {
+        self.commit_inner(Some(authorization), Some(veto))
+    }
+
+    fn commit_inner(
+        mut self,
+        mut state_commit_authorization: Option<Box<dyn StateBlockCommitAuthorization>>,
+        mut autoscale_retirement_queue_veto: Option<
+            &mut (dyn FnMut(LaneId, DataSpaceId, Hash) -> Result<(), String> + '_),
+        >,
+    ) -> Result<(), TransactionsBlockError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         let block_height = self._curr_block.height().get();
         let block_header_hash = self._curr_block.hash();
@@ -49693,6 +50701,22 @@ impl<'state> StateBlock<'state> {
                 zk_dedup: _,
             ..
         } = self;
+        let exact_scale_in_binding = match pending_autoscale_lifecycle
+            .as_ref()
+            .map(PendingAutoscaleLaneLifecycle::exact_scale_in_binding)
+            .transpose()
+        {
+            Ok(binding) => binding.flatten(),
+            Err(err) => {
+                error!(
+                    block_height,
+                    block = %block_header_hash,
+                    ?err,
+                    "failed to derive the exact autoscale retirement binding before state commit"
+                );
+                return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
+            }
+        };
         let _state_commit_lock = state_ref.state_commit_lock.lock();
         if let Err(err) = merge_execution_commit_surface_result {
             error!(
@@ -49910,6 +50934,67 @@ impl<'state> StateBlock<'state> {
         } else {
             None
         };
+        if tx_validate_accepted
+            && !replay_prevalidation
+            && let Some((lane_id, dataspace_id, lane_incarnation)) = exact_scale_in_binding
+        {
+            match autoscale_retirement_queue_veto.as_mut() {
+                Some(veto) => {
+                    if let Err(reason) = veto(lane_id, dataspace_id, lane_incarnation) {
+                        error!(
+                            block_height,
+                            block = %block_header_hash,
+                            lane = lane_id.as_u32(),
+                            dataspace = dataspace_id.as_u64(),
+                            incarnation = %hex::encode(lane_incarnation.as_ref()),
+                            %reason,
+                            "final autoscale retirement Queue veto rejected state commit"
+                        );
+                        return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
+                    }
+                }
+                None if !replay_compatibility => {
+                    error!(
+                        block_height,
+                        block = %block_header_hash,
+                        lane = lane_id.as_u32(),
+                        dataspace = dataspace_id.as_u64(),
+                        incarnation = %hex::encode(lane_incarnation.as_ref()),
+                        "live autoscale retirement has no final Queue veto"
+                    );
+                    return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
+                }
+                // Authenticated Kura replay has no live Queue ownership and
+                // re-applies the already-decided lifecycle transition.
+                None => {}
+            }
+        }
+        if tx_validate_accepted && !replay_prevalidation {
+            match state_commit_authorization.take() {
+                Some(authorization) => {
+                    if let Err(reason) = authorization
+                        .consume_for_state_commit(block_header_hash, staged_merge_entry.as_ref())
+                    {
+                        error!(
+                            block_height,
+                            block = %block_header_hash,
+                            %reason,
+                            "State commit authorization rejected the exact carrier transition"
+                        );
+                        return Err(TransactionsBlockError::MergeAdmission);
+                    }
+                }
+                None if carries_autonomous_execution && !replay_compatibility => {
+                    error!(
+                        block_height,
+                        block = %block_header_hash,
+                        "live autonomous execution has no checked carrier State commit authorization"
+                    );
+                    return Err(TransactionsBlockError::MergeAdmission);
+                }
+                None => {}
+            }
+        }
         let autoscale_storage_hold = if tx_validate_accepted {
             if let Some(pending) = &pending_autoscale_lifecycle {
                 let autoscale_start = Instant::now();
@@ -51233,7 +52318,10 @@ impl<'state> StateBlock<'state> {
                 "drain commitment carrier must contain exactly one certificate".to_owned(),
             ));
         };
-        if entry.execution_batch.is_some() || !entry.lane_snapshots.is_empty() {
+        if entry.execution_batch.is_some()
+            || !entry.lane_snapshots.is_empty()
+            || !entry.queue_plan_admissions.is_empty()
+        {
             return Err(LaneLifecycleError::Storage(
                 "drain commitment carrier must be certificate-only".to_owned(),
             ));
@@ -51426,6 +52514,12 @@ impl<'state> StateBlock<'state> {
                 incarnation,
             ) || commitment.carrier_height >= block_height
                 || frontier != commitment.frontier
+                || State::queue_plan_pending_route_obligation_blocks_lane_drain_in_world(
+                    &self.world,
+                    *lane,
+                    lane_config.dataspace_id,
+                    incarnation,
+                )
                 || self.state_ref.lane_has_drain_blocking_evidence(
                     *lane,
                     lane_config.dataspace_id,
@@ -51615,7 +52709,7 @@ impl<'state> StateBlock<'state> {
                     .is_some()
             });
         let scale_in_action = (autoscale_capacity_lanes > 1)
-            .then(|| self.select_autoscale_scale_in_action(block))
+            .then(|| self.select_autoscale_scale_in_action(block.as_ref()))
             .flatten();
         if drain_in_progress {
             let Some(AutoscaleScaleInAction::Retire(retire_lane_id)) = scale_in_action else {
@@ -51868,7 +52962,7 @@ impl<'state> StateBlock<'state> {
 
     fn select_autoscale_scale_in_action(
         &self,
-        block: &CommittedBlock,
+        block: &SignedBlock,
     ) -> Option<AutoscaleScaleInAction> {
         let candidate = autoscale_managed_lane_for_retire(
             self.nexus.lane_catalog.lanes(),
@@ -51910,6 +53004,12 @@ impl<'state> StateBlock<'state> {
         )
         .ok()?;
         if frontier != commitment.frontier
+            || State::queue_plan_pending_route_obligation_blocks_lane_drain_in_world(
+                &self.world,
+                candidate,
+                lane.dataspace_id,
+                incarnation,
+            )
             || self.state_ref.lane_has_drain_blocking_evidence(
                 candidate,
                 lane.dataspace_id,
@@ -51918,13 +53018,12 @@ impl<'state> StateBlock<'state> {
         {
             return None;
         }
-        let owns_current_block_payload =
-            block.as_ref().execution_context().is_some_and(|context| {
-                context
-                    .lane_payload_ownerships
-                    .iter()
-                    .any(|ownership| ownership.lane_id == candidate)
-            });
+        let owns_current_block_payload = block.execution_context().is_some_and(|context| {
+            context
+                .lane_payload_ownerships
+                .iter()
+                .any(|ownership| ownership.lane_id == candidate)
+        });
         if self.touched_lanes.contains(&candidate) || owns_current_block_payload {
             debug!(
                 lane = candidate.as_u32(),
@@ -51934,6 +53033,69 @@ impl<'state> StateBlock<'state> {
             return None;
         }
         Some(AutoscaleScaleInAction::Retire(candidate))
+    }
+
+    /// Return the exact route/incarnation this already-executed block would
+    /// retire during deterministic post-execution autoscale processing.
+    ///
+    /// Callers hold the lane lifecycle admission fence while consulting the
+    /// local Queue, so no ordinary owner can appear between this projection
+    /// and the retirement vote check.
+    pub(crate) fn prospective_autoscale_retirement_binding(
+        &self,
+        block: &SignedBlock,
+    ) -> Result<Option<(LaneId, DataSpaceId, Hash)>, LaneLifecycleError> {
+        if self.pending_autoscale_lifecycle.is_some()
+            || self
+                .staged_merge_entry
+                .as_ref()
+                .is_some_and(|entry| entry.execution_batch.is_some())
+            || !self.nexus.enabled
+            || !self.nexus.autoscale.enabled
+        {
+            return Ok(None);
+        }
+        if ensure_autoscale_runtime_lane_bounds(&self.nexus.autoscale).is_err()
+            || ensure_autoscale_runtime_elastic_range(&self.nexus).is_err()
+            || ensure_autoscale_managed_created_heights_not_future(
+                &self.nexus,
+                self._curr_block.height().get(),
+            )
+            .is_err()
+        {
+            return Ok(None);
+        }
+        let capacity = autoscale_default_route_capacity_lanes(
+            &self.nexus.routing_policy,
+            self.nexus.lane_catalog.lanes(),
+            self.nexus.autoscale.min_lanes.get(),
+            self.nexus.autoscale.max_lanes.get(),
+        );
+        if capacity <= 1 {
+            return Ok(None);
+        }
+        let Some(AutoscaleScaleInAction::Retire(lane_id)) =
+            self.select_autoscale_scale_in_action(block)
+        else {
+            return Ok(None);
+        };
+        let lane = self
+            .nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == lane_id)
+            .ok_or(LaneLifecycleError::InvalidAutoscaleManagedLane {
+                lane: lane_id,
+                reason: "prospective retirement lane is absent from the catalog",
+            })?;
+        let incarnation = self.lane_incarnations.get(&lane_id).copied().ok_or(
+            LaneLifecycleError::InvalidAutoscaleManagedLane {
+                lane: lane_id,
+                reason: "prospective retirement lane has no active incarnation",
+            },
+        )?;
+        Ok(Some((lane_id, lane.dataspace_id, incarnation)))
     }
 
     fn collect_autoscale_samples(
@@ -52402,6 +53564,8 @@ impl<'state> StateBlock<'state> {
                 transaction.apply();
             }
         }
+        self.resolve_queue_plan_pending_obligations_from_block(block)
+            .expect("committed block must resolve exact QueuePlan pending application obligations");
     }
 
     fn seed_committed_transaction_context(

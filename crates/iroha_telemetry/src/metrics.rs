@@ -5705,7 +5705,10 @@ pub struct Status {
     /// Stack sizing/configuration snapshot.
     #[norito(default)]
     pub stack: StackStatus,
-    /// Complete mandatory offline-cash readiness across configured escrow assets.
+    /// Universal offline-wallet protocol capability advertised by this build.
+    ///
+    /// This is never a node-health, startup, asset-enrollment, or dataspace
+    /// readiness gate.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub offline: Option<OfflineStatus>,

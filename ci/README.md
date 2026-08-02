@@ -87,7 +87,12 @@ Their focused regression tests live under `scripts/tests/` and
   `scripts/formal/run_sumeragi_v2_harness.sh`. The retired Sumeragi v1
   Apalache and expected-failure corridors are not release evidence.
 - `check_swift_spm_validation.sh` – exercises `IrohaSwift/Package.swift` with the bridge present and with the bridge intentionally missing. The complete artifact must build and the missing-artifact case must fail with the mandatory-bridge diagnostic. Writes a summary + logs under `artifacts/swift_spm_validation`.
-- `check_swift_pod_bridge.sh` – runs `pod lib lint` against `IrohaSwift/IrohaSwift.podspec` with the bundled `NoritoBridge.xcframework` to make sure pod consumers get the signed bridge and minimum platform/toolchain settings stay in sync with SPM.
+- `check_swift_pod_bridge.sh` – requires CocoaPods and runs strict Release
+  `pod lib lint` against `IrohaSwift/IrohaSwift.podspec` while an authenticated
+  `NoritoBridge.xcframework` is present. Missing tooling or artifacts fail the
+  lane. This is a structural lint only; native CocoaPods delivery remains
+  blocked until the podspec has a reviewed vendored-XCFramework archive path
+  and downstream install evidence.
 - `check_walletless_follow_bundle.sh` – repackages the walletless follow-game static bundle and asserts the tarball + `.sha256` sidecar exist. Use this in CI before publishing via the content lane workflow.
 
 ## Cargo `build-dir` decision

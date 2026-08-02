@@ -15,6 +15,15 @@ use iroha_torii_shared::{
         BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1,
         BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1,
     },
+    sorafs_moderation_api::{
+        SORAFS_MODERATION_DEAD_LETTER_APPLY_REQUEST_MAX_BYTES_V1,
+        SORAFS_MODERATION_DEAD_LETTER_APPLY_RESPONSE_SCHEMA_V1,
+        SORAFS_MODERATION_DEAD_LETTER_APPLY_STATUS_V1,
+        SORAFS_MODERATION_DEAD_LETTER_PREPARE_REQUEST_MAX_BYTES_V1,
+        SORAFS_MODERATION_DEAD_LETTER_PREPARE_RESPONSE_SCHEMA_V1,
+        SORAFS_MODERATION_DEAD_LETTER_PREPARE_STATUS_V1,
+        SORAFS_MODERATION_DEAD_LETTER_RESOLUTION_MAX_BASE64_BYTES_V1,
+    },
     uri,
 };
 use norito::json::{Map, Value};
@@ -1390,38 +1399,29 @@ fn offline_readiness_operation() -> Map {
     );
     operation.insert(
         "summary".into(),
-        Value::String("Report Kagemusha readiness.".to_owned()),
+        Value::String("Report universal offline-wallet capability.".to_owned()),
     );
     operation.insert(
         "description".into(),
         Value::String(
-            "Evaluate Kagemusha readiness for one asset definition at a specific committed block. The response binds the live asset scale, five distinct active verifier records, and exact authenticated ABI-21 V4 release identity to that same height and block hash so clients can cross-check capabilities and release artifacts atomically. proof_backend_available reports exact backend construction independently; recursive_lineage_supported additionally requires the authenticated artifact set and distinct active Eq/Ep records. ready is true exactly when no typed blocker remains, so unrelated blockers do not erase backend or lineage facts. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness."
+            "Report the offline-wallet protocol interface implemented by every Iroha app-api deployment. cash_handoff_v1 and native bridge ABI 21 are universally available to applications and do not require settlement flags, escrow catalogs, asset metadata, or dataspace enrollment. This capability response is deliberately asset-neutral: mandatory is false, ready is true, and assets and blockers are empty. Wallets must not gate offline UI or peer handoff on this discovery call; those flows continue without network connectivity. It does not claim that any particular asset has server-managed top-up, redemption, proof, or escrow material."
                 .to_owned(),
         ),
     );
     operation.insert(
         "parameters".into(),
-        Value::Array(vec![
-            norito::json!({
-                "name": "asset_definition_id",
-                "in": "query",
-                "required": true,
-                "schema": { "type": "string" },
-                "description": "Canonical asset-definition address literal or currently live asset alias. The response always contains the resolved canonical asset definition id."
-            }),
-            norito::json!({
-                "name": "If-None-Match",
-                "in": "header",
-                "required": false,
-                "schema": { "type": "string" },
-                "description": "A strong or weak ETag returned by an earlier readiness evaluation, or *. A match for the selected representation returns 304."
-            }),
-        ]),
+        Value::Array(vec![norito::json!({
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "A strong or weak ETag returned by an earlier capability response, or *. A match for the selected representation returns 304."
+        })]),
     );
     let mut responses = Map::new();
     let mut ok = dual_format_response(
-        "Readiness was evaluated successfully.",
-        "#/components/schemas/OfflineReadiness",
+        "The universal offline-wallet capability is available.",
+        "#/components/schemas/OfflineCapabilityStatus",
     );
     if let Value::Object(response) = &mut ok {
         response.insert(
@@ -1433,14 +1433,14 @@ fn offline_readiness_operation() -> Map {
     responses.insert(
         "304".to_owned(),
         norito::json!({
-            "description": "The previously returned readiness representation is still current.",
+            "description": "The previously returned capability representation is still current.",
             "headers": {
                 "ETag": {
-                    "description": "Strong validator for the selected readiness representation.",
+                    "description": "Strong validator for the selected capability representation.",
                     "schema": { "type": "string" }
                 },
                 "Cache-Control": {
-                    "description": "Readiness revalidation policy.",
+                    "description": "Capability revalidation policy.",
                     "schema": { "type": "string", "example": "private, max-age=0, must-revalidate" }
                 },
                 "Vary": {
@@ -1450,36 +1450,13 @@ fn offline_readiness_operation() -> Map {
             }
         }),
     );
-    responses.insert(
-        "400".to_owned(),
-        dual_format_error_response_with_reject_codes(
-            "The asset selector is malformed.",
-            "Exact application-validation code; transport or parser failures sharing HTTP 400 may omit this header.",
-            &["asset_definition_id_invalid"],
-        ),
-    );
-    responses.insert(
-        "404".to_owned(),
-        dual_format_error_response_with_reject_codes(
-            "The asset definition does not exist.",
-            "Exact application-resource code distinguishing a missing asset from an unmatched or intermediary-generated HTTP 404.",
-            &["asset_definition_not_found"],
-        ),
-    );
     responses.insert("401".to_owned(), api_token_unauthorized_response());
     responses.insert("406".to_owned(), offline_not_acceptable_response());
     responses.insert(
         "429".to_owned(),
         retryable_error_response(
-            "The readiness request was rejected by an ingress or route rate limit.",
+            "The capability request was rejected by an ingress or route rate limit.",
             &[],
-        ),
-    );
-    responses.insert(
-        "503".to_owned(),
-        retryable_error_response(
-            "Torii could not evaluate readiness (readiness_unavailable).",
-            &["readiness_unavailable"],
         ),
     );
     operation.insert("responses".into(), Value::Object(responses));
@@ -2324,6 +2301,24 @@ fn path_param(name: &str, description: &str) -> Value {
 fn system_paths() -> Map {
     let mut paths = Map::new();
     paths.insert("/health".to_owned(), Value::Object(health_operation()));
+    paths.insert(
+        "/livez".to_owned(),
+        Value::Object(protocol_probe_operation(
+            iroha_torii_shared::route_catalog::core::LIVEZ.stable_route_id(),
+            "Check process liveness.",
+            "Return Alive when the Torii process can serve requests. This process-only probe never claims protocol or application readiness.",
+            "Alive",
+        )),
+    );
+    paths.insert(
+        "/readyz".to_owned(),
+        Value::Object(protocol_probe_operation(
+            iroha_torii_shared::route_catalog::core::READYZ.stable_route_id(),
+            "Check node admission readiness.",
+            "Return Ready when the ordinary node admission probe succeeds. Optional application capabilities do not participate in this probe.",
+            "Ready",
+        )),
+    );
     #[cfg(feature = "telemetry")]
     {
         paths.insert(
@@ -3259,6 +3254,10 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/contracts/call/batch/prepare".to_owned(),
+        Value::Object(contract_call_batch_prepare_operation()),
+    );
+    paths.insert(
         "/v1/contracts/call/simulate".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
@@ -3343,6 +3342,57 @@ fn contracts_paths() -> Map {
         )),
     );
     paths
+}
+
+fn contract_call_batch_prepare_operation() -> Map {
+    let mut methods = json_post_operation(
+        "Contracts",
+        "Prepare an exact ordered contract-call batch.",
+        "Resolve one through 256 ordered contract-call or native-instruction entries against the current committed contract manifests, enforce exact optional address/code/ABI pins, normalize callable arguments, and return the canonical executable inventory plus its signature-bound binding digest. The route never signs or submits the returned plan.",
+        "#/components/schemas/ContractCallBatchPrepareRequestV1",
+        "#/components/schemas/ContractCallBatchPlanV1",
+        Vec::new(),
+    );
+    let operation = methods
+        .get_mut("post")
+        .and_then(Value::as_object_mut)
+        .expect("contract-call batch prepare POST operation");
+    operation.insert(
+        "operationId".into(),
+        Value::String(
+            iroha_torii_shared::route_catalog::contracts_and_verification_keys::CONTRACTS_CALL_BATCH_PREPARE_POST
+                .stable_route_id()
+                .to_owned(),
+        ),
+    );
+    let responses = operation
+        .get_mut("responses")
+        .and_then(Value::as_object_mut)
+        .expect("contract-call batch prepare responses");
+    for (status, description) in [
+        (
+            "400",
+            "The closed request, exact-one item choice, canonical instruction frame, target pin, entrypoint, or normalized arguments are invalid.",
+        ),
+        (
+            "404",
+            "A selected contract, alias, manifest, or callable entrypoint is absent from the committed view.",
+        ),
+        (
+            "429",
+            "The public contract-tooling rate limit is exhausted.",
+        ),
+        (
+            "503",
+            "The committed contract projection required for preparation is unavailable.",
+        ),
+    ] {
+        responses.insert(
+            status.to_owned(),
+            json_response(description, error_schema_reference()),
+        );
+    }
+    methods
 }
 
 fn multisig_post_operation(
@@ -6647,7 +6697,7 @@ fn sorafs_paths() -> Map {
             Vec::new(),
         )),
     );
-    let mut appeal_finance_reports = json_get_operation(
+    let appeal_finance_reports = json_get_operation(
         "SoraFS",
         "List appeal finance report publications.",
         "Summarize locally published SoraFS appeal finance reports from the Governance DAG publish-index, including outcome counts, finance totals, and source entries. The entries array is bounded by `limit` and capped at 500 entries while aggregate totals are computed over the full local index.",
@@ -6658,23 +6708,11 @@ fn sorafs_paths() -> Map {
             Some("uint64"),
         )],
     );
-    if let Some(Value::Object(post_operation)) = json_post_operation(
-        "SoraFS",
-        "Publish an appeal finance report.",
-        "Publish a validated SoraFS appeal finance report into the local Governance DAG pipeline. The request requires canonical app authentication and a configured governance publisher.",
-        "#/components/schemas/JsonValue",
-        "#/components/schemas/JsonValue",
-        Vec::new(),
-    )
-    .remove("post")
-    {
-        appeal_finance_reports.insert("post".to_owned(), Value::Object(post_operation));
-    }
     paths.insert(
         "/v1/sorafs/appeals/finance/reports".to_owned(),
         Value::Object(appeal_finance_reports),
     );
-    let mut weekly_rollups = json_get_operation(
+    let weekly_rollups = json_get_operation(
         "SoraFS",
         "List appeal finance weekly rollup publications.",
         "Summarize locally published SoraFS appeal finance weekly rollups from the Governance DAG publish-index, including cycle counts, report totals, and source entries. The entries array is bounded by `limit` and capped at 500 entries while aggregate totals are computed over the full local index.",
@@ -6685,18 +6723,6 @@ fn sorafs_paths() -> Map {
             Some("uint64"),
         )],
     );
-    if let Some(Value::Object(post_operation)) = json_post_operation(
-        "SoraFS",
-        "Publish an appeal finance weekly rollup.",
-        "Publish a validated SoraFS appeal finance weekly rollup into the local Governance DAG pipeline. The request requires canonical app authentication and a configured governance publisher.",
-        "#/components/schemas/JsonValue",
-        "#/components/schemas/JsonValue",
-        Vec::new(),
-    )
-    .remove("post")
-    {
-        weekly_rollups.insert("post".to_owned(), Value::Object(post_operation));
-    }
     paths.insert(
         "/v1/sorafs/appeals/finance/weekly-rollups".to_owned(),
         Value::Object(weekly_rollups),
@@ -6860,6 +6886,30 @@ fn sorafs_paths() -> Map {
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/dead-letters/prepare".to_owned(),
+        Value::Object(sorafs_moderation_dead_letter_post_operation(
+            iroha_torii_shared::route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_PREPARE_POST
+                .stable_route_id(),
+            "Prepare an externally attested moderation dead-letter resolution.",
+            "Authenticate the exact request with a canonical account signature, require the finalized sorafs_moderation_operator role, and prepare one checkpoint-bound canonical Norito resolution frame. The response exposes only that bounded frame and its signing digest. An independently administered checkpoint-attestor Ed25519 key must sign the digest outside Torii before apply; the authenticated operator key cannot substitute for the attestor.",
+            "#/components/schemas/SorafsModerationDeadLetterPrepareRequestV1",
+            "#/components/schemas/SorafsModerationDeadLetterPrepareResponseV1",
+            SORAFS_MODERATION_DEAD_LETTER_PREPARE_REQUEST_MAX_BYTES_V1,
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/dead-letters/apply".to_owned(),
+        Value::Object(sorafs_moderation_dead_letter_post_operation(
+            iroha_torii_shared::route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_APPLY_POST
+                .stable_route_id(),
+            "Apply an externally attested moderation dead-letter resolution.",
+            "Authenticate the exact request with a canonical account signature, require the finalized sorafs_moderation_operator role, bounded-decode and byte-canonically re-encode the opaque V1 resolution frame, verify its detached Ed25519 signature with the configured checkpoint attestor, and apply the checkpoint-bound redrive or acknowledgement atomically. The authenticated operator and external attestor must be independently administered.",
+            "#/components/schemas/SorafsModerationDeadLetterApplyRequestV1",
+            "#/components/schemas/SorafsModerationDeadLetterApplyResponseV1",
+            SORAFS_MODERATION_DEAD_LETTER_APPLY_REQUEST_MAX_BYTES_V1,
         )),
     );
     let mut moderation_ballots = json_get_operation(
@@ -7447,30 +7497,6 @@ fn sorafs_paths() -> Map {
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             evidence_request_parameters(Vec::new()),
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/moderation/viewer-audit-reports".to_owned(),
-        Value::Object(json_post_operation_with_success_status(
-            "SoraFS",
-            "Retired moderation evidence-viewer audit-ingestion tombstone.",
-            "This compatibility tombstone performs canonical app authentication and requires the sorafs_moderation_operator role, then returns HTTP 410 Gone. It never parses the retired report body or reads or mutates the former local session/access registry. Read the authoritative signed, payload-free receipt chain from `/v1/evidence/audit` and its signed checkpoint status from `/v1/evidence/status`.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-            "410",
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/moderation/viewer-audit-reports/publish-due".to_owned(),
-        Value::Object(json_post_operation_with_success_status(
-            "SoraFS",
-            "Retired moderation evidence-viewer audit-publication tombstone.",
-            "This compatibility tombstone performs canonical app authentication and requires the sorafs_moderation_operator role, then returns HTTP 410 Gone. The former process-local audit scheduler and local session/access publication path are removed. Read the authoritative signed, payload-free receipt chain from `/v1/evidence/audit`; publication must consume that exact signed projection through a deployment-owned transparency adapter.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-            "410",
         )),
     );
     paths.insert(
@@ -10314,6 +10340,77 @@ fn json_post_operation(
         params,
         "200",
     )
+}
+
+fn sorafs_moderation_dead_letter_post_operation(
+    operation_id: &str,
+    summary: &str,
+    description: &str,
+    request_schema_ref: &str,
+    response_schema_ref: &str,
+    request_max_bytes: usize,
+) -> Map {
+    let mut methods = json_post_operation(
+        "SoraFS",
+        summary,
+        description,
+        request_schema_ref,
+        response_schema_ref,
+        canonical_request_auth_header_parameters(),
+    );
+    let operation = methods
+        .get_mut("post")
+        .and_then(Value::as_object_mut)
+        .expect("moderation dead-letter POST operation");
+    operation.insert("operationId".into(), Value::String(operation_id.to_owned()));
+    operation.insert(
+        "x-iroha-max-request-bytes".into(),
+        Value::from(
+            u64::try_from(request_max_bytes)
+                .expect("moderation dead-letter request bound fits uint64"),
+        ),
+    );
+    insert_reputation_auth_contract(operation);
+    let responses = operation
+        .get_mut("responses")
+        .and_then(Value::as_object_mut)
+        .expect("moderation dead-letter POST responses");
+    for (status, error_description) in [
+        (
+            "400",
+            "The strict JSON transport, canonical hexadecimal value, canonical base64 frame, bounded Norito resolution, or requested transition is invalid.",
+        ),
+        (
+            "401",
+            "Canonical single-signature or multisig-witness authentication is missing or invalid.",
+        ),
+        (
+            "403",
+            "The authenticated account lacks the finalized moderation-operator role, conflicts with the external checkpoint attestor, or is not authorized for the durable operation.",
+        ),
+        (
+            "404",
+            "The exact unresolved moderation dead-letter record is absent.",
+        ),
+        (
+            "409",
+            "The resolution conflicts with the current sealed checkpoint or an existing operation.",
+        ),
+        (
+            "429",
+            "The bounded moderation-orchestrator capacity is exhausted.",
+        ),
+        (
+            "503",
+            "The production moderation runtime, finalized projection, sealed checkpoint, or immutable archive is unavailable or invalid.",
+        ),
+    ] {
+        responses.insert(
+            status.to_owned(),
+            json_response(error_description, error_schema_reference()),
+        );
+    }
+    methods
 }
 
 fn json_post_operation_with_success_status(
@@ -13298,6 +13395,31 @@ fn health_operation() -> Map {
         Value::String("healthCheck".to_owned()),
     );
     operation.insert("responses".into(), Value::Object(health_responses()));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn protocol_probe_operation(
+    operation_id: &str,
+    summary: &str,
+    description: &str,
+    response_body: &str,
+) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("System".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    operation.insert("operationId".into(), Value::String(operation_id.to_owned()));
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        plain_text_response("Probe succeeded.", Some(response_body)),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
     let mut methods = Map::new();
     methods.insert("get".to_owned(), Value::Object(operation));
     methods
@@ -20693,19 +20815,315 @@ fn insert_sorafs_hedging_billing_schemas(schemas: &mut Map) {
     );
 }
 
-fn openapi_schemas() -> Map {
+fn insert_sorafs_moderation_recovery_schemas(schemas: &mut Map) {
+    let resolution_max_base64_bytes =
+        u64::try_from(SORAFS_MODERATION_DEAD_LETTER_RESOLUTION_MAX_BASE64_BYTES_V1)
+            .expect("moderation dead-letter base64 bound fits uint64");
+    schemas.insert(
+        "SorafsModerationDeadLetterKindV1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "enum": ["native_submission", "terminal_handoff", "panel_notification"],
+            "description": "Closed V1 durable source family containing the unresolved moderation dead letter."
+        }),
+    );
+    schemas.insert(
+        "SorafsModerationDeadLetterResolutionActionV1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "enum": ["redrive", "acknowledge"],
+            "description": "Closed V1 disposition authorized by the independent checkpoint attestor."
+        }),
+    );
+    schemas.insert(
+        "SorafsModerationDeadLetterNonzeroHex32V1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+            "description": "Exact non-zero lowercase 32-byte hexadecimal value without a prefix."
+        }),
+    );
+    schemas.insert(
+        "SorafsModerationDeadLetterHex32V1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Exact lowercase 32-byte hexadecimal value without a prefix."
+        }),
+    );
+    schemas.insert(
+        "SorafsModerationDeadLetterNonzeroHex64V1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 128,
+            "maxLength": 128,
+            "pattern": "^(?!0{128}$)[0-9a-f]{128}$",
+            "description": "Exact non-zero lowercase 64-byte Ed25519 signature without a prefix."
+        }),
+    );
+    schemas.insert(
+        "SorafsModerationDeadLetterResolutionNoritoBase64V1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 4,
+            "maxLength": resolution_max_base64_bytes,
+            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+            "description": "The sole V1 resolution representation: non-empty canonical RFC 4648 standard base64, including required padding, of at most 4096 canonical Norito bytes."
+        }),
+    );
+    schemas.insert(
+        "SorafsModerationDeadLetterPrepareRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["identity_hex", "kind", "action", "authorized_at_unix_ms"],
+            "additionalProperties": false,
+            "properties": {
+                "identity_hex": { "$ref": "#/components/schemas/SorafsModerationDeadLetterNonzeroHex32V1" },
+                "kind": { "$ref": "#/components/schemas/SorafsModerationDeadLetterKindV1" },
+                "action": { "$ref": "#/components/schemas/SorafsModerationDeadLetterResolutionActionV1" },
+                "authorized_at_unix_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "Explicit external authorization time in Unix milliseconds."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsModerationDeadLetterPrepareResponseV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema", "status", "resolution_norito_b64", "signing_message_hex"],
+            "additionalProperties": false,
+            "properties": {
+                "schema": { "type": "string", "const": (SORAFS_MODERATION_DEAD_LETTER_PREPARE_RESPONSE_SCHEMA_V1) },
+                "status": { "type": "string", "const": (SORAFS_MODERATION_DEAD_LETTER_PREPARE_STATUS_V1) },
+                "resolution_norito_b64": { "$ref": "#/components/schemas/SorafsModerationDeadLetterResolutionNoritoBase64V1" },
+                "signing_message_hex": { "$ref": "#/components/schemas/SorafsModerationDeadLetterHex32V1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsModerationDeadLetterApplyRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["resolution_norito_b64", "signature_hex"],
+            "additionalProperties": false,
+            "properties": {
+                "resolution_norito_b64": { "$ref": "#/components/schemas/SorafsModerationDeadLetterResolutionNoritoBase64V1" },
+                "signature_hex": { "$ref": "#/components/schemas/SorafsModerationDeadLetterNonzeroHex64V1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsModerationDeadLetterApplyResponseV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema", "status", "identity_hex", "kind", "action"],
+            "additionalProperties": false,
+            "properties": {
+                "schema": { "type": "string", "const": (SORAFS_MODERATION_DEAD_LETTER_APPLY_RESPONSE_SCHEMA_V1) },
+                "status": { "type": "string", "const": (SORAFS_MODERATION_DEAD_LETTER_APPLY_STATUS_V1) },
+                "identity_hex": { "$ref": "#/components/schemas/SorafsModerationDeadLetterNonzeroHex32V1" },
+                "kind": { "$ref": "#/components/schemas/SorafsModerationDeadLetterKindV1" },
+                "action": { "$ref": "#/components/schemas/SorafsModerationDeadLetterResolutionActionV1" }
+            }
+        }),
+    );
+}
+
+fn insert_contract_call_batch_schemas(schemas: &mut Map) {
+    let batch_max_items = u64::try_from(crate::routing::CONTRACT_CALL_BATCH_MAX_ITEMS)
+        .expect("contract-call batch bound fits uint64");
+    schemas.insert(
+        "ContractCallBatchHex32V1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Exact lowercase 32-byte hexadecimal digest without a prefix."
+        }),
+    );
+    schemas.insert(
+        "ContractCallBatchCanonicalBase64V1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+            "description": "Canonical RFC 4648 standard base64 with exact padding and no whitespace."
+        }),
+    );
+    schemas.insert(
+        "ContractCallBatchIntentV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["entrypoint"],
+            "additionalProperties": false,
+            "properties": {
+                "contract_address": { "type": "string", "minLength": 1 },
+                "contract_alias": { "type": "string", "minLength": 1 },
+                "expected_contract_address": { "type": "string", "minLength": 1 },
+                "expected_code_hash_hex": { "$ref": "#/components/schemas/ContractCallBatchHex32V1" },
+                "expected_abi_hash_hex": { "$ref": "#/components/schemas/ContractCallBatchHex32V1" },
+                "entrypoint": { "type": "string", "minLength": 1 },
+                "payload": { "$ref": "#/components/schemas/JsonValue" }
+            },
+            "oneOf": [
+                {
+                    "required": ["contract_address"],
+                    "not": { "required": ["contract_alias"] }
+                },
+                {
+                    "required": ["contract_alias"],
+                    "not": { "required": ["contract_address"] }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "ContractCallBatchPrepareItemV1".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["contract_call"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "contract_call": { "$ref": "#/components/schemas/ContractCallBatchIntentV1" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["instruction_b64"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "instruction_b64": {
+                            "allOf": [
+                                { "$ref": "#/components/schemas/ContractCallBatchCanonicalBase64V1" },
+                                { "minLength": 4 }
+                            ],
+                            "description": "One non-empty exact canonically framed native InstructionBox."
+                        }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "ContractCallBatchPrepareRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["entries"],
+            "additionalProperties": false,
+            "properties": {
+                "entries": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": batch_max_items,
+                    "items": { "$ref": "#/components/schemas/ContractCallBatchPrepareItemV1" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ContractCallBatchBindingItemV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["index", "kind"],
+            "additionalProperties": false,
+            "properties": {
+                "index": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 255 },
+                "kind": { "type": "string", "enum": ["contract_call", "instruction"] },
+                "contract_alias": { "type": "string", "minLength": 1 },
+                "contract_address": { "type": "string", "minLength": 1 },
+                "dataspace": { "type": "string", "minLength": 1 },
+                "code_hash_hex": { "$ref": "#/components/schemas/ContractCallBatchHex32V1" },
+                "abi_hash_hex": { "$ref": "#/components/schemas/ContractCallBatchHex32V1" },
+                "entrypoint": { "type": "string", "minLength": 1 },
+                "payload_digest_hex": { "$ref": "#/components/schemas/ContractCallBatchHex32V1" },
+                "arguments_digest_hex": { "$ref": "#/components/schemas/ContractCallBatchHex32V1" },
+                "wire_id": { "type": "string", "minLength": 1 },
+                "instruction_digest_hex": { "$ref": "#/components/schemas/ContractCallBatchHex32V1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ContractCallBatchBindingV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "items"],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "format": "uint16", "const": 1 },
+                "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": batch_max_items,
+                    "items": { "$ref": "#/components/schemas/ContractCallBatchBindingItemV1" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ContractCallBatchPreparedItemV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["index", "kind"],
+            "additionalProperties": false,
+            "properties": {
+                "index": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 255 },
+                "kind": { "type": "string", "enum": ["contract_call", "instruction"] },
+                "contract_address": { "type": "string", "minLength": 1 },
+                "code_hash_hex": { "$ref": "#/components/schemas/ContractCallBatchHex32V1" },
+                "abi_hash_hex": { "$ref": "#/components/schemas/ContractCallBatchHex32V1" },
+                "entrypoint": { "type": "string", "minLength": 1 },
+                "arguments_b64": { "$ref": "#/components/schemas/ContractCallBatchCanonicalBase64V1" },
+                "wire_id": { "type": "string", "minLength": 1 },
+                "instruction_b64": { "$ref": "#/components/schemas/ContractCallBatchCanonicalBase64V1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ContractCallBatchPlanV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["ok", "binding", "binding_digest_hex", "prepared_entries"],
+            "additionalProperties": false,
+            "properties": {
+                "ok": { "type": "boolean", "const": true },
+                "binding": { "$ref": "#/components/schemas/ContractCallBatchBindingV1" },
+                "binding_digest_hex": { "$ref": "#/components/schemas/ContractCallBatchHex32V1" },
+                "prepared_entries": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": batch_max_items,
+                    "items": { "$ref": "#/components/schemas/ContractCallBatchPreparedItemV1" }
+                }
+            }
+        }),
+    );
+}
+
+// Keep the schema construction in bounded call frames. A single debug-mode
+// function containing every `json!` expansion exhausts the default test-thread
+// stack before the resulting maps can move their contents to the heap.
+fn insert_openapi_schemas_part_1(schemas: &mut Map) {
     let max_sumeragi_validators =
         u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT)
             .expect("Sumeragi validator bound must fit in an OpenAPI uint64");
     let max_sumeragi_commit_quorum_groups =
         u64::try_from(iroha_data_model::block::consensus_v2::MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT)
             .expect("Sumeragi Commit quorum-group bound must fit in an OpenAPI uint64");
-    let mut schemas = Map::new();
     schemas.extend(sccp_schemas());
-    bridge_finality_schemas(&mut schemas);
-    validation_fee_schemas(&mut schemas);
-    app_api_local_signing_schemas(&mut schemas);
-    subscription_schemas(&mut schemas);
+    bridge_finality_schemas(schemas);
+    validation_fee_schemas(schemas);
+    app_api_local_signing_schemas(schemas);
+    subscription_schemas(schemas);
     schemas.insert(
         "ZkSnapshotBlockHash".to_owned(),
         norito::json!({
@@ -20820,14 +21238,16 @@ fn openapi_schemas() -> Map {
             "description": "Canonical non-negative exact XOR amount with at most nine fractional digits. The mantissa is bounded by the positive range of a signed 512-bit integer; JSON numbers, fixed-unit aliases, leading zeros, and trailing fractional zeros are rejected."
         }),
     );
-    insert_vpn_schemas(&mut schemas);
-    insert_sorafs_proof_stream_schemas(&mut schemas);
-    sorafs_evidence::insert_sorafs_evidence_schemas(&mut schemas);
-    insert_sorafs_pin_register_schemas(&mut schemas);
-    insert_sorafs_pin_manifest_readback_schemas(&mut schemas);
-    insert_sorafs_replication_schemas(&mut schemas);
-    insert_sorafs_reputation_schemas(&mut schemas);
-    insert_sorafs_hedging_billing_schemas(&mut schemas);
+    insert_vpn_schemas(schemas);
+    insert_sorafs_proof_stream_schemas(schemas);
+    sorafs_evidence::insert_sorafs_evidence_schemas(schemas);
+    insert_sorafs_pin_register_schemas(schemas);
+    insert_sorafs_pin_manifest_readback_schemas(schemas);
+    insert_sorafs_replication_schemas(schemas);
+    insert_sorafs_reputation_schemas(schemas);
+    insert_sorafs_hedging_billing_schemas(schemas);
+    insert_sorafs_moderation_recovery_schemas(schemas);
+    insert_contract_call_batch_schemas(schemas);
     schemas.insert(
         "PositiveXorQuantity".to_owned(),
         norito::json!({
@@ -23268,7 +23688,10 @@ fn openapi_schemas() -> Map {
             "format": "xml"
         }),
     );
-    insert_offline_typed_schemas(&mut schemas);
+    insert_offline_typed_schemas(schemas);
+}
+
+fn insert_openapi_schemas_part_2(schemas: &mut Map) {
     let offline_top_up_norito_schema =
         iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME;
     let offline_redeem_norito_schema =
@@ -23723,6 +24146,57 @@ fn openapi_schemas() -> Map {
                     "items": { "$ref": "#/components/schemas/OfflineReadinessBlocker" }
                 }
             }
+        }),
+    );
+    schemas.insert(
+        "OfflineCapabilityStatus".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "mandatory", "cash_handoff_capability",
+                "required_bridge_abi_version", "max_hops",
+                "ready", "assets", "blockers"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "mandatory": {
+                    "type": "boolean",
+                    "const": false,
+                    "description": "Always false: offline-wallet UI capability is universal and is never a deployment admission requirement."
+                },
+                "cash_handoff_capability": {
+                    "type": "string",
+                    "const": (iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1),
+                    "description": "Client-facing irreversible cash-handoff interface implemented by every app-api deployment."
+                },
+                "required_bridge_abi_version": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "const": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4),
+                    "description": "Native bridge ABI exposed to offline-wallet applications."
+                },
+                "max_hops": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "const": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2)
+                },
+                "ready": {
+                    "type": "boolean",
+                    "const": true,
+                    "description": "Always true because this reports interface availability, not per-asset backend material."
+                },
+                "assets": {
+                    "type": "array",
+                    "maxItems": 0,
+                    "description": "Always empty; universal capability discovery never enrolls or attests any asset."
+                },
+                "blockers": {
+                    "type": "array",
+                    "maxItems": 0,
+                    "description": "Always empty; application feature capability never blocks node health or readiness."
+                }
+            },
+            "description": "Universal, asset-neutral offline-wallet application interface capability."
         }),
     );
     schemas.insert(
@@ -27170,6 +27644,9 @@ fn openapi_schemas() -> Map {
             }
         }),
     );
+}
+
+fn insert_openapi_schemas_part_3(schemas: &mut Map) {
     schemas.insert(
         "PublicLaneValidatorStatus".to_owned(),
         norito::json!({
@@ -28839,7 +29316,6 @@ fn openapi_schemas() -> Map {
             }
         }),
     );
-    schemas
 }
 
 fn queue_error_snapshot_schema() -> Value {
@@ -29623,6 +30099,14 @@ fn privacy_capability_schemas(schemas: &mut Map) {
     );
 }
 
+fn openapi_schemas() -> Map {
+    let mut schemas = Map::new();
+    insert_openapi_schemas_part_1(&mut schemas);
+    insert_openapi_schemas_part_2(&mut schemas);
+    insert_openapi_schemas_part_3(&mut schemas);
+    schemas
+}
+
 fn canonical_request_security_schemes() -> Map {
     let mut schemes = Map::new();
     for (name, header, description) in [
@@ -29691,14 +30175,6 @@ pub fn generate_spec() -> Value {
     generate_spec_with_features(crate::router::builder::compiled_route_features())
 }
 
-/// Return the OpenAPI specification for one concrete Torii runtime.
-#[must_use]
-pub(crate) fn generate_spec_for_runtime(offline_enabled: bool) -> Value {
-    generate_spec_with_features(crate::router::builder::runtime_route_features(
-        offline_enabled,
-    ))
-}
-
 fn generate_spec_with_features(enabled_features: EnabledFeatures<'_>) -> Value {
     let mut doc = Map::new();
     doc.insert("openapi".into(), Value::String("3.1.0".to_owned()));
@@ -29719,9 +30195,10 @@ mod tests {
 
     use super::*;
 
-    const OFFLINE_TYPED_SCHEMA_ROOTS: [&str; 8] = [
+    const OFFLINE_TYPED_SCHEMA_ROOTS: [&str; 9] = [
         "OfflineTopUpRequest",
         "OfflineRedeemRequest",
+        "OfflineCapabilityStatus",
         "OfflineReadiness",
         "OfflineOperationReference",
         "OfflineOperationStatus",
@@ -31507,6 +31984,142 @@ mod tests {
     }
 
     #[test]
+    fn moderation_dead_letter_openapi_is_typed_bounded_and_dual_control() {
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+        assert_strict_object_schema(
+            schemas,
+            "SorafsModerationDeadLetterPrepareRequestV1",
+            &["identity_hex", "kind", "action", "authorized_at_unix_ms"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SorafsModerationDeadLetterPrepareResponseV1",
+            &[
+                "schema",
+                "status",
+                "resolution_norito_b64",
+                "signing_message_hex",
+            ],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SorafsModerationDeadLetterApplyRequestV1",
+            &["resolution_norito_b64", "signature_hex"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SorafsModerationDeadLetterApplyResponseV1",
+            &["schema", "status", "identity_hex", "kind", "action"],
+            &[],
+        );
+
+        let resolution_schema = schemas
+            .get("SorafsModerationDeadLetterResolutionNoritoBase64V1")
+            .and_then(Value::as_object)
+            .expect("moderation resolution base64 schema");
+        assert_eq!(
+            resolution_schema.get("maxLength").and_then(Value::as_u64),
+            Some(
+                u64::try_from(SORAFS_MODERATION_DEAD_LETTER_RESOLUTION_MAX_BASE64_BYTES_V1)
+                    .expect("moderation resolution base64 bound fits uint64")
+            )
+        );
+        assert_eq!(
+            schemas
+                .get("SorafsModerationDeadLetterKindV1")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("enum"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(3)
+        );
+        assert_eq!(
+            schemas
+                .get("SorafsModerationDeadLetterResolutionActionV1")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("enum"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+
+        let expected_auth_headers = BTreeSet::from([
+            "X-Iroha-Account".to_owned(),
+            "X-Iroha-Signature".to_owned(),
+            "X-Iroha-Timestamp-Ms".to_owned(),
+            "X-Iroha-Nonce".to_owned(),
+            "X-Iroha-Witness".to_owned(),
+        ]);
+        for (path, route, request_schema, response_schema, request_max_bytes) in [
+            (
+                "/v1/sorafs/moderation/dead-letters/prepare",
+                iroha_torii_shared::route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_PREPARE_POST,
+                "#/components/schemas/SorafsModerationDeadLetterPrepareRequestV1",
+                "#/components/schemas/SorafsModerationDeadLetterPrepareResponseV1",
+                SORAFS_MODERATION_DEAD_LETTER_PREPARE_REQUEST_MAX_BYTES_V1,
+            ),
+            (
+                "/v1/sorafs/moderation/dead-letters/apply",
+                iroha_torii_shared::route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_APPLY_POST,
+                "#/components/schemas/SorafsModerationDeadLetterApplyRequestV1",
+                "#/components/schemas/SorafsModerationDeadLetterApplyResponseV1",
+                SORAFS_MODERATION_DEAD_LETTER_APPLY_REQUEST_MAX_BYTES_V1,
+            ),
+        ] {
+            assert!(catalog_openapi_route_enabled(CatalogHttpMethod::Post, path));
+            let operation = openapi_operation(&document, path, "post");
+            assert_eq!(
+                operation.get("operationId").and_then(Value::as_str),
+                Some(route.stable_route_id())
+            );
+            assert_eq!(operation_request_schema_ref(operation, path), request_schema);
+            assert_eq!(
+                operation_response_schema_ref(operation, "200", path),
+                response_schema
+            );
+            assert_eq!(
+                operation
+                    .get("x-iroha-max-request-bytes")
+                    .and_then(Value::as_u64),
+                Some(
+                    u64::try_from(request_max_bytes)
+                        .expect("moderation request bound fits uint64")
+                )
+            );
+            assert_eq!(
+                operation_header_requirements(operation)
+                    .into_iter()
+                    .map(|(name, required)| {
+                        assert!(!required, "{path} canonical auth uses alternative proof sets");
+                        name
+                    })
+                    .collect::<BTreeSet<_>>(),
+                expected_auth_headers
+            );
+            assert_eq!(
+                operation.get("security").and_then(Value::as_array).map(Vec::len),
+                Some(2)
+            );
+            let description = operation
+                .get("description")
+                .and_then(Value::as_str)
+                .expect("moderation recovery description");
+            assert!(description.contains("independent"));
+            let responses = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .expect("moderation recovery responses");
+            for status in ["200", "400", "401", "403", "404", "409", "429", "503"] {
+                assert!(responses.contains_key(status), "{path} missing HTTP {status}");
+            }
+        }
+    }
+
+    #[test]
     fn hedging_billing_openapi_is_authenticated_bounded_and_private() {
         let document = generate_spec();
         let expected_auth_headers = BTreeSet::from([
@@ -32321,8 +32934,8 @@ mod tests {
         ))]
         assert_eq!(
             expected.len(),
-            440,
-            "the supported full Torii documentation profile must remain exactly 440 cataloged operations"
+            470,
+            "the supported full Torii documentation profile must remain exactly 470 cataloged operations"
         );
 
         let spec = generate_spec();
@@ -32461,43 +33074,25 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn runtime_openapi_omits_offline_operations_when_capability_is_disabled() {
+    fn openapi_always_contains_the_universal_offline_interface() {
         use iroha_torii_shared::route_catalog::offline;
 
-        let static_paths = generate_spec()
+        let document = generate_spec();
+        let paths = document
             .get("paths")
             .and_then(Value::as_object)
-            .expect("static OpenAPI paths")
-            .clone();
-        let enabled_paths = generate_spec_for_runtime(true)
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("offline-enabled runtime OpenAPI paths")
-            .clone();
-        let disabled_paths = generate_spec_for_runtime(false)
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("offline-disabled runtime OpenAPI paths")
-            .clone();
+            .expect("OpenAPI paths");
 
         for route in offline::ROUTES {
             let path = route.path().replace("{*", "{");
             assert!(
-                static_paths.contains_key(&path),
-                "static build-capability OpenAPI must retain {path}"
-            );
-            assert!(
-                enabled_paths.contains_key(&path),
-                "offline-enabled runtime OpenAPI must retain {path}"
-            );
-            assert!(
-                !disabled_paths.contains_key(&path),
-                "offline-disabled runtime OpenAPI must omit {path}"
+                paths.contains_key(&path),
+                "the universal OpenAPI contract must retain {path}"
             );
         }
         assert!(
-            disabled_paths.contains_key("/v1/accounts"),
-            "runtime filtering must preserve unrelated app-api operations"
+            paths.contains_key("/v1/accounts"),
+            "offline exposure must preserve unrelated app-api operations"
         );
     }
 
@@ -34803,6 +35398,20 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/appeals/finance/settlement-receipts"));
         assert!(paths.contains_key("/v1/sorafs/appeals/finance/reports"));
         assert!(paths.contains_key("/v1/sorafs/appeals/finance/weekly-rollups"));
+        for read_only_path in [
+            "/v1/sorafs/appeals/finance/reports",
+            "/v1/sorafs/appeals/finance/weekly-rollups",
+        ] {
+            let operation = paths
+                .get(read_only_path)
+                .and_then(Value::as_object)
+                .expect("appeal-finance publication readback path item");
+            assert!(operation.contains_key("get"), "{read_only_path}");
+            assert!(
+                !operation.contains_key("post"),
+                "caller-controlled appeal-finance publication leaked into OpenAPI: {read_only_path}"
+            );
+        }
         assert!(paths.contains_key("/v1/sorafs/transparency/cycles"));
         assert!(paths.contains_key("/v1/sorafs/transparency/cycles/{cycle_id_hex}"));
         assert!(
@@ -34818,6 +35427,8 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/transparency/tokens"));
         assert!(paths.contains_key("/v1/sorafs/transparency/tokens/issuances"));
         assert!(paths.contains_key("/v1/sorafs/transparency/tokens/verify"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/dead-letters/prepare"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/dead-letters/apply"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/{case_id}/{round_id}"));
         assert!(
@@ -34882,18 +35493,10 @@ mod tests {
             "/v1/sorafs/moderation/viewer-audit-reports",
             "/v1/sorafs/moderation/viewer-audit-reports/publish-due",
         ] {
-            let operation = paths
-                .get(retired_path)
-                .and_then(Value::as_object)
-                .and_then(|methods| methods.get("post"))
-                .and_then(Value::as_object)
-                .expect("retired evidence-viewer audit tombstone");
-            let responses = operation
-                .get("responses")
-                .and_then(Value::as_object)
-                .expect("retired evidence-viewer audit responses");
-            assert_eq!(responses.len(), 1);
-            assert!(responses.contains_key("410"));
+            assert!(
+                !paths.contains_key(retired_path),
+                "retired evidence-viewer audit route leaked into OpenAPI: {retired_path}"
+            );
         }
         assert!(paths.contains_key("/v1/soradns/directory/latest"));
         assert!(paths.contains_key("/v1/content/{bundle}/{path}"));
@@ -36813,7 +37416,7 @@ mod tests {
                 .and_then(Value::as_str);
             assert_eq!(schema_ref, Some("#/components/schemas/ErrorEnvelope"));
 
-            for status in ["429", "503"] {
+            for status in ["429"] {
                 let headers = responses
                     .get(status)
                     .and_then(Value::as_object)
@@ -36829,6 +37432,34 @@ mod tests {
             }
         }
 
+        for path in [
+            "/v1/offline/receiver-lineage",
+            "/v1/offline/top-up",
+            "/v1/offline/redeem",
+            "/v1/offline/operations/{operation_id}",
+        ] {
+            let responses = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|item| item.values().next())
+                .and_then(Value::as_object)
+                .and_then(|operation| operation.get("responses"))
+                .and_then(Value::as_object)
+                .expect("offline operation responses");
+            let headers = responses
+                .get("503")
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("headers"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("offline 503 response headers: {path}"));
+            for header in ["Retry-After", "Cache-Control", "Vary"] {
+                assert!(
+                    headers.contains_key(header),
+                    "offline 503 must document {header}: {path}"
+                );
+            }
+        }
+
         let readiness_responses = paths
             .get("/v1/offline/readiness")
             .and_then(Value::as_object)
@@ -36837,18 +37468,12 @@ mod tests {
             .and_then(|operation| operation.get("responses"))
             .and_then(Value::as_object)
             .expect("offline readiness responses");
-        assert_eq!(
-            documented_reject_codes(readiness_responses, "400"),
-            ["asset_definition_id_invalid"]
-        );
-        assert_eq!(
-            documented_reject_codes(readiness_responses, "404"),
-            ["asset_definition_not_found"]
-        );
-        assert_eq!(
-            documented_reject_codes(readiness_responses, "503"),
-            ["readiness_unavailable"]
-        );
+        for status in ["400", "404", "503"] {
+            assert!(
+                !readiness_responses.contains_key(status),
+                "universal capability discovery must not document {status} backend evaluation"
+            );
+        }
         assert!(
             !response_documents_reject_code(readiness_responses, "429"),
             "generic readiness ingress throttling must not advertise an application reject code"

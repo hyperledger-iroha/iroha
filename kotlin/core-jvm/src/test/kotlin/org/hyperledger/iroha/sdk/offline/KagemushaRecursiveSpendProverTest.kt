@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.offline
 
 import java.net.URI
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -1639,24 +1640,33 @@ class KagemushaRecursiveSpendProverTest {
             object : TransportExecutor {
                 override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
                     captured.set(request)
+                    val capability = request.uri.path.endsWith("/readiness")
                     val lineage = request.uri.path.endsWith("/receiver-lineage")
                     val command = request.method == "POST" && !lineage
                     return CompletableFuture.completedFuture(
                         TransportResponse.builder()
                             .setStatusCode(if (command) 202 else 200)
-                            .addHeader("Content-Type", "application/x-norito")
+                            .addHeader(
+                                "Content-Type",
+                                if (capability) "application/json" else "application/x-norito",
+                            )
                             .setBody(
-                                archive(
-                                    if (command) {
-                                        "OfflineOperationReference"
-                                    } else if (lineage) {
-                                        "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage"
-                                    } else if (request.uri.path.contains("/operations/")) {
-                                        "OfflineOperationStatus"
-                                    } else {
-                                        "OfflineReadiness"
-                                    },
-                                ),
+                                if (capability) {
+                                    """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"""
+                                        .toByteArray(StandardCharsets.UTF_8)
+                                } else {
+                                    archive(
+                                        if (command) {
+                                            "OfflineOperationReference"
+                                        } else if (lineage) {
+                                            "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage"
+                                        } else if (request.uri.path.contains("/operations/")) {
+                                            "OfflineOperationStatus"
+                                        } else {
+                                            error("unexpected Torii route")
+                                        },
+                                    )
+                                },
                             )
                             .build(),
                     )
@@ -1664,12 +1674,25 @@ class KagemushaRecursiveSpendProverTest {
             },
         )
 
-        client.getReadiness("pkr#sbp").join()
+        val status = client.getOfflineCapability().join()
+        assertTrue(
+            KagemushaRecursiveSpendProver.ToriiClient::class.java.declaredMethods.none {
+                it.name == "getReadiness"
+            },
+            "selector-taking offline readiness alias must remain absent",
+        )
+        assertFalse(status.mandatory)
+        assertEquals("cash_handoff_v1", status.cashHandoffCapability)
+        assertEquals(21, status.requiredBridgeAbiVersion)
+        assertEquals(8, status.maximumHops)
+        assertTrue(status.ready)
+        assertTrue(status.assets.isEmpty())
+        assertTrue(status.blockers.isEmpty())
         assertEquals(
-            "https://torii.example/api/v1/offline/readiness?asset_definition_id=pkr%23sbp",
+            "https://torii.example/api/v1/offline/readiness",
             captured.get().uri.toString(),
         )
-        assertEquals(listOf("application/x-norito"), captured.get().headers["Accept"])
+        assertEquals(listOf("application/json"), captured.get().headers["Accept"])
 
         client.getRecipientRegistrationLineage(
             KagemushaRecursiveSpendProver.RecipientLineageQueryV2(
@@ -1704,6 +1727,27 @@ class KagemushaRecursiveSpendProverTest {
 
         client.getOperation(operationId).join()
         assertEquals("/api/v1/offline/operations/$operationId", captured.get().uri.path)
+    }
+
+    @Test
+    fun offlineCapabilityRejectsBackendReadinessClaims() {
+        val invalidPayloads = listOf(
+            """{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":20,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":9,"ready":true,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":false,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[],"future":true}""",
+        )
+        invalidPayloads.forEach { payload ->
+            assertFailsWith<RuntimeException> {
+                KagemushaRecursiveSpendProver.OfflineStatus.decode(
+                    payload.toByteArray(StandardCharsets.UTF_8),
+                )
+            }
+        }
     }
 
     private fun spendableBranch(seed: Int): KagemushaRecursiveSpendProver.SpendableBranchV4 =

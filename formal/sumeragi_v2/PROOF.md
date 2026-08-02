@@ -1219,7 +1219,7 @@ yielding the 806-test checkpoint. Seven physical-cut, adapter-capability,
 aggregate-rebase, and ineligible-driver regressions yield the current 813-test,
 39-module inventory. The complete source-sealed
 pre-network corridor
-contains 82 legs. Six source-sealed command legs and the G-SCALE
+contains 86 legs. Six source-sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 Wire protocol version 1 uses positive `NonZeroU64` responder generation,
 requester epoch, and per-stream semantic sequence coordinates. Canonical
@@ -1289,6 +1289,11 @@ rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
 `708e0ed0221056b20b9d9f03f1ea8cd07225b0c84c39ad18dd25402e090fb30f`.
+The separate source-sealed G-UNIT inventory now contains 402 focused tests,
+including 199 `iroha_core` tests. Its 403-line canonical TSV has SHA-256
+`269749df3b0c751764622b29d60b3354761e51970460c9c7f5f85803e8566eac`;
+the newly sealed Native rows cover exact per-route prevote-byte accounting,
+empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,
@@ -1324,7 +1329,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The five integration names share a module-filtered leg; the pre-network corridor
-now has 82 legs, including separate exact data-model status and atomic
+now has 86 legs, including separate exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
 geometry modules, the daemon genesis module, and source-sealed command-success
 legs. Its finality, offline compact-QC, and height-context proposal-origin

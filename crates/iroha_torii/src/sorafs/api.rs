@@ -152,6 +152,16 @@ use iroha_executor_data_model::permission::sorafs::{
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{debug, error, warn};
 use iroha_primitives::numeric::Quantity;
+use iroha_torii_shared::sorafs_moderation_api::{
+    SORAFS_MODERATION_DEAD_LETTER_APPLY_RESPONSE_SCHEMA_V1,
+    SORAFS_MODERATION_DEAD_LETTER_APPLY_STATUS_V1,
+    SORAFS_MODERATION_DEAD_LETTER_PREPARE_RESPONSE_SCHEMA_V1,
+    SORAFS_MODERATION_DEAD_LETTER_PREPARE_STATUS_V1,
+    SORAFS_MODERATION_DEAD_LETTER_RESOLUTION_MAX_CANONICAL_BYTES_V1,
+    SorafsModerationDeadLetterApplyRequestV1, SorafsModerationDeadLetterApplyResponseV1,
+    SorafsModerationDeadLetterKindV1, SorafsModerationDeadLetterPrepareRequestV1,
+    SorafsModerationDeadLetterPrepareResponseV1, SorafsModerationDeadLetterResolutionActionV1,
+};
 use mv::storage::StorageReadOnly;
 use norito::derive::{JsonDeserialize, NoritoDeserialize, NoritoSerialize};
 use norito::json::{self, Map, Number, Value};
@@ -194,7 +204,9 @@ use sorafs_manifest::{
     verify_settlement_receipt_signature_v1,
 };
 use sorafs_node::moderation_orchestrator::{
-    ModerationNativeActionV1, ModerationOperationStatusV1, ModerationOrchestratorError,
+    ModerationDeadLetterKindV1, ModerationDeadLetterResolutionActionV1,
+    ModerationDeadLetterResolutionV1, ModerationNativeActionV1, ModerationOperationStatusV1,
+    ModerationOrchestratorError,
 };
 use sorafs_node::reputation::runtime::{
     ReputationCommittedReadApiV1, ReputationCommittedReadProjectionV1,
@@ -337,11 +349,6 @@ const MODERATION_ROUTE_SCREENING_RESULTS: &str = "/v1/sorafs/moderation/screenin
 const MODERATION_SCREENING_AUTHORITY_MAX_CANONICAL_BYTES: usize = 256 * 1024;
 const MODERATION_SCREENING_MEMBER_MAX_CANONICAL_BYTES: usize = 64 * 1024;
 const MODERATION_ROUTE_QUARANTINE: &str = "/v1/sorafs/moderation/quarantine";
-#[cfg(test)]
-const MODERATION_ROUTE_VIEWER_AUDIT_REPORTS: &str = "/v1/sorafs/moderation/viewer-audit-reports";
-#[cfg(test)]
-const MODERATION_ROUTE_VIEWER_AUDIT_REPORTS_PUBLISH_DUE: &str =
-    "/v1/sorafs/moderation/viewer-audit-reports/publish-due";
 const EVIDENCE_ROUTE_SIGNED_AUDIT: &str = "/v1/evidence/audit";
 const EVIDENCE_ROUTE_SIGNED_STATUS: &str = "/v1/evidence/status";
 const MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX: &str = "object";
@@ -355,8 +362,6 @@ static SORAFS_MODERATION_OPERATOR_ROLE_ID: LazyLock<RoleId> = LazyLock::new(|| {
         .parse()
         .expect("SoraFS moderation operator role id is valid")
 });
-#[cfg(test)]
-const APPEAL_FINANCE_ROUTE_REPORTS: &str = "/v1/sorafs/appeals/finance/reports";
 const TRANSPARENCY_SOURCE_ENTRIES_ROUTE: &str = "/v1/sorafs/transparency/source-entries";
 #[cfg(test)]
 const TRANSPARENCY_PRIVACY_AGGREGATE_SOURCE_EVENTS_ROUTE: &str =
@@ -377,8 +382,6 @@ const APPEAL_FINANCE_ROUTE_DEPOSIT_SUBMIT_SETTLEMENT: &str =
 #[cfg(test)]
 const APPEAL_FINANCE_ROUTE_DEPOSIT_RECONCILE: &str =
     "/v1/sorafs/appeals/finance/deposits/reconcile";
-#[cfg(test)]
-const APPEAL_FINANCE_ROUTE_WEEKLY_ROLLUPS: &str = "/v1/sorafs/appeals/finance/weekly-rollups";
 const RANGE_THROTTLE_REASON_QUOTA: &str = "quota";
 const RANGE_THROTTLE_REASON_CONCURRENCY: &str = "concurrency";
 const RANGE_THROTTLE_REASON_BYTE_RATE: &str = "byte_rate";
@@ -9293,6 +9296,471 @@ fn orderbook_api_response(
     response
 }
 
+fn moderation_dead_letter_kind_from_api(
+    kind: SorafsModerationDeadLetterKindV1,
+) -> ModerationDeadLetterKindV1 {
+    match kind {
+        SorafsModerationDeadLetterKindV1::NativeSubmission => {
+            ModerationDeadLetterKindV1::NativeSubmission
+        }
+        SorafsModerationDeadLetterKindV1::TerminalHandoff => {
+            ModerationDeadLetterKindV1::TerminalHandoff
+        }
+        SorafsModerationDeadLetterKindV1::PanelNotification => {
+            ModerationDeadLetterKindV1::PanelNotification
+        }
+    }
+}
+
+fn moderation_dead_letter_kind_to_api(
+    kind: ModerationDeadLetterKindV1,
+) -> SorafsModerationDeadLetterKindV1 {
+    match kind {
+        ModerationDeadLetterKindV1::NativeSubmission => {
+            SorafsModerationDeadLetterKindV1::NativeSubmission
+        }
+        ModerationDeadLetterKindV1::TerminalHandoff => {
+            SorafsModerationDeadLetterKindV1::TerminalHandoff
+        }
+        ModerationDeadLetterKindV1::PanelNotification => {
+            SorafsModerationDeadLetterKindV1::PanelNotification
+        }
+    }
+}
+
+fn moderation_dead_letter_action_from_api(
+    action: SorafsModerationDeadLetterResolutionActionV1,
+) -> ModerationDeadLetterResolutionActionV1 {
+    match action {
+        SorafsModerationDeadLetterResolutionActionV1::Redrive => {
+            ModerationDeadLetterResolutionActionV1::Redrive
+        }
+        SorafsModerationDeadLetterResolutionActionV1::Acknowledge => {
+            ModerationDeadLetterResolutionActionV1::Acknowledge
+        }
+    }
+}
+
+fn moderation_dead_letter_action_to_api(
+    action: ModerationDeadLetterResolutionActionV1,
+) -> SorafsModerationDeadLetterResolutionActionV1 {
+    match action {
+        ModerationDeadLetterResolutionActionV1::Redrive => {
+            SorafsModerationDeadLetterResolutionActionV1::Redrive
+        }
+        ModerationDeadLetterResolutionActionV1::Acknowledge => {
+            SorafsModerationDeadLetterResolutionActionV1::Acknowledge
+        }
+    }
+}
+
+fn decode_moderation_dead_letter_identity(identity_hex: &str) -> Result<[u8; 32], String> {
+    if identity_hex.len() != 64
+        || !identity_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || identity_hex.bytes().all(|byte| byte == b'0')
+    {
+        return Err(
+            "identity_hex must be one non-zero lowercase 32-byte hexadecimal value".to_owned(),
+        );
+    }
+    let mut identity = [0_u8; 32];
+    hex::decode_to_slice(identity_hex, &mut identity).map_err(|_| {
+        "identity_hex must be one non-zero lowercase 32-byte hexadecimal value".to_owned()
+    })?;
+    Ok(identity)
+}
+
+fn decode_moderation_dead_letter_signature(signature_hex: &str) -> Result<[u8; 64], String> {
+    if signature_hex.len() != 128
+        || !signature_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || signature_hex.bytes().all(|byte| byte == b'0')
+    {
+        return Err(
+            "signature_hex must be one non-zero lowercase 64-byte hexadecimal value".to_owned(),
+        );
+    }
+    let mut signature = [0_u8; 64];
+    hex::decode_to_slice(signature_hex, &mut signature).map_err(|_| {
+        "signature_hex must be one non-zero lowercase 64-byte hexadecimal value".to_owned()
+    })?;
+    Ok(signature)
+}
+
+fn decode_moderation_dead_letter_resolution(
+    encoded: &str,
+) -> Result<ModerationDeadLetterResolutionV1, String> {
+    let bytes = BASE64_STANDARD.decode(encoded.as_bytes()).map_err(|_| {
+        "resolution_norito_b64 must use canonical padded standard base64".to_owned()
+    })?;
+    if bytes.is_empty()
+        || bytes.len() > SORAFS_MODERATION_DEAD_LETTER_RESOLUTION_MAX_CANONICAL_BYTES_V1
+        || BASE64_STANDARD.encode(&bytes) != encoded
+    {
+        return Err("resolution_norito_b64 is empty, oversized, or noncanonical".to_owned());
+    }
+    let max_bytes = SORAFS_MODERATION_DEAD_LETTER_RESOLUTION_MAX_CANONICAL_BYTES_V1;
+    let limits = norito::DecodeLimits::new(
+        64,
+        max_bytes,
+        max_bytes.saturating_mul(2),
+        max_bytes.saturating_mul(2),
+        32,
+    );
+    let resolution = norito::decode_from_bytes_with_limits::<ModerationDeadLetterResolutionV1>(
+        &bytes, limits,
+    )
+    .map_err(|_| "resolution_norito_b64 does not contain a valid V1 resolution".to_owned())?;
+    let canonical = norito::to_bytes(&resolution)
+        .map_err(|_| "failed to re-encode the V1 resolution".to_owned())?;
+    if canonical != bytes {
+        return Err("resolution_norito_b64 is not byte-canonical".to_owned());
+    }
+    resolution
+        .signing_message()
+        .map_err(|_| "resolution_norito_b64 contains invalid V1 coordinates".to_owned())?;
+    Ok(resolution)
+}
+
+fn require_moderation_recovery_operator_role(
+    state: &SharedAppState,
+    verified: &crate::app_auth::VerifiedCanonicalRequest,
+) -> Result<(), Response> {
+    let world = state.state.world_view();
+    if world
+        .account_roles_iter(&verified.account)
+        .any(|role| role == sorafs_moderation_operator_role_id())
+    {
+        Ok(())
+    } else {
+        Err(json_error(
+            StatusCode::FORBIDDEN,
+            format!(
+                "SoraFS moderation dead-letter recovery requires role `{SORAFS_MODERATION_OPERATOR_ROLE}`"
+            ),
+        ))
+    }
+}
+
+fn require_independent_moderation_recovery_attestor(
+    verified: &crate::app_auth::VerifiedCanonicalRequest,
+    resolution: &ModerationDeadLetterResolutionV1,
+) -> Result<(), Response> {
+    for signer in verified
+        .verified_signers
+        .iter()
+        .chain(std::iter::once(&verified.signer))
+    {
+        let Ok(algorithm) = signer.try_algorithm() else {
+            return Err(json_error(
+                StatusCode::FORBIDDEN,
+                "SoraFS moderation recovery operator identity is invalid",
+            ));
+        };
+        let (_, payload) = signer.to_bytes();
+        if algorithm == Algorithm::Ed25519 && payload == resolution.attestor_public_key.as_slice() {
+            return Err(json_error(
+                StatusCode::FORBIDDEN,
+                "SoraFS moderation recovery operator and checkpoint attestor must be independently administered",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn moderation_dead_letter_json_response<T>(value: &T) -> Response
+where
+    T: norito::json::JsonSerialize,
+{
+    match json::to_value(value) {
+        Ok(value) => JsonBody(value).into_response(),
+        Err(error) => {
+            warn!(
+                ?error,
+                "failed to encode SoraFS moderation recovery response"
+            );
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to encode SoraFS moderation recovery response",
+            )
+        }
+    }
+}
+
+#[cfg(test)]
+fn moderation_dead_letter_resolution_fixture(
+    attestor_public_key: [u8; 32],
+) -> ModerationDeadLetterResolutionV1 {
+    ModerationDeadLetterResolutionV1 {
+        version: 1,
+        chain_id: "moderation-recovery-test-chain".to_owned(),
+        checkpoint_namespace_digest: [0x11; 32],
+        checkpoint_generation: 7,
+        checkpoint_revision: [0x22; 32],
+        checkpoint_digest: [0x33; 32],
+        identity: [0x44; 32],
+        kind: ModerationDeadLetterKindV1::NativeSubmission,
+        action: ModerationDeadLetterResolutionActionV1::Acknowledge,
+        source_record_digest: [0x55; 32],
+        authorized_at_unix_ms: 1_725_000_000_123,
+        attestor_handle: "hsm:moderation:checkpoint-primary".to_owned(),
+        attestor_revision: 3,
+        attestor_policy_digest: [0x66; 32],
+        attestor_public_key,
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn moderation_dead_letter_transport_rejects_aliases_and_noncanonical_frames() {
+    let attestor = checked_test_keypair(0x5A);
+    let (_, attestor_bytes) = attestor.public_key().to_bytes();
+    let resolution = moderation_dead_letter_resolution_fixture(
+        attestor_bytes
+            .try_into()
+            .expect("Ed25519 fixture public key has 32 bytes"),
+    );
+    let canonical = norito::to_bytes(&resolution).expect("encode resolution fixture");
+    let encoded = BASE64_STANDARD.encode(&canonical);
+    assert_eq!(
+        decode_moderation_dead_letter_resolution(&encoded)
+            .expect("decode canonical resolution fixture"),
+        resolution
+    );
+
+    let mut trailing = canonical;
+    trailing.push(0);
+    assert!(decode_moderation_dead_letter_resolution(&BASE64_STANDARD.encode(trailing)).is_err());
+    assert!(decode_moderation_dead_letter_resolution("AQIDBA").is_err());
+    assert!(
+        decode_moderation_dead_letter_resolution(&BASE64_STANDARD.encode(vec![
+            0_u8;
+            SORAFS_MODERATION_DEAD_LETTER_RESOLUTION_MAX_CANONICAL_BYTES_V1
+                + 1
+        ]))
+        .is_err()
+    );
+
+    assert_eq!(
+        decode_moderation_dead_letter_identity(&"44".repeat(32)),
+        Ok([0x44; 32])
+    );
+    assert!(decode_moderation_dead_letter_identity(&"00".repeat(32)).is_err());
+    assert!(decode_moderation_dead_letter_identity(&"AA".repeat(32)).is_err());
+    assert_eq!(
+        decode_moderation_dead_letter_signature(&"77".repeat(64)),
+        Ok([0x77; 64])
+    );
+    assert!(decode_moderation_dead_letter_signature(&"00".repeat(64)).is_err());
+    assert!(decode_moderation_dead_letter_signature(&"AA".repeat(64)).is_err());
+
+    let same_operator = crate::app_auth::VerifiedCanonicalRequest {
+        account: AccountId::new(attestor.public_key().clone()),
+        signer: attestor.public_key().clone(),
+        verified_signers: vec![attestor.public_key().clone()],
+    };
+    assert_eq!(
+        require_independent_moderation_recovery_attestor(&same_operator, &resolution)
+            .expect_err("operator and attestor role collision must fail")
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let independent_key = checked_test_keypair(0x5B).public_key().clone();
+    let independent_operator = crate::app_auth::VerifiedCanonicalRequest {
+        account: AccountId::new(independent_key.clone()),
+        signer: independent_key.clone(),
+        verified_signers: vec![independent_key],
+    };
+    require_independent_moderation_recovery_attestor(&independent_operator, &resolution)
+        .expect("independent operator and attestor are accepted");
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_dead_letter_prepare(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation recovery API is not enabled on this node");
+    }
+    let verified =
+        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+        {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    if let Err(response) = require_moderation_recovery_operator_role(&state, &verified) {
+        return response;
+    }
+    let Some(runtime) = state.sorafs_moderation_orchestrator.as_ref() else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "durable SoraFS moderation recovery is unavailable",
+        );
+    };
+    let request =
+        match json::from_slice::<SorafsModerationDeadLetterPrepareRequestV1>(body.as_ref()) {
+            Ok(request) => request,
+            Err(error) => {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid SoraFS moderation dead-letter prepare request: {error}"),
+                );
+            }
+        };
+    if let Err(error) = request.validate() {
+        return json_error(StatusCode::BAD_REQUEST, error);
+    }
+    let identity = match decode_moderation_dead_letter_identity(&request.identity_hex) {
+        Ok(identity) => identity,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
+    let kind = moderation_dead_letter_kind_from_api(request.kind);
+    let action = moderation_dead_letter_action_from_api(request.action);
+    let authorized_at_unix_ms = request.authorized_at_unix_ms;
+    let orchestrator = runtime.orchestrator();
+    let prepared = tokio::task::spawn_blocking(move || {
+        let resolution = orchestrator.prepare_dead_letter_resolution(
+            identity,
+            kind,
+            action,
+            authorized_at_unix_ms,
+        )?;
+        let signing_message = resolution.signing_message()?;
+        let bytes = norito::to_bytes(&resolution)
+            .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+        Ok::<_, ModerationOrchestratorError>((resolution, signing_message, bytes))
+    })
+    .await;
+    let (resolution, signing_message, resolution_bytes) = match prepared {
+        Ok(Ok(prepared)) => prepared,
+        Ok(Err(error)) => return moderation_orchestrator_error_response(error),
+        Err(error) => {
+            warn!(?error, "SoraFS moderation recovery prepare task failed");
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "durable SoraFS moderation recovery is unavailable",
+            );
+        }
+    };
+    if resolution_bytes.len() > SORAFS_MODERATION_DEAD_LETTER_RESOLUTION_MAX_CANONICAL_BYTES_V1 {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "prepared SoraFS moderation resolution exceeds the V1 byte bound",
+        );
+    }
+    if let Err(response) = require_independent_moderation_recovery_attestor(&verified, &resolution)
+    {
+        return response;
+    }
+    let response = SorafsModerationDeadLetterPrepareResponseV1 {
+        schema: SORAFS_MODERATION_DEAD_LETTER_PREPARE_RESPONSE_SCHEMA_V1.to_owned(),
+        status: SORAFS_MODERATION_DEAD_LETTER_PREPARE_STATUS_V1.to_owned(),
+        resolution_norito_b64: BASE64_STANDARD.encode(resolution_bytes),
+        signing_message_hex: hex::encode(signing_message),
+    };
+    if let Err(error) = response.validate() {
+        warn!(%error, "prepared SoraFS moderation recovery response was invalid");
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "prepared SoraFS moderation recovery response was invalid",
+        );
+    }
+    moderation_dead_letter_json_response(&response)
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_dead_letter_apply(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation recovery API is not enabled on this node");
+    }
+    let verified =
+        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+        {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    if let Err(response) = require_moderation_recovery_operator_role(&state, &verified) {
+        return response;
+    }
+    let Some(runtime) = state.sorafs_moderation_orchestrator.as_ref() else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "durable SoraFS moderation recovery is unavailable",
+        );
+    };
+    let request = match json::from_slice::<SorafsModerationDeadLetterApplyRequestV1>(body.as_ref())
+    {
+        Ok(request) => request,
+        Err(error) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("invalid SoraFS moderation dead-letter apply request: {error}"),
+            );
+        }
+    };
+    if let Err(error) = request.validate() {
+        return json_error(StatusCode::BAD_REQUEST, error);
+    }
+    let resolution = match decode_moderation_dead_letter_resolution(&request.resolution_norito_b64)
+    {
+        Ok(resolution) => resolution,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
+    let signature = match decode_moderation_dead_letter_signature(&request.signature_hex) {
+        Ok(signature) => signature,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
+    if let Err(response) = require_independent_moderation_recovery_attestor(&verified, &resolution)
+    {
+        return response;
+    }
+    let identity = resolution.identity;
+    let kind = resolution.kind;
+    let action = resolution.action;
+    let orchestrator = runtime.orchestrator();
+    let applied = tokio::task::spawn_blocking(move || {
+        orchestrator.apply_dead_letter_resolution(resolution, signature)
+    })
+    .await;
+    match applied {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => return moderation_orchestrator_error_response(error),
+        Err(error) => {
+            warn!(?error, "SoraFS moderation recovery apply task failed");
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "durable SoraFS moderation recovery is unavailable",
+            );
+        }
+    }
+    let response = SorafsModerationDeadLetterApplyResponseV1 {
+        schema: SORAFS_MODERATION_DEAD_LETTER_APPLY_RESPONSE_SCHEMA_V1.to_owned(),
+        status: SORAFS_MODERATION_DEAD_LETTER_APPLY_STATUS_V1.to_owned(),
+        identity_hex: hex::encode(identity),
+        kind: moderation_dead_letter_kind_to_api(kind),
+        action: moderation_dead_letter_action_to_api(action),
+    };
+    if let Err(error) = response.validate() {
+        warn!(%error, "applied SoraFS moderation recovery response was invalid");
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "applied SoraFS moderation recovery response was invalid",
+        );
+    }
+    moderation_dead_letter_json_response(&response)
+}
+
 pub(crate) async fn handle_post_sorafs_moderation_ballot_announce(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -10720,60 +11188,6 @@ pub(crate) async fn handle_get_sorafs_moderation_quarantine_object(
         }
         Err(err) => moderation_quarantine_object_error_response(err),
     }
-}
-
-pub(crate) async fn handle_post_sorafs_moderation_viewer_audit_report(
-    State(state): State<SharedAppState>,
-    headers: HeaderMap,
-    method: Method,
-    uri: Uri,
-    body: Bytes,
-) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled(
-            "sorafs moderation evidence viewer audit-report API is not enabled on this node",
-        );
-    }
-    let verified =
-        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
-        {
-            Ok(verified) => verified,
-            Err(response) => return response,
-        };
-    if let Err(response) = require_moderation_quarantine_operator_role(&state, &verified) {
-        return response;
-    }
-    json_error(
-        StatusCode::GONE,
-        "legacy SoraFS moderation evidence-viewer audit ingestion is retired; read signed receipts from /v1/evidence/audit",
-    )
-}
-
-pub(crate) async fn handle_post_sorafs_moderation_viewer_audit_report_publish_due(
-    State(state): State<SharedAppState>,
-    headers: HeaderMap,
-    method: Method,
-    uri: Uri,
-    body: Bytes,
-) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled(
-            "sorafs moderation evidence viewer audit-report publish-due API is not enabled on this node",
-        );
-    }
-    let verified =
-        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
-        {
-            Ok(verified) => verified,
-            Err(response) => return response,
-        };
-    if let Err(response) = require_moderation_quarantine_operator_role(&state, &verified) {
-        return response;
-    }
-    json_error(
-        StatusCode::GONE,
-        "legacy SoraFS moderation evidence-viewer audit publication is retired; read signed receipts from /v1/evidence/audit",
-    )
 }
 
 pub(crate) async fn handle_post_sorafs_orderbook_order(
@@ -16947,112 +17361,6 @@ pub(crate) async fn handle_get_sorafs_appeal_finance_deposit(
         .into_response()
 }
 
-pub(crate) async fn handle_post_sorafs_appeal_finance_report(
-    State(state): State<SharedAppState>,
-    headers: HeaderMap,
-    method: Method,
-    uri: Uri,
-    body: Bytes,
-) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled("sorafs appeal finance report API is not enabled on this node");
-    }
-    if !state.sorafs_node.has_governance_publisher() {
-        return json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "sorafs appeal finance report API requires a configured governance publisher",
-        );
-    }
-    if let Err(response) =
-        require_appeal_finance_request_auth(&state, &headers, &method, &uri, body.as_ref())
-    {
-        return response;
-    }
-    let report = match json::from_slice::<SoraFsAppealFinanceReportV1>(body.as_ref()) {
-        Ok(report) => report,
-        Err(err) => {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                format!("failed to decode SoraFS appeal finance report JSON: {err}"),
-            );
-        }
-    };
-    if let Err(err) = report.validate() {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            format!("invalid SoraFS appeal finance report: {err}"),
-        );
-    }
-    if let Err(err) = state
-        .sorafs_node
-        .publish_appeal_finance_report(report.clone())
-    {
-        return json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to publish SoraFS appeal finance report: {err}"),
-        );
-    }
-    (
-        StatusCode::ACCEPTED,
-        JsonBody(appeal_finance_report_publish_json(&report)),
-    )
-        .into_response()
-}
-
-pub(crate) async fn handle_post_sorafs_appeal_finance_weekly_rollup(
-    State(state): State<SharedAppState>,
-    headers: HeaderMap,
-    method: Method,
-    uri: Uri,
-    body: Bytes,
-) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled(
-            "sorafs appeal finance weekly rollup API is not enabled on this node",
-        );
-    }
-    if !state.sorafs_node.has_governance_publisher() {
-        return json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "sorafs appeal finance weekly rollup API requires a configured governance publisher",
-        );
-    }
-    if let Err(response) =
-        require_appeal_finance_request_auth(&state, &headers, &method, &uri, body.as_ref())
-    {
-        return response;
-    }
-    let rollup = match json::from_slice::<SoraFsAppealFinanceWeeklyRollupV1>(body.as_ref()) {
-        Ok(rollup) => rollup,
-        Err(err) => {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                format!("failed to decode SoraFS appeal finance weekly rollup JSON: {err}"),
-            );
-        }
-    };
-    if let Err(err) = rollup.validate() {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            format!("invalid SoraFS appeal finance weekly rollup: {err}"),
-        );
-    }
-    if let Err(err) = state
-        .sorafs_node
-        .publish_appeal_finance_weekly_rollup(rollup.clone())
-    {
-        return json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to publish SoraFS appeal finance weekly rollup: {err}"),
-        );
-    }
-    (
-        StatusCode::ACCEPTED,
-        JsonBody(appeal_finance_weekly_rollup_publish_json(&rollup)),
-    )
-        .into_response()
-}
-
 const APPEAL_FINANCE_CONFIG_SOURCE_V1: &str = "iroha_config";
 const APPEAL_PRICING_POLICY_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.appeal_pricing.policy_digest.v1\0";
 const APPEAL_SETTLEMENT_POLICY_DIGEST_DOMAIN_V1: &[u8] =
@@ -19632,88 +19940,6 @@ fn asset_escrow_kind_label(kind: AssetEscrowKind) -> &'static str {
         AssetEscrowKind::Lock => "lock",
         AssetEscrowKind::Conditional => "conditional",
     }
-}
-
-fn appeal_finance_report_publish_json(report: &SoraFsAppealFinanceReportV1) -> Value {
-    json_object(vec![
-        json_entry(
-            "schema",
-            Value::from("sorafs.appeal_finance.report.publish.v1"),
-        ),
-        json_entry("status", Value::from("accepted")),
-        json_entry("payload_kind", Value::from(APPEAL_FINANCE_REPORT_KIND)),
-        json_entry("report_id_hex", Value::from(encode(report.report_id))),
-        json_entry("case_id", Value::from(report.case_id.clone())),
-        json_entry(
-            "round_id",
-            report
-                .round_id
-                .as_deref()
-                .map(Value::from)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "generated_at_unix_ms",
-            Value::from(report.generated_at_unix_ms),
-        ),
-        json_entry(
-            "appeal_finance_config_version",
-            Value::from(report.appeal_finance_config_version.clone()),
-        ),
-        json_entry("outcome", Value::from(report.outcome.as_str())),
-        json_entry("panel_size", Value::from(u64::from(report.panel_size))),
-        json_entry(
-            "juror_payout_count",
-            Value::from(report.juror_payouts.len() as u64),
-        ),
-        json_entry(
-            "no_show_count",
-            Value::from(report.no_show_juror_ids.len() as u64),
-        ),
-        json_entry(
-            "publication",
-            Value::from("local_governance_dag_filesystem"),
-        ),
-    ])
-}
-
-fn appeal_finance_weekly_rollup_publish_json(rollup: &SoraFsAppealFinanceWeeklyRollupV1) -> Value {
-    let source_report_ids = rollup
-        .source_report_ids
-        .iter()
-        .map(|report_id| Value::from(encode(report_id)))
-        .collect::<Vec<_>>();
-
-    json_object(vec![
-        json_entry(
-            "schema",
-            Value::from("sorafs.appeal_finance.weekly_rollup.publish.v1"),
-        ),
-        json_entry("status", Value::from("accepted")),
-        json_entry(
-            "payload_kind",
-            Value::from(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND),
-        ),
-        json_entry("cycle", Value::from(rollup.cycle.to_string())),
-        json_entry(
-            "generated_at_unix_ms",
-            Value::from(rollup.generated_at_unix_ms),
-        ),
-        json_entry("report_count", Value::from(rollup.report_count)),
-        json_entry("case_count", Value::from(rollup.case_count)),
-        json_entry(
-            "config_version_count",
-            Value::from(rollup.appeal_finance_config_versions.len() as u64),
-        ),
-        json_entry("outcome_count", Value::from(rollup.outcomes.len() as u64)),
-        json_entry("juror_payout_count", Value::from(rollup.juror_payout_count)),
-        json_entry("no_show_count", Value::from(rollup.no_show_juror_count)),
-        json_entry("source_report_ids_hex", Value::Array(source_report_ids)),
-        json_entry(
-            "publication",
-            Value::from("local_governance_dag_filesystem"),
-        ),
-    ])
 }
 
 fn decode_moderation_model_registry_manifest<T>(
@@ -31917,6 +32143,14 @@ mod advert_tests {
         potr::PotrReceiptV1,
         proof_stream::ProofStreamTier,
     };
+    use sorafs_node::appeal_finance_transaction_forwarder::{
+        APPEAL_FINANCE_CHECKPOINT_AUTHENTICATION_POLICY_VERSION_V1,
+        APPEAL_FINANCE_TRANSACTION_MAX_CANONICAL_BYTES_V1,
+        AppealFinanceCheckpointAuthenticationPolicyV1, AppealFinanceCheckpointExternalError,
+        AppealFinanceCheckpointRuntime, AppealFinanceCheckpointRuntimeIdentityV1,
+        AppealFinanceRuntimeProviderQualificationV1, AppealFinanceSealedCheckpointRecordV1,
+        AppealFinanceTransactionForwarder, AppealFinanceTransactionForwarderPolicyV1,
+    };
     use sorafs_node::{
         FencedPrivacyPublicationReceiptV1, FencedPrivacyPublicationRequestV1,
         FencedTransparencyAuthoritativeHeadReaderV1, FencedTransparencyHeadAncestryProofV1,
@@ -36635,10 +36869,6 @@ mod advert_tests {
         .expect("privacy API test policy")
     }
 
-    fn appeal_finance_weekly_rollup_body(rollup: SoraFsAppealFinanceWeeklyRollupV1) -> Bytes {
-        Bytes::from(norito::json::to_vec(&rollup).expect("encode appeal finance weekly rollup"))
-    }
-
     fn appeal_finance_deposit_request(
         payer_account: &AccountId,
         destination_account: &AccountId,
@@ -36755,15 +36985,92 @@ mod advert_tests {
         }
     }
 
+    #[derive(Debug)]
+    struct TestAppealFinanceCheckpointRuntime {
+        identity: AppealFinanceCheckpointRuntimeIdentityV1,
+        signing_key: SigningKey,
+        latest: Mutex<Option<AppealFinanceSealedCheckpointRecordV1>>,
+    }
+
+    impl TestAppealFinanceCheckpointRuntime {
+        fn new(seed: u8) -> Self {
+            let signing_key = SigningKey::from_bytes(&[seed; 32]);
+            Self {
+                identity: AppealFinanceCheckpointRuntimeIdentityV1 {
+                    provider_handle: "hsm:appeal-finance-checkpoint-primary".to_owned(),
+                    public_key: signing_key.verifying_key().to_bytes(),
+                    qualification: AppealFinanceRuntimeProviderQualificationV1::new(1, [seed; 32]),
+                },
+                signing_key,
+                latest: Mutex::new(None),
+            }
+        }
+
+        fn authentication_policy(&self) -> AppealFinanceCheckpointAuthenticationPolicyV1 {
+            AppealFinanceCheckpointAuthenticationPolicyV1 {
+                version: APPEAL_FINANCE_CHECKPOINT_AUTHENTICATION_POLICY_VERSION_V1,
+                provider_handle: self.identity.provider_handle.clone(),
+                public_key: self.identity.public_key,
+                revision: self.identity.qualification.revision,
+                policy_digest: self.identity.qualification.policy_digest,
+            }
+        }
+    }
+
+    impl AppealFinanceCheckpointRuntime for TestAppealFinanceCheckpointRuntime {
+        fn identity(
+            &self,
+        ) -> Result<AppealFinanceCheckpointRuntimeIdentityV1, AppealFinanceCheckpointExternalError>
+        {
+            Ok(self.identity.clone())
+        }
+
+        fn sign_digest(
+            &self,
+            digest: [u8; 32],
+        ) -> Result<[u8; 64], AppealFinanceCheckpointExternalError> {
+            Ok(self.signing_key.sign(&digest).to_bytes())
+        }
+
+        fn load_latest(
+            &self,
+        ) -> Result<
+            Option<AppealFinanceSealedCheckpointRecordV1>,
+            AppealFinanceCheckpointExternalError,
+        > {
+            self.latest
+                .lock()
+                .map(|latest| latest.clone())
+                .map_err(|_| AppealFinanceCheckpointExternalError::Unavailable)
+        }
+
+        fn compare_and_swap_latest(
+            &self,
+            expected_revision: Option<[u8; 32]>,
+            next: &AppealFinanceSealedCheckpointRecordV1,
+        ) -> Result<(), AppealFinanceCheckpointExternalError> {
+            let mut latest = self
+                .latest
+                .lock()
+                .map_err(|_| AppealFinanceCheckpointExternalError::Unavailable)?;
+            if latest.as_ref().map(|record| record.revision) != expected_revision
+                || latest
+                    .as_ref()
+                    .map_or(1, |record| record.checkpoint_sequence.saturating_add(1))
+                    != next.checkpoint_sequence
+            {
+                return Err(AppealFinanceCheckpointExternalError::Rejected);
+            }
+            *latest = Some(next.clone());
+            Ok(())
+        }
+    }
+
     fn configure_appeal_finance_settlement_submitter(
         app: &mut SharedAppState,
         signer: &OrderbookAccountFixture,
+        state_root: &std::path::Path,
     ) {
-        use sorafs_node::appeal_finance_transaction_forwarder::{
-            APPEAL_FINANCE_TRANSACTION_MAX_CANONICAL_BYTES_V1, AppealFinanceTransactionForwarder,
-            AppealFinanceTransactionForwarderPolicyV1,
-        };
-
         let handle = "pkcs11:appeal-finance-a".to_owned();
         let runtime_signer: Arc<dyn crate::SoraFsAppealFinanceTransactionSigner> =
             Arc::new(TestAppealFinanceRuntimeSigner {
@@ -36772,6 +37079,22 @@ mod advert_tests {
             });
         let runtime_signers = crate::SoraFsAppealFinanceRuntimeSignersV1::new(vec![runtime_signer])
             .expect("valid test appeal-finance runtime signer");
+        let checkpoint_runtime = Arc::new(TestAppealFinanceCheckpointRuntime::new(0xC5));
+        let checkpoint_authentication = checkpoint_runtime.authentication_policy();
+        let forwarder = AppealFinanceTransactionForwarder::open(
+            &state_root.join("appeal-finance-transaction-forwarder"),
+            AppealFinanceTransactionForwarderPolicyV1 {
+                max_pending: 32,
+                max_completed: 64,
+                max_dead_letters: 16,
+                max_attempts: 3,
+                max_transaction_bytes: APPEAL_FINANCE_TRANSACTION_MAX_CANONICAL_BYTES_V1,
+                checkpoint_max_bytes: 8 * 1024 * 1024,
+            },
+            checkpoint_authentication,
+            checkpoint_runtime,
+        )
+        .expect("durable appeal-finance forwarder");
         let app_inner = Arc::get_mut(app).expect("unique app state");
         app_inner.sorafs_appeal_settlement_submitter =
             Some(crate::SoraFsAppealSettlementSubmitter {
@@ -36787,17 +37110,7 @@ mod advert_tests {
                     },
                 ],
                 runtime_signers: Some(Arc::new(runtime_signers)),
-                forwarder: AppealFinanceTransactionForwarder::in_memory(
-                    AppealFinanceTransactionForwarderPolicyV1 {
-                        max_pending: 32,
-                        max_completed: 64,
-                        max_dead_letters: 16,
-                        max_attempts: 3,
-                        max_transaction_bytes: APPEAL_FINANCE_TRANSACTION_MAX_CANONICAL_BYTES_V1,
-                        checkpoint_max_bytes: 8 * 1024 * 1024,
-                    },
-                )
-                .expect("in-memory appeal-finance forwarder"),
+                forwarder,
                 worker_scan_interval: Duration::from_millis(30_000),
             });
     }
@@ -37844,7 +38157,7 @@ mod advert_tests {
             &auth,
             &expected.asset_definition_id,
         );
-        configure_appeal_finance_settlement_submitter(&mut app, &auth.provider);
+        configure_appeal_finance_settlement_submitter(&mut app, &auth.provider, _temp_dir.path());
         seed_empty_appeal_finance_finalized_block(&app);
         let asset_definition_id = request.asset_definition_id.clone();
         let destination_account = request.destination_account.clone();
@@ -38325,7 +38638,7 @@ mod advert_tests {
             &auth,
             &expected.asset_definition_id,
         );
-        configure_appeal_finance_settlement_submitter(&mut app, &auth.provider);
+        configure_appeal_finance_settlement_submitter(&mut app, &auth.provider, _temp_dir.path());
         seed_appeal_finance_asset_lock(&app, &expected);
         let confirmation = appeal_finance_deposit_confirm_request(
             &request,
@@ -38470,7 +38783,7 @@ mod advert_tests {
                 &auth,
                 &expected.asset_definition_id,
             );
-        configure_appeal_finance_settlement_submitter(&mut app, &auth.provider);
+        configure_appeal_finance_settlement_submitter(&mut app, &auth.provider, temp_dir.path());
         seed_appeal_finance_asset_lock(&app, &expected);
         let confirmation = appeal_finance_deposit_confirm_request(
             &request,
@@ -38582,7 +38895,7 @@ mod advert_tests {
             &auth,
             &expected.asset_definition_id,
         );
-        configure_appeal_finance_settlement_submitter(&mut app, &auth.provider);
+        configure_appeal_finance_settlement_submitter(&mut app, &auth.provider, _temp_dir.path());
         Arc::get_mut(&mut app)
             .expect("unique app state")
             .sorafs_appeal_settlement_submitter
@@ -38763,75 +39076,6 @@ mod advert_tests {
         );
         let settled_digest = assert_appeal_finance_reconciliation_digest_hex(&value);
         assert_ne!(settled_digest, in_progress_digest);
-    }
-
-    #[tokio::test]
-    async fn appeal_finance_report_endpoint_requires_canonical_request_auth() {
-        let (app, _temp_dir, _auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
-        let body = appeal_finance_report_body(appeal_finance_report_fixture());
-
-        let response = handle_post_sorafs_appeal_finance_report(
-            State(app),
-            HeaderMap::new(),
-            Method::POST,
-            Uri::from_static(APPEAL_FINANCE_ROUTE_REPORTS),
-            body,
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn appeal_finance_report_endpoint_publishes_to_governance_dag() {
-        let (app, temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
-        let report = appeal_finance_report_fixture();
-        let body = appeal_finance_report_body(report.clone());
-
-        let response = post_appeal_finance_report(app, &auth.provider, body).await;
-
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let body = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect report publish body");
-        let value: Value = norito::json::from_slice(&body).expect("decode report publish body");
-        assert_eq!(
-            value.get("schema").and_then(Value::as_str),
-            Some("sorafs.appeal_finance.report.publish.v1")
-        );
-        assert_eq!(
-            value.get("status").and_then(Value::as_str),
-            Some("accepted")
-        );
-        let report_id_hex = hex::encode(report.report_id);
-        assert_eq!(
-            value.get("report_id_hex").and_then(Value::as_str),
-            Some(report_id_hex.as_str())
-        );
-
-        let governance_dir = temp_dir.path().join("governance");
-        let report_dir = governance_dir
-            .join("appeals")
-            .join("finance")
-            .join("case-42");
-        let encoded_files = fs::read_dir(&report_dir)
-            .expect("read appeal finance report dir")
-            .map(|entry| entry.expect("report dir entry").path())
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
-            .collect::<Vec<_>>();
-        assert_eq!(encoded_files.len(), 1);
-
-        let index_bytes = fs::read(governance_dir.join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE))
-            .expect("read publish index");
-        let index: Value = norito::json::from_slice(&index_bytes).expect("decode publish index");
-        assert_eq!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get(APPEAL_FINANCE_REPORT_KIND))
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
     }
 
     #[tokio::test]
@@ -39281,70 +39525,6 @@ mod advert_tests {
         assert_eq!(value.get("published").and_then(Value::as_bool), Some(false));
     }
 
-    #[tokio::test]
-    async fn appeal_finance_weekly_rollup_endpoint_publishes_to_governance_dag() {
-        let (app, temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
-        let rollup = appeal_finance_weekly_rollup_fixture();
-        let body = appeal_finance_weekly_rollup_body(rollup.clone());
-
-        let response = post_appeal_finance_weekly_rollup(app, &auth.provider, body).await;
-
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let body = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect weekly rollup publish body");
-        let value: Value =
-            norito::json::from_slice(&body).expect("decode weekly rollup publish body");
-        assert_eq!(
-            value.get("schema").and_then(Value::as_str),
-            Some("sorafs.appeal_finance.weekly_rollup.publish.v1")
-        );
-        assert_eq!(value.get("cycle").and_then(Value::as_str), Some("2026-W26"));
-        assert_eq!(
-            value
-                .get("source_report_ids_hex")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-
-        let governance_dir = temp_dir.path().join("governance");
-        let rollup_dir = governance_dir
-            .join("appeals")
-            .join("finance")
-            .join("weekly")
-            .join("2026-W26");
-        let encoded_files = fs::read_dir(&rollup_dir)
-            .expect("read appeal finance weekly rollup dir")
-            .map(|entry| entry.expect("weekly rollup dir entry").path())
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
-            .collect::<Vec<_>>();
-        assert_eq!(encoded_files.len(), 1);
-
-        let index_bytes = fs::read(governance_dir.join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE))
-            .expect("read publish index");
-        let index: Value = norito::json::from_slice(&index_bytes).expect("decode publish index");
-        assert_eq!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND))
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-    }
-
-    async fn post_appeal_finance_report(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        body: Bytes,
-    ) -> Response {
-        let method = Method::POST;
-        let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_REPORTS);
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_appeal_finance_report(State(app), headers, method, uri, body).await
-    }
-
     async fn post_transparency_source_entry(
         app: SharedAppState,
         signer: &OrderbookAccountFixture,
@@ -39497,18 +39677,6 @@ mod advert_tests {
             Path(escrow_id_hex.to_owned()),
         )
         .await
-    }
-
-    async fn post_appeal_finance_weekly_rollup(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        body: Bytes,
-    ) -> Response {
-        let method = Method::POST;
-        let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_WEEKLY_ROLLUPS);
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_appeal_finance_weekly_rollup(State(app), headers, method, uri, body)
-            .await
     }
 
     fn moderation_repro_manifest_fixture(
@@ -39994,36 +40162,6 @@ mod advert_tests {
             method,
             uri,
             Path(quarantine_id_hex.to_owned()),
-            body,
-        )
-        .await
-    }
-
-    async fn post_moderation_viewer_audit_report(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        body: Bytes,
-    ) -> Response {
-        let method = Method::POST;
-        let uri = Uri::from_static(MODERATION_ROUTE_VIEWER_AUDIT_REPORTS);
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_viewer_audit_report(State(app), headers, method, uri, body)
-            .await
-    }
-
-    async fn post_moderation_viewer_audit_report_publish_due(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        body: Bytes,
-    ) -> Response {
-        let method = Method::POST;
-        let uri = Uri::from_static(MODERATION_ROUTE_VIEWER_AUDIT_REPORTS_PUBLISH_DUE);
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_viewer_audit_report_publish_due(
-            State(app),
-            headers,
-            method,
-            uri,
             body,
         )
         .await
@@ -41718,82 +41856,6 @@ mod advert_tests {
         );
         assert!(!routes.contains_key("viewer_audit_reports"));
         assert!(!routes.contains_key("viewer_audit_reports_publish_due"));
-    }
-
-    #[tokio::test]
-    async fn moderation_evidence_viewer_legacy_audit_writes_are_retired_and_fail_closed() {
-        let body = Bytes::from_static(b"{\"retired\":true}");
-
-        let (unprivileged_app, _dir, unprivileged_auth) = sorafs_app_state_with_orderbook_auth();
-        let response = handle_post_sorafs_moderation_viewer_audit_report(
-            State(unprivileged_app.clone()),
-            HeaderMap::new(),
-            Method::POST,
-            Uri::from_static(MODERATION_ROUTE_VIEWER_AUDIT_REPORTS),
-            body.clone(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        let response = post_moderation_viewer_audit_report(
-            unprivileged_app.clone(),
-            &unprivileged_auth.provider,
-            body.clone(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
-        let response = handle_post_sorafs_moderation_viewer_audit_report_publish_due(
-            State(unprivileged_app.clone()),
-            HeaderMap::new(),
-            Method::POST,
-            Uri::from_static(MODERATION_ROUTE_VIEWER_AUDIT_REPORTS_PUBLISH_DUE),
-            body.clone(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        let response = post_moderation_viewer_audit_report_publish_due(
-            unprivileged_app,
-            &unprivileged_auth.provider,
-            body.clone(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
-        let (operator_app, _dir, operator_auth) = sorafs_app_state_with_moderation_operator_auth();
-        let source_entries_before = operator_app
-            .sorafs_node
-            .transparency_ledger_source_entry_count();
-
-        let response = post_moderation_viewer_audit_report(
-            operator_app.clone(),
-            &operator_auth.provider,
-            body.clone(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::GONE);
-        let response_body = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect retired audit-ingestion response");
-        assert!(String::from_utf8_lossy(&response_body).contains("/v1/evidence/audit"));
-
-        let response = post_moderation_viewer_audit_report_publish_due(
-            operator_app.clone(),
-            &operator_auth.provider,
-            body,
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::GONE);
-        let response_body = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect retired audit-publication response");
-        assert!(String::from_utf8_lossy(&response_body).contains("/v1/evidence/audit"));
-
-        assert_eq!(
-            operator_app
-                .sorafs_node
-                .transparency_ledger_source_entry_count(),
-            source_entries_before
-        );
     }
 
     #[test]

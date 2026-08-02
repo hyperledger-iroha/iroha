@@ -139,8 +139,8 @@ use crate::{
     },
     prelude::*,
     state::{
-        QueuePlanAdmissionRegistryMatch, State, StateReadOnly, TransactionsReadOnly, WorldReadOnly,
-        queue_plan_admission_registry_match,
+        QueuePlanAdmissionRegistryMatch, State, StateReadOnly, StateReadOnlyWithTransactions,
+        TransactionsReadOnly, WorldReadOnly, queue_plan_admission_registry_match,
     },
     sumeragi::{
         lane_planner::AutonomousLaneReservationSelectionAuthorization,
@@ -2178,6 +2178,35 @@ impl fmt::Debug for Queue {
     }
 }
 
+/// Queue-side fence for one lane-retirement ownership observation.
+///
+/// The guard acquires `lane_reservation_transition_lock` before callers enter
+/// the State lane-lifecycle fence. Its predicate then acquires only the queue
+/// mutation and reservation-store locks, preserving the production order
+/// `reservation transition -> lifecycle -> queue ownership`.
+pub(crate) struct QueueLaneRetirementObserver<'queue> {
+    queue: &'queue Queue,
+    _reservation_transition_guard: parking_lot::MutexGuard<'queue, ()>,
+}
+
+impl QueueLaneRetirementObserver<'_> {
+    /// Return whether the exact lane incarnation still owns or may receive
+    /// queued work while the reservation-transition fence is held.
+    #[must_use]
+    pub(crate) fn lane_has_pending_work(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> bool {
+        self.queue.lane_has_pending_work_under_retirement_observer(
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        )
+    }
+}
+
 const QUEUE_PRESSURE_MIN_AGE_BUDGET_MS: u64 = 2_000;
 const QUEUE_PRESSURE_MAX_AGE_BUDGET_MS: u64 = 5_000;
 /// Fixed queue/index overhead charged to every retained transaction.
@@ -3905,10 +3934,11 @@ impl Queue {
         // convoy unrelated queue work behind this operation's storage barrier.
         let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
         // Lifecycle publication and queue ownership use one lock order:
-        // lifecycle first, then queue. Retain the fence through the durable
-        // reservation append and FIFO removal so either the reservation is
-        // visible to drain validation or this operation observes the closed
-        // incarnation and fails before taking ownership.
+        // reservation transition first, lifecycle second, and queue ownership
+        // last. Retain the fences through the durable reservation append and
+        // FIFO removal so either the reservation is visible to drain
+        // validation or this operation observes the closed incarnation and
+        // fails before taking ownership.
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         // Publish the current router/catalog generation before taking exclusive selection
         // ownership. Already accepted work keeps its immutable admitted plan across policy
@@ -4801,11 +4831,8 @@ impl Queue {
                 "pre-Kura direct-release count exceeds u64".to_owned(),
             )
         })?;
-        let binding_a = CanonicalIdentityProjection::from_bytes(
-            IDENTITY_DOMAIN_PAYLOAD,
-            IDENTITY_KIND_CANONICAL_PAYLOAD,
-            *expected_group.reservation_group_hash.as_ref(),
-        );
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(expected_group);
         let before = ProductionInFlightFirstReleaseStateProjection {
             validator_count,
             producer,
@@ -6475,12 +6502,33 @@ impl Queue {
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
     ) -> bool {
+        let observer = self.lock_lane_retirement_observer();
+        observer.lane_has_pending_work(lane_id, dataspace_id, lane_incarnation)
+    }
+
+    /// Acquire the Queue half of the lane-retirement publication fence.
+    ///
+    /// Callers that also inspect or publish State lifecycle data must acquire
+    /// this guard first and retain it until the lifecycle guard is released.
+    #[must_use]
+    pub(crate) fn lock_lane_retirement_observer(&self) -> QueueLaneRetirementObserver<'_> {
+        QueueLaneRetirementObserver {
+            queue: self,
+            _reservation_transition_guard: self.lane_reservation_transition_lock.lock(),
+        }
+    }
+
+    fn lane_has_pending_work_under_retirement_observer(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> bool {
         if hash_is_zero(lane_incarnation) || self.transaction_selection_durability_faulted() {
             return true;
         }
         #[cfg(test)]
         self.wait_for_durability_observer_lock_handoff_for_test();
-        let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
         let _queue_guard = self.push_remove_lock.lock();
         if self.transaction_selection_durability_faulted() {
             return true;
@@ -9217,7 +9265,7 @@ impl Queue {
     fn global_admission_registry_match_for_hash(
         &self,
         hash: SignedTxHash,
-        state_view: &impl StateReadOnly,
+        state_view: &impl StateReadOnlyWithTransactions,
     ) -> Result<
         Option<(
             crate::torii_proxy::QueuePlanAdmissionBindingV2,
@@ -16341,27 +16389,10 @@ pub mod tests {
     fn install_queue_plan_registry_value_for_test(
         state: &State,
         binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
-        binding_hash: Hash,
     ) {
-        let registry_key = binding.registry_key();
-        let marker_key: StatePath = format!(
-            "queue_plan_admission_v2_{}_{}",
-            hex::encode(registry_key.chain_id_digest.as_ref()),
-            hex::encode(registry_key.entrypoint_hash.as_ref()),
-        )
-        .parse()
-        .expect("global guard fixture registry marker key");
-        let marker_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV2 {
-            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
-            binding_hash,
-        };
-        let marker_payload =
-            norito::to_bytes(&marker_value).expect("encode global guard fixture registry value");
-        let mut world = state.world.block();
-        world
-            .smart_contract_state
-            .insert(marker_key, marker_payload);
-        world.commit();
+        state
+            .install_queue_plan_pending_binding_for_test(binding)
+            .expect("install complete QueuePlan registry owner evidence");
     }
 
     fn admit_globally_certified_reservation_transaction_for_test(
@@ -16403,7 +16434,7 @@ pub mod tests {
                 &binding,
             )
             .expect("durably admit globally certified reservation transaction");
-        install_queue_plan_registry_value_for_test(state, &binding, binding.canonical_hash());
+        install_queue_plan_registry_value_for_test(state, &binding);
         assert_eq!(
             state
                 .queue_plan_admission_binding_registry_match(&binding)
@@ -23232,11 +23263,7 @@ pub mod tests {
             .queue
             .push_with_lane_with_state(fixture.follower_transaction.clone(), &fixture.state)
             .expect("enqueue FIFO follower");
-        install_queue_plan_registry_value_for_test(
-            &fixture.state,
-            &fixture.binding,
-            fixture.binding.canonical_hash(),
-        );
+        install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
         assert_eq!(
             fixture
                 .state
@@ -23260,11 +23287,27 @@ pub mod tests {
         drop(guard);
         fixture.assert_restored_fifo_owner();
 
-        install_queue_plan_registry_value_for_test(
-            &fixture.state,
-            &fixture.binding,
-            Hash::new(b"conflicting-global-guard-binding"),
+        let routing_plan = fixture
+            .binding
+            .routing_plan()
+            .expect("fixture binding routing plan");
+        let conflicting_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            fixture.state.chain_id_ref(),
+            fixture.transaction.entrypoint(),
+            &routing_plan,
+            fixture.binding.admission_context.clone(),
+            fixture.binding.enqueue_timestamp_ms.saturating_add(1),
+        )
+        .expect("build coherent conflicting global guard owner");
+        assert_eq!(
+            conflicting_binding.entrypoint_hash,
+            fixture.binding.entrypoint_hash
         );
+        assert_ne!(
+            conflicting_binding.canonical_hash(),
+            fixture.binding.canonical_hash()
+        );
+        install_queue_plan_registry_value_for_test(&fixture.state, &conflicting_binding);
         assert_eq!(
             fixture
                 .state

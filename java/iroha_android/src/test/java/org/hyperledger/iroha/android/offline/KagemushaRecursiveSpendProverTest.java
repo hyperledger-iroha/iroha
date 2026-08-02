@@ -54,12 +54,23 @@ public final class KagemushaRecursiveSpendProverTest {
     qrNfcAndNearbyGoldenVectorsAreExact();
     nfcV4StreamsBeyondLegacyLimitAndRejectsDowngrade();
     toriiLifecycleRoutesAndHeadersAreExact();
+    offlineCapabilityRejectsBackendReadinessClaims();
     publicSurfaceIsKagemushaOnly();
   }
 
   @org.junit.Test
   public void scaledAmountsAreExactAndNeverRoundUnderJUnit() {
     scaledAmountsAreExactAndNeverRound();
+  }
+
+  @org.junit.Test
+  public void toriiLifecycleRoutesAndHeadersAreExactUnderJUnit() {
+    toriiLifecycleRoutesAndHeadersAreExact();
+  }
+
+  @org.junit.Test
+  public void offlineCapabilityRejectsBackendReadinessClaimsUnderJUnit() {
+    offlineCapabilityRejectsBackendReadinessClaims();
   }
 
   private static void heavyProofPermitIsReentrantButRejectsAnotherThreadWithoutWaiting() {
@@ -1441,28 +1452,44 @@ public final class KagemushaRecursiveSpendProverTest {
             URI.create("https://torii.example/api/"),
             request -> {
               captured.set(request);
+              final boolean capability = request.uri().getPath().endsWith("/readiness");
               final boolean lineage = request.uri().getPath().endsWith("/receiver-lineage");
               final boolean command = "POST".equals(request.method()) && !lineage;
               return CompletableFuture.completedFuture(
                   TransportResponse.builder()
                       .setStatusCode(command ? 202 : 200)
-                      .addHeader("Content-Type", "application/x-norito")
+                      .addHeader(
+                          "Content-Type",
+                          capability ? "application/json" : "application/x-norito")
                       .setBody(
-                          archive(
-                              command
-                                  ? "OfflineOperationReference"
-                                  : lineage
-                                      ? "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage"
-                                  : request.uri().getPath().contains("/operations/")
-                                      ? "OfflineOperationStatus"
-                                      : "OfflineReadiness"))
+                          capability
+                              ? universalOfflineCapabilityJson().getBytes(StandardCharsets.UTF_8)
+                              : archive(
+                                  command
+                                      ? "OfflineOperationReference"
+                                      : lineage
+                                          ? "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage"
+                                      : request.uri().getPath().contains("/operations/")
+                                          ? "OfflineOperationStatus"
+                                          : unexpectedToriiRoute(request)))
                       .build());
             });
 
-    client.getReadiness("pkr#sbp").join();
+    final KagemushaRecursiveSpendProver.OfflineStatus status =
+        client.getOfflineCapability().join();
+    assert Arrays.stream(KagemushaRecursiveSpendProver.ToriiClient.class.getDeclaredMethods())
+        .noneMatch(method -> method.getName().equals("getReadiness"))
+        : "selector-taking offline readiness alias must remain absent";
+    assert !status.mandatory();
+    assert status.cashHandoffCapability().equals("cash_handoff_v1");
+    assert status.requiredBridgeAbiVersion() == 21;
+    assert status.maximumHops() == 8;
+    assert status.ready();
+    assert status.assets().isEmpty();
+    assert status.blockers().isEmpty();
     assert captured.get().uri().toString()
-        .equals("https://torii.example/api/v1/offline/readiness?asset_definition_id=pkr%23sbp");
-    assert captured.get().headers().get("Accept").equals(Arrays.asList("application/x-norito"));
+        .equals("https://torii.example/api/v1/offline/readiness");
+    assert captured.get().headers().get("Accept").equals(Arrays.asList("application/json"));
 
     final KagemushaRecursiveSpendProver.RecipientLineageQueryV2 query = construct(
         KagemushaRecursiveSpendProver.RecipientLineageQueryV2.class,
@@ -1496,6 +1523,46 @@ public final class KagemushaRecursiveSpendProverTest {
 
     client.getOperation(operationId).join();
     assert captured.get().uri().getPath().equals("/api/v1/offline/operations/" + operationId);
+  }
+
+  private static String universalOfflineCapabilityJson() {
+    return "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\","
+        + "\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true,"
+        + "\"assets\":[],\"blockers\":[]}";
+  }
+
+  private static String unexpectedToriiRoute(final TransportRequest request) {
+    throw new AssertionError("unexpected Torii route " + request.uri());
+  }
+
+  private static void offlineCapabilityRejectsBackendReadinessClaims() {
+    final List<String> invalidPayloads = Arrays.asList(
+        "{\"mandatory\":true,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v2\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":20,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":9,\"ready\":true,\"assets\":[],\"blockers\":[]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":false,\"assets\":[],\"blockers\":[]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true,\"assets\":[{}],\"blockers\":[]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[{\"code\":\"unexpected\",\"message\":\"unexpected\"}]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[],\"future\":true}");
+    for (final String payload : invalidPayloads) {
+      final KagemushaRecursiveSpendProver.ToriiClient client =
+          KagemushaRecursiveSpendProver.newToriiClient(
+              URI.create("https://torii.example"),
+              request -> CompletableFuture.completedFuture(
+                  TransportResponse.builder()
+                      .setStatusCode(200)
+                      .addHeader("Content-Type", "application/json")
+                      .setBody(payload.getBytes(StandardCharsets.UTF_8))
+                      .build()));
+      boolean rejected = false;
+      try {
+        client.getOfflineCapability().join();
+      } catch (final RuntimeException expected) {
+        rejected = true;
+      }
+      assert rejected : "accepted non-universal offline capability: " + payload;
+    }
   }
 
   private static void publicSurfaceIsKagemushaOnly() {

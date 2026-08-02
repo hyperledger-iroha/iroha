@@ -488,7 +488,11 @@ def _production_trace_unique_function(
         errors.append(str(error))
         return None
     items = rust_items(source, symbol)
-    expected_context = None if impl_name is None else (("impl", impl_name),)
+    expected_context = (
+        None
+        if impl_name is None
+        else (tuple(rust_code_tokens(f"impl {impl_name}")),)
+    )
     matches = [
         item
         for item in items
@@ -530,6 +534,7 @@ def _production_trace_extraction_source_snapshot(
     errors: list[str] = []
     root_dir = root_dir.resolve()
     model_relative = "formal/sumeragi_v2/SumeragiV2InFlightFirstRelease.tla"
+    bindings_relative = "formal/sumeragi_v2/multilane_source_bindings.json"
     model_path = root_dir / model_relative
     try:
         model_payload = _bounded_regular_file_bytes(
@@ -543,6 +548,39 @@ def _production_trace_extraction_source_snapshot(
         model_payload = b""
         model_source = ""
 
+    try:
+        binding_ledger = json.loads(
+            _bounded_regular_file_bytes(
+                root_dir / bindings_relative,
+                label="multilane source-binding ledger",
+                maximum_bytes=PRODUCTION_TRACE_EXTRACTION_COMPONENT_MAX_BYTES,
+            ).decode("utf-8")
+        )
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        errors.append(
+            "production trace-extraction theorem cannot read its model-action "
+            f"inventory: {error}"
+        )
+    else:
+        layout_contract = (
+            binding_ledger.get("inflight_first_release_layout_contract")
+            if isinstance(binding_ledger, dict)
+            else None
+        )
+        ledger_actions = (
+            layout_contract.get("required_actions")
+            if isinstance(layout_contract, dict)
+            else None
+        )
+        if not isinstance(ledger_actions, list) or tuple(ledger_actions) != (
+            PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS
+        ):
+            errors.append(
+                "production trace-extraction required model actions differ from "
+                "the multilane source-binding ledger"
+            )
+
+    errors.extend(_production_trace_extraction_action_partition_errors())
     ordered_actions: list[str] = []
     for binding in PRODUCTION_TRACE_EXTRACTION_BINDINGS:
         for action in binding["model_actions"]:
@@ -729,11 +767,12 @@ def _production_trace_extraction_source_snapshot(
             item_tokens, rust_code_tokens("into_projection")
         )
         expected_count = binding["checked_transition_count"]
+        has_separate_consumer = binding.get("checked_transition_consumer") is not None
         if (
             missing_tokens
             or checked_count != expected_count
             or projection_count != expected_count
-            or consumption_count < expected_count
+            or (not has_separate_consumer and consumption_count < expected_count)
         ):
             detail: list[str] = []
             if missing_tokens:
@@ -748,7 +787,7 @@ def _production_trace_extraction_source_snapshot(
                     "transition projections "
                     f"expected {expected_count}, found {projection_count}"
                 )
-            if consumption_count < expected_count:
+            if not has_separate_consumer and consumption_count < expected_count:
                 detail.append(
                     "move-only checked projection consumptions "
                     f"expected at least {expected_count}, found {consumption_count}"
@@ -781,12 +820,21 @@ def _production_trace_extraction_source_snapshot(
                 for token in authorization_source["required_tokens"]
                 if _token_sequence_count(source_tokens, rust_code_tokens(token)) == 0
             ]
-            if missing_source_tokens:
+            source_order_error = _production_trace_ordered_token_sequence_error(
+                source_tokens,
+                authorization_source.get("ordered_tokens", ()),
+            )
+            if missing_source_tokens or source_order_error is not None:
+                detail = (
+                    f"missing exact code tokens {missing_source_tokens!r}"
+                    if missing_source_tokens
+                    else source_order_error
+                )
                 errors.append(
                     "production trace-extraction theorem missing canonical authorization "
-                    f"source tokens {missing_source_tokens!r} at "
+                    f"source tokens at "
                     f"{authorization_source['path']}!{authorization_source['impl']}::"
-                    f"{authorization_source['symbol']}"
+                    f"{authorization_source['symbol']}: {detail}"
                 )
                 continue
             authorization_source_entry = _production_trace_rust_item_entry(
@@ -799,14 +847,126 @@ def _production_trace_extraction_source_snapshot(
                 item=source_item,
             )
             production_items.append(authorization_source_entry)
+        checked_transition_consumer_entry = None
+        checked_transition_consumer = binding.get("checked_transition_consumer")
+        if checked_transition_consumer is not None:
+            consumer_item = _production_trace_unique_function(
+                root_dir=root_dir,
+                relative=checked_transition_consumer["path"],
+                symbol=checked_transition_consumer["symbol"],
+                impl_name=checked_transition_consumer["impl"],
+                errors=errors,
+            )
+            if consumer_item is None:
+                continue
+            consumer_tokens = rust_code_tokens(consumer_item.source)
+            missing_consumer_tokens = [
+                token
+                for token in checked_transition_consumer["required_tokens"]
+                if _token_sequence_count(consumer_tokens, rust_code_tokens(token)) == 0
+            ]
+            consumer_count = _token_sequence_count(
+                consumer_tokens, rust_code_tokens("into_projection")
+            )
+            consumer_order_error = _production_trace_ordered_token_sequence_error(
+                consumer_tokens,
+                checked_transition_consumer.get("ordered_tokens", ()),
+            )
+            if (
+                missing_consumer_tokens
+                or consumer_count < expected_count
+                or consumer_order_error is not None
+            ):
+                detail = []
+                if missing_consumer_tokens:
+                    detail.append(
+                        f"missing exact code tokens {missing_consumer_tokens!r}"
+                    )
+                if consumer_count < expected_count:
+                    detail.append(
+                        "move-only checked projection consumptions "
+                        f"expected at least {expected_count}, found {consumer_count}"
+                    )
+                if consumer_order_error is not None:
+                    detail.append(consumer_order_error)
+                errors.append(
+                    "production trace-extraction theorem missing move-only consumer "
+                    f"{binding['id']} at {checked_transition_consumer['path']}!"
+                    f"{checked_transition_consumer['impl']}::"
+                    f"{checked_transition_consumer['symbol']}: "
+                    + "; ".join(detail)
+                )
+                continue
+            checked_transition_consumer_entry = _production_trace_rust_item_entry(
+                path=checked_transition_consumer["path"],
+                kind="method",
+                symbol=(
+                    f"{checked_transition_consumer['impl']}::"
+                    f"{checked_transition_consumer['symbol']}"
+                ),
+                item=consumer_item,
+            )
+            production_items.append(checked_transition_consumer_entry)
+        checked_transition_adapter_entry = None
+        checked_transition_adapter = binding.get("checked_transition_adapter")
+        if checked_transition_adapter is not None:
+            adapter_item = _production_trace_unique_function(
+                root_dir=root_dir,
+                relative=checked_transition_adapter["path"],
+                symbol=checked_transition_adapter["symbol"],
+                impl_name=checked_transition_adapter["impl"],
+                errors=errors,
+            )
+            if adapter_item is None:
+                continue
+            adapter_tokens = rust_code_tokens(adapter_item.source)
+            missing_adapter_tokens = [
+                token
+                for token in checked_transition_adapter["required_tokens"]
+                if _token_sequence_count(adapter_tokens, rust_code_tokens(token)) == 0
+            ]
+            adapter_order_error = _production_trace_ordered_token_sequence_error(
+                adapter_tokens,
+                checked_transition_adapter.get("ordered_tokens", ()),
+            )
+            if missing_adapter_tokens or adapter_order_error is not None:
+                detail = (
+                    f"missing exact code tokens {missing_adapter_tokens!r}"
+                    if missing_adapter_tokens
+                    else adapter_order_error
+                )
+                errors.append(
+                    "production trace-extraction theorem missing move-only State "
+                    f"commit adapter {binding['id']} at "
+                    f"{checked_transition_adapter['path']}!"
+                    f"{checked_transition_adapter['impl']}::"
+                    f"{checked_transition_adapter['symbol']}: {detail}"
+                )
+                continue
+            checked_transition_adapter_entry = _production_trace_rust_item_entry(
+                path=checked_transition_adapter["path"],
+                kind="method",
+                symbol=(
+                    f"{checked_transition_adapter['impl']}::"
+                    f"{checked_transition_adapter['symbol']}"
+                ),
+                item=adapter_item,
+            )
+            production_items.append(checked_transition_adapter_entry)
         commit_sink_entry = None
         commit_sink = binding.get("commit_sink")
         if commit_sink is not None:
+            commit_sink_impl = commit_sink.get("impl")
+            commit_sink_symbol = (
+                commit_sink["symbol"]
+                if commit_sink_impl is None
+                else f"{commit_sink_impl}::{commit_sink['symbol']}"
+            )
             sink_item = _production_trace_unique_function(
                 root_dir=root_dir,
                 relative=commit_sink["path"],
                 symbol=commit_sink["symbol"],
-                impl_name=commit_sink["impl"],
+                impl_name=commit_sink_impl,
                 errors=errors,
             )
             if sink_item is None:
@@ -817,18 +977,26 @@ def _production_trace_extraction_source_snapshot(
                 for token in commit_sink["required_tokens"]
                 if _token_sequence_count(sink_tokens, rust_code_tokens(token)) == 0
             ]
-            if missing_sink_tokens:
+            sink_order_error = _production_trace_ordered_token_sequence_error(
+                sink_tokens,
+                commit_sink.get("ordered_tokens", ()),
+            )
+            if missing_sink_tokens or sink_order_error is not None:
+                detail = (
+                    f"missing exact code tokens {missing_sink_tokens!r}"
+                    if missing_sink_tokens
+                    else sink_order_error
+                )
                 errors.append(
                     "production trace-extraction theorem missing canonical commit "
-                    f"sink tokens {missing_sink_tokens!r} at "
-                    f"{commit_sink['path']}!{commit_sink['impl']}::"
-                    f"{commit_sink['symbol']}"
+                    f"sink tokens at "
+                    f"{commit_sink['path']}!{commit_sink_symbol}: {detail}"
                 )
                 continue
             commit_sink_entry = _production_trace_rust_item_entry(
                 path=commit_sink["path"],
                 kind="method",
-                symbol=f"{commit_sink['impl']}::{commit_sink['symbol']}",
+                symbol=commit_sink_symbol,
                 item=sink_item,
             )
             production_items.append(commit_sink_entry)
@@ -853,6 +1021,8 @@ def _production_trace_extraction_source_snapshot(
                 ],
                 "production_symbol": entry,
                 "authorization_source": authorization_source_entry,
+                "checked_transition_consumer": checked_transition_consumer_entry,
+                "checked_transition_adapter": checked_transition_adapter_entry,
                 "canonical_commit_sink": commit_sink_entry,
                 "carrier_identity_projection": shared_identity_entry,
                 "refinement_kernel": core_by_symbol.get(
@@ -881,7 +1051,6 @@ def _production_trace_extraction_source_snapshot(
         raise ValueError("\n".join(errors))
 
     fixed_relative = "formal/sumeragi_v2/inflight_first_release_fixed.cfg"
-    bindings_relative = "formal/sumeragi_v2/multilane_source_bindings.json"
     checker_relative = "scripts/formal/check_sumeragi_v2_multilane_models.py"
     model_sources = []
     for relative, label in (
@@ -913,6 +1082,70 @@ def _production_trace_extraction_source_snapshot(
     }
 
 
+def _production_trace_ordered_token_sequence_error(
+    source_tokens: Sequence[str], required_tokens: Sequence[str]
+) -> str | None:
+    """Return a fail-closed error unless each token sequence occurs once in order."""
+
+    cursor = -1
+    for required in required_tokens:
+        needle = rust_code_tokens(required)
+        positions = [
+            index
+            for index in range(len(source_tokens) - len(needle) + 1)
+            if tuple(source_tokens[index : index + len(needle)]) == tuple(needle)
+        ]
+        if len(positions) != 1:
+            return (
+                f"ordered code token {required!r} must occur exactly once, "
+                f"found {len(positions)}"
+            )
+        if positions[0] <= cursor:
+            return f"ordered code token {required!r} moved before its predecessor"
+        cursor = positions[0]
+    return None
+
+
+def _production_trace_extraction_action_partition_errors() -> list[str]:
+    """Require concrete bindings plus explicit debt to cover the whole model."""
+
+    required = PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS
+    open_actions = PRODUCTION_TRACE_EXTRACTION_OPEN_MODEL_ACTIONS
+    bound_actions = tuple(
+        action
+        for binding in PRODUCTION_TRACE_EXTRACTION_BINDINGS
+        for action in binding["model_actions"]
+    )
+    required_set = set(required)
+    open_set = set(open_actions)
+    bound_set = set(bound_actions)
+    errors: list[str] = []
+    if len(required_set) != len(required):
+        errors.append(
+            "production trace-extraction required model-action inventory "
+            "contains duplicates"
+        )
+    if len(open_set) != len(open_actions):
+        errors.append(
+            "production trace-extraction open model-action inventory contains "
+            "duplicates"
+        )
+    overlap = [
+        action
+        for action in required
+        if action in open_set and action in bound_set
+    ]
+    missing = [action for action in required if action not in open_set | bound_set]
+    unexpected = sorted((open_set | bound_set) - required_set)
+    if overlap or missing or unexpected:
+        errors.append(
+            "production trace-extraction bindings and explicit open actions do "
+            "not partition the exact model-action inventory: "
+            f"overlap={overlap!r}, missing={missing!r}, unexpected={unexpected!r}"
+        )
+    return errors
+
+
 def build_production_trace_extraction_evidence(
     ledger: dict[str, Any],
     *,
@@ -929,6 +1162,15 @@ def build_production_trace_extraction_evidence(
         raise ValueError(
             "production trace-extraction evidence requires "
             "machine_checked_completion=true"
+        )
+    partition_errors = _production_trace_extraction_action_partition_errors()
+    if partition_errors:
+        raise ValueError("\n".join(partition_errors))
+    if PRODUCTION_TRACE_EXTRACTION_OPEN_MODEL_ACTIONS:
+        raise ValueError(
+            "production trace-extraction evidence cannot be certified while "
+            "model actions remain unextracted: "
+            + ", ".join(PRODUCTION_TRACE_EXTRACTION_OPEN_MODEL_ACTIONS)
         )
     if not all(
         isinstance(value, dict)

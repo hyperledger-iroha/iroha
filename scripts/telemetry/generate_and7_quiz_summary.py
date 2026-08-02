@@ -314,8 +314,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     default_responses = (
         Path(__file__).resolve().parents[2]
-        / "docs"
-        / "source"
+        / "specs"
         / "sdk"
         / "android"
         / "readiness"

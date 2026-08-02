@@ -113,7 +113,6 @@ const SANDBOX_READINESS_TIMEOUT: Duration = Duration::from_secs(60);
 const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const SMOKE_TIMEOUT: Duration = Duration::from_secs(12);
 const SMOKE_MAX_ATTEMPTS: usize = 3;
-const LOCAL_MCP_STARTUP_MAX_ATTEMPTS: usize = 4;
 const LOCAL_MCP_STARTUP_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
 const LOCAL_MCP_STARTUP_MAX_BACKOFF: Duration = Duration::from_secs(1);
 const EVENT_FILTER_STORAGE_KEY: &str = "mochi.event_filter";
@@ -1178,7 +1177,7 @@ fn run_sandbox_serve_cli(overrides: CliOverrides) -> Result<(), String> {
     })?;
 
     let mcp_probe = runtime.block_on(async {
-        validate_local_mcp_for_startup(&client)
+        validate_local_mcp_for_startup(&client, readiness_options.timeout)
             .await
             .map_err(|err| format!("failed while validating local MCP: {err}"))
     })?;
@@ -1208,10 +1207,11 @@ fn run_sandbox_serve_cli(overrides: CliOverrides) -> Result<(), String> {
 
 async fn validate_local_mcp_for_startup(
     client: &ToriiClient,
+    readiness_timeout: Duration,
 ) -> Result<LocalMcpProbeResult, ToriiError> {
     retry_local_mcp_rate_limit(
         || client.validate_local_mcp(),
-        LOCAL_MCP_STARTUP_MAX_ATTEMPTS,
+        readiness_timeout,
         LOCAL_MCP_STARTUP_INITIAL_BACKOFF,
         LOCAL_MCP_STARTUP_MAX_BACKOFF,
     )
@@ -1220,7 +1220,7 @@ async fn validate_local_mcp_for_startup(
 
 async fn retry_local_mcp_rate_limit<F, Fut>(
     mut probe: F,
-    max_attempts: usize,
+    readiness_timeout: Duration,
     initial_backoff: Duration,
     max_backoff: Duration,
 ) -> Result<LocalMcpProbeResult, ToriiError>
@@ -1228,31 +1228,60 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<LocalMcpProbeResult, ToriiError>>,
 {
-    let max_attempts = max_attempts.max(1);
+    let started = tokio::time::Instant::now();
+    let Some(deadline) = started.checked_add(readiness_timeout) else {
+        return Err(local_mcp_readiness_timeout(readiness_timeout));
+    };
     let mut backoff = initial_backoff.min(max_backoff);
-    let mut attempt = 1;
     loop {
-        match probe().await {
-            Ok(result) => return Ok(result),
-            Err(error) if local_mcp_error_is_rate_limited(&error) && attempt < max_attempts => {
-                // ToriiError does not currently retain response headers, so
-                // Retry-After is unavailable at this boundary. Keep the
-                // fallback short and bounded; all non-429 failures return
-                // immediately without retrying protocol or catalog errors.
-                tokio::time::sleep(backoff).await;
-                backoff = backoff.saturating_mul(2).min(max_backoff);
-                attempt += 1;
+        match tokio::time::timeout_at(deadline, probe()).await {
+            Ok(Ok(result)) => return Ok(result),
+            Ok(Err(error)) if local_mcp_error_is_rate_limited(&error) => {
+                let delay = local_mcp_retry_delay(&error, backoff)
+                    .expect("rate-limited MCP errors always produce a retry delay");
+                if error.retry_after().is_none() {
+                    backoff = backoff.saturating_mul(2).min(max_backoff);
+                }
+
+                let now = tokio::time::Instant::now();
+                let Some(remaining) = deadline.checked_duration_since(now) else {
+                    return Err(local_mcp_readiness_timeout(readiness_timeout));
+                };
+                if delay >= remaining {
+                    tokio::time::sleep(remaining).await;
+                    return Err(local_mcp_readiness_timeout(readiness_timeout));
+                }
+                if delay.is_zero() {
+                    tokio::task::yield_now().await;
+                } else {
+                    tokio::time::sleep(delay).await;
+                }
             }
-            Err(error) => return Err(error),
+            Ok(Err(error)) => return Err(error),
+            Err(_) => return Err(local_mcp_readiness_timeout(readiness_timeout)),
         }
     }
 }
 
+fn local_mcp_retry_delay(error: &ToriiError, fallback: Duration) -> Option<Duration> {
+    if !local_mcp_error_is_rate_limited(error) {
+        return None;
+    }
+    Some(error.retry_after().unwrap_or(fallback))
+}
+
+fn local_mcp_readiness_timeout(readiness_timeout: Duration) -> ToriiError {
+    ToriiError::Timeout {
+        context: format!("local MCP readiness after {readiness_timeout:?}"),
+    }
+}
+
 fn local_mcp_error_is_rate_limited(error: &ToriiError) -> bool {
-    matches!(
-        error,
-        ToriiError::UnexpectedStatus { status, .. } if status.as_u16() == 429
-    )
+    matches!(error, ToriiError::RateLimited { .. })
+        || matches!(
+            error,
+            ToriiError::UnexpectedStatus { status, .. } if status.as_u16() == 429
+        )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13443,7 +13472,8 @@ mod tests {
         MaintenanceState, MaintenanceTask, MochiApp, ProfilePreset, SignerEntryForm,
         SignerEntryState, StatePageCache, StateQueryKind, SupervisorBuilder,
         compose_app_env_recipe, compose_launch_recipe, ensure_http_base, filter_state_entries,
-        reset_cli_overrides_for_tests, retry_local_mcp_rate_limit, shell_quote,
+        local_mcp_retry_delay, reset_cli_overrides_for_tests, retry_local_mcp_rate_limit,
+        shell_quote,
     };
 
     #[test]
@@ -13506,12 +13536,8 @@ mod tests {
         }
     }
 
-    fn local_mcp_rate_limit_error() -> ToriiError {
-        ToriiError::UnexpectedStatus {
-            status: "429".parse().expect("valid status code"),
-            reject_code: None,
-            message: Some("mcp request rate limited".to_owned()),
-        }
+    fn local_mcp_rate_limit_error(retry_after: Option<Duration>) -> ToriiError {
+        ToriiError::RateLimited { retry_after }
     }
 
     #[test]
@@ -13524,13 +13550,13 @@ mod tests {
                 let attempt = observed_attempts.fetch_add(1, Ordering::SeqCst);
                 async move {
                     if attempt < 2 {
-                        Err(local_mcp_rate_limit_error())
+                        Err(local_mcp_rate_limit_error(None))
                     } else {
                         Ok(local_mcp_probe_fixture())
                     }
                 }
             },
-            4,
+            Duration::from_secs(1),
             Duration::ZERO,
             Duration::ZERO,
         ));
@@ -13553,7 +13579,7 @@ mod tests {
                     observed_attempts.fetch_add(1, Ordering::SeqCst);
                     async { Err(ToriiError::Decode("invalid MCP tool catalog".to_owned())) }
                 },
-                4,
+                Duration::from_secs(1),
                 Duration::ZERO,
                 Duration::ZERO,
             ))
@@ -13572,16 +13598,42 @@ mod tests {
             .block_on(retry_local_mcp_rate_limit(
                 move || {
                     observed_attempts.fetch_add(1, Ordering::SeqCst);
-                    async { Err(local_mcp_rate_limit_error()) }
+                    async { Err(local_mcp_rate_limit_error(Some(Duration::from_secs(1)))) }
                 },
-                3,
-                Duration::ZERO,
-                Duration::ZERO,
+                Duration::from_millis(10),
+                Duration::from_millis(1),
+                Duration::from_millis(2),
             ))
-            .expect_err("persistent throttling must remain visible");
+            .expect_err("persistent throttling must reach the readiness deadline");
 
-        assert!(matches!(error, ToriiError::UnexpectedStatus { .. }));
-        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        assert!(matches!(
+            error,
+            ToriiError::Timeout { context } if context.contains("local MCP readiness")
+        ));
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "a Retry-After beyond the remaining deadline cannot trigger another probe"
+        );
+    }
+
+    #[test]
+    fn local_mcp_startup_retry_honors_server_retry_after() {
+        let retry_after = Duration::from_secs(7);
+        assert_eq!(
+            local_mcp_retry_delay(
+                &local_mcp_rate_limit_error(Some(retry_after)),
+                Duration::from_millis(250),
+            ),
+            Some(retry_after)
+        );
+        assert_eq!(
+            local_mcp_retry_delay(
+                &local_mcp_rate_limit_error(None),
+                Duration::from_millis(250),
+            ),
+            Some(Duration::from_millis(250))
+        );
     }
 
     #[test]

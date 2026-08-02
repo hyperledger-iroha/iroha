@@ -392,12 +392,13 @@ impl KagemushaReleaseCatalogV4 {
         self.configured_policy_sha256
     }
 
-    /// Load the immutable catalog selected by process-local offline-settlement policy.
+    /// Load an optional immutable verifier cache.
     ///
-    /// Disabled policy and an omitted policy/artifact pair both produce the explicit empty
-    /// catalog. A partially configured pair, or any authentication failure, is rejected. This
-    /// helper is shared by node startup and isolated genesis staging so both boundaries commit to
-    /// the same authenticated release-policy digest.
+    /// An omitted policy/artifact pair produces the explicit empty catalog. The
+    /// cache is not an offline-capability switch and is not an asset catalog;
+    /// every deployment and asset retains the protocol primitives when it is
+    /// empty. A partially configured pair or authentication failure is rejected
+    /// only when an operator explicitly configures this cache.
     ///
     /// # Errors
     ///
@@ -406,9 +407,6 @@ impl KagemushaReleaseCatalogV4 {
     pub fn from_offline_config(
         config: &iroha_config::parameters::actual::Offline,
     ) -> Result<Self, String> {
-        if !config.enabled {
-            return Ok(Self::empty());
-        }
         match (
             config.kagemusha_release_policy_path.as_deref(),
             config.kagemusha_artifact_dir.as_deref(),

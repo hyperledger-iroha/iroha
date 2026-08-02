@@ -8,8 +8,6 @@ PROFILE="${PROFILE:-release}"
 ALLOW_DIRTY=0
 SKIP_BUILD=0
 SKIP_LOCAL_REGRESSIONS=0
-KAGEMUSHA_RELEASE_POLICY="${KAGEMUSHA_V4_RELEASE_POLICY_PATH:-}"
-KAGEMUSHA_ARTIFACT_ROOT="${KAGEMUSHA_V4_ARTIFACT_ROOT:-}"
 IROHAD_RELEASE_FEATURES="embedded-soracloud-runtime,zk-stark"
 PRIVACY_RELEASE_EVIDENCE_FEATURE="privacy-release-evidence"
 PRIVACY_RELEASE_RUNNER_PACKAGE="iroha_test_network"
@@ -37,8 +35,6 @@ Usage: build_taira_rollout_bundle.sh [--output-dir PATH] [--profile debug|releas
                                      [--allow-dirty] [--skip-build]
                                      [--skip-local-regressions]
                                      [--skip-router-regression]
-                                     [--kagemusha-release-policy PATH]
-                                     [--kagemusha-artifact-root PATH]
 
 Build a deterministic public-Taira rollout bundle from the current `../iroha`
 checkout. By default the script refuses to package a dirty worktree so the
@@ -66,10 +62,6 @@ The bundle contains:
   - `rollout.manifest.json`
   - `sha256sums.txt`
   - `<bundle>.tar.gz`
-
-The authenticated ABI-21/V4 Kagemusha policy and artifact root are mandatory.
-They are verified by the production promotion corridor and copied into the
-bundle; there is no build or rollout path that omits offline cash.
 
 `--skip-build` is a debug-only convenience. Release bundles always rebuild
 every packaged binary from the exact source tree exercised by the gates.
@@ -122,22 +114,6 @@ while [[ $# -gt 0 ]]; do
     --skip-local-regressions|--skip-router-regression)
       SKIP_LOCAL_REGRESSIONS=1
       shift
-      ;;
-    --kagemusha-release-policy)
-      [[ $# -ge 2 ]] || {
-        echo "missing value for --kagemusha-release-policy" >&2
-        exit 1
-      }
-      KAGEMUSHA_RELEASE_POLICY="$2"
-      shift 2
-      ;;
-    --kagemusha-artifact-root)
-      [[ $# -ge 2 ]] || {
-        echo "missing value for --kagemusha-artifact-root" >&2
-        exit 1
-      }
-      KAGEMUSHA_ARTIFACT_ROOT="$2"
-      shift 2
       ;;
     -h|--help)
       usage
@@ -287,23 +263,6 @@ for field, expected_value in expected.items():
             f"canonical Taira [nts].{field} must be exactly {expected_value!r}, got {actual!r}"
         )
 PY
-
-if [[ -z "$KAGEMUSHA_RELEASE_POLICY" || ! -f "$KAGEMUSHA_RELEASE_POLICY" || -L "$KAGEMUSHA_RELEASE_POLICY" ]]; then
-  echo "an authenticated regular Kagemusha release policy is mandatory; set --kagemusha-release-policy" >&2
-  exit 1
-fi
-if [[ -z "$KAGEMUSHA_ARTIFACT_ROOT" || ! -d "$KAGEMUSHA_ARTIFACT_ROOT" || -L "$KAGEMUSHA_ARTIFACT_ROOT" ]]; then
-  echo "an authenticated Kagemusha artifact root is mandatory; set --kagemusha-artifact-root" >&2
-  exit 1
-fi
-if [[ -z "$(find "$KAGEMUSHA_ARTIFACT_ROOT" -mindepth 1 -maxdepth 2 -type f -print -quit)" ]]; then
-  echo "Kagemusha artifact root contains no release material: $KAGEMUSHA_ARTIFACT_ROOT" >&2
-  exit 1
-fi
-
-KAGEMUSHA_V4_RELEASE_POLICY_PATH="$KAGEMUSHA_RELEASE_POLICY" \
-KAGEMUSHA_V4_ARTIFACT_ROOT="$KAGEMUSHA_ARTIFACT_ROOT" \
-  "${REPO_ROOT}/ci/check_kagemusha_production_readiness.sh" promotion
 
 sha256_file() {
   local path="$1"
@@ -530,7 +489,7 @@ bundle_dir="${OUTPUT_DIR}/${bundle_name}"
 archive_path="${OUTPUT_DIR}/${bundle_name}.tar.gz"
 binary_dir="${REPO_ROOT}/target/${PROFILE}"
 
-mkdir -p "$bundle_dir/bin" "$bundle_dir/configs/soranexus" "$bundle_dir/scripts" "$bundle_dir/provenance" "$bundle_dir/kagemusha/v4"
+mkdir -p "$bundle_dir/bin" "$bundle_dir/configs/soranexus" "$bundle_dir/scripts" "$bundle_dir/provenance"
 
 if [[ $SKIP_BUILD -ne 1 ]]; then
   core_build_args=(
@@ -733,8 +692,6 @@ bundled_privacy_runner_common_args=(
   --receipt-json "${bundle_dir}/${privacy_release_json_relative_path}"
 
 assert_workspace_source_manifest_unchanged "post-bundled-runner-verification"
-cp "$KAGEMUSHA_RELEASE_POLICY" "${bundle_dir}/kagemusha/release-policy.norito"
-cp -R "$KAGEMUSHA_ARTIFACT_ROOT"/. "${bundle_dir}/kagemusha/v4/"
 if [[ "$reference_validator_source_mode" == "attested" ]]; then
   mkdir -p "${bundle_dir}/provenance/source-bundle"
   for component in provenance.json tracked.patch untracked.tar untracked.manifest.json source.manifest.json; do
@@ -982,8 +939,6 @@ payload = {
     ],
     "included_paths": [
         "configs/soranexus/taira/",
-        "kagemusha/release-policy.norito",
-        "kagemusha/v4/",
         "scripts/render_taira_validator_bundle.py",
         "scripts/render_taira_edge_nginx_conf.py",
         "scripts/taira_faucet_canary.py",
@@ -1006,11 +961,11 @@ payload = {
         "render and install the shared-edge nginx config from the same validator roster before public cutover, preferably with "
         "configs/soranexus/taira/install_taira_edge_nginx_conf.sh and local-roster [[soracloud_alias_routes]] entries for dedicated runtime aliases such as solswap-indexer.sora",
         "restart the validator with the shipped taira-irohad.service or equivalent",
-        "run configs/soranexus/taira/check_mcp_rollout.sh --public-root https://<public-torii-root> --validator-root <label>=<validator-url> (once per validator) --require-all-validators --offline-asset-definition-id <registered-scale-2-ds-asset-definition-id> --offline-expected-identity /run/secrets/taira-offline-release-identity.json --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "
+        "run configs/soranexus/taira/check_mcp_rollout.sh --public-root https://<public-torii-root> --validator-root <label>=<validator-url> (once per validator) --require-all-validators --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "
         + os.environ["GIT_HEAD"]
         + " after the node is back, so stale public edges fail before live scenario acceptance",
         "run configs/soranexus/taira/check_sorafs_rollout.sh after the node is back",
-        "run configs/soranexus/taira/verify_soraswap_rollout.sh --public-root https://<public-torii-root> --validator-root <label>=<validator-url> (once per validator) --offline-asset-definition-id <registered-scale-2-ds-asset-definition-id> --offline-expected-identity /run/secrets/taira-offline-release-identity.json --expected-git-sha "
+        "run configs/soranexus/taira/verify_soraswap_rollout.sh --public-root https://<public-torii-root> --validator-root <label>=<validator-url> (once per validator) --expected-git-sha "
         + os.environ["GIT_HEAD"]
         + " with its default local SoraSwap regressions enabled after the node is back",
     ],

@@ -55,10 +55,12 @@ only the recipient bundle and its secret-free membership witness.
 
 The receiver verifies the V4 proof pair, signed recipient leaf, finality
 origins, artifact generation, chain, asset, scale, amount, commitment, hop
-limit, and branch disjointness before persisting the branch. The unchanged V2
-acknowledgement leaf is signed only after durable receipt. Duplicate delivery
-returns the same bytes, and the sender consumes reserved parents only after the
-acknowledgement verifies.
+limit, and branch disjointness before durably persisting the branch without a
+user approval step. Before transmission, the sender atomically consumes the
+parent notes, persists the immutable payment and change, and performs the
+device-bound consume-and-sign operation. The acknowledgement is only a receipt.
+Losing it permits retransmission of identical bytes, never another spend,
+reversal, or ownership change.
 
 ## V4 redemption
 
@@ -106,25 +108,12 @@ the release attestation. Native finalization, release-directory verification,
 and consensus release-record admission all enforce the same data-model
 validator.
 
-Authenticated artifact installation and backend construction are necessary
-but not by themselves sufficient for complete node readiness. Torii carries a
-required nullable `artifact_set`: it is present only with the atomic V4
-recursive verifier pair and contains the generation, manifest, policy and
-attestation digests, issuance window, proof-pair bound, and asset scale. A null
-value requires both recursive verifier records and backend construction to be
-unavailable together with exactly one `recursive_v4_registry_unavailable` or
-`recursive_v4_registry_malformed` blocker. A present value forbids both
-registry blockers. `proof_backend_available` reports exact backend
-construction independently. `recursive_lineage_supported` is true only when
-that artifact set, distinct active Eq/Ep records, and the backend are all
-present. `ready` is true exactly when the complete blocker set is empty, and
-`recursive_lineage_unavailable` is present exactly when lineage is false.
-
-Transaction admission authenticates the exact release binding against both
-consensus records and the immutable startup catalog. Top-up and redemption
-change require a currently issuing release. Full redemption authenticates its
-parent release for the longer redemption lifetime and remains valid after that
-release's issuance window closes.
+Authenticated artifact installation and backend construction are optional,
+command-scoped inputs for online top-up and redemption. They are not node
+readiness and do not enable offline support. A command that uses a release
+authenticates its exact binding against consensus records and any configured
+local cache. Missing material rejects that command only; Iroha still starts and
+remains offline-capable.
 
 ## Public Torii surface
 
@@ -135,22 +124,12 @@ The complete first-release route set is:
 - `POST /v1/offline/redeem`
 - `GET /v1/offline/operations/{operation_id}`
 
-Readiness is a closed snapshot-bound object. It carries mandatory
-`cash_handoff_capability = "cash_handoff_v1"`, exact bridge ABI 21,
-maximum hop count, canonical asset and scale, evaluated block height/hash,
-active transfer, top-up-shield, unshield, recursive StepEq and recursive StepEp
-verifier records, the required nullable authenticated `artifact_set`, backend
-construction state, recursive-lineage support, readiness, and blockers. The V4
-recursive roles are exactly
-`kagemusha_recursive_step_eq_v4_verifier_record` with circuit
-`kagemusha-recursive-spend-step-eq-compact-layout-v5` and
-`kagemusha_recursive_step_ep_v4_verifier_record` with circuit
-`kagemusha-recursive-spend-step-ep-compact-lineage-v5`. Both use registry
-backend `halo2/ipa`, appear or disappear atomically with `artifact_set`, and
-bind the same activation window and proof-size limit as that artifact set. No
-verifier role may share a registry id, key commitment, or public-input schema
-hash with another role. Missing or malformed release material, Eq/Ep records,
-or backend construction emits typed blockers and keeps admission fail-closed.
+The legacy-named readiness route reports the universal, asset-neutral
+application protocol: `mandatory = false`,
+`cash_handoff_capability = "cash_handoff_v1"`, bridge ABI 21, maximum hop count
+8, `ready = true`, and empty `assets` and `blockers`. It takes no required query
+and never evaluates an asset, domain, dataspace, verifier catalog, or proof
+backend. Wallet/device handoff must continue without network discovery.
 
 Top-up and redemption accept no JSON body or encoded-byte wrapper. A canonical
 lowercase 64-hex `Idempotency-Key` equals the signed operation id. Identical

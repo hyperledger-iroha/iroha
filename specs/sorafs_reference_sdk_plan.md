@@ -103,12 +103,17 @@ Apple/Swift and packaged Android/JNI artifacts remain covered by the separate
 source-sealed `check_mobile_sdk_artifacts.sh` contract, which verifies every
 slice, exact ABI 21, the Android `NativeSignerBridge` JNI contract revision,
 symbols, hashes, and source identity; they are not represented as host-manifest
-lanes.
+lanes. Swift package admission also requires the XCFramework's embedded
+`NoritoBridge.artifacts.json` to declare exact ABI 21, and the runtime loader
+rejects a parsed manifest whose ABI is missing or differs from the binary
+identifier's required ABI before accepting its hash.
 
 These gates deliberately reject the repository's current dirty-source Node
-artifact. They do not constitute a rebuilt release inventory. Clean native
-artifacts still must be produced and exercised for Linux x86_64, Linux aarch64,
-macOS x86_64, macOS aarch64, and Windows x86_64 before this lane can close.
+artifact and the ignored local Swift XCFramework, which lacks the required
+embedded ABI metadata while its sibling manifest declares ABI 19. They do not
+constitute a rebuilt release inventory. Clean native artifacts still must be
+produced and exercised for Linux x86_64, Linux aarch64, macOS x86_64, macOS
+aarch64, and Windows x86_64 before this lane can close.
 
 The C# NuGet source path now consumes exactly those five target-host
 `iroha.native-sdk-abi21-artifact.v1` manifests, maps them to `linux-x64`,
@@ -121,6 +126,12 @@ entry, and the workflow runs a `PackageReference` consumer on each matching
 native host. This closes the C# packaging implementation gap only; it does not
 claim that a clean five-host run, publication canary, SBOM, or provenance record
 has been collected.
+
+CocoaPods distribution remains open: the lint gate now fails when the `pod`
+CLI is unavailable, but the current podspec does not yet define an
+authenticated vendored-XCFramework delivery path. Do not treat a local lint or
+the Git tag alone as published native Swift evidence until that archive design,
+install smoke, and signed artifact provenance are implemented.
 
 The existing `sorafs_manifest` crate exposes `ValidationOutcomeV1`,
 `validate_provider_advert_bytes`, `validate_provider_admission_envelope_bytes`,

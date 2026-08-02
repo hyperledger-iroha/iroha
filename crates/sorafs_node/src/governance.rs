@@ -12854,12 +12854,14 @@ mod tests {
         GovernanceDagRuntimeProviderQualificationV1::new(1, TEST_FENCED_HEAD_READER_POLICY_DIGEST)
     }
 
+    type TestFencedPublications =
+        BTreeMap<([u8; 32], [u8; 16]), ([u8; 32], [u8; 32], FencedTransparencyTargetHeadV1)>;
+
     #[derive(Debug, Default)]
     struct TestFencedPublisherState {
         head: Option<FencedTransparencyTargetHeadV1>,
         fencing_floor: u64,
-        publications:
-            BTreeMap<([u8; 32], [u8; 16]), ([u8; 32], [u8; 32], FencedTransparencyTargetHeadV1)>,
+        publications: TestFencedPublications,
         receipts: BTreeMap<
             [u8; 32],
             (
@@ -15158,10 +15160,12 @@ mod tests {
             validate_runtime_dag_producer_file_lengths(1, 1, mutable_limit + 1).is_err(),
             "index limit + 1 must fail before sealing"
         );
-        assert!(
-            GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES
-                > GOVERNANCE_RUNTIME_DAG_SOURCE_PAYLOAD_MAX_BYTES
-        );
+        const {
+            assert!(
+                GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES
+                    > GOVERNANCE_RUNTIME_DAG_SOURCE_PAYLOAD_MAX_BYTES
+            );
+        }
         validate_runtime_dag_producer_entry_count(
             GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1,
             u64::try_from(GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1).expect("entry cap fits u64"),

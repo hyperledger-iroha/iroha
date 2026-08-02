@@ -119,6 +119,7 @@ enum NoritoBridgeLoader {
 
     private struct ArtifactManifest {
         let version: String
+        let bridgeAbiVersion: UInt32?
         let hashes: [String: String]
     }
 
@@ -291,6 +292,14 @@ enum NoritoBridgeLoader {
         if let version = manifest?.version, version != expectedVersion {
             return .versionMismatch(path: path, expected: expectedVersion, actual: version)
         }
+        if let manifest,
+           manifest.bridgeAbiVersion != expectedBridgeAbiVersion(for: identifier) {
+            return .abiMismatch(
+                path: path,
+                expected: expectedBridgeAbiVersion(for: identifier),
+                actual: manifest.bridgeAbiVersion
+            )
+        }
         guard let expectedHash = manifest?.hashes[identifier] ?? pinnedHashes[identifier] else {
             return .pathDenied(path: path)
         }
@@ -369,7 +378,11 @@ enum NoritoBridgeLoader {
             return nil
         }
         let hashes = json["hashes"] as? [String: String] ?? [:]
-        return ArtifactManifest(version: version, hashes: hashes)
+        return ArtifactManifest(
+            version: version,
+            bridgeAbiVersion: json["native_bridge_abi_version"] as? UInt32,
+            hashes: hashes
+        )
     }
 
     private static func sha256(url: URL) -> String? {

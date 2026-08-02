@@ -164,6 +164,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let manifest = """
         {
           "version": "\(NoritoBridgeLoader.expectedVersion)",
+          "native_bridge_abi_version": 21,
           "hashes": {
             "\(original.identifier)": "\(hashHex)"
           }
@@ -173,6 +174,40 @@ final class NativeBridgeLoaderTests: XCTestCase {
 
         let status = NoritoBridgeLoader.validateForTests(at: bridgeURL.path, allowUntrustedLocation: true)
         XCTAssertEqual(status, .valid(path: bridgeURL.path, identifier: original.identifier))
+    }
+
+    func testArtifactManifestRejectsStaleAbiNineteenBeforeHashAcceptance() throws {
+        let identifier = NoritoBridgeLoader.currentIdentifier()
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let bridgeURL = stagedBridgeURL(root: tempDir, identifier: identifier)
+        try FileManager.default.createDirectory(
+            at: bridgeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let bytes = Data("stale-abi-19-bridge".utf8)
+        try bytes.write(to: bridgeURL, options: .atomic)
+        let hashHex = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let manifestURL = tempDir.appendingPathComponent("NoritoBridge.artifacts.json")
+        let manifest = """
+        {
+          "version": "\(NoritoBridgeLoader.expectedVersion)",
+          "native_bridge_abi_version": 19,
+          "hashes": {
+            "\(identifier)": "\(hashHex)"
+          }
+        }
+        """
+        try manifest.write(to: manifestURL, atomically: true, encoding: .utf8)
+
+        let status = NoritoBridgeLoader.validateForTests(
+            at: bridgeURL.path,
+            allowUntrustedLocation: true
+        )
+        XCTAssertEqual(
+            status,
+            .abiMismatch(path: bridgeURL.path, expected: 21, actual: 19)
+        )
     }
 
     func testArtifactManifestAtDistRootOverridesPinnedHashForXcframeworkLayout() throws {
@@ -199,6 +234,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let manifest = """
         {
           "version": "\(NoritoBridgeLoader.expectedVersion)",
+          "native_bridge_abi_version": 21,
           "hashes": {
             "\(original.identifier)": "\(hashHex)"
           }

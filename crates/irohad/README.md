@@ -65,7 +65,7 @@ config selector that dynamically loads executable provider code.
 The stock `irohad` binary does not embed deployment providers. With the default
 empty binding catalog it starts without external adapters. With a non-empty
 catalog it uses the stock local-broker client and
-fail before subsystem startup if the broker or any exact requested role is
+fails before subsystem startup if the broker or any exact requested role is
 missing, substituted, stale, or unsupported.
 
 There are two supported injection boundaries. A deployment-owned embedding

@@ -12061,12 +12061,10 @@ mod tests {
                     else {
                         return None;
                     };
-                    (outcome.binding == latest.binding).then(|| {
-                        (
-                            latest.binding.request_context_digest,
-                            delivery.entry.event_id,
-                        )
-                    })
+                    (outcome.binding == latest.binding).then_some((
+                        latest.binding.request_context_digest,
+                        delivery.entry.event_id,
+                    ))
                 })
                 .expect("latest pending gateway event");
             let earlier = state

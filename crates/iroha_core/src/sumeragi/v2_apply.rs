@@ -28,7 +28,7 @@ use iroha_data_model::{
     },
     events::EventBox,
     merge::MergeLedgerEntry,
-    nexus::LaneRelayEnvelope,
+    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     transaction::SignedTransaction,
 };
 use iroha_primitives::time::TimeSource;
@@ -41,9 +41,9 @@ use super::{
     v2::VerifiedHeightContext,
     v2_body_store::{BodyValidationError, V2BodyStore, ValidatedBodyReceipt},
     v2_core::{
-        CanonicalIdentityProjection, EventTag, IDENTITY_DOMAIN_CONTEXT,
-        IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_SUBJECT,
-        IDENTITY_KIND_BLOCK_HEADER, IDENTITY_KIND_CANONICAL_PAYLOAD,
+        CanonicalIdentityProjection, CheckedProductionTransition, EventTag,
+        IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD,
+        IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_BLOCK_HEADER, IDENTITY_KIND_CANONICAL_PAYLOAD,
         IDENTITY_KIND_DURABLE_BODY_FRAME, IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
         IDENTITY_KIND_EXECUTION_COMMITMENT, IDENTITY_KIND_FINALITY_ARTIFACT,
         IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_QUORUM_CERTIFICATE,
@@ -72,17 +72,19 @@ use crate::{
         AutonomousLaneReservationEvidenceError, AutonomousLaneReservationEvidenceV1,
         AutonomousLaneSlotRetirementV1, CommitManifest, HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
         HistoricalAutonomousLaneRecoveryPersistOutcome, HistoricalAutonomousLaneRecoveryRecordV1,
-        Kura, KuraV2CommitReceipt,
+        Kura, KuraV2CommitReceipt, NativeAmxParticipantApplicationEvidenceByteBudgetError,
     },
     lane_consensus::{LaneExecutablePayloadV1, deterministic_lane_author},
     queue::{
         LaneQueueReservationError, LaneQueueReservationGroupIdentityV1,
         LaneQueueReservationReconciliationGroupV1, LaneQueueReservationReconciliationSnapshotV1,
-        LaneQueueReservationReleaseBarrierV3, Queue, RoutingDecision,
+        LaneQueueReservationReleaseBarrierV3, Queue, QueueLaneRetirementObserver, RoutingDecision,
         canonical_lane_queue_reservation_group_identity_projection,
         lane_queue_reservation_group_binding_from_ordered_keys,
     },
-    state::{MergeLedgerCommitError, MergeLedgerPublicationMode, State},
+    state::{
+        MergeLedgerCommitError, MergeLedgerPublicationMode, State, StateBlockCommitAuthorization,
+    },
 };
 
 /// Fail-closed error while consuming or recovering durable lane reservations.
@@ -1883,21 +1885,6 @@ pub(crate) fn plan_lane_reservation_ownership(
                 active_height: active_context.height,
             });
         }
-        if state.lane_incarnation_at_height(
-            input.group.identity.lane_id,
-            input.group.identity.proposal_height,
-        ) != Some(input.group.identity.lane_incarnation)
-            || crate::state::nexus_active_lane_dataspace_at_height(
-                input.group.identity.lane_id,
-                &nexus,
-                input.group.identity.proposal_height,
-            ) != Some(input.group.identity.dataspace_id)
-        {
-            return Err(V2ReservationLifecycleError::StaleReservationContext {
-                lane_id: input.group.identity.lane_id,
-                proposal_height: input.group.identity.proposal_height,
-            });
-        }
         let committed_count = input
             .owned_keys
             .iter()
@@ -1917,6 +1904,29 @@ pub(crate) fn plan_lane_reservation_ownership(
                     proposal_height: input.group.identity.proposal_height,
                 });
             }
+            // Once State proves every observed owner committed, lifecycle
+            // eligibility no longer controls Queue ownership. The exact
+            // indexed MergeLedger carrier below independently reconstructs
+            // and authenticates the complete ordered group, including its
+            // historical route and incarnation. This lets a restart finish
+            // Commit/ForgetCommit after same-ID lane recreation without ever
+            // admitting the old reservation into the fresh incarnation.
+            continue;
+        }
+        if state.lane_incarnation_at_height(
+            input.group.identity.lane_id,
+            input.group.identity.proposal_height,
+        ) != Some(input.group.identity.lane_incarnation)
+            || crate::state::nexus_active_lane_dataspace_at_height(
+                input.group.identity.lane_id,
+                &nexus,
+                input.group.identity.proposal_height,
+            ) != Some(input.group.identity.dataspace_id)
+        {
+            return Err(V2ReservationLifecycleError::StaleReservationContext {
+                lane_id: input.group.identity.lane_id,
+                proposal_height: input.group.identity.proposal_height,
+            });
         }
     }
     for barrier in &commit_barriers {
@@ -1963,34 +1973,50 @@ pub(crate) fn plan_lane_reservation_ownership(
             .collect::<Result<Vec<_>, _>>()?;
         let carrier_height =
             exact_committed_carrier_height_for_group(&observed_group, &observed_heights)?;
-        let carrier_entry = kura
-            .get_merge_entry_by_carrier_height(carrier_height)?
-            .ok_or_else(|| V2ReservationLifecycleError::MissingCommittedBinding {
-                transaction_hash: input.owned_keys[0].signed_transaction_hash,
-            })?;
-        let carrier_reservations =
-            crate::state::certified_merge_queue_reservations(&carrier_entry)?;
-        let matching_positions = carrier_reservations
-            .iter()
-            .enumerate()
-            .filter_map(|(index, (_, key))| {
-                reservation_key_matches_group(key, &input.group.identity).then_some(index)
-            })
-            .collect::<Vec<_>>();
-        if matching_positions.is_empty()
-            || matching_positions
-                .windows(2)
-                .any(|positions| positions[1] != positions[0].saturating_add(1))
-            || matching_positions.len() > crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS
+        // Direct transaction membership is not canonical block history. The
+        // indexed carrier is admissible only when State committed that exact
+        // Kura block at the same height.
+        let state_carrier_hash = u64::try_from(carrier_height.get())
+            .ok()
+            .and_then(|height| state.committed_block_hash_at_height(height));
+        if state.committed_height() < carrier_height.get()
+            || state_carrier_hash.is_none()
+            || state_carrier_hash != kura.get_durable_block_hash(carrier_height)
         {
             return Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
                 lane_id: input.group.identity.lane_id,
                 proposal_height: input.group.identity.proposal_height,
             });
         }
-        let full_keys = matching_positions
+        let carrier_entry = kura
+            .get_merge_entry_by_carrier_height(carrier_height)?
+            .ok_or_else(|| V2ReservationLifecycleError::MissingCommittedBinding {
+                transaction_hash: input.owned_keys[0].signed_transaction_hash,
+            })?;
+        let carrier_groups =
+            crate::state::certified_merge_queue_reservation_groups(&carrier_entry)?;
+        let mut matching_groups = carrier_groups.iter().filter(|group| {
+            group
+                .first()
+                .is_some_and(|(_, key)| reservation_key_matches_group(key, &input.group.identity))
+        });
+        let Some(matching_group) = matching_groups.next() else {
+            return Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
+                lane_id: input.group.identity.lane_id,
+                proposal_height: input.group.identity.proposal_height,
+            });
+        };
+        if matching_groups.next().is_some()
+            || matching_group.len() > crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS
+        {
+            return Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
+                lane_id: input.group.identity.lane_id,
+                proposal_height: input.group.identity.proposal_height,
+            });
+        }
+        let full_keys = matching_group
             .iter()
-            .map(|index| carrier_reservations[*index].1)
+            .map(|(_, key)| *key)
             .collect::<Vec<_>>();
         let full_by_transaction = full_keys
             .iter()
@@ -2010,8 +2036,10 @@ pub(crate) fn plan_lane_reservation_ownership(
             }
         }
         for key in &full_keys {
-            if !state.has_committed_transaction(key.signed_transaction_hash) {
-                return Err(V2ReservationLifecycleError::PartialCommittedGroup {
+            if state.committed_transaction_height(&key.signed_transaction_hash)
+                != Some(carrier_height)
+            {
+                return Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
                     lane_id: input.group.identity.lane_id,
                     proposal_height: input.group.identity.proposal_height,
                 });
@@ -3113,6 +3141,132 @@ impl DurableApplicationEvidence {
     }
 }
 
+#[derive(Debug)]
+struct CheckedCarrierApplication {
+    checked: CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>,
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+}
+
+/// Move-only authorization for every autonomous lane carried by one canonical block.
+///
+/// The complete compact merge reference and proposal identity are retained with the
+/// checked transition tokens. This prevents an empty or unrelated token collection
+/// from authorizing a block that actually carries an autonomous execution batch.
+#[derive(Debug)]
+struct CheckedCarrierApplications {
+    carrier_block_hash: HashOf<BlockHeader>,
+    execution_reference: Option<CertifiedMergeLedgerReference>,
+    expected_lane_count: usize,
+    applications: Vec<CheckedCarrierApplication>,
+}
+
+impl CheckedCarrierApplications {
+    fn for_block(block: &SignedBlock) -> Self {
+        Self {
+            carrier_block_hash: block.hash(),
+            execution_reference: None,
+            expected_lane_count: 0,
+            applications: Vec::new(),
+        }
+    }
+
+    fn bind_execution_batch(
+        &mut self,
+        reference: &CertifiedMergeLedgerReference,
+        lane_count: usize,
+    ) -> Result<(), V2ApplyError> {
+        if self.execution_reference.is_some()
+            || !self.applications.is_empty()
+            || reference.execution_batch_hash.is_none()
+            || lane_count == 0
+        {
+            return Err(V2ApplyError::Validation(
+                "autonomous carrier checked-application batch binding is invalid".to_owned(),
+            ));
+        }
+        self.execution_reference = Some(reference.clone());
+        self.expected_lane_count = lane_count;
+        Ok(())
+    }
+
+    fn push(
+        &mut self,
+        checked: CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>,
+        projection: ProductionInFlightFirstReleaseTransitionProjection,
+    ) -> Result<(), V2ApplyError> {
+        if self.execution_reference.is_none() || self.applications.len() >= self.expected_lane_count
+        {
+            return Err(V2ApplyError::Validation(
+                "autonomous carrier checked-application cardinality is invalid".to_owned(),
+            ));
+        }
+        self.applications.push(CheckedCarrierApplication {
+            checked,
+            projection,
+        });
+        Ok(())
+    }
+
+    fn consume_for_state_commit(
+        self,
+        carrier_block_hash: HashOf<BlockHeader>,
+        staged_merge_entry: Option<&MergeLedgerEntry>,
+    ) -> Result<(), &'static str> {
+        if carrier_block_hash != self.carrier_block_hash {
+            return Err("checked ApplyCarrier block identity changed before State commit");
+        }
+        let committed_execution_reference = staged_merge_entry.and_then(|entry| {
+            entry
+                .execution_batch
+                .as_ref()
+                .map(|batch| (CertifiedMergeLedgerReference::new(entry), batch.lanes.len()))
+        });
+        match (
+            self.execution_reference.as_ref(),
+            committed_execution_reference.as_ref(),
+        ) {
+            (None, None) if self.expected_lane_count == 0 && self.applications.is_empty() => {
+                return Ok(());
+            }
+            (Some(expected), Some((actual, actual_lane_count)))
+                if expected == actual
+                    && self.expected_lane_count > 0
+                    && self.expected_lane_count == *actual_lane_count
+                    && self.applications.len() == self.expected_lane_count => {}
+            _ => {
+                return Err(
+                    "checked ApplyCarrier batch identity or cardinality changed before State commit",
+                );
+            }
+        }
+        for CheckedCarrierApplication {
+            checked,
+            projection,
+        } in self.applications
+        {
+            if checked.into_projection() != projection {
+                return Err("checked ApplyCarrier projection changed before State commit");
+            }
+        }
+        Ok(())
+    }
+}
+
+impl StateBlockCommitAuthorization for CheckedCarrierApplications {
+    fn consume_for_state_commit(
+        self: Box<Self>,
+        carrier_block_hash: HashOf<BlockHeader>,
+        staged_merge_entry: Option<&MergeLedgerEntry>,
+    ) -> Result<(), String> {
+        CheckedCarrierApplications::consume_for_state_commit(
+            *self,
+            carrier_block_hash,
+            staged_merge_entry,
+        )
+        .map_err(str::to_owned)
+    }
+}
+
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {
     state: Arc<State>,
@@ -3138,6 +3292,20 @@ pub(crate) struct V2ApplyService {
 }
 
 impl V2ApplyService {
+    fn classify_native_amx_evidence_byte_budget_error(
+        error: NativeAmxParticipantApplicationEvidenceByteBudgetError,
+    ) -> V2ApplyError {
+        match &error {
+            NativeAmxParticipantApplicationEvidenceByteBudgetError::ArtifactConstruction
+            | NativeAmxParticipantApplicationEvidenceByteBudgetError::ArtifactFraming(_) => {
+                V2ApplyError::ExecutionCommitment(error.to_string())
+            }
+            NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(_) => {
+                V2ApplyError::Validation(error.to_string())
+            }
+        }
+    }
+
     fn classify_candidate_validation_error(
         merge_reference: Option<&CertifiedMergeLedgerReference>,
         failed_block: &SignedBlock,
@@ -3394,7 +3562,7 @@ impl V2ApplyService {
         // reference is part of the finality-authenticated proposal; its exact
         // full entry and source bundles are reloaded and revalidated here
         // before any token is allowed to span the WSV commit boundary.
-        let mut checked_carrier_applications = Vec::new();
+        let mut checked_carrier_applications = CheckedCarrierApplications::for_block(&body);
         if state_height < height.get()
             && let Some(reference) = body
                 .execution_context()
@@ -3427,6 +3595,8 @@ impl V2ApplyService {
                     "autonomous merge execution batch identity or lane set is invalid".to_owned(),
                 ));
             }
+            checked_carrier_applications
+                .bind_execution_batch(reference, execution_batch.lanes.len())?;
             let chain_hash = Hash::new(self.chain_id.as_str().as_bytes());
             for lane in &execution_batch.lanes {
                 let authenticated_bundle = Kura::decode_autonomous_lane_merge_bundle(
@@ -3669,7 +3839,7 @@ impl V2ApplyService {
                                 .to_owned(),
                         )
                     })?;
-                checked_carrier_applications.push((checked, projection));
+                checked_carrier_applications.push(checked, projection)?;
             }
         }
 
@@ -3680,15 +3850,8 @@ impl V2ApplyService {
                 true,
                 task.validated_receipt().execution_commitment(),
                 &artifact,
+                checked_carrier_applications,
             )?;
-            for (checked, projection) in checked_carrier_applications {
-                if checked.into_projection() != projection {
-                    return Err(V2ApplyError::committed_recovery_required(
-                        "canonical WSV carrier refinement authorization",
-                        &"checked ApplyCarrier projection changed across State commit",
-                    ));
-                }
-            }
             self.kura
                 .get_block(height)
                 .ok_or(V2ApplyError::StateAheadOfKura)?
@@ -3922,6 +4085,45 @@ impl V2ApplyService {
         Ok(())
     }
 
+    fn validate_prospective_autoscale_retirement_queue(
+        &self,
+        block: &SignedBlock,
+        state_block: &crate::state::StateBlock<'_>,
+    ) -> Result<(), V2ApplyError> {
+        let queue_retirement_observer = self.queue.lock_lane_retirement_observer();
+        let _lifecycle_guard = self.state.lock_lane_lifecycle_work_admission();
+        let Some((lane_id, dataspace_id, lane_incarnation)) = state_block
+            .prospective_autoscale_retirement_binding(block)
+            .map_err(|error| V2ApplyError::Validation(error.to_string()))?
+        else {
+            return Ok(());
+        };
+        Self::validate_autoscale_retirement_queue_binding(
+            &queue_retirement_observer,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        )
+    }
+
+    fn validate_autoscale_retirement_queue_binding(
+        queue_retirement_observer: &QueueLaneRetirementObserver<'_>,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<(), V2ApplyError> {
+        if queue_retirement_observer.lane_has_pending_work(lane_id, dataspace_id, lane_incarnation)
+        {
+            return Err(V2ApplyError::Validation(format!(
+                "autoscale retirement for lane {} dataspace {} incarnation {} is blocked by local Queue ownership",
+                lane_id.as_u32(),
+                dataspace_id.as_u64(),
+                hex::encode(lane_incarnation.as_ref()),
+            )));
+        }
+        Ok(())
+    }
+
     /// Run the exact production proposal validator without applying its state
     /// overlay.
     ///
@@ -3962,6 +4164,7 @@ impl V2ApplyService {
                 error.as_ref(),
             )
         })?;
+        self.validate_prospective_autoscale_retirement_queue(valid.as_ref(), &state_block)?;
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
@@ -3970,12 +4173,20 @@ impl V2ApplyService {
                 valid.as_ref(),
             )
             .map_err(V2ApplyError::ExecutionCommitment)?;
-        crate::sumeragi::exec::execution_commitment_from_validated_block(
-            &witness,
-            &native_amx_manifest,
-            valid.as_ref(),
-        )
-        .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))
+        let execution_commitment =
+            crate::sumeragi::exec::execution_commitment_from_validated_block(
+                &witness,
+                &native_amx_manifest,
+                valid.as_ref(),
+            )
+            .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))?;
+        self.kura
+            .validate_native_amx_participant_application_evidence_byte_budget(
+                &native_amx_manifest,
+                None,
+            )
+            .map_err(Self::classify_native_amx_evidence_byte_budget_error)?;
+        Ok(execution_commitment)
     }
 
     fn validate_and_apply(
@@ -3985,6 +4196,7 @@ impl V2ApplyService {
         store_block: bool,
         expected_execution_commitment: wire::ExecutionCommitment,
         artifact: &wire::finality::V2FinalityArtifact,
+        checked_carrier_applications: CheckedCarrierApplications,
     ) -> Result<(), V2ApplyError> {
         if !body.is_resultless_proposal() {
             return Err(V2ApplyError::ResultBearingProposal);
@@ -4017,6 +4229,7 @@ impl V2ApplyService {
                     error.as_ref(),
                 )
             })?;
+        self.validate_prospective_autoscale_retirement_queue(valid_block.as_ref(), &state_block)?;
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
@@ -4035,6 +4248,12 @@ impl V2ApplyService {
         if actual_execution_commitment != expected_execution_commitment {
             return Err(V2ApplyError::ExecutionCommitmentMismatch);
         }
+        self.kura
+            .validate_native_amx_participant_application_evidence_byte_budget(
+                &native_amx_manifest,
+                Some(HashOf::new(artifact)),
+            )
+            .map_err(Self::classify_native_amx_evidence_byte_budget_error)?;
         // Persist the witness-derived leaf/path projection before either the
         // canonical block log or WSV advances. Promotion is deliberately
         // deferred until Kura has durably persisted the exact finality
@@ -4218,7 +4437,38 @@ impl V2ApplyService {
                 return Err(V2ApplyError::InjectedCrashAfterReputationArchiveCapture);
             }
         }
-        state_block.commit().map_err(|error| {
+        let carries_scale_in = state_block
+            .pending_autoscale_retirement_binding()
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "autoscale retirement identity projection",
+                    &error,
+                )
+            })?
+            .is_some();
+        let state_commit_authorization: Box<dyn StateBlockCommitAuthorization> =
+            Box::new(checked_carrier_applications);
+        let commit_result = if carries_scale_in {
+            // Queue's reservation-transition fence must precede State's commit
+            // and lane-lifecycle fences. Ordinary blocks do not acquire it.
+            let queue_retirement_observer = self.queue.lock_lane_retirement_observer();
+            let mut autoscale_retirement_queue_veto = |lane_id, dataspace_id, lane_incarnation| {
+                Self::validate_autoscale_retirement_queue_binding(
+                    &queue_retirement_observer,
+                    lane_id,
+                    dataspace_id,
+                    lane_incarnation,
+                )
+                .map_err(|error| error.to_string())
+            };
+            state_block.commit_with_state_commit_authorization_and_autoscale_retirement_queue_veto(
+                state_commit_authorization,
+                &mut autoscale_retirement_queue_veto,
+            )
+        } else {
+            state_block.commit_with_state_commit_authorization(state_commit_authorization)
+        };
+        commit_result.map_err(|error| {
             V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
         })?;
         #[cfg(test)]

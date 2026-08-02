@@ -3002,6 +3002,20 @@ impl Kura {
         )
     }
 
+    /// Override the shared pending-control byte bound before a test Kura is shared.
+    ///
+    /// This focused hook drives the exact production candidate-admission field below
+    /// the runtime configuration floor. It deliberately keeps the default, conservative
+    /// Native evidence prune-intent geometry because callers must not exercise Native evidence
+    /// persistence or pruning after installing an otherwise invalid runtime bound.
+    #[cfg(test)]
+    pub(crate) fn set_pending_control_sidecar_validation_bytes_for_testing(
+        &mut self,
+        aggregate_bytes: NonZeroUsize,
+    ) {
+        self.pending_control_sidecar_limits.aggregate_bytes = aggregate_bytes.get();
+    }
+
     /// Create an isolated test Kura whose canonical primary and lane segments match `lane_config`.
     ///
     /// Unlike reconciling a default test Kura after construction, this opens the
@@ -4832,6 +4846,104 @@ impl Kura {
                 })
     }
 
+    fn validate_native_amx_participant_application_pair_byte_lengths(
+        &self,
+        manifest_bytes: usize,
+        receipt_bytes: usize,
+        standalone_limit: u64,
+    ) -> std::result::Result<(), NativeAmxParticipantApplicationEvidenceByteBudgetError> {
+        if manifest_bytes == 0 {
+            return Err(
+                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
+                    "Native AMX participant manifest framing is empty".to_owned(),
+                ),
+            );
+        }
+        if receipt_bytes == 0 {
+            return Err(
+                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
+                    "Native AMX participant receipt framing is empty".to_owned(),
+                ),
+            );
+        }
+        let manifest_bytes_u64 = u64::try_from(manifest_bytes).map_err(|_| {
+            NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
+                "Native AMX participant manifest length does not fit u64".to_owned(),
+            )
+        })?;
+        let receipt_bytes_u64 = u64::try_from(receipt_bytes).map_err(|_| {
+            NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
+                "Native AMX participant receipt length does not fit u64".to_owned(),
+            )
+        })?;
+        if manifest_bytes_u64 > standalone_limit {
+            return Err(
+                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(format!(
+                    "Native AMX participant manifest is {manifest_bytes_u64} bytes, exceeding the standalone payload budget of {standalone_limit} bytes"
+                )),
+            );
+        }
+        if receipt_bytes_u64 > standalone_limit {
+            return Err(
+                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(format!(
+                    "Native AMX participant receipt is {receipt_bytes_u64} bytes, exceeding the standalone payload budget of {standalone_limit} bytes"
+                )),
+            );
+        }
+        let pair_bytes = checked_native_amx_participant_application_pair_bytes(
+            manifest_bytes_u64,
+            receipt_bytes_u64,
+        )?;
+        if !self.native_amx_participant_evidence_pair_fits_stable_bytes(
+            manifest_bytes,
+            receipt_bytes,
+        ) {
+            return Err(
+                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(format!(
+                    "Native AMX participant manifest/receipt pair is {pair_bytes} bytes, exceeding the configured shared stable aggregate byte bound of {} bytes",
+                    self.native_amx_participant_evidence_file_bytes()
+                )),
+            );
+        }
+        Ok(())
+    }
+
+    /// Validate the exact framed Native AMX evidence pair for every route
+    /// without locks, filesystem access, inventory reads, or telemetry.
+    ///
+    /// Candidate validation supplies `None`, which selects a typed fixed-width
+    /// finality placeholder. Decided-block validation supplies the actual
+    /// durable finality hash and rechecks the same byte geometry before any
+    /// staging or persistence begins.
+    pub(crate) fn validate_native_amx_participant_application_evidence_byte_budget(
+        &self,
+        manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,
+        finality_artifact_hash: Option<HashOf<V2FinalityArtifact>>,
+    ) -> std::result::Result<(), NativeAmxParticipantApplicationEvidenceByteBudgetError> {
+        let finality_artifact_hash = finality_artifact_hash
+            .unwrap_or_else(native_amx_participant_application_finality_placeholder_hash);
+        let artifacts = native_amx_participant_application_artifacts(
+            manifest,
+            finality_artifact_hash,
+        )
+        .ok_or(
+            NativeAmxParticipantApplicationEvidenceByteBudgetError::ArtifactConstruction,
+        )?;
+        for (manifest, receipt) in artifacts {
+            let (manifest_bytes, receipt_bytes) =
+                native_amx_participant_application_pair_framed_bytes(&manifest, &receipt)
+                    .map_err(
+                        NativeAmxParticipantApplicationEvidenceByteBudgetError::ArtifactFraming,
+                    )?;
+            self.validate_native_amx_participant_application_pair_byte_lengths(
+                manifest_bytes.len(),
+                receipt_bytes.len(),
+                STRICT_INIT_MAX_BLOCK_BYTES,
+            )?;
+        }
+        Ok(())
+    }
+
     fn native_amx_evidence_stable_payload_bytes(
         inventory: &NativeAmxEvidenceInventory,
     ) -> Option<u64> {
@@ -6020,6 +6132,17 @@ impl Kura {
         false
     }
 
+    fn sidecar_directory_binding_unchanged(
+        left: &std::fs::Metadata,
+        right: &std::fs::Metadata,
+    ) -> bool {
+        // Directory mtime/ctime describe mutations to child entries, not replacement of the
+        // directory itself. Progress sidecars are published concurrently, so descriptor binding
+        // must compare object identity only. Stable inventory scans deliberately retain the
+        // stronger timestamp comparison in `sidecar_directory_metadata_unchanged`.
+        Self::sidecar_metadata_same_object(left, right)
+    }
+
     #[cfg(windows)]
     fn sidecar_file_metadata_unchanged(
         left: &std::fs::Metadata,
@@ -6153,7 +6276,7 @@ impl Kura {
             .map_err(|error| Error::IO(error, expected_directory.to_path_buf()))?;
         if after.file_type().is_symlink()
             || !after.is_dir()
-            || !Self::sidecar_directory_metadata_unchanged(&before, &after)
+            || !Self::sidecar_directory_binding_unchanged(&before, &after)
         {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -7218,10 +7341,10 @@ impl Kura {
             .map_err(|error| Error::IO(error, expected_path.to_path_buf()))?;
         let after = Self::canonical_sidecar_directory_for(store_root, expected_path)?;
         if !opened.is_dir()
-            || !Self::sidecar_directory_metadata_unchanged(&metadata, &opened)
+            || !Self::sidecar_directory_binding_unchanged(&metadata, &opened)
             || !after.as_ref().is_some_and(|(after_path, after_metadata)| {
                 *after_path == canonical_path
-                    && Self::sidecar_directory_metadata_unchanged(&metadata, after_metadata)
+                    && Self::sidecar_directory_binding_unchanged(&metadata, after_metadata)
             })
         {
             return Err(Error::IO(
@@ -7526,11 +7649,8 @@ impl Kura {
                         return false;
                     }
                 }
-                let opened_matches = if index == 0 {
-                    Self::sidecar_directory_metadata_unchanged(&directory.metadata, &opened)
-                } else {
-                    Self::sidecar_metadata_same_object(&directory.metadata, &opened)
-                };
+                let opened_matches =
+                    Self::sidecar_directory_binding_unchanged(&directory.metadata, &opened);
                 if !opened.is_dir() || !opened_matches {
                     return false;
                 }
@@ -7538,14 +7658,10 @@ impl Kura {
                     .ok()
                     .flatten()
                     .is_some_and(|(canonical_path, metadata)| {
-                        let path_matches = if index == 0 {
-                            Self::sidecar_directory_metadata_unchanged(
-                                &directory.metadata,
-                                &metadata,
-                            )
-                        } else {
-                            Self::sidecar_metadata_same_object(&directory.metadata, &metadata)
-                        };
+                        let path_matches = Self::sidecar_directory_binding_unchanged(
+                            &directory.metadata,
+                            &metadata,
+                        );
                         canonical_path == directory.canonical_path && path_matches
                     })
             })
@@ -22667,12 +22783,12 @@ impl Kura {
     }
 }
 
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+#[cfg(test)]
 impl Kura {
     /// Inject a semantically valid selected-keeper observation in focused
     /// storage tests which do not own the keeper private key.  Production
     /// ingress can only use [`Self::admit_kura_replica_advert`].
-    fn record_block_replica_advert(
+    pub(crate) fn record_block_replica_advert(
         &self,
         peer: PeerId,
         height: u64,
@@ -22710,7 +22826,10 @@ impl Kura {
                 },
             );
     }
+}
 
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+impl Kura {
     /// Persist a benchmark block directly into the canonical block store.
     ///
     /// # Errors
@@ -25583,6 +25702,26 @@ pub(crate) struct NativeAmxParticipantApplicationReceiptArtifact {
     pub results: Vec<TransactionResult>,
 }
 
+type NativeAmxParticipantApplicationArtifactPair = (
+    NativeAmxParticipantApplicationManifestArtifactV1,
+    NativeAmxParticipantApplicationReceiptArtifact,
+);
+
+/// Side-effect-free failure while projecting the exact durable Native AMX
+/// artifact bytes which a candidate would require.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum NativeAmxParticipantApplicationEvidenceByteBudgetError {
+    /// The canonical manifest could not supply one proof per route.
+    #[error("Native AMX participant evidence artifact construction failed")]
+    ArtifactConstruction,
+    /// Exact Norito framing failed before any persistence boundary.
+    #[error("Native AMX participant evidence artifact framing failed: {0}")]
+    ArtifactFraming(#[source] norito::Error),
+    /// The exact framed pair violates a configured or hard byte bound.
+    #[error("{0}")]
+    Budget(String),
+}
+
 /// Bounded route/incarnation pointer to the latest Native AMX application receipt.
 ///
 /// The immutable per-height manifest and receipt files remain authoritative.
@@ -25642,10 +25781,7 @@ struct NativeAmxParticipantApplicationEvidencePlan {
     finality_artifact_hash: HashOf<V2FinalityArtifact>,
     manifest_root: Hash,
     manifest_leaf_count: u32,
-    artifacts: Vec<(
-        NativeAmxParticipantApplicationManifestArtifactV1,
-        NativeAmxParticipantApplicationReceiptArtifact,
-    )>,
+    artifacts: Vec<NativeAmxParticipantApplicationArtifactPair>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25809,6 +25945,60 @@ impl NativeAmxParticipantApplicationReceiptArtifact {
     }
 }
 
+fn native_amx_participant_application_finality_placeholder_hash() -> HashOf<V2FinalityArtifact> {
+    HashOf::from_untyped_unchecked(Hash::new(
+        b"Native AMX participant evidence finality placeholder",
+    ))
+}
+
+/// Build the exact ordered per-route artifact pairs without consulting Kura
+/// state or performing I/O. The finality identity is fixed-width, so callers
+/// may use the typed placeholder during candidate validation and the actual
+/// artifact hash during decided-block application without changing lengths.
+fn native_amx_participant_application_artifacts(
+    manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,
+    finality_artifact_hash: HashOf<V2FinalityArtifact>,
+) -> Option<Vec<NativeAmxParticipantApplicationArtifactPair>> {
+    let mut artifacts = Vec::with_capacity(manifest.entries().len());
+    for (index, entry) in manifest.entries().iter().enumerate() {
+        let leaf_index = u32::try_from(index).ok()?;
+        let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
+            version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
+            leaf: entry.leaf.clone(),
+            leaf_index,
+            proof: manifest.proof(leaf_index)?,
+            manifest_root: manifest.root(),
+            manifest_leaf_count: manifest.count(),
+            finality_artifact_hash,
+        };
+        let receipt = NativeAmxParticipantApplicationReceiptArtifact::new(
+            entry,
+            HashOf::new(&manifest_artifact),
+            finality_artifact_hash,
+        );
+        artifacts.push((manifest_artifact, receipt));
+    }
+    Some(artifacts)
+}
+
+fn native_amx_participant_application_pair_framed_bytes(
+    manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
+    receipt: &NativeAmxParticipantApplicationReceiptArtifact,
+) -> Result<(Vec<u8>, Vec<u8>), norito::Error> {
+    Ok((manifest.encode_framed()?, receipt.encode_framed()?))
+}
+
+fn checked_native_amx_participant_application_pair_bytes(
+    manifest_bytes: u64,
+    receipt_bytes: u64,
+) -> std::result::Result<u64, NativeAmxParticipantApplicationEvidenceByteBudgetError> {
+    manifest_bytes.checked_add(receipt_bytes).ok_or_else(|| {
+        NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
+            "Native AMX participant manifest/receipt pair byte length overflowed".to_owned(),
+        )
+    })
+}
+
 impl NativeAmxParticipantApplicationPrepublicationIdentity {
     fn from_artifacts(
         manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
@@ -25889,28 +26079,14 @@ impl NativeAmxParticipantApplicationPrepublicationToken {
             return false;
         }
 
-        let mut expected = Vec::with_capacity(manifest.entries().len());
-        for (index, entry) in manifest.entries().iter().enumerate() {
-            let Ok(leaf_index) = u32::try_from(index) else {
-                return false;
-            };
-            let Some(proof) = manifest.proof(leaf_index) else {
-                return false;
-            };
-            let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
-                version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
-                leaf: entry.leaf.clone(),
-                leaf_index,
-                proof,
-                manifest_root: manifest.root(),
-                manifest_leaf_count: manifest.count(),
-                finality_artifact_hash: self.finality_artifact_hash,
-            };
-            let receipt = NativeAmxParticipantApplicationReceiptArtifact::new(
-                entry,
-                HashOf::new(&manifest_artifact),
-                self.finality_artifact_hash,
-            );
+        let Some(artifacts) = native_amx_participant_application_artifacts(
+            manifest,
+            self.finality_artifact_hash,
+        ) else {
+            return false;
+        };
+        let mut expected = Vec::with_capacity(artifacts.len());
+        for (manifest_artifact, receipt) in artifacts {
             let Some(identity) =
                 NativeAmxParticipantApplicationPrepublicationIdentity::from_artifacts(
                     &manifest_artifact,
@@ -27327,33 +27503,25 @@ impl Kura {
                         format!("cannot account Native AMX application manifest: {error}"),
                     )
                 })?;
-        let placeholder_finality_hash = HashOf::from_untyped_unchecked(Hash::new(
-            b"Native AMX application disk-accounting finality placeholder",
-        ));
+        let native_artifacts = native_amx_participant_application_artifacts(
+            &native_manifest,
+            native_amx_participant_application_finality_placeholder_hash(),
+        )
+        .ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                PathBuf::from(NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX),
+                "cannot account missing Native AMX manifest proof",
+            )
+        })?;
         let mut native_prune_intent_routes = BTreeSet::new();
-        for (index, entry) in native_manifest.entries().iter().enumerate() {
-            let leaf_index = u32::try_from(index)?;
-            let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
-                version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
-                leaf: entry.leaf.clone(),
-                leaf_index,
-                proof: native_manifest.proof(leaf_index).ok_or_else(|| {
-                    Self::invalid_lane_artifact_error(
-                        PathBuf::from(NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX),
-                        "cannot account missing Native AMX manifest proof",
-                    )
-                })?,
-                manifest_root: native_manifest.root(),
-                manifest_leaf_count: native_manifest.count(),
-                finality_artifact_hash: placeholder_finality_hash,
-            };
-            let receipt = NativeAmxParticipantApplicationReceiptArtifact::new(
-                entry,
-                HashOf::new(&manifest_artifact),
-                placeholder_finality_hash,
-            );
-            let manifest_len = u64::try_from(manifest_artifact.encode_framed()?.len())?;
-            let receipt_len = u64::try_from(receipt.encode_framed()?.len())?;
+        for (manifest_artifact, receipt) in native_artifacts {
+            let (manifest_bytes, receipt_bytes) =
+                native_amx_participant_application_pair_framed_bytes(
+                    &manifest_artifact,
+                    &receipt,
+                )?;
+            let manifest_len = u64::try_from(manifest_bytes.len())?;
+            let receipt_len = u64::try_from(receipt_bytes.len())?;
             let latest_len = u64::try_from(
                 norito::encode_canonical(&NativeAmxParticipantReceiptLatestIndexV2::from_receipt(
                     &receipt,
@@ -27365,9 +27533,9 @@ impl Kura {
                 .saturating_add(receipt_len)
                 .saturating_add(latest_len);
             if native_prune_intent_routes.insert((
-                entry.leaf.lane_id,
-                entry.leaf.dataspace_id,
-                entry.leaf.lane_incarnation,
+                manifest_artifact.leaf.lane_id,
+                manifest_artifact.leaf.dataspace_id,
+                manifest_artifact.leaf.lane_incarnation,
             )) {
                 total = total.saturating_add(u64::try_from(
                     self.native_amx_evidence_prune_intent_max_bytes(),
@@ -35211,45 +35379,28 @@ impl Kura {
             )?;
         }
         let finality_artifact_hash = HashOf::new(&finality);
-        let mut evidence = Vec::with_capacity(native_manifest.entries().len());
-        for (index, entry) in native_manifest.entries().iter().enumerate() {
-            let leaf_index = u32::try_from(index).map_err(|_| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "Native AMX manifest leaf index does not fit u32",
-                )
-            })?;
-            let proof = native_manifest.proof(leaf_index).ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "Native AMX manifest builder did not produce an inclusion proof",
-                )
-            })?;
-            let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
-                version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
-                leaf: entry.leaf.clone(),
-                leaf_index,
-                proof,
-                manifest_root: native_manifest.root(),
-                manifest_leaf_count: native_manifest.count(),
-                finality_artifact_hash,
-            };
-            Self::validate_native_amx_participant_application_manifest_artifact(&manifest_artifact)
+        let evidence = native_amx_participant_application_artifacts(
+            &native_manifest,
+            finality_artifact_hash,
+        )
+        .ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX manifest builder did not produce every route artifact",
+            )
+        })?;
+        for (manifest_artifact, receipt) in &evidence {
+            Self::validate_native_amx_participant_application_manifest_artifact(manifest_artifact)
                 .map_err(|message| {
                     Self::invalid_lane_artifact_error(self.store_root.clone(), message)
                 })?;
-            let receipt = NativeAmxParticipantApplicationReceiptArtifact::new(
-                entry,
-                HashOf::new(&manifest_artifact),
-                finality_artifact_hash,
-            );
-            Self::validate_native_amx_participant_application_receipt_artifact(&receipt).map_err(
+            Self::validate_native_amx_participant_application_receipt_artifact(receipt).map_err(
                 |message| {
                     Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_owned())
                 },
             )?;
             if !Self::native_amx_participant_receipt_matches_manifest_leaf(
-                &receipt,
+                receipt,
                 &manifest_artifact.leaf,
             ) {
                 return Err(Self::invalid_lane_artifact_error(
@@ -35257,7 +35408,6 @@ impl Kura {
                     "Native AMX receipt does not exactly match its canonical manifest leaf",
                 ));
             }
-            evidence.push((manifest_artifact, receipt));
         }
         Ok(NativeAmxParticipantApplicationEvidencePlan {
             application_block_height,
@@ -35568,9 +35718,11 @@ impl Kura {
                 "Native AMX prepublication would regress behind newer durable route evidence",
             ));
         }
+        let (manifest_bytes, receipt_bytes) =
+            native_amx_participant_application_pair_framed_bytes(manifest, receipt)?;
         let incoming = [
-            (NativeAmxEvidenceKind::Manifest, manifest.encode_framed()?),
-            (NativeAmxEvidenceKind::Receipt, receipt.encode_framed()?),
+            (NativeAmxEvidenceKind::Manifest, manifest_bytes),
+            (NativeAmxEvidenceKind::Receipt, receipt_bytes),
         ];
         if !self.native_amx_participant_evidence_pair_fits_stable_bytes(
             incoming[0].1.len(),

@@ -2636,6 +2636,33 @@ fn lane_pending_work_rechecks_durability_fault_after_queue_lock_handoff() {
 }
 
 #[test]
+fn lane_retirement_observer_holds_transition_before_lifecycle_fence() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Queue::test(config_factory(), &time_source);
+    let lane_id = LaneId::new(92);
+    let dataspace_id = DataSpaceId::new(92);
+    let lane_incarnation = Hash::new(b"retirement-observer-lock-order-incarnation");
+
+    let observer = queue.lock_lane_retirement_observer();
+    assert!(
+        queue.lane_reservation_transition_lock.try_lock().is_none(),
+        "the retirement observer must retain the reservation-transition fence"
+    );
+    let lifecycle_guard = state.lock_lane_lifecycle_work_admission();
+    assert!(
+        !observer.lane_has_pending_work(lane_id, dataspace_id, lane_incarnation),
+        "the guarded predicate must not reacquire the reservation-transition lock"
+    );
+    drop(lifecycle_guard);
+    drop(observer);
+    assert!(
+        queue.lane_reservation_transition_lock.try_lock().is_some(),
+        "dropping the observer must release the reservation-transition fence"
+    );
+}
+
+#[test]
 fn reservation_journal_install_rejects_selection_publication_window() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);

@@ -2179,21 +2179,6 @@ impl EvidenceViewerCheckpointCommitFailureV1 {
 }
 
 impl EvidenceViewerServiceV1 {
-    /// Reject provider-less startup for an enabled production service.
-    ///
-    /// # Errors
-    ///
-    /// Always returns [`EvidenceViewerErrorV1::CheckpointUnavailable`].
-    /// Call [`Self::open_with_checkpoint_store`] with an exact qualified
-    /// deployment-owned authority.
-    pub fn open(
-        _config: EvidenceViewerConfigV1,
-        _deps: EvidenceViewerRuntimeDepsV1,
-        _node: NodeHandle,
-    ) -> Result<Self, EvidenceViewerErrorV1> {
-        Err(EvidenceViewerErrorV1::CheckpointUnavailable)
-    }
-
     /// Open against an exact qualified authoritative checkpoint store.
     ///
     /// The external CAS head is authoritative. The configured local file is
@@ -7731,12 +7716,15 @@ mod tests {
         }
     }
 
+    type MockCompactionArchiveArtifacts =
+        BTreeMap<[u8; 32], ([u8; 32], EvidenceViewerCompactionArchiveReadbackV1)>;
+
     struct MockCompactionArchive {
         handle: String,
         qualification: MockProviderQualification,
         archive_id: [u8; 32],
         signing_key: SigningKey,
-        artifacts: Mutex<BTreeMap<[u8; 32], ([u8; 32], EvidenceViewerCompactionArchiveReadbackV1)>>,
+        artifacts: Mutex<MockCompactionArchiveArtifacts>,
         install_calls: AtomicUsize,
         read_calls: AtomicUsize,
         append_trailing_on_next_read: AtomicBool,
@@ -9140,23 +9128,6 @@ mod tests {
                 .expect_err("the initial signed checkpoint must be durable before exposure"),
             EvidenceViewerErrorV1::ResourceExhausted
         );
-    }
-
-    #[test]
-    fn provider_less_open_fails_before_checkpoint_access() {
-        let fixture = EvidenceViewerFixture::new();
-        assert_eq!(
-            EvidenceViewerServiceV1::open(
-                fixture.config.clone(),
-                fixture.deps.clone(),
-                fixture.node.clone(),
-            )
-            .expect_err("provider-less startup must fail closed"),
-            EvidenceViewerErrorV1::CheckpointUnavailable
-        );
-        assert_eq!(fixture.checkpoint_store.load_call_count(), 0);
-        assert_eq!(fixture.checkpoint_store.cas_call_count(), 0);
-        assert!(!fixture.config.checkpoint_path.exists());
     }
 
     #[test]
@@ -11233,13 +11204,12 @@ mod tests {
             .expect("erase at the retained boundary");
         assert_eq!(fixture.erasure.call_count(), 1);
         assert!(
-            reopened
+            !reopened
                 .state
                 .lock()
                 .expect("post-erasure state lock")
                 .default_retention_floors
-                .get(&fixture.quarantine_id)
-                .is_none(),
+                .contains_key(&fixture.quarantine_id),
             "a completed erasure removes the no-longer-needed retention floor"
         );
     }

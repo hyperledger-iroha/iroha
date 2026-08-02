@@ -68,6 +68,7 @@ mod protocol {
             EvidenceViewerWebAuthnBindingV1, IrohaRuntimeProviderBindingV1,
             IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderRegistryErrorV1,
             IrohaRuntimeProviderSlotV1, ProviderIngestSourceLimitsV1,
+            RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1,
         },
     };
 
@@ -155,7 +156,7 @@ mod protocol {
         MAX_GOVERNANCE_SEALED_STATE_RECORD_BYTES_V1 + MAX_BROKER_FRAME_ENVELOPE_BYTES_V1;
     const MAX_CHAIN_ID_BYTES_V1: usize = 1024;
     const MAX_PROVIDER_HANDLE_BYTES_V1: usize = 1024;
-    const MAX_CATALOG_ENTRIES_V1: usize = 64;
+    const MAX_CATALOG_ENTRIES_V1: usize = RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1;
     const MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1: usize =
         provider_ingest_outbox_defaults::COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1 as usize;
     const MAX_PROVIDER_INGEST_PUBLIC_KEY_BYTES_V1: usize = 16 * 1024;
@@ -1017,6 +1018,10 @@ mod protocol {
                             .soracloud_runtime_signer_binding()
                             .map(NativeTransactionSignerBindingWireV1::from_soracloud_binding)
                     }),
+                governance_dag_publisher_peer_id: binding
+                    .governance_dag_publisher_peer_id()
+                    .map(<[u8]>::to_vec),
+                governance_dag_publisher_public_key: binding.governance_dag_publisher_public_key(),
                 governance_request_auth_public_key: binding.governance_request_auth_public_key(),
                 governance_request_auth_max_body_bytes: binding
                     .governance_request_auth_max_body_bytes(),
@@ -1075,6 +1080,10 @@ mod protocol {
                 (self.revision, self.policy_digest),
                 (Some(revision), Some(digest)) if revision != 0 && digest != [0; 32]
             )
+        }
+
+        fn runtime_slot(&self) -> Result<IrohaRuntimeProviderSlotV1, BrokerError> {
+            IrohaRuntimeProviderSlotV1::from_wire_id(self.slot).ok_or(BrokerError::BindingMismatch)
         }
     }
 
@@ -1173,6 +1182,24 @@ mod protocol {
     }
 
     fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerError> {
+        let runtime_slot = binding.runtime_slot()?;
+        let governance_signer = runtime_slot == IrohaRuntimeProviderSlotV1::GovernanceDagSigner;
+        match (
+            binding.governance_dag_publisher_peer_id.as_deref(),
+            binding.governance_dag_publisher_public_key,
+        ) {
+            (Some(peer_id), Some(public_key)) if governance_signer => {
+                if peer_id.is_empty()
+                    || peer_id.len() > GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1
+                    || !peer_id.iter().all(u8::is_ascii_graphic)
+                    || iroha_crypto::ed25519_parse_public_key(&public_key).is_err()
+                {
+                    return Err(BrokerError::BindingMismatch);
+                }
+            }
+            (None, None) if !governance_signer => {}
+            _ => return Err(BrokerError::BindingMismatch),
+        }
         let stream_token = binding.slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id();
         let stream_token_gateway_admission =
             binding.slot == IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id();
@@ -1394,8 +1421,6 @@ mod protocol {
         } else if has_new_role_metadata {
             return Err(BrokerError::BindingMismatch);
         }
-        let governance_signer =
-            binding.slot == IrohaRuntimeProviderSlotV1::GovernanceDagSigner.wire_id();
         let governance_request_auth = binding.slot
             == IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator.wire_id()
             || binding.slot == IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator.wire_id();
@@ -1931,6 +1956,34 @@ mod protocol {
             .then_with(|| left.handle.cmp(&right.handle))
             .then_with(|| left.revision.cmp(&right.revision))
             .then_with(|| left.policy_digest.cmp(&right.policy_digest))
+    }
+
+    fn validate_catalog_slot_ids(
+        slot_ids: impl IntoIterator<Item = u16>,
+    ) -> Result<(), BrokerError> {
+        let mut multiplicities = [0_usize; IrohaRuntimeProviderSlotV1::ALL.len()];
+        let mut entry_count = 0_usize;
+        for wire_id in slot_ids {
+            entry_count = entry_count
+                .checked_add(1)
+                .ok_or(BrokerError::BindingMismatch)?;
+            if entry_count > MAX_CATALOG_ENTRIES_V1 {
+                return Err(BrokerError::BindingMismatch);
+            }
+            let slot = IrohaRuntimeProviderSlotV1::from_wire_id(wire_id)
+                .ok_or(BrokerError::BindingMismatch)?;
+            let slot_index = usize::from(wire_id - 1);
+            multiplicities[slot_index] = multiplicities[slot_index]
+                .checked_add(1)
+                .ok_or(BrokerError::BindingMismatch)?;
+            if multiplicities[slot_index] > slot.max_configured_multiplicity() {
+                return Err(BrokerError::BindingMismatch);
+            }
+        }
+        if entry_count == 0 {
+            return Err(BrokerError::BindingMismatch);
+        }
+        Ok(())
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
@@ -6191,9 +6244,20 @@ mod protocol {
         read_operation_request_frame_inner(reader, Some(inbound_budget), None)
     }
 
-    fn catalog_digest(catalog: &[ProviderBindingWireV1]) -> Result<[u8; 32], BrokerError> {
+    fn catalog_digest(
+        chain_id: &str,
+        catalog: &[ProviderBindingWireV1],
+    ) -> Result<[u8; 32], BrokerError> {
         let bytes = encode_canonical(&catalog.to_vec(), MAX_HANDSHAKE_FRAME_BYTES_V1)?;
-        Ok(digest_parts(CATALOG_DIGEST_DOMAIN_V1, &[&bytes]))
+        Ok(digest_parts(
+            CATALOG_DIGEST_DOMAIN_V1,
+            &[
+                &BROKER_MAGIC_V1,
+                &BROKER_VERSION_V1.to_be_bytes(),
+                chain_id.as_bytes(),
+                &bytes,
+            ],
+        ))
     }
 
     fn client_transcript_digest(
@@ -6282,9 +6346,7 @@ mod protocol {
         {
             return Err(BrokerError::BindingMismatch);
         }
-        if requested_catalog.is_empty() || requested_catalog.len() > MAX_CATALOG_ENTRIES_V1 {
-            return Err(BrokerError::BindingMismatch);
-        }
+        validate_catalog_slot_ids(requested_catalog.iter().map(|binding| binding.slot))?;
         for binding in &requested_catalog {
             validate_wire_binding(binding)?;
         }
@@ -6294,7 +6356,7 @@ mod protocol {
         {
             return Err(BrokerError::BindingMismatch);
         }
-        let catalog_digest = catalog_digest(&requested_catalog)?;
+        let catalog_digest = catalog_digest(chain_id, &requested_catalog)?;
         let transcript = HandshakeTranscriptFieldsV1 {
             chain_id: chain_id.to_owned(),
             requested_catalog: requested_catalog.clone(),
@@ -6519,11 +6581,20 @@ mod protocol {
                     .signer_metadata
                     .as_ref()
                     .ok_or(BrokerError::BindingMismatch)?;
+                let expected_peer_id = requested
+                    .governance_dag_publisher_peer_id
+                    .as_deref()
+                    .ok_or(BrokerError::BindingMismatch)?;
+                let expected_public_key = requested
+                    .governance_dag_publisher_public_key
+                    .ok_or(BrokerError::BindingMismatch)?;
                 if metadata.publisher_peer_id.is_empty()
                     || metadata.publisher_peer_id.len()
                         > GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1
                     || !metadata.publisher_peer_id.iter().all(u8::is_ascii_graphic)
                     || iroha_crypto::ed25519_parse_public_key(&metadata.public_key).is_err()
+                    || metadata.publisher_peer_id.as_slice() != expected_peer_id
+                    || metadata.public_key != expected_public_key
                 {
                     return Err(BrokerError::BindingMismatch);
                 }
@@ -11787,7 +11858,7 @@ mod protocol {
             let mut evidence_viewer_archive_public_key = None;
             let mut moderation_checkpoint_attestation_public_key = None;
             let mut moderation_panel_notification_archive_binding = None;
-            match binding.slot {
+            match binding.runtime_slot().map_err(server_error)?.wire_id() {
                 slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id() => {
                     let signer = backends
                         .stream_token_signer
@@ -12469,21 +12540,42 @@ mod protocol {
                         .governance_dag_signer
                         .as_ref()
                         .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let expected_peer_id = binding
+                        .governance_dag_publisher_peer_id
+                        .as_deref()
+                        .ok_or(RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    let expected_public_key = binding
+                        .governance_dag_publisher_public_key
+                        .ok_or(RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
                     let qualification = signer
                         .qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    let publisher_peer_id = signer.publisher_peer_id().to_vec();
+                    let public_key = signer.public_key();
                     if signer.handle() != binding.handle
                         || !qualification_matches(
                             binding,
                             qualification.revision,
                             qualification.policy_digest,
                         )
+                        || publisher_peer_id.as_slice() != expected_peer_id
+                        || public_key != expected_public_key
+                    {
+                        return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
+                    }
+                    let qualification_after = signer
+                        .qualification()
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    if signer.handle() != binding.handle
+                        || qualification_after != qualification
+                        || signer.publisher_peer_id() != publisher_peer_id.as_slice()
+                        || signer.public_key() != public_key
                     {
                         return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
                     }
                     signer_metadata = Some(SignerMetadataWireV1 {
-                        publisher_peer_id: signer.publisher_peer_id().to_vec(),
-                        public_key: signer.public_key(),
+                        publisher_peer_id,
+                        public_key,
                     });
                 }
                 slot if slot
@@ -29097,7 +29189,7 @@ mod protocol {
             > = None;
             let mut potr_runtime_binding: Option<PotrRuntimeBindingWireV1> = None;
             for (binding, observation) in requested_catalog.iter().zip(&observations) {
-                match binding.slot {
+                match binding.runtime_slot().map_err(registry_error)?.wire_id() {
                     slot if slot
                         == IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider.wire_id() =>
                     {
@@ -29579,14 +29671,26 @@ mod protocol {
                     slot if slot == IrohaRuntimeProviderSlotV1::GovernanceDagSigner.wire_id() => {
                         let metadata = observation
                             .signer_metadata
+                            .as_ref()
+                            .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
+                        let publisher_peer_id = binding
+                            .governance_dag_publisher_peer_id
                             .clone()
                             .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
+                        let public_key = binding
+                            .governance_dag_publisher_public_key
+                            .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
+                        if metadata.publisher_peer_id.as_slice() != publisher_peer_id.as_slice()
+                            || metadata.public_key != public_key
+                        {
+                            return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+                        }
                         let signer = Arc::new(GovernanceDagBrokerSigner {
                             session: Arc::clone(&session),
                             binding: binding.clone(),
                             metadata_digest: observation.metadata_digest,
-                            publisher_peer_id: metadata.publisher_peer_id,
-                            public_key: metadata.public_key,
+                            publisher_peer_id,
+                            public_key,
                         });
                         signer.live_qualification().map_err(registry_error)?;
                         dependencies = dependencies.with_sorafs_governance_dag_signer(signer);
@@ -32468,15 +32572,18 @@ mod protocol {
                         sorafs_node::moderation_orchestrator::
                             ModerationCheckpointStoreExternalErrorV1::Rejected
                     })?;
-                    keypair
-                        .sign(&self.expected_statement_digest)
-                        .to_bytes()
-                        .as_slice()
-                        .try_into()
-                        .map_err(|_| {
-                            sorafs_node::moderation_orchestrator::
-                                ModerationCheckpointStoreExternalErrorV1::Rejected
-                        })
+                    let signature = iroha_crypto::Signature::try_new(
+                        keypair.private_key(),
+                        &self.expected_statement_digest,
+                    )
+                    .map_err(|_| {
+                        sorafs_node::moderation_orchestrator::
+                            ModerationCheckpointStoreExternalErrorV1::Rejected
+                    })?;
+                    signature.payload().try_into().map_err(|_| {
+                        sorafs_node::moderation_orchestrator::
+                            ModerationCheckpointStoreExternalErrorV1::Rejected
+                    })
                 }
             }
 
@@ -33537,12 +33644,13 @@ mod protocol {
             }
 
             fn server_test_catalog() -> IrohaRuntimeProviderBindingsV1 {
-                IrohaRuntimeProviderBindingsV1::qualified_for_test(
+                IrohaRuntimeProviderBindingsV1::qualified_governance_dag_signer_for_test(
                     "server-test-chain",
-                    IrohaRuntimeProviderSlotV1::GovernanceDagSigner,
                     SERVER_TEST_SIGNER_HANDLE,
                     7,
                     TEST_POLICY_DIGEST,
+                    "12D3KooWRuntimeBrokerServerPrimary",
+                    "1509a611ad6d97b01d871e58ed00c8fd7c3917b6ca61a8c2833a19e000aac2e4",
                 )
             }
 
@@ -33847,6 +33955,11 @@ mod protocol {
                 kind: sorafs_node::moderation_orchestrator::ModerationTerminalHandoffKindV1,
             ) -> iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffRequestV1
             {
+                let actor_key = iroha_crypto::KeyPair::try_from_seed(
+                    vec![42; 32],
+                    iroha_crypto::Algorithm::Ed25519,
+                )
+                .expect("derive moderation handoff actor");
                 let handoff = sorafs_node::moderation_orchestrator::ModerationTerminalHandoffV1 {
                     handoff_id: [0x31; 32],
                     kind,
@@ -33873,7 +33986,9 @@ mod protocol {
                                         SorafsModerationLedgerEventKind::CaseFinalized,
                                     Some("case-1".to_owned()),
                                     Some("round-1".to_owned()),
-                                    account(42),
+                                    iroha_data_model::account::AccountId::new(
+                                        actor_key.public_key().clone(),
+                                    ),
                                     7,
                                 ),
                         },
@@ -35242,6 +35357,10 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
+                    governance_dag_publisher_peer_id: Some(
+                        b"12D3KooWRuntimeBrokerPrimary".to_vec(),
+                    ),
+                    governance_dag_publisher_public_key: Some(TEST_SIGNER_KEY),
                     governance_request_auth_public_key: None,
                     governance_request_auth_max_body_bytes: None,
                     provider_ingest_signer_binding: None,
@@ -35263,9 +35382,10 @@ mod protocol {
             }
 
             fn stream_token_signer_binding() -> ProviderBindingWireV1 {
-                let mut binding = signer_binding();
-                binding.slot = IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id();
-                binding.handle = "pkcs11:prod/sorafs/stream-token/primary".to_owned();
+                let mut binding = plain_runtime_binding(
+                    IrohaRuntimeProviderSlotV1::StreamTokenSigner,
+                    "pkcs11:prod/sorafs/stream-token/primary",
+                );
                 binding.stream_token_signer_public_key = Some(TEST_SIGNER_KEY);
                 binding
             }
@@ -35277,6 +35397,8 @@ mod protocol {
                 let mut binding = signer_binding();
                 binding.slot = slot.wire_id();
                 binding.handle = handle.to_owned();
+                binding.governance_dag_publisher_peer_id = None;
+                binding.governance_dag_publisher_public_key = None;
                 binding
             }
 
@@ -35674,6 +35796,8 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
+                    governance_dag_publisher_peer_id: None,
+                    governance_dag_publisher_public_key: None,
                     governance_request_auth_public_key: None,
                     governance_request_auth_max_body_bytes: None,
                     provider_ingest_signer_binding: None,
@@ -35713,6 +35837,8 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
+                    governance_dag_publisher_peer_id: None,
+                    governance_dag_publisher_public_key: None,
                     governance_request_auth_public_key: None,
                     governance_request_auth_max_body_bytes: None,
                     provider_ingest_signer_binding: None,
@@ -35752,6 +35878,8 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
+                    governance_dag_publisher_peer_id: None,
+                    governance_dag_publisher_public_key: None,
                     governance_request_auth_public_key: None,
                     governance_request_auth_max_body_bytes: None,
                     provider_ingest_signer_binding: None,
@@ -35823,8 +35951,13 @@ mod protocol {
                 let signer_metadata =
                     if binding.slot == IrohaRuntimeProviderSlotV1::GovernanceDagSigner.wire_id() {
                         Some(SignerMetadataWireV1 {
-                            publisher_peer_id: b"12D3KooWRuntimeBrokerPrimary".to_vec(),
-                            public_key: TEST_SIGNER_KEY,
+                            publisher_peer_id: binding
+                                .governance_dag_publisher_peer_id
+                                .clone()
+                                .expect("Governance signer binding peer ID"),
+                            public_key: binding
+                                .governance_dag_publisher_public_key
+                                .expect("Governance signer binding key"),
                         })
                     } else {
                         None
@@ -35975,7 +36108,7 @@ mod protocol {
             fn assert_valid_handshake_request(request: &HandshakeRequestV1) {
                 assert_eq!(
                     request.catalog_digest,
-                    catalog_digest(&request.requested_catalog)
+                    catalog_digest(&request.chain_id, &request.requested_catalog)
                         .expect("digest test requested catalog")
                 );
                 let transcript = HandshakeTranscriptFieldsV1 {
@@ -36278,6 +36411,10 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
+                    governance_dag_publisher_peer_id: Some(
+                        b"12D3KooWRuntimeBrokerServerPrimary".to_vec(),
+                    ),
+                    governance_dag_publisher_public_key: Some(TEST_SIGNER_KEY),
                     governance_request_auth_public_key: None,
                     governance_request_auth_max_body_bytes: None,
                     provider_ingest_signer_binding: None,
@@ -37746,6 +37883,8 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
+                    governance_dag_publisher_peer_id: None,
+                    governance_dag_publisher_public_key: None,
                     governance_request_auth_public_key: None,
                     governance_request_auth_max_body_bytes: None,
                     provider_ingest_signer_binding: None,
@@ -38092,10 +38231,79 @@ mod protocol {
             }
 
             #[test]
+            fn configured_catalog_slots_roundtrip_through_the_canonical_inverse() {
+                for slot in IrohaRuntimeProviderSlotV1::ALL {
+                    let catalog = IrohaRuntimeProviderBindingsV1::qualified_for_test(
+                        "catalog-inverse-chain",
+                        slot,
+                        format!("hsm://production/runtime-slot-{}", slot.wire_id()),
+                        1,
+                        TEST_POLICY_DIGEST,
+                    );
+                    let configured = catalog.iter().next().expect("one configured binding");
+                    let wire = ProviderBindingWireV1::try_from_binding(configured)
+                        .expect("project configured binding");
+                    assert_eq!(wire.runtime_slot(), Ok(slot));
+                }
+
+                let mut unknown = signer_binding();
+                for wire_id in [0, 56, u16::MAX] {
+                    unknown.slot = wire_id;
+                    assert_eq!(unknown.runtime_slot(), Err(BrokerError::BindingMismatch));
+                }
+            }
+
+            #[test]
             fn signer_observation_requires_governance_peer_and_strong_ed25519_key() {
                 let binding = signer_binding();
+                assert_eq!(
+                    binding.governance_dag_publisher_peer_id.as_deref(),
+                    Some(b"12D3KooWRuntimeBrokerPrimary".as_slice())
+                );
+                assert_eq!(
+                    binding.governance_dag_publisher_public_key,
+                    Some(TEST_SIGNER_KEY)
+                );
+                validate_wire_binding(&binding).expect("accept pinned signer identity");
                 let valid = observation(&binding);
                 validate_observation(&binding, &valid).expect("accept canonical signer metadata");
+
+                let mut missing_peer = binding.clone();
+                missing_peer.governance_dag_publisher_peer_id = None;
+                assert_eq!(
+                    validate_wire_binding(&missing_peer),
+                    Err(BrokerError::BindingMismatch)
+                );
+                let mut missing_key = binding.clone();
+                missing_key.governance_dag_publisher_public_key = None;
+                assert_eq!(
+                    validate_wire_binding(&missing_key),
+                    Err(BrokerError::BindingMismatch)
+                );
+
+                let mut substituted_peer = valid.clone();
+                substituted_peer
+                    .signer_metadata
+                    .as_mut()
+                    .expect("signer metadata")
+                    .publisher_peer_id = b"12D3KooWRuntimeBrokerSecondary".to_vec();
+                refresh_metadata_digest(&mut substituted_peer);
+                assert_eq!(
+                    validate_observation(&binding, &substituted_peer),
+                    Err(BrokerError::BindingMismatch)
+                );
+
+                let mut substituted_key = valid.clone();
+                substituted_key
+                    .signer_metadata
+                    .as_mut()
+                    .expect("signer metadata")
+                    .public_key = server_test_request_auth_public_key();
+                refresh_metadata_digest(&mut substituted_key);
+                assert_eq!(
+                    validate_observation(&binding, &substituted_key),
+                    Err(BrokerError::BindingMismatch)
+                );
 
                 let mut oversized_peer = valid.clone();
                 oversized_peer
@@ -38139,6 +38347,37 @@ mod protocol {
                         Err(BrokerError::BindingMismatch)
                     );
                 }
+            }
+
+            #[test]
+            fn server_governance_signer_must_match_the_configured_publisher_identity() {
+                let catalog = server_test_catalog();
+                let configured = catalog.iter().next().expect("configured signer");
+                let binding = ProviderBindingWireV1::try_from_binding(configured)
+                    .expect("project configured Governance signer");
+                assert_eq!(binding, signer_binding_for_server());
+                make_server_observation(&binding, &server_test_backends())
+                    .expect("accept exact configured signer identity");
+
+                let mut substituted_peer = binding.clone();
+                substituted_peer.governance_dag_publisher_peer_id =
+                    Some(b"12D3KooWRuntimeBrokerServerSecondary".to_vec());
+                validate_wire_binding(&substituted_peer)
+                    .expect("substituted peer remains structurally valid");
+                assert!(matches!(
+                    make_server_observation(&substituted_peer, &server_test_backends()),
+                    Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
+                ));
+
+                let mut substituted_key = binding;
+                substituted_key.governance_dag_publisher_public_key =
+                    Some(server_test_request_auth_public_key());
+                validate_wire_binding(&substituted_key)
+                    .expect("substituted key remains structurally valid");
+                assert!(matches!(
+                    make_server_observation(&substituted_key, &server_test_backends()),
+                    Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
+                ));
             }
 
             #[test]
@@ -39846,6 +40085,115 @@ mod protocol {
                     .join()
                     .expect("join invalid-receipt panel broker")
                     .expect("invalid-receipt panel broker exits cleanly");
+            }
+
+            #[test]
+            fn catalog_slot_ids_are_bounded_by_configured_multiplicities() {
+                let mut maximum = Vec::with_capacity(MAX_CATALOG_ENTRIES_V1);
+                for slot in IrohaRuntimeProviderSlotV1::ALL {
+                    maximum.extend(std::iter::repeat_n(
+                        slot.wire_id(),
+                        slot.max_configured_multiplicity(),
+                    ));
+                }
+                assert_eq!(maximum.len(), MAX_CATALOG_ENTRIES_V1);
+                assert_eq!(MAX_CATALOG_ENTRIES_V1, 182);
+                assert_eq!(validate_catalog_slot_ids(maximum.iter().copied()), Ok(()));
+
+                let mut oversized = maximum;
+                oversized
+                    .push(IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner.wire_id());
+                assert_eq!(
+                    validate_catalog_slot_ids(oversized.iter().copied()),
+                    Err(BrokerError::BindingMismatch)
+                );
+                assert_eq!(
+                    validate_catalog_slot_ids([
+                        IrohaRuntimeProviderSlotV1::GovernanceDagSigner.wire_id(),
+                        IrohaRuntimeProviderSlotV1::GovernanceDagSigner.wire_id(),
+                    ]),
+                    Err(BrokerError::BindingMismatch),
+                    "a singular role must reject duplicate wire IDs"
+                );
+                assert_eq!(
+                    validate_catalog_slot_ids([56]),
+                    Err(BrokerError::BindingMismatch),
+                    "an unknown role must fail closed"
+                );
+                assert_eq!(
+                    validate_catalog_slot_ids([]),
+                    Err(BrokerError::BindingMismatch),
+                    "a catalog missing every role is not a handshake catalog"
+                );
+            }
+
+            #[test]
+            fn catalog_digest_binds_protocol_and_chain_identity() {
+                let catalog = vec![signer_binding()];
+                let canonical_catalog = encode_canonical(&catalog, MAX_HANDSHAKE_FRAME_BYTES_V1)
+                    .expect("encode canonical test catalog");
+                let digest = catalog_digest("test-chain", &catalog)
+                    .expect("digest chain-bound test catalog");
+                assert_eq!(
+                    digest,
+                    digest_parts(
+                        CATALOG_DIGEST_DOMAIN_V1,
+                        &[
+                            &BROKER_MAGIC_V1,
+                            &BROKER_VERSION_V1.to_be_bytes(),
+                            b"test-chain",
+                            &canonical_catalog,
+                        ],
+                    )
+                );
+                assert_ne!(
+                    digest,
+                    catalog_digest("other-chain", &catalog)
+                        .expect("digest catalog for a different chain")
+                );
+                let mut substituted_peer = catalog.clone();
+                substituted_peer[0].governance_dag_publisher_peer_id =
+                    Some(b"12D3KooWRuntimeBrokerSecondary".to_vec());
+                assert_ne!(
+                    digest,
+                    catalog_digest("test-chain", &substituted_peer)
+                        .expect("digest catalog with a substituted publisher peer ID")
+                );
+                let mut substituted_key = catalog.clone();
+                substituted_key[0].governance_dag_publisher_public_key =
+                    Some(server_test_request_auth_public_key());
+                assert_ne!(
+                    digest,
+                    catalog_digest("test-chain", &substituted_key)
+                        .expect("digest catalog with a substituted publisher key")
+                );
+
+                let mut other_magic = BROKER_MAGIC_V1;
+                other_magic[0] ^= 1;
+                assert_ne!(
+                    digest,
+                    digest_parts(
+                        CATALOG_DIGEST_DOMAIN_V1,
+                        &[
+                            &other_magic,
+                            &BROKER_VERSION_V1.to_be_bytes(),
+                            b"test-chain",
+                            &canonical_catalog,
+                        ],
+                    )
+                );
+                assert_ne!(
+                    digest,
+                    digest_parts(
+                        CATALOG_DIGEST_DOMAIN_V1,
+                        &[
+                            &BROKER_MAGIC_V1,
+                            &(BROKER_VERSION_V1 + 1).to_be_bytes(),
+                            b"test-chain",
+                            &canonical_catalog,
+                        ],
+                    )
+                );
             }
 
             #[test]
@@ -44318,25 +44666,18 @@ mod protocol {
                     OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1,
                     archive_head_read_payload.clone(),
                 );
-                validate_operation_request_for_session(
-                    &empty_head_read,
-                    fixture.chain_id.as_str(),
-                )
-                .expect("validate empty archive-head readback request");
+                validate_operation_request_for_session(&empty_head_read, fixture.chain_id.as_str())
+                    .expect("validate empty archive-head readback request");
                 let empty_head_read_result = dispatch_server_operation(&state, &empty_head_read)
                     .expect("read empty public archive head");
-                validate_operation_result(
-                    &empty_head_read,
-                    STATUS_OK_V1,
-                    &empty_head_read_result,
-                )
-                .expect("validate empty archive-head readback result");
-                let empty_head_read_result = decode_canonical::<
-                    ModerationPanelNotificationArchiveHeadReadResultWireV1,
-                >(
-                    &empty_head_read_result, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1
-                )
-                .expect("decode empty archive-head readback");
+                validate_operation_result(&empty_head_read, STATUS_OK_V1, &empty_head_read_result)
+                    .expect("validate empty archive-head readback result");
+                let empty_head_read_result =
+                    decode_canonical::<ModerationPanelNotificationArchiveHeadReadResultWireV1>(
+                        &empty_head_read_result,
+                        MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
+                    )
+                    .expect("decode empty archive-head readback");
                 assert_eq!(
                     empty_head_read_result.version,
                     MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
@@ -44499,12 +44840,12 @@ mod protocol {
                     &published_head_read_result,
                 )
                 .expect("validate published archive-head readback result");
-                let published_head_read_result = decode_canonical::<
-                    ModerationPanelNotificationArchiveHeadReadResultWireV1,
-                >(
-                    &published_head_read_result, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1
-                )
-                .expect("decode published archive-head readback");
+                let published_head_read_result =
+                    decode_canonical::<ModerationPanelNotificationArchiveHeadReadResultWireV1>(
+                        &published_head_read_result,
+                        MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
+                    )
+                    .expect("decode published archive-head readback");
                 assert_eq!(
                     published_head_read_result.canonical_head.as_deref(),
                     Some(fixture.canonical_signed_head.as_slice())
@@ -44856,6 +45197,8 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
+                    governance_dag_publisher_peer_id: None,
+                    governance_dag_publisher_public_key: None,
                     governance_request_auth_public_key: None,
                     governance_request_auth_max_body_bytes: None,
                     provider_ingest_signer_binding: None,
@@ -44934,6 +45277,8 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
+                    governance_dag_publisher_peer_id: None,
+                    governance_dag_publisher_public_key: None,
                     governance_request_auth_public_key: None,
                     governance_request_auth_max_body_bytes: None,
                     provider_ingest_signer_binding: Some(exact_signer.clone()),
@@ -45001,6 +45346,8 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
+                    governance_dag_publisher_peer_id: None,
+                    governance_dag_publisher_public_key: None,
                     governance_request_auth_public_key: None,
                     governance_request_auth_max_body_bytes: None,
                     provider_ingest_signer_binding: None,
@@ -45112,6 +45459,8 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
+                    governance_dag_publisher_peer_id: None,
+                    governance_dag_publisher_public_key: None,
                     governance_request_auth_public_key: None,
                     governance_request_auth_max_body_bytes: None,
                     provider_ingest_signer_binding: None,
@@ -45940,16 +46289,19 @@ mod protocol {
                 let (session, observations) =
                     BrokerSession::connect(&policy, "test-chain", vec![binding.clone()])
                         .expect("connect broker session");
-                let metadata = observations[0]
-                    .signer_metadata
+                let publisher_peer_id = binding
+                    .governance_dag_publisher_peer_id
                     .clone()
-                    .expect("signer metadata");
+                    .expect("configured signer peer ID");
+                let public_key = binding
+                    .governance_dag_publisher_public_key
+                    .expect("configured signer key");
                 let signer = GovernanceDagBrokerSigner {
                     session,
                     binding,
                     metadata_digest: observations[0].metadata_digest,
-                    publisher_peer_id: metadata.publisher_peer_id,
-                    public_key: metadata.public_key,
+                    publisher_peer_id,
+                    public_key,
                 };
                 assert_eq!(
                     signer.live_qualification().expect("qualify signer"),
@@ -46289,16 +46641,19 @@ mod protocol {
                 let (session, observations) =
                     BrokerSession::connect(&policy, "test-chain", vec![binding.clone()])
                         .expect("connect broker session");
-                let metadata = observations[0]
-                    .signer_metadata
+                let publisher_peer_id = binding
+                    .governance_dag_publisher_peer_id
                     .clone()
-                    .expect("signer metadata");
+                    .expect("configured signer peer ID");
+                let public_key = binding
+                    .governance_dag_publisher_public_key
+                    .expect("configured signer key");
                 let signer = GovernanceDagBrokerSigner {
                     session,
                     binding,
                     metadata_digest: observations[0].metadata_digest,
-                    publisher_peer_id: metadata.publisher_peer_id,
-                    public_key: metadata.public_key,
+                    publisher_peer_id,
+                    public_key,
                 };
                 assert_eq!(
                     sorafs_node::GovernanceDagRuntimeSigner::qualification(&signer),

@@ -14,6 +14,7 @@ def test_offline_readiness_verifier_roles_are_public_exports() -> None:
         OfflineActiveTopUpShieldVerifier,
         OfflineActiveTransferVerifier,
         OfflineActiveUnshieldVerifier,
+        OfflineStatus,
     )
 
     assert OfflineActiveTopUpShieldVerifier is OfflineActiveTransferVerifier
@@ -26,8 +27,10 @@ def test_offline_readiness_verifier_roles_are_public_exports() -> None:
         "OfflineActiveUnshieldVerifier",
         "OfflineActiveRecursiveStepEqVerifier",
         "OfflineActiveRecursiveStepEpVerifier",
+        "OfflineStatus",
     ):
         assert name in iroha_python.__all__
+    assert OfflineStatus.__name__ == "OfflineStatus"
 
 
 def test_package_root_lazy_crypto_exports_preserve_import_error_cause() -> None:

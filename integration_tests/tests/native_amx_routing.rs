@@ -1409,7 +1409,7 @@ async fn submit_grouped_native_amx_transactions(
     );
     let payloads = transactions
         .iter()
-        .map(|transaction| submitter.prepare_transaction_payload(transaction))
+        .map(Client::prepare_transaction_payload)
         .collect::<Vec<_>>();
     submitter
         .submit_prepared_transaction_payload_batch_async(&payloads)

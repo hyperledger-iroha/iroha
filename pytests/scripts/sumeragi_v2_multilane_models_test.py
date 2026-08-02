@@ -367,12 +367,53 @@ def replace_once(path: Path, old: str, new: str) -> None:
     path.write_text(source.replace(old, new, 1), encoding="utf-8")
 
 
+def replace_once_after(path: Path, anchor: str, old: str, new: str) -> None:
+    """Replace one token after an exact enclosing-item anchor."""
+
+    source = path.read_text(encoding="utf-8")
+    anchor_offset = source.find(anchor)
+    assert anchor_offset >= 0, f"fixture cannot find {anchor!r} in {path}"
+    old_offset = source.find(old, anchor_offset + len(anchor))
+    assert old_offset >= 0, f"fixture cannot find {old!r} after {anchor!r} in {path}"
+    path.write_text(
+        source[:old_offset] + new + source[old_offset + len(old) :],
+        encoding="utf-8",
+    )
+
+
 def swap_ordered_once(path: Path, earlier: str, later: str) -> None:
     """Swap one ordered token pair while retaining both source anchors."""
 
     source = path.read_text(encoding="utf-8")
     earlier_offset = source.find(earlier)
     assert earlier_offset >= 0, f"fixture cannot find {earlier!r} in {path}"
+    later_offset = source.find(later, earlier_offset + len(earlier))
+    assert later_offset >= 0, (
+        f"fixture cannot find {later!r} after {earlier!r} in {path}"
+    )
+    middle = source[earlier_offset + len(earlier) : later_offset]
+    path.write_text(
+        source[:earlier_offset]
+        + later
+        + middle
+        + earlier
+        + source[later_offset + len(later) :],
+        encoding="utf-8",
+    )
+
+
+def swap_ordered_once_after(
+    path: Path, anchor: str, earlier: str, later: str
+) -> None:
+    """Swap one ordered token pair after an exact enclosing-item anchor."""
+
+    source = path.read_text(encoding="utf-8")
+    anchor_offset = source.find(anchor)
+    assert anchor_offset >= 0, f"fixture cannot find {anchor!r} in {path}"
+    earlier_offset = source.find(earlier, anchor_offset + len(anchor))
+    assert earlier_offset >= 0, (
+        f"fixture cannot find {earlier!r} after {anchor!r} in {path}"
+    )
     later_offset = source.find(later, earlier_offset + len(earlier))
     assert later_offset >= 0, (
         f"fixture cannot find {later!r} after {earlier!r} in {path}"
@@ -440,6 +481,404 @@ def validate_native_participant_classifier_fixture(
         tmp_path, models, errors
     )
     return tuple(errors)
+
+
+def copy_queue_plan_pending_membership_fixture(
+    tmp_path: Path, module
+) -> list[dict]:
+    """Copy sources consumed by the exact QueuePlan route-member contract."""
+
+    models = canonical_models()
+    relatives = {
+        Path(relative)
+        for relative, _, _, _ in module.QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS
+    }
+    relatives.update(
+        Path(relative)
+        for relative, _, _ in module.QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS
+    )
+    for relative in relatives:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+    return models
+
+
+def validate_queue_plan_pending_membership_fixture(
+    tmp_path: Path, module, models: list[dict]
+) -> tuple[str, ...]:
+    errors: list[str] = []
+    module._validate_queue_plan_pending_membership_contract(
+        tmp_path, models, errors
+    )
+    return tuple(errors)
+
+
+def test_queue_plan_pending_membership_contract_accepts_current_production(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    assert validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    ) == ()
+
+
+def test_queue_plan_pending_membership_contract_rejects_bound_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once(
+        path,
+        "const MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES: usize = 1024;",
+        "const MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES: usize = 2048;",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any("one exact reviewed 1024-byte declaration" in error for error in errors), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_roster_bound_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once(
+        path,
+        "const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize =\n"
+        "    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSIONS;",
+        "const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize = usize::MAX;",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any("exact merge-admission consensus bound" in error for error in errors), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_unbounded_roster_scan(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once(
+        path,
+        "            route,\n"
+        "            MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS,\n",
+        "            route,\n"
+        "            usize::MAX,\n",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "queue_plan_pending_route_members_from_storage" in error
+        and "MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_phantom_member(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once(
+        path,
+        "if storage.get(&obligation_key).is_none() {",
+        "if false {",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "queue_plan_pending_route_members_from_storage" in error
+        and "storage.get(&obligation_key).is_none()" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_full_roster_obligation_decode(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once_after(
+        path,
+        "fn queue_plan_pending_route_members_from_storage_with_limit(",
+        "            let obligation_key = Self::queue_plan_pending_obligation_marker_key(\n",
+        "            let _ = Self::decode_exact_queue_plan_pending_obligation_marker(\n"
+        "                key, payload,\n"
+        "            )?;\n"
+        "            let obligation_key = Self::queue_plan_pending_obligation_marker_key(\n",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "without decoding the full obligation payload" in error for error in errors
+    ), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_untyped_member_claim(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once_after(
+        path,
+        "fn queue_plan_pending_route_member_identity_from_claim(",
+        "        entrypoint_hash: HashOf<TransactionEntrypoint>,\n",
+        "        entrypoint_hash: Hash,\n",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "queue_plan_pending_route_member_identity_from_claim" in error
+        and "HashOf<TransactionEntrypoint>" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_visible_native_prefix(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_HOST_RELATIVE
+    replace_once(
+        path,
+        '    "queue_plan_pending_route_member_v1_",\n',
+        "",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "queue_plan_pending_route_member_v1_" in error
+        and "opaque system contract-state namespace" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "token"),
+    (
+        (
+            "queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set",
+            "failed whole-list staging must restore the exact prior overlay",
+        ),
+        (
+            "queue_plan_pending_resolution_corrupt_route_counts_fail_without_partial_mutation",
+            "failed whole-list resolution must restore the exact prior overlay",
+        ),
+    ),
+)
+def test_queue_plan_pending_membership_contract_rejects_atomic_test_weakening(
+    tmp_path: Path, symbol: str, token: str
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs"
+    )
+    replace_once(path, token, "weakened atomic rollback assertion")
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(symbol in error and token in error for error in errors), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_inner_stage_prefix_write(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once(
+        path,
+        "        let obligation_payload = Self::queue_plan_pending_obligation_marker_payload(&obligation)?;\n",
+        "        storage.insert_queue_plan_marker(obligation_key.clone(), Vec::new());\n"
+        "        let obligation_payload = Self::queue_plan_pending_obligation_marker_payload(&obligation)?;\n",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "stage_queue_plan_pending_obligation_marker_in_storage mutates WSV "
+        "before completing all-route preflight" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_stage_apply_before_list(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    swap_ordered_once_after(
+        path,
+        "fn stage_queue_plan_admissions(",
+        "State::stage_queue_plan_pending_obligation_in_storage(&mut markers, &admission)?;",
+        "markers.apply();",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "ordered QueuePlan pending route-membership item "
+        "stage_queue_plan_admissions" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    "symbol",
+    (
+        "resolve_queue_plan_pending_obligations_for_entrypoints",
+        "resolve_required_queue_plan_pending_obligations",
+    ),
+)
+def test_queue_plan_pending_membership_contract_rejects_bulk_apply_before_list(
+    tmp_path: Path, symbol: str
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    swap_ordered_once_after(
+        path,
+        f"fn {symbol}(",
+        "State::resolve_queue_plan_pending_obligation_in_storage(",
+        "markers.apply();",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        f"ordered QueuePlan pending route-membership item {symbol}" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_decode_before_bound(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    swap_ordered_once_after(
+        path,
+        "fn decode_exact_queue_plan_pending_route_member_marker(",
+        "if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {",
+        "norito::decode_from_bytes::<QueuePlanPendingRouteMemberV1>(payload)",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "ordered QueuePlan pending route-membership item "
+        "decode_exact_queue_plan_pending_route_member_marker" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_lifecycle_height_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once(
+        path,
+        "state.lane_incarnation_at_height(route.lane_id, proposal_height)",
+        "state.lane_incarnation_at_height("
+        "route.lane_id, proposal_height.saturating_add(1))",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "queue_plan_pending_obligation_matches_active_lifecycle" in error
+        and "lane_incarnation_at_height" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_stale_queue_ownership(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once(
+        path,
+        "application_state != Some(QueuePlanAdmissionApplicationState::Pending)",
+        "application_state != Some(QueuePlanAdmissionApplicationState::PendingStale)",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "queue_plan_admission_registry_match" in error
+        and "QueuePlanAdmissionApplicationState::Pending" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_stale_cleanup_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once(
+        path,
+        "                    QueuePlanAdmissionApplicationState::PendingStale => {\n"
+        "                        PendingQueuePlanAdmissionDisposition::Stale\n"
+        "                    }",
+        "                    QueuePlanAdmissionApplicationState::PendingStale => {\n"
+        "                        PendingQueuePlanAdmissionDisposition::Exact\n"
+        "                    }",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "classify_pending_queue_plan_admission" in error
+        and "PendingQueuePlanAdmissionDisposition::Stale" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_pending_membership_contract_preserves_historical_applied(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    replace_once(
+        path,
+        "None if committed => Ok(QueuePlanAdmissionApplicationState::Applied)",
+        "None if committed => Ok(QueuePlanAdmissionApplicationState::PendingStale)",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "queue_plan_registry_owner_application_state_in_view" in error
+        and "QueuePlanAdmissionApplicationState::Applied" in error
+        for error in errors
+    ), errors
 
 
 def test_native_participant_classifier_contract_accepts_current_production(
@@ -616,7 +1055,27 @@ def test_native_prepublication_contract_rejects_removed_prepublication_call(
         (
             ".apply_without_execution_with_verified_v2_finality("
             "&committed_block, commit_topology)",
-            "state_block.commit().map_err",
+            ".pending_autoscale_retirement_binding()",
+        ),
+        (
+            ".pending_autoscale_retirement_binding()",
+            "Box::new(checked_carrier_applications)",
+        ),
+        (
+            "Box::new(checked_carrier_applications)",
+            "if carries_scale_in {",
+        ),
+        (
+            "if carries_scale_in {",
+            "self.queue.lock_lane_retirement_observer()",
+        ),
+        (
+            "self.queue.lock_lane_retirement_observer()",
+            ".commit_with_state_commit_authorization_and_autoscale_retirement_queue_veto(",
+        ),
+        (
+            ".commit_with_state_commit_authorization_and_autoscale_retirement_queue_veto(",
+            "state_block.commit_with_state_commit_authorization(state_commit_authorization)",
         ),
     ),
     ids=(
@@ -624,7 +1083,12 @@ def test_native_prepublication_contract_rejects_removed_prepublication_call(
         "prepublication-before-state-projection",
         "state-projection-before-readback-token",
         "readback-token-before-wsv-stage",
-        "wsv-stage-before-wsv-commit",
+        "wsv-stage-before-scale-in-projection",
+        "scale-in-projection-before-carrier-authorization",
+        "carrier-authorization-before-scale-in-branch",
+        "scale-in-branch-before-queue-observer",
+        "queue-observer-before-scale-in-commit",
+        "scale-in-before-ordinary-commit",
     ),
 )
 def test_native_prepublication_contract_rejects_apply_order_drift(
@@ -638,6 +1102,49 @@ def test_native_prepublication_contract_rejects_apply_order_drift(
     assert any(
         "ordered Native prepublication item "
         "V2ApplyService::validate_and_apply" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("earlier", "later"),
+    (
+        (
+            "let _state_commit_lock = state_ref.state_commit_lock.lock();",
+            "let autoscale_lifecycle_guard",
+        ),
+        (
+            "let autoscale_lifecycle_guard",
+            "autoscale_retirement_queue_veto.as_mut()",
+        ),
+        (
+            "autoscale_retirement_queue_veto.as_mut()",
+            "state_commit_authorization.take()",
+        ),
+        (
+            "state_commit_authorization.take()",
+            ".consume_for_state_commit(",
+        ),
+        (
+            ".consume_for_state_commit(",
+            "state_ref.apply_committed_autoscale_lane_geometry(",
+        ),
+        (
+            "state_ref.apply_committed_autoscale_lane_geometry(",
+            "transactions.commit()",
+        ),
+    ),
+)
+def test_native_prepublication_contract_rejects_state_commit_order_drift(
+    tmp_path: Path, earlier: str, later: str
+) -> None:
+    module = load_checker()
+    models = copy_native_prepublication_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/state.rs"
+    swap_ordered_once(path, earlier, later)
+    errors = validate_native_prepublication_fixture(tmp_path, module, models)
+    assert any(
+        "ordered Native prepublication item commit_inner" in error
         for error in errors
     ), errors
 
@@ -1636,6 +2143,26 @@ def test_inflight_layout_contract_rejects_ledger_weakening(
     assert any("whole-file source checks differ" in error for error in errors)
 
 
+def test_inflight_layout_contract_rejects_closure_ledger_mutation_count_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "specs/sumeragi_v2_multilane_closure_ledger.md"
+    replace_once(
+        path,
+        "twenty-two exact TLC mutation witnesses",
+        "twenty exact TLC mutation witnesses",
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "missing current-layout closure token "
+        "'twenty-two exact TLC mutation witnesses'" in error
+        for error in errors
+    ), errors
+
+
 def test_inflight_layout_contract_rejects_action_inventory_weakening(
     tmp_path: Path,
 ) -> None:
@@ -1720,8 +2247,7 @@ def test_inflight_composed_contract_rejects_terminal_wsv_before_full_forget_pref
     path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
     replace_once(
         path,
-        "        && projection.history.reservation_commit_forgotten_prefix\n"
-        "            == projection.queue.selected_count\n",
+        "        && projection.history.reservation_commit_forgotten_prefix == projection.queue.selected_count\n",
         "",
     )
     errors = validate_fixture(tmp_path, module, contract)
@@ -2047,6 +2573,33 @@ def test_inflight_layout_contract_rejects_terminal_fifo_ownership_weakening(
     assert any(
         "Queue::release_barrier_has_exact_fifo_ownership_locked" in error
         and "self.txs.contains_key(&hash)" in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_expired_release_owner_filter(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue.rs"
+    replace_once(
+        path,
+        "            drop(tx);\n"
+        "            if members.insert(hash)",
+        "            if self.is_expired(tx.as_accepted()) {\n"
+        "                continue;\n"
+        "            }\n"
+        "            drop(tx);\n"
+        "            if members.insert(hash)",
+    )
+
+    errors = validate_fixture(tmp_path, module, contract)
+
+    assert any(
+        "Queue::fifo_with_released_reservations_locked" in error
+        and "is_expired(" in error
         for error in errors
     ), errors
 

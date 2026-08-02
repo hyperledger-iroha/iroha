@@ -7566,6 +7566,18 @@ struct BufferedPayloadChunk {
     ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
 }
 
+// A lifecycle classification revalidates the complete fair-ingress carrier and
+// scans the executor's exact body stages. Limit that adversarially expensive
+// work to one orphan per service turn; the persistent cursor below still gives
+// every retained orphan deterministic round-robin progress.
+const MAX_ORPHAN_LIFECYCLE_VISITS_PER_REPLAY: usize = 1;
+
+#[derive(Clone, Copy, Debug)]
+struct OrphanPayloadLifecycleSweepCursor {
+    manifest_hash: HashOf<wire::PayloadManifest>,
+    chunk_offset: usize,
+}
+
 /// Result of routing one payload chunk through the bounded reorder buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PayloadChunkDisposition {
@@ -12978,6 +12990,7 @@ pub(crate) struct ProductionV2Services {
     orphan_chunks: BTreeMap<HashOf<wire::PayloadManifest>, VecDeque<BufferedPayloadChunk>>,
     orphan_chunk_count: usize,
     orphan_chunk_bytes: u64,
+    orphan_lifecycle_sweep_cursor: Option<OrphanPayloadLifecycleSweepCursor>,
     max_orphan_chunks: usize,
     max_orphan_chunk_bytes: u64,
     max_merge_sidecar_deferrals: usize,
@@ -13187,6 +13200,7 @@ impl ProductionV2Services {
             orphan_chunks: BTreeMap::new(),
             orphan_chunk_count: 0,
             orphan_chunk_bytes: 0,
+            orphan_lifecycle_sweep_cursor: None,
             max_orphan_chunks: orphan_chunk_capacity,
             max_orphan_chunk_bytes,
             max_merge_sidecar_deferrals: consensus_io_capacity,
@@ -14304,70 +14318,135 @@ impl ProductionV2Services {
         true
     }
 
+    fn next_orphan_payload_lifecycle_sweep_position(
+        &self,
+    ) -> Option<OrphanPayloadLifecycleSweepCursor> {
+        let first = || {
+            self.orphan_chunks
+                .iter()
+                .find(|(_, chunks)| !chunks.is_empty())
+                .map(|(manifest_hash, _)| OrphanPayloadLifecycleSweepCursor {
+                    manifest_hash: *manifest_hash,
+                    chunk_offset: 0,
+                })
+        };
+        let Some(cursor) = self.orphan_lifecycle_sweep_cursor else {
+            return first();
+        };
+        if self
+            .orphan_chunks
+            .get(&cursor.manifest_hash)
+            .is_some_and(|chunks| cursor.chunk_offset < chunks.len())
+        {
+            return Some(cursor);
+        }
+        self.orphan_chunks
+            .range((
+                std::ops::Bound::Excluded(cursor.manifest_hash),
+                std::ops::Bound::Unbounded,
+            ))
+            .find(|(_, chunks)| !chunks.is_empty())
+            .map(|(manifest_hash, _)| OrphanPayloadLifecycleSweepCursor {
+                manifest_hash: *manifest_hash,
+                chunk_offset: 0,
+            })
+            .or_else(first)
+    }
+
+    fn terminalize_buffered_payload_chunk_if_complete<R: EffectRuntime>(
+        &self,
+        executor: &V2EffectExecutor<R>,
+        manifest_hash: HashOf<wire::PayloadManifest>,
+        buffered: &BufferedPayloadChunk,
+    ) -> Result<bool, String> {
+        let Some(ingress_ownership) = buffered.ingress_ownership.as_ref() else {
+            return Ok(false);
+        };
+        let Some(runtime) = ingress_ownership.leader_wire_runtime_receipt() else {
+            return Ok(false);
+        };
+        let disposition =
+            match self.has_exact_reconstructed_completion(manifest_hash, ingress_ownership) {
+                Ok(true) => PayloadChunkLifecycleDisposition::Volatile,
+                Ok(false) => executor
+                    .classify_payload_chunk_lifecycle(manifest_hash, ingress_ownership)
+                    .map_err(|error| error.to_string())?,
+                Err(error) => return Err(error),
+            };
+        match disposition {
+            PayloadChunkLifecycleDisposition::Durable(receipt) => self
+                .leader_wire_ingress
+                .mark_leader_wire_durable_body_terminal(runtime, &receipt)?,
+            PayloadChunkLifecycleDisposition::Volatile => self
+                .leader_wire_ingress
+                .mark_leader_wire_volatile_terminal(runtime)?,
+            PayloadChunkLifecycleDisposition::Retain => return Ok(false),
+        }
+        Ok(true)
+    }
+
     fn sweep_buffered_payload_chunk_lifecycles<R: EffectRuntime>(
         &mut self,
         executor: &V2EffectExecutor<R>,
     ) -> Result<usize, String> {
-        let manifest_hashes = self.orphan_chunks.keys().copied().collect::<Vec<_>>();
         let mut retired = 0usize;
         let mut first_error = None;
-        for manifest_hash in manifest_hashes {
-            let Some(mut chunks) = self.orphan_chunks.remove(&manifest_hash) else {
-                continue;
+        let visits = self
+            .orphan_chunk_count
+            .min(MAX_ORPHAN_LIFECYCLE_VISITS_PER_REPLAY);
+        for _ in 0..visits {
+            let Some(cursor) = self.next_orphan_payload_lifecycle_sweep_position() else {
+                self.orphan_lifecycle_sweep_cursor = None;
+                break;
             };
-            let mut retained = VecDeque::new();
-            while let Some(buffered) = chunks.pop_front() {
-                let Some(ingress_ownership) = buffered.ingress_ownership.as_ref() else {
-                    retained.push_back(buffered);
-                    continue;
-                };
-                let Some(runtime) = ingress_ownership.leader_wire_runtime_receipt() else {
-                    retained.push_back(buffered);
-                    continue;
-                };
-                let disposition = match self
-                    .has_exact_reconstructed_completion(manifest_hash, ingress_ownership)
-                {
-                    Ok(true) => Ok(PayloadChunkLifecycleDisposition::Volatile),
-                    Ok(false) => executor
-                        .classify_payload_chunk_lifecycle(manifest_hash, ingress_ownership)
-                        .map_err(|error| error.to_string()),
-                    Err(error) => Err(error),
-                };
-                let terminal = match disposition {
-                    Ok(PayloadChunkLifecycleDisposition::Durable(receipt)) => self
-                        .leader_wire_ingress
-                        .mark_leader_wire_durable_body_terminal(runtime, &receipt),
-                    Ok(PayloadChunkLifecycleDisposition::Volatile) => self
-                        .leader_wire_ingress
-                        .mark_leader_wire_volatile_terminal(runtime),
-                    Ok(PayloadChunkLifecycleDisposition::Retain) => {
-                        retained.push_back(buffered);
-                        continue;
+            let classification = {
+                let buffered = self
+                    .orphan_chunks
+                    .get(&cursor.manifest_hash)
+                    .and_then(|chunks| chunks.get(cursor.chunk_offset))
+                    .expect("orphan lifecycle cursor resolves an existing buffered chunk");
+                self.terminalize_buffered_payload_chunk_if_complete(
+                    executor,
+                    cursor.manifest_hash,
+                    buffered,
+                )
+            };
+            match classification {
+                Ok(true) => {
+                    let (removed, remove_manifest) = {
+                        let chunks = self
+                            .orphan_chunks
+                            .get_mut(&cursor.manifest_hash)
+                            .expect("classified orphan manifest remains present");
+                        let removed = chunks
+                            .remove(cursor.chunk_offset)
+                            .expect("classified orphan chunk remains present");
+                        (removed, chunks.is_empty())
+                    };
+                    if remove_manifest {
+                        self.orphan_chunks.remove(&cursor.manifest_hash);
                     }
-                    Err(error) => {
-                        if first_error.is_none() {
-                            first_error = Some(error);
-                        }
-                        retained.push_back(buffered);
-                        continue;
-                    }
-                };
-                if let Err(error) = terminal {
+                    let bytes = u64::try_from(removed.chunk.bytes.len()).unwrap_or(u64::MAX);
+                    self.orphan_chunk_count = self.orphan_chunk_count.saturating_sub(1);
+                    self.orphan_chunk_bytes = self.orphan_chunk_bytes.saturating_sub(bytes);
+                    retired = retired.saturating_add(1);
+                    self.orphan_lifecycle_sweep_cursor = Some(cursor);
+                }
+                Ok(false) => {
+                    self.orphan_lifecycle_sweep_cursor = Some(OrphanPayloadLifecycleSweepCursor {
+                        manifest_hash: cursor.manifest_hash,
+                        chunk_offset: cursor.chunk_offset.saturating_add(1),
+                    });
+                }
+                Err(error) => {
+                    self.orphan_lifecycle_sweep_cursor = Some(OrphanPayloadLifecycleSweepCursor {
+                        manifest_hash: cursor.manifest_hash,
+                        chunk_offset: cursor.chunk_offset.saturating_add(1),
+                    });
                     if first_error.is_none() {
                         first_error = Some(error);
                     }
-                    retained.push_back(buffered);
-                    continue;
                 }
-                let bytes = u64::try_from(buffered.chunk.bytes.len()).unwrap_or(u64::MAX);
-                self.orphan_chunk_count = self.orphan_chunk_count.saturating_sub(1);
-                self.orphan_chunk_bytes = self.orphan_chunk_bytes.saturating_sub(bytes);
-                retired = retired.saturating_add(1);
-            }
-            if !retained.is_empty() {
-                let previous = self.orphan_chunks.insert(manifest_hash, retained);
-                debug_assert!(previous.is_none());
             }
         }
         first_error.map_or(Ok(retired), Err)
@@ -18748,6 +18827,7 @@ pub(super) mod tests {
             orphan_chunks: BTreeMap::new(),
             orphan_chunk_count: 0,
             orphan_chunk_bytes: 0,
+            orphan_lifecycle_sweep_cursor: None,
             max_orphan_chunks: 1,
             max_orphan_chunk_bytes: 32,
             max_merge_sidecar_deferrals: 1,
@@ -28706,7 +28786,10 @@ pub(super) mod tests {
         let replay_admissions = Arc::new(AtomicUsize::new(0));
         let replay_admissions_for_hook = Arc::clone(&replay_admissions);
         service.set_exact_output_admission_hook(move |_post, ticket| {
-            assert!(ticket.is_none(), "the first live replay owns no retry ticket");
+            assert!(
+                ticket.is_none(),
+                "the first live replay owns no retry ticket"
+            );
             replay_admissions_for_hook.fetch_add(1, AtomicOrdering::AcqRel);
             Ok(())
         });
@@ -31504,6 +31587,147 @@ pub(super) mod tests {
                 "durable_before_late_chunk={durable_before_late_chunk}"
             );
         }
+    }
+
+    #[test]
+    fn productive_orphan_lifecycle_sweep_bounds_turns_services_completion_and_wraps() {
+        let (mut service, keys) = fixture_with_block_payload();
+        let capacity = usize::try_from(service.context.da_layout.max_chunk_count)
+            .expect("fixture orphan capacity fits usize");
+        service.max_orphan_chunks = capacity;
+        service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
+        let gate_directory = TempDir::new().expect("temporary bounded orphan-sweep gate");
+        let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
+        let mut complete_recovered = BTreeMap::new();
+        let mut recovered_keys = Vec::with_capacity(capacity);
+        let mut tokens = Vec::with_capacity(capacity);
+
+        for view in 0..u64::try_from(capacity).expect("fixture capacity fits u64") {
+            let (_, manifest, proposal, chunk, sender) =
+                productive_chunk_at_view(&service, &keys, view);
+            admit_and_terminalize_productive_proposal(&ingress, proposal, sender.clone());
+            let manifest_hash = HashOf::new(&manifest);
+            let token = buffer_productive_orphan_for_replay(&mut service, &ingress, sender, chunk);
+            tokens.push((manifest_hash, token));
+            let durable = DurableBodyReceipt::for_test(
+                service.context.id(),
+                manifest.round,
+                manifest.subject,
+                manifest_hash,
+            );
+            let key = (manifest.round, manifest.subject);
+            recovered_keys.push((manifest_hash, key));
+            complete_recovered.insert(key, (manifest, durable));
+        }
+        assert_eq!(service.orphan_chunk_count, capacity);
+        assert_eq!(
+            service
+                .orphan_chunks
+                .values()
+                .map(VecDeque::len)
+                .sum::<usize>(),
+            capacity
+        );
+
+        // Keep the last deterministic sweep position live while every other
+        // exact owner is already durable. This forces a full cursor cycle and
+        // a wrap before the final owner can retire.
+        let retained_manifest_hash = *service
+            .orphan_chunks
+            .keys()
+            .next_back()
+            .expect("capacity fixture has a final manifest");
+        let retained_key = recovered_keys
+            .iter()
+            .find_map(|(manifest_hash, key)| {
+                (*manifest_hash == retained_manifest_hash).then_some(*key)
+            })
+            .expect("retained manifest has exact recovered coordinates");
+        let mut partial_recovered = complete_recovered.clone();
+        assert!(partial_recovered.remove(&retained_key).is_some());
+        let mut executor = chunk_effect_executor(&service, partial_recovered);
+
+        let (command_tx, _command_rx, admission) = test_io_command_channel(1);
+        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
+        });
+        completion_tx
+            .try_send(V2IoCompletion::AuxiliaryNoop)
+            .expect("queue completion behind the first bounded sweep");
+
+        assert_eq!(
+            service
+                .replay_buffered_chunks(&mut executor)
+                .expect("first bounded lifecycle sweep remains valid"),
+            0
+        );
+        assert_eq!(service.orphan_chunk_count, capacity.saturating_sub(1));
+        assert_eq!(
+            service
+                .drain_completions(&mut executor)
+                .expect("bounded sweep returns a completion service opportunity"),
+            1,
+            "a ready service completion must run before the next lifecycle sweep"
+        );
+        // No worker owns this synthetic channel; remove it before service Drop
+        // attempts the production shutdown handshake.
+        drop(service.io.take());
+
+        for _ in 1..capacity {
+            let before = service.orphan_chunk_count;
+            assert_eq!(
+                service
+                    .replay_buffered_chunks(&mut executor)
+                    .expect("bounded lifecycle sweep remains valid"),
+                0,
+                "terminal lifecycle sweeping must not report chunk delivery"
+            );
+            assert!(
+                before.saturating_sub(service.orphan_chunk_count) <= 1,
+                "one service turn may deeply classify at most one orphan"
+            );
+        }
+        assert_eq!(
+            service.orphan_chunk_count, 1,
+            "one Retain owner must not starve the durable tail during a complete cursor cycle"
+        );
+        let retained_token = tokens
+            .iter()
+            .find_map(|(manifest_hash, token)| {
+                (*manifest_hash == retained_manifest_hash).then_some(token)
+            })
+            .expect("retained manifest has a lifecycle token");
+        assert_eq!(
+            ingress.state.lock().leader_wire_lifecycles[&retained_token.slot].status,
+            super::super::FairV2IngressLeaderWireStatus::Runtime
+        );
+
+        let mut complete_executor = chunk_effect_executor(&service, complete_recovered);
+        assert_eq!(
+            service
+                .replay_buffered_chunks(&mut complete_executor)
+                .expect("cursor wrap reaches the newly durable retained owner"),
+            0
+        );
+        assert!(service.orphan_chunks.is_empty());
+        assert_eq!(service.orphan_chunk_count, 0);
+        assert_eq!(service.orphan_chunk_bytes, 0);
+        assert!(tokens.iter().all(|(_, token)| {
+            ingress.state.lock().leader_wire_lifecycles[&token.slot].status
+                == super::super::FairV2IngressLeaderWireStatus::Terminal
+        }));
+        assert_eq!(
+            service
+                .replay_buffered_chunks(&mut complete_executor)
+                .expect("an empty lifecycle sweep is idle"),
+            0
+        );
+        assert!(service.orphan_lifecycle_sweep_cursor.is_none());
     }
 
     #[test]

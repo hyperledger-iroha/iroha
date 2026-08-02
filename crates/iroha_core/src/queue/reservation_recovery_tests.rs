@@ -1853,11 +1853,7 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
     );
     assert_eq!(queue.queued_len(), 1);
 
-    install_queue_plan_registry_value_for_test(
-        &state,
-        &admission_binding,
-        admission_binding.canonical_hash(),
-    );
+    install_queue_plan_registry_value_for_test(&state, &admission_binding);
     assert_eq!(
         state
             .queue_plan_admission_binding_registry_match(&admission_binding)

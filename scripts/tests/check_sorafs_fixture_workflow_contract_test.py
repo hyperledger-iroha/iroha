@@ -115,6 +115,63 @@ STRICT_NATIVE_PROFILE_MARKERS = {
     ),
 }
 
+MATERIAL_CLOSURE_PATHS_BY_WORKFLOW = {
+    "openapi.yml": {
+        "crates/iroha_torii_shared/src/sorafs_moderation_api.rs",
+        "crates/iroha_torii_shared/src/lib.rs",
+        "crates/iroha_torii_shared/src/route_catalog.rs",
+        "crates/iroha_torii/src/lib.rs",
+        "crates/iroha_torii/src/openapi.rs",
+        "crates/iroha_torii/src/sorafs/api.rs",
+    },
+    "mobile_sdk_artifacts.yml": {
+        "IrohaSwift/Package.swift",
+        "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/NativeBridgeLoaderTests.swift",
+        "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.json",
+        (
+            "fixtures/sorafs_manifest/reference_sdk/"
+            "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"
+        ),
+        "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json",
+        "integration_tests/tests/native_escrow.rs",
+    },
+    "pr_csharp.yml": {
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/"
+            "SoraFsReferenceValidatorsTests.cs"
+        ),
+        "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.json",
+        (
+            "fixtures/sorafs_manifest/reference_sdk/"
+            "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"
+        ),
+        "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json",
+        "integration_tests/tests/native_escrow.rs",
+    },
+    "sorafs-orchestrator-sdk.yml": {
+        "IrohaSwift/Package.swift",
+        "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/NativeBridgeLoaderTests.swift",
+        "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.json",
+        (
+            "fixtures/sorafs_manifest/reference_sdk/"
+            "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"
+        ),
+        "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json",
+        "integration_tests/tests/native_escrow.rs",
+    },
+    "sorafs-fixtures-nightly.yml": {
+        "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.json",
+        (
+            "fixtures/sorafs_manifest/reference_sdk/"
+            "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"
+        ),
+        "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json",
+        "integration_tests/tests/native_escrow.rs",
+    },
+}
+
 
 def read(relative: str) -> str:
     """Read one repository file as UTF-8."""
@@ -122,26 +179,83 @@ def read(relative: str) -> str:
     return (REPO_ROOT / relative).read_text(encoding="utf-8")
 
 
-def pull_request_paths(workflow_name: str) -> set[str]:
-    """Return the literal pull-request path filter from one workflow."""
+def workflow_event_paths(workflow_name: str, event: str) -> set[str]:
+    """Return one literal GitHub workflow event path filter."""
 
     source = (WORKFLOW_ROOT / workflow_name).read_text(encoding="utf-8")
     match = re.search(
-        r"(?m)^  pull_request:\n"
+        rf"(?m)^  {re.escape(event)}:\n"
         r"(?P<body>(?:^    [^\n]*\n)*)",
         source,
     )
-    assert match is not None, f"{workflow_name} must define pull_request"
+    assert match is not None, f"{workflow_name} must define {event}"
     body = match.group("body")
     paths = re.search(
         r'(?m)^    paths:\n(?P<paths>(?:^      - "[^"\n]+"\n)+)',
         body,
     )
-    assert paths is not None, f"{workflow_name} must define pull_request.paths"
+    assert paths is not None, f"{workflow_name} must define {event}.paths"
     return {
         line.removeprefix("      - ").strip().strip('"')
         for line in paths.group("paths").splitlines()
     }
+
+
+def pull_request_paths(workflow_name: str) -> set[str]:
+    """Return the literal pull-request path filter from one workflow."""
+
+    return workflow_event_paths(workflow_name, "pull_request")
+
+
+def workflow_filter_covers(path: str, filters: set[str]) -> bool:
+    """Return whether literal GitHub path filters cover one repository path."""
+
+    for candidate in filters:
+        if candidate == path:
+            return True
+        if candidate.endswith("/**"):
+            prefix = candidate.removesuffix("/**")
+            if path == prefix or path.startswith(f"{prefix}/"):
+                return True
+    return False
+
+
+@pytest.mark.parametrize(
+    ("workflow_name", "material_paths"),
+    MATERIAL_CLOSURE_PATHS_BY_WORKFLOW.items(),
+)
+def test_material_closure_files_are_routed_to_relevant_workflows(
+    workflow_name: str,
+    material_paths: set[str],
+) -> None:
+    """Changed V1 closure inputs must start every workflow that consumes them."""
+
+    filters = pull_request_paths(workflow_name)
+    missing_files = sorted(
+        path for path in material_paths if not (REPO_ROOT / path).is_file()
+    )
+    assert not missing_files, f"closure inventory names missing files: {missing_files}"
+    uncovered = sorted(
+        path
+        for path in material_paths
+        if not workflow_filter_covers(path, filters)
+    )
+    assert not uncovered, f"{workflow_name} omits closure triggers: {uncovered}"
+
+
+def test_openapi_push_and_pull_request_filters_cover_moderation_sources() -> None:
+    """The canonical generator must run for moderation changes on both events."""
+
+    for event in ("pull_request", "push"):
+        filters = workflow_event_paths("openapi.yml", event)
+        uncovered = sorted(
+            path
+            for path in MATERIAL_CLOSURE_PATHS_BY_WORKFLOW["openapi.yml"]
+            if not workflow_filter_covers(path, filters)
+        )
+        assert not uncovered, (
+            f"openapi.yml {event} omits closure triggers: {uncovered}"
+        )
 
 
 @pytest.mark.parametrize(

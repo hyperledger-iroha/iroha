@@ -8,61 +8,23 @@
 export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 21;
 export const KAGEMUSHA_MANIFEST_VERSION = 4;
 export const KAGEMUSHA_MAX_HOPS = 8;
+export const KAGEMUSHA_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1";
 export const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES = 512 * 1024;
 export const KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES = 48 * 1024 * 1024;
 
 const HASH_32 = /^[0-9a-f]{64}$/u;
 const OPERATION_ID = /^(?!0{64}$)[0-9a-f]{64}$/u;
-const BLOCKER_CODE = /^[a-z0-9_]{1,64}$/u;
 const EXACT_JSON_MEDIA_TYPE =
   /^[ \t]*application\/json(?:[ \t]*;[ \t]*[!#$%&'*+\-.^_`|~0-9A-Za-z]+=(?:[!#$%&'*+\-.^_`|~0-9A-Za-z]+|"(?:[ \t!#-\[\]-~\u0080-\u00ff]|\\[ \t!-~\u0080-\u00ff])*"))*[ \t]*$/iu;
-const REQUIRED_READINESS_FIELDS = Object.freeze([
+const OFFLINE_STATUS_FIELDS = Object.freeze([
+  "mandatory",
+  "cash_handoff_capability",
   "required_bridge_abi_version",
   "max_hops",
-  "asset_definition_id",
-  "asset_scale",
-  "evaluated_block_height",
-  "evaluated_block_hash",
-  "active_transfer_verifier",
-  "active_topup_shield_verifier",
-  "active_unshield_verifier",
-  "active_recursive_step_eq_verifier",
-  "active_recursive_step_ep_verifier",
-  "artifact_set",
-  "proof_backend_available",
-  "recursive_lineage_supported",
   "ready",
+  "assets",
   "blockers",
 ]);
-const VERIFIER_FIELDS = Object.freeze([
-  "active_transfer_verifier",
-  "active_topup_shield_verifier",
-  "active_unshield_verifier",
-  "active_recursive_step_eq_verifier",
-  "active_recursive_step_ep_verifier",
-]);
-const VERIFIER_IDENTITIES = Object.freeze({
-  active_transfer_verifier: Object.freeze({
-    name: "confidential_transfer_v2_verifier_record",
-    circuit: "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-  }),
-  active_topup_shield_verifier: Object.freeze({
-    name: "kagemusha_topup_shield_v2_verifier_record",
-    circuit: "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-  }),
-  active_unshield_verifier: Object.freeze({
-    name: "confidential_unshield_v3_verifier_record",
-    circuit: "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-  }),
-  active_recursive_step_eq_verifier: Object.freeze({
-    name: "kagemusha_recursive_step_eq_v4_verifier_record",
-    circuit: "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-  }),
-  active_recursive_step_ep_verifier: Object.freeze({
-    name: "kagemusha_recursive_step_ep_v4_verifier_record",
-    circuit: "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-  }),
-});
 
 function record(value, context) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -101,13 +63,6 @@ function safeUnsigned(value, context, { positive = false, maximum = Number.MAX_S
   return value;
 }
 
-function boolean(value, context) {
-  if (typeof value !== "boolean") {
-    throw new TypeError(`${context} must be a boolean`);
-  }
-  return value;
-}
-
 function hash32(value, context, { nonzero = false } = {}) {
   if (typeof value !== "string" || !HASH_32.test(value) || (nonzero && value === "0".repeat(64))) {
     throw new TypeError(`${context} must be ${nonzero ? "non-zero " : ""}lowercase 32-byte hexadecimal`);
@@ -120,115 +75,6 @@ function jsonSnapshot(value) {
     return structuredClone(value);
   }
   return JSON.parse(JSON.stringify(value));
-}
-
-function normalizeVerifier(value, field, evaluatedBlockHeight) {
-  const context = `Kagemusha readiness.${field}`;
-  const item = exactFields(value, context, [
-    "id",
-    "version",
-    "circuit_id",
-    "commitment",
-    "public_inputs_schema_hash",
-    "max_proof_bytes",
-    "activation_height",
-    "withdrawal_height",
-  ]);
-  const id = exactFields(item.id, `${context}.id`, ["backend", "name"]);
-  const identity = VERIFIER_IDENTITIES[field];
-  const backend = exactString(id.backend, `${context}.id.backend`, { maximum: 256 });
-  const name = exactString(id.name, `${context}.id.name`, { maximum: 256 });
-  const circuitId = exactString(item.circuit_id, `${context}.circuit_id`, { maximum: 512 });
-  if (backend !== "halo2/ipa" || name !== identity.name || circuitId !== identity.circuit) {
-    throw new TypeError(`${context} does not identify its production verifier role`);
-  }
-  const activationHeight = safeUnsigned(item.activation_height, `${context}.activation_height`);
-  const withdrawalHeight = item.withdrawal_height === null
-    ? null
-    : safeUnsigned(item.withdrawal_height, `${context}.withdrawal_height`, { positive: true });
-  if (
-    activationHeight > evaluatedBlockHeight ||
-    (withdrawalHeight !== null && withdrawalHeight <= evaluatedBlockHeight)
-  ) {
-    throw new TypeError(`${context} is not active at the evaluated block`);
-  }
-  return Object.freeze({
-    id: Object.freeze({ backend, name }),
-    version: safeUnsigned(item.version, `${context}.version`, { positive: true, maximum: 0xffff_ffff }),
-    circuit_id: circuitId,
-    commitment: hash32(item.commitment, `${context}.commitment`, { nonzero: true }),
-    public_inputs_schema_hash: hash32(
-      item.public_inputs_schema_hash,
-      `${context}.public_inputs_schema_hash`,
-      { nonzero: true },
-    ),
-    max_proof_bytes: safeUnsigned(item.max_proof_bytes, `${context}.max_proof_bytes`, {
-      positive: true,
-      maximum: 0xffff_ffff,
-    }),
-    activation_height: activationHeight,
-    withdrawal_height: withdrawalHeight,
-  });
-}
-
-function normalizeArtifactSet(value, evaluatedBlockHeight, assetScale) {
-  const context = "Kagemusha readiness.artifact_set";
-  const item = exactFields(value, context, [
-    "generation",
-    "manifest_sha256",
-    "release_policy_sha256",
-    "release_attestation_sha256",
-    "activation_height",
-    "withdrawal_height",
-    "max_proof_bytes",
-    "asset_scale",
-  ]);
-  const generation = exactString(item.generation, `${context}.generation`, { maximum: 128 });
-  if (!/^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$/u.test(generation)) {
-    throw new TypeError(`${context}.generation must be a portable artifact identifier`);
-  }
-  const digests = [
-    hash32(item.manifest_sha256, `${context}.manifest_sha256`, { nonzero: true }),
-    hash32(item.release_policy_sha256, `${context}.release_policy_sha256`, { nonzero: true }),
-    hash32(item.release_attestation_sha256, `${context}.release_attestation_sha256`, { nonzero: true }),
-  ];
-  if (new Set(digests).size !== digests.length) {
-    throw new TypeError(`${context} digests must be pairwise distinct`);
-  }
-  const activationHeight = safeUnsigned(item.activation_height, `${context}.activation_height`, {
-    positive: true,
-  });
-  const withdrawalHeight = safeUnsigned(item.withdrawal_height, `${context}.withdrawal_height`, {
-    positive: true,
-  });
-  if (
-    withdrawalHeight <= activationHeight ||
-    activationHeight > evaluatedBlockHeight ||
-    withdrawalHeight <= evaluatedBlockHeight
-  ) {
-    throw new TypeError(`${context} is not active at the evaluated block`);
-  }
-  const artifactScale = safeUnsigned(item.asset_scale, `${context}.asset_scale`, { maximum: 28 });
-  if (artifactScale !== assetScale) {
-    throw new TypeError(`${context}.asset_scale must equal the authoritative asset scale`);
-  }
-  return Object.freeze({
-    generation,
-    manifest_sha256: digests[0],
-    release_policy_sha256: digests[1],
-    release_attestation_sha256: digests[2],
-    activation_height: activationHeight,
-    withdrawal_height: withdrawalHeight,
-    max_proof_bytes: safeUnsigned(item.max_proof_bytes, `${context}.max_proof_bytes`, {
-      positive: true,
-      maximum: 16 * 1024 * 1024,
-    }),
-    asset_scale: artifactScale,
-  });
-}
-
-export function normalizeKagemushaAssetSelector(value, context = "assetDefinitionId") {
-  return exactString(value, context, { maximum: 512 });
 }
 
 export function normalizeKagemushaOperationId(value, context = "operationId") {
@@ -244,116 +90,56 @@ export function requireKagemushaJsonContentType(value, context) {
   }
 }
 
-export function normalizeKagemushaReadinessV4(payload, requestedAssetSelector) {
-  const context = "Kagemusha readiness";
-  const requested = normalizeKagemushaAssetSelector(requestedAssetSelector, "requested asset selector");
-  const item = exactFields(payload, context, REQUIRED_READINESS_FIELDS);
-  if (safeUnsigned(item.required_bridge_abi_version, `${context}.required_bridge_abi_version`, {
-    positive: true,
-    maximum: 0xffff_ffff,
-  }) !== KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION) {
-    throw new TypeError(`${context}.required_bridge_abi_version must be 21`);
-  }
-  if (safeUnsigned(item.max_hops, `${context}.max_hops`, {
-    positive: true,
-    maximum: 0xffff_ffff,
-  }) !== KAGEMUSHA_MAX_HOPS) {
-    throw new TypeError(`${context}.max_hops must be 8`);
-  }
-  const assetDefinitionId = exactString(item.asset_definition_id, `${context}.asset_definition_id`, {
-    maximum: 512,
-  });
-  if (requested.includes("#") && assetDefinitionId !== requested) {
-    throw new TypeError(`${context}.asset_definition_id does not match the requested canonical asset`);
-  }
-  const assetScale = item.asset_scale === null
-    ? null
-    : safeUnsigned(item.asset_scale, `${context}.asset_scale`, { maximum: 0xffff_ffff });
-  const evaluatedBlockHeight = safeUnsigned(
-    item.evaluated_block_height,
-    `${context}.evaluated_block_height`,
-  );
-  const verifiers = {};
-  for (const field of VERIFIER_FIELDS) {
-    verifiers[field] = item[field] === null
-      ? null
-      : normalizeVerifier(item[field], field, evaluatedBlockHeight);
-  }
-  const hasEq = verifiers.active_recursive_step_eq_verifier !== null;
-  const hasEp = verifiers.active_recursive_step_ep_verifier !== null;
-  if (hasEq !== hasEp) {
-    throw new TypeError(`${context} must report the ABI-21 V4 Eq/Ep verifier pair atomically`);
-  }
-  const artifactSet = item.artifact_set === null
-    ? null
-    : normalizeArtifactSet(item.artifact_set, evaluatedBlockHeight, assetScale);
-  if ((artifactSet !== null) !== hasEq) {
-    throw new TypeError(`${context}.artifact_set and the ABI-21 V4 Eq/Ep pair must be reported together`);
+/** Normalize the exact universal OfflineStatus projection returned by Torii. */
+export function normalizeOfflineStatus(payload) {
+  const context = "Offline capability";
+  const item = exactFields(payload, context, OFFLINE_STATUS_FIELDS);
+  if (item.mandatory !== false) {
+    throw new TypeError(`${context}.mandatory must be false`);
   }
   if (
-    artifactSet !== null &&
-    (artifactSet.max_proof_bytes !== verifiers.active_recursive_step_eq_verifier.max_proof_bytes ||
-      artifactSet.max_proof_bytes !== verifiers.active_recursive_step_ep_verifier.max_proof_bytes)
+    exactString(
+      item.cash_handoff_capability,
+      `${context}.cash_handoff_capability`,
+    ) !== KAGEMUSHA_CASH_HANDOFF_CAPABILITY
   ) {
-    throw new TypeError(`${context}.artifact_set.max_proof_bytes must match both recursive verifiers`);
+    throw new TypeError(
+      `${context}.cash_handoff_capability must be ${KAGEMUSHA_CASH_HANDOFF_CAPABILITY}`,
+    );
   }
-  const proofBackendAvailable = boolean(
-    item.proof_backend_available,
-    `${context}.proof_backend_available`,
-  );
-  if (proofBackendAvailable && artifactSet === null) {
-    throw new TypeError(`${context}.proof_backend_available requires an authenticated artifact_set`);
+  if (
+    safeUnsigned(item.required_bridge_abi_version, `${context}.required_bridge_abi_version`, {
+      positive: true,
+      maximum: 0xffff_ffff,
+    }) !== KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION
+  ) {
+    throw new TypeError(`${context}.required_bridge_abi_version must be 21`);
   }
-  const recursiveLineageSupported = boolean(
-    item.recursive_lineage_supported,
-    `${context}.recursive_lineage_supported`,
-  );
-  const expectedLineage = proofBackendAvailable && artifactSet !== null && hasEq && hasEp;
-  if (recursiveLineageSupported !== expectedLineage) {
-    throw new TypeError(`${context}.recursive_lineage_supported contradicts the ABI-21 runtime conjunction`);
+  if (
+    safeUnsigned(item.max_hops, `${context}.max_hops`, {
+      positive: true,
+      maximum: 0xffff_ffff,
+    }) !== KAGEMUSHA_MAX_HOPS
+  ) {
+    throw new TypeError(`${context}.max_hops must be 8`);
   }
-  if (!Array.isArray(item.blockers)) {
-    throw new TypeError(`${context}.blockers must be an array`);
+  if (item.ready !== true) {
+    throw new TypeError(`${context}.ready must be true`);
   }
-  const blockerCodes = new Set();
-  const blockers = item.blockers.map((value, index) => {
-    const blockerContext = `${context}.blockers[${index}]`;
-    const blocker = exactFields(value, blockerContext, ["code", "message"]);
-    const code = exactString(blocker.code, `${blockerContext}.code`, { maximum: 64 });
-    if (!BLOCKER_CODE.test(code) || blockerCodes.has(code)) {
-      throw new TypeError(`${blockerContext}.code must be unique stable lowercase text`);
-    }
-    blockerCodes.add(code);
-    return Object.freeze({
-      code,
-      message: exactString(blocker.message, `${blockerContext}.message`),
-    });
-  });
-  const ready = boolean(item.ready, `${context}.ready`);
-  const expectedReady =
-    expectedLineage &&
-    assetScale !== null &&
-    assetScale <= 28 &&
-    verifiers.active_transfer_verifier !== null &&
-    verifiers.active_topup_shield_verifier !== null &&
-    verifiers.active_unshield_verifier !== null &&
-    blockers.length === 0;
-  if (ready !== expectedReady) {
-    throw new TypeError(`${context}.ready contradicts the complete ABI-21 runtime conjunction`);
+  if (!Array.isArray(item.assets) || item.assets.length !== 0) {
+    throw new TypeError(`${context}.assets must be an empty array`);
+  }
+  if (!Array.isArray(item.blockers) || item.blockers.length !== 0) {
+    throw new TypeError(`${context}.blockers must be an empty array`);
   }
   return Object.freeze({
+    mandatory: false,
+    cash_handoff_capability: KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
     required_bridge_abi_version: KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
     max_hops: KAGEMUSHA_MAX_HOPS,
-    asset_definition_id: assetDefinitionId,
-    asset_scale: assetScale,
-    evaluated_block_height: evaluatedBlockHeight,
-    evaluated_block_hash: hash32(item.evaluated_block_hash, `${context}.evaluated_block_hash`),
-    ...verifiers,
-    artifact_set: artifactSet,
-    proof_backend_available: proofBackendAvailable,
-    recursive_lineage_supported: recursiveLineageSupported,
-    ready,
-    blockers: Object.freeze(blockers),
+    ready: true,
+    assets: Object.freeze([]),
+    blockers: Object.freeze([]),
   });
 }
 

@@ -11,7 +11,10 @@ readonly native_file="integration_tests/tests/native_amx_routing.rs"
 readonly launcher="scripts/run_nexus_cross_dataspace_atomic_swap.sh"
 readonly release_runner="scripts/run_sumeragi_v2_release_gates.sh"
 readonly grouped_parity_harness="ci/run_native_amx_v2_grouped_sdk_parity.sh"
+readonly sdk_diagnostics_harness="ci/run_sumeragi_v2_sdk_diagnostics.sh"
+readonly js_sdk_diagnostics_test="javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js"
 readonly grouped_fixture="fixtures/sumeragi_v2/native_amx_v2_grouped.json"
+readonly closure_ledger="specs/sumeragi_v2_multilane_closure_ledger.md"
 readonly release_receipt_writer="scripts/write_sumeragi_v2_release_receipt.py"
 readonly release_receipt_component="scripts/write_sumeragi_v2_release_receipt_formal_artifacts.py"
 readonly prebuilt_bundle_shell="scripts/sumeragi_v2_prebuilt_bundle.sh"
@@ -72,6 +75,28 @@ require_exact_token() {
   fi
 }
 
+require_exact_digest_occurrences() {
+  local path="$1"
+  local digest="$2"
+  local expected_count="$3"
+  local label="$4"
+  local observed_count
+  if [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "${label} is not a lowercase SHA-256 digest: ${digest}" >&2
+    exit 1
+  fi
+  observed_count="$(
+    awk -v needle="$digest" '
+      { count += gsub(needle, "") }
+      END { print count + 0 }
+    ' "$path"
+  )"
+  if [[ "$observed_count" != "$expected_count" ]]; then
+    echo "${path} must publish the current ${label} exactly ${expected_count} times; found ${observed_count}" >&2
+    exit 1
+  fi
+}
+
 require_nonignored_test "$autoscale_file" "$autoscale_test"
 require_nonignored_test "$autoscale_file" "$autoscale_restart_test"
 require_nonignored_test "$autoscale_file" "$autoscale_drain_test"
@@ -120,7 +145,10 @@ require_exact_token \
   "readonly native_amx_grouped_parity_harness=\"${grouped_parity_harness}\""
 require_exact_token \
   "$release_runner" \
-  "readonly expected_multilane_focus_test_count=397"
+  "readonly sumeragi_v2_sdk_diagnostics_harness=\"${sdk_diagnostics_harness}\""
+require_exact_token \
+  "$release_runner" \
+  "readonly expected_multilane_focus_test_count=418"
 require_exact_token \
   "$release_runner" \
   "readonly expected_multilane_formal_mutation_count=73"
@@ -132,7 +160,7 @@ require_exact_token \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
 require_exact_token \
   "$release_runner" \
-  "  readonly expected_corridor_leg_count=82"
+  "  readonly expected_corridor_leg_count=86"
 require_exact_token \
   "$release_runner" \
   "export CARGO_INCREMENTAL=0"
@@ -167,7 +195,7 @@ require_exact_token \
   "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 52"
 require_exact_token \
   "$release_receipt_writer" \
-  "_G_UNIT_TEST_COUNT = 397"
+  "_G_UNIT_TEST_COUNT = 418"
 require_exact_token \
   "$release_receipt_writer" \
   "_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"
@@ -201,6 +229,25 @@ for grouped_suite in \
   '    ("java", 5),'; do
   require_exact_token "$release_receipt_writer" "$grouped_suite"
 done
+for sdk_diagnostics_suite in \
+  '    ("python", 114),' \
+  '    ("javascript", 88),' \
+  '    ("swift", 17),' \
+  '    ("kotlin", 15),' \
+  '    ("java", 10),'; do
+  require_exact_token "$release_receipt_writer" "$sdk_diagnostics_suite"
+done
+for sdk_diagnostics_test_count in 114 88 17 15 10; do
+  require_exact_token \
+    "$sdk_diagnostics_harness" \
+    "    observed_test_count=${sdk_diagnostics_test_count}"
+done
+require_exact_token \
+  "$sdk_diagnostics_harness" \
+  '      assert_node_tap "$javascript_transcript" 44'
+require_exact_token \
+  "$js_sdk_diagnostics_test" \
+  '  "typed Sumeragi endpoints reject swapped status and diagnostics payloads",'
 
 python3 -I -S - \
   "$release_runner" \
@@ -445,8 +492,8 @@ native_amx_parity_inventory = """\
   )
   native_amx_grouped_parity_test_counts=(
     7
+    58
     56
-    54
     3
     6
     5
@@ -565,7 +612,7 @@ for block in source_sealed_blocks:
         reject(f"source-sealed command/evidence block {label} is missing or duplicated")
 
 expected_focus_counts = {
-    "required_multilane_core_focus_tests": 194,
+    "required_multilane_core_focus_tests": 215,
     "required_multilane_queue_journal_focus_tests": 140,
     "required_multilane_config_lib_focus_tests": 9,
     "required_multilane_config_runtime_focus_tests": 2,
@@ -609,9 +656,9 @@ for array_name, expected_count in expected_focus_counts.items():
         )
     all_focus_entries.extend(entries)
 
-if len(all_focus_entries) != 397 or len(set(all_focus_entries)) != 397:
+if len(all_focus_entries) != 418 or len(set(all_focus_entries)) != 418:
     reject(
-        "multilane focus-test arrays must contain 397 globally distinct tests; "
+        "multilane focus-test arrays must contain 418 globally distinct tests; "
         f"found {len(all_focus_entries)} entries and "
         f"{len(set(all_focus_entries))} distinct entries"
     )
@@ -621,7 +668,7 @@ g_unit_groups = (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        194,
+        215,
         "--lib",
     ),
     (
@@ -693,7 +740,7 @@ for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
     if source.count(
         f'    g_unit_expected_test_count "$expected_multilane_focus_test_count" \\'
     ) != 1:
-        reject("G-UNIT expected 397 count is not published exactly once")
+        reject("G-UNIT expected 418 count is not published exactly once")
     if expected_count <= 0:
         reject(f"G-UNIT leg {leg_id} has an invalid expected count")
 
@@ -1211,12 +1258,25 @@ for index in execution_lines:
 PY
 
 for grouped_surface in openapi python javascript swift kotlin java; do
-  if [[ "$(grep -Ec -- "^    ${grouped_surface}$" "$release_runner" || true)" != 1 ]]; then
-    echo "production release runner must inventory grouped Native AMX V2 ${grouped_surface} parity exactly once" >&2
+  grouped_surface_occurrences=2
+  [[ "$grouped_surface" == openapi ]] && grouped_surface_occurrences=1
+  if [[ "$(grep -Ec -- "^    ${grouped_surface}$" "$release_runner" || true)" != "$grouped_surface_occurrences" ]]; then
+    echo "production release runner has an invalid grouped/diagnostics ${grouped_surface} surface inventory" >&2
     exit 1
   fi
   if ! grep -Fq -- "${grouped_surface})" "$grouped_parity_harness"; then
     echo "grouped Native AMX V2 parity harness lacks ${grouped_surface} execution" >&2
+    exit 1
+  fi
+done
+
+for sdk_diagnostics_surface in python javascript swift kotlin java; do
+  if [[ "$(grep -Ec -- "^    ${sdk_diagnostics_surface}$" "$release_runner" || true)" != 2 ]]; then
+    echo "production release runner must inventory grouped and diagnostics ${sdk_diagnostics_surface} SDK surfaces exactly once each" >&2
+    exit 1
+  fi
+  if ! grep -Fq -- "${sdk_diagnostics_surface})" "$sdk_diagnostics_harness"; then
+    echo "Sumeragi v2 SDK diagnostics harness lacks ${sdk_diagnostics_surface} execution" >&2
     exit 1
   fi
 done
@@ -1248,6 +1308,43 @@ if [[ ! "$grouped_fixture_sha256" =~ ^[0-9a-f]{64}$ \
   echo "grouped Native AMX V2 fixture/suite source binding is invalid" >&2
   exit 1
 fi
+require_exact_digest_occurrences \
+  "$closure_ledger" \
+  "$grouped_fixture_sha256" \
+  2 \
+  "grouped Native AMX V2 fixture SHA-256"
+require_exact_digest_occurrences \
+  "$closure_ledger" \
+  "$grouped_suite_source_manifest_sha256" \
+  2 \
+  "grouped Native AMX V2 suite-source manifest SHA-256"
+
+sdk_diagnostics_suite_source_manifest_sha256="$(
+  bash "$sdk_diagnostics_harness" --suite-source-manifest-sha256
+)"
+receipt_sdk_diagnostics_suite_source_manifest_sha256="$(
+  python3 -I -S - "$repo_root" <<'PY'
+from pathlib import Path
+import runpy
+import sys
+
+root = Path(sys.argv[1]).resolve(strict=True)
+sys.path.insert(0, str(root))
+symbols = runpy.run_path(str(root / "scripts/write_sumeragi_v2_release_receipt.py"))
+print(symbols["_sumeragi_sdk_diagnostics_suite_source_manifest"](root))
+PY
+)"
+if [[ ! "$sdk_diagnostics_suite_source_manifest_sha256" =~ ^[0-9a-f]{64}$ \
+  || "$receipt_sdk_diagnostics_suite_source_manifest_sha256" \
+    != "$sdk_diagnostics_suite_source_manifest_sha256" ]]; then
+  echo "Sumeragi v2 SDK diagnostics suite source binding is invalid" >&2
+  exit 1
+fi
+require_exact_digest_occurrences \
+  "$closure_ledger" \
+  "$sdk_diagnostics_suite_source_manifest_sha256" \
+  2 \
+  "Sumeragi v2 SDK diagnostics suite-source manifest SHA-256"
 
 if [[ "$(grep -Fxc -- '      --multilane-four-peer-release' "$release_runner" || true)" != 1 ]]; then
   echo "production release runner must invoke the mandatory four-peer launcher exactly once" >&2
@@ -1286,4 +1383,4 @@ if [[ "$(grep -Fxc -- "    env \"\${ENV_VARS[@]}\" IROHA_MULTILANE_RELEASE_MODE=
   exit 1
 fi
 
-echo "[multilane-release-inventory] 82 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 39 modules, exact 397/397 G-UNIT (194 core, 140 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 86 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 39 modules, exact 418/418 G-UNIT (215 core, 140 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"

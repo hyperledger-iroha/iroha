@@ -4574,18 +4574,10 @@ pub fn execution_policy_digest_v1(
     policy.push("content.default_auth_mode", &content.default_auth_mode);
     policy.push("content.stripe_layout", &content.stripe_layout);
 
-    // Offline-cash and deterministic settlement routing. The process-local
-    // service switch is deliberately excluded: per-asset metadata and escrow
-    // bindings determine consensus execution. Artifact paths are authenticated
-    // by the promoted release policy digest instead of their local filesystem names.
-    policy.push(
-        "settlement.offline.escrow_required",
-        &settlement.offline.escrow_required,
-    );
-    policy.push(
-        "settlement.offline.escrow_accounts",
-        &settlement.offline.escrow_accounts,
-    );
+    // Offline-cash primitives are universal. Runtime escrow bindings are
+    // deterministically derived when an offline instruction executes, so no
+    // process-local enablement or asset catalog participates in consensus
+    // policy. Artifact paths are likewise local cache locations.
     policy.push(
         "settlement.offline.kagemusha_max_decoded_bytes",
         &settlement.offline.kagemusha_max_decoded_bytes,
@@ -12458,23 +12450,22 @@ impl FromStr for StreamingSoranetAccessKind {
     }
 }
 
-/// Settlement configuration for offline cash and conversion routing.
+/// Settlement execution state and conversion routing configuration.
 #[derive(Debug, Clone, Default)]
 pub struct Settlement {
-    /// Offline settlement retention policy.
+    /// Universal cash-protocol state plus optional proof-release cache controls.
     pub offline: Offline,
     /// Router configuration for XOR conversion.
     pub router: Router,
 }
 
-/// Kagemusha escrow and execution policy parameters.
+/// Universal Kagemusha execution state and optional proof-release cache parameters.
 #[derive(Debug, Clone)]
 pub struct Offline {
-    /// Whether this node profile enables offline-cash support.
-    pub enabled: bool,
-    /// Whether Kagemusha cash must be escrow-backed.
-    pub escrow_required: bool,
-    /// Escrow accounts keyed by Kagemusha asset definition.
+    /// Lazily derived escrow accounts keyed by asset definition.
+    ///
+    /// This map is runtime state, not operator configuration and not an
+    /// enablement catalog. Every asset can use the offline instructions.
     pub escrow_accounts: BTreeMap<AssetDefinitionId, AccountId>,
     /// Canonical Norito policy authenticating promoted Kagemusha releases.
     pub kagemusha_release_policy_path: Option<PathBuf>,
@@ -12489,8 +12480,6 @@ pub struct Offline {
 impl Default for Offline {
     fn default() -> Self {
         Self {
-            enabled: false,
-            escrow_required: true,
             escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
                 defaults::settlement::offline::kagemusha_release_policy_path(),

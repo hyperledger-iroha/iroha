@@ -47,8 +47,6 @@ jobs:
       TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT: ${{ vars.TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT }}
       TAIRA_RELEASE_MANIFEST_VERIFIER_PATH: ${{ vars.TAIRA_RELEASE_MANIFEST_VERIFIER_PATH }}
       TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256: ${{ vars.TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256 }}
-      KAGEMUSHA_V4_RELEASE_POLICY_PATH: ${{ vars.KAGEMUSHA_V4_RELEASE_POLICY_PATH }}
-      KAGEMUSHA_V4_ARTIFACT_ROOT: ${{ vars.KAGEMUSHA_V4_ARTIFACT_ROOT }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -105,9 +103,7 @@ jobs:
           OUTPUT_DIR="$output_dir" \
             bash configs/soranexus/taira/build_taira_rollout_bundle.sh \
               --profile release \
-              --output-dir "$output_dir" \
-              --kagemusha-release-policy "$KAGEMUSHA_V4_RELEASE_POLICY_PATH" \
-              --kagemusha-artifact-root "$KAGEMUSHA_V4_ARTIFACT_ROOT"
+              --output-dir "$output_dir"
 
           python3 -I -S - "$output_dir" "${{ steps.source.outputs.source_identity }}" <<'PY'
           import json
@@ -177,12 +173,6 @@ jobs:
       TAIRA_RELEASE_MANIFEST_VERIFIER_PATH: ${{ vars.TAIRA_RELEASE_MANIFEST_VERIFIER_PATH }}
       TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256: ${{ vars.TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256 }}
       TAIRA_MACOS_SOURCE_RESET_BUNDLE_PATH: ${{ vars.TAIRA_MACOS_SOURCE_RESET_BUNDLE_PATH }}
-      TAIRA_MACOS_OFFLINE_GENESIS_PATH: ${{ vars.TAIRA_MACOS_OFFLINE_GENESIS_PATH }}
-      TAIRA_MACOS_KAGEMUSHA_RELEASE_BUNDLE_PATH: ${{ vars.TAIRA_MACOS_KAGEMUSHA_RELEASE_BUNDLE_PATH }}
-      TAIRA_MACOS_OPERATOR_IDENTITY_PATH: ${{ vars.TAIRA_MACOS_OPERATOR_IDENTITY_PATH }}
-      TAIRA_MACOS_GENESIS_PRIVATE_KEY_PATH: ${{ vars.TAIRA_MACOS_GENESIS_PRIVATE_KEY_PATH }}
-      TAIRA_MACOS_GENESIS_PUBLIC_KEY: ${{ vars.TAIRA_MACOS_GENESIS_PUBLIC_KEY }}
-      TAIRA_MACOS_COMMAND_AUTHORITY: ${{ vars.TAIRA_MACOS_COMMAND_AUTHORITY }}
       TAIRA_OCI_REPOSITORY: ${{ vars.TAIRA_OCI_REPOSITORY }}
       TAIRA_OCI_USERNAME: ${{ secrets.TAIRA_OCI_USERNAME }}
       TAIRA_OCI_PASSWORD: ${{ secrets.TAIRA_OCI_PASSWORD }}
@@ -238,11 +228,7 @@ jobs:
           require_external_file "release external signer" "$TAIRA_RELEASE_EXTERNAL_SIGNER_PATH"
           require_external_file "release public key" "$TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH"
           require_external_file "native release verifier" "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH"
-          require_external_file "offline genesis" "$TAIRA_MACOS_OFFLINE_GENESIS_PATH"
-          require_external_file "operator identity" "$TAIRA_MACOS_OPERATOR_IDENTITY_PATH"
-          require_external_file "genesis private key" "$TAIRA_MACOS_GENESIS_PRIVATE_KEY_PATH"
           require_external_directory "source reset bundle" "$TAIRA_MACOS_SOURCE_RESET_BUNDLE_PATH"
-          require_external_directory "Kagemusha release bundle" "$TAIRA_MACOS_KAGEMUSHA_RELEASE_BUNDLE_PATH"
           [[ "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]
           [[ "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" =~ ^[0-9a-f]{64}$ ]]
           test "$(shasum -a 256 "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" | awk '{print $1}')" = "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
@@ -327,7 +313,7 @@ jobs:
               stream.write(f"authority={root / 'authority'}\n")
           PY
 
-      - name: Build the native macOS arm64 validator and preparation tool
+      - name: Build the native macOS arm64 validator
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -337,15 +323,11 @@ jobs:
           CARGO_TARGET_DIR="$target_root" CARGO_BUILD_JOBS=1 cargo build --locked --release \
             -p irohad --bin irohad \
             --features embedded-soracloud-runtime,zk-stark
-          CARGO_TARGET_DIR="$target_root" CARGO_BUILD_JOBS=1 cargo build --locked --release \
-            -p iroha_kagami --bin kagami
           test "$(python3 -I -S scripts/compute_workspace_source_manifest.py --root "$GITHUB_WORKSPACE")" = "$TAIRA_WORKSPACE_SOURCE_MANIFEST_SHA256"
           test "$(shasum -a 256 Cargo.lock | awk '{print $1}')" = "$TAIRA_CARGO_LOCK_SHA256"
           test -x "$target_root/release/irohad"
-          test -x "$target_root/release/kagami"
           {
             echo "TAIRA_MACOS_IROHAD=$target_root/release/irohad"
-            echo "TAIRA_MACOS_KAGAMI=$target_root/release/kagami"
           } >>"$GITHUB_ENV"
 
       - name: Prepare the exact fresh macOS deployment payload
@@ -354,23 +336,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           reset_bundle="${RUNNER_TEMP}/taira-macos-reset-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          python3 scripts/prepare_taira_offline_reset_bundle.py prepare \
+          binary_sha="$(shasum -a 256 "$TAIRA_MACOS_IROHAD" | awk '{print $1}')"
+          python3 scripts/prepare_taira_empty_reset_bundle.py \
             --source-bundle "$TAIRA_MACOS_SOURCE_RESET_BUNDLE_PATH" \
-            --offline-genesis "$TAIRA_MACOS_OFFLINE_GENESIS_PATH" \
-            --release-bundle "$TAIRA_MACOS_KAGEMUSHA_RELEASE_BUNDLE_PATH" \
-            --operator-identity "$TAIRA_MACOS_OPERATOR_IDENTITY_PATH" \
-            --genesis-private-key-file "$TAIRA_MACOS_GENESIS_PRIVATE_KEY_PATH" \
-            --genesis-public-key "$TAIRA_MACOS_GENESIS_PUBLIC_KEY" \
-            --command-authority "$TAIRA_MACOS_COMMAND_AUTHORITY" \
-            --kagami "$TAIRA_MACOS_KAGAMI" \
-            --irohad "$TAIRA_MACOS_IROHAD" \
+            --irohad-sha256 "$binary_sha" \
             --source-commit "$TAIRA_SOURCE_COMMIT" \
             --output-bundle "$reset_bundle"
-          binary_sha="$(shasum -a 256 "$TAIRA_MACOS_IROHAD" | awk '{print $1}')"
-          python3 scripts/prepare_taira_offline_reset_bundle.py check \
-            --bundle "$reset_bundle" \
-            --irohad "$TAIRA_MACOS_IROHAD" \
-            --expected-irohad-sha256 "$binary_sha"
           supervisor="${RUNNER_TEMP}/taira-peer-supervisor-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.py"
           install -m 0600 scripts/taira_peer_supervisor.py "$supervisor"
           restart_generation="$(

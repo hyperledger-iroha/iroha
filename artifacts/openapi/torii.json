@@ -40458,36 +40458,6 @@
           "SoraFS"
         ],
         "x-iroha-tool-effect": "read"
-      },
-      "post": {
-        "description": "Publish a validated SoraFS appeal finance report into the local Governance DAG pipeline. The request requires canonical app authentication and a configured governance publisher.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Publish an appeal finance report.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/appeals/finance/settle": {
@@ -40588,36 +40558,6 @@
           "SoraFS"
         ],
         "x-iroha-tool-effect": "read"
-      },
-      "post": {
-        "description": "Publish a validated SoraFS appeal finance weekly rollup into the local Governance DAG pipeline. The request requires canonical app authentication and a configured governance publisher.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Publish an appeal finance weekly rollup.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/appeals/pricing/config": {
@@ -49496,70 +49436,6 @@
           }
         },
         "summary": "Admit authenticated moderation screening evidence.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/moderation/viewer-audit-reports": {
-      "post": {
-        "description": "This compatibility tombstone performs canonical app authentication and requires the sorafs_moderation_operator role, then returns HTTP 410 Gone. It never parses the retired report body or reads or mutates the former local session/access registry. Read the authoritative signed, payload-free receipt chain from `/v1/evidence/audit` and its signed checkpoint status from `/v1/evidence/status`.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "410": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Retired moderation evidence-viewer audit-ingestion tombstone.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/moderation/viewer-audit-reports/publish-due": {
-      "post": {
-        "description": "This compatibility tombstone performs canonical app authentication and requires the sorafs_moderation_operator role, then returns HTTP 410 Gone. The former process-local audit scheduler and local session/access publication path are removed. Read the authoritative signed, payload-free receipt chain from `/v1/evidence/audit`; publication must consume that exact signed projection through a deployment-owned transparency adapter.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "410": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Retired moderation evidence-viewer audit-publication tombstone.",
         "tags": [
           "SoraFS"
         ],

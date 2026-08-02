@@ -28,6 +28,8 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(SoraFsReferenceValidators.IsAvailable(new FakeNativeBoundary()));
         Assert.False(SoraFsReferenceValidators.IsAvailable(
+            new FakeNativeBoundary { Abi = 19 }));
+        Assert.False(SoraFsReferenceValidators.IsAvailable(
             new FakeNativeBoundary { Abi = 20 }));
         Assert.False(SoraFsReferenceValidators.IsAvailable(
             new FakeNativeBoundary { Abi = 22 }));
@@ -48,6 +50,8 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.True(SoraFsReferenceValidators.IsAppealFinanceAvailable(
             new FakeNativeBoundary()));
         Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
+            new FakeNativeBoundary { Abi = 19 }));
+        Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
             new FakeNativeBoundary { Abi = 20 }));
         Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
             new FakeNativeBoundary { Abi = 22 }));
@@ -66,6 +70,8 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.True(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
             new FakeNativeBoundary()));
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
+            new FakeNativeBoundary { Abi = 19 }));
+        Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
             new FakeNativeBoundary { Abi = 20 }));
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
             new FakeNativeBoundary { Abi = 22 }));
@@ -83,6 +89,8 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(SoraFsReferenceValidators.IsFixtureBundleAvailable(
             new FakeNativeBoundary()));
+        Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
+            new FakeNativeBoundary { Abi = 19 }));
         Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
             new FakeNativeBoundary { Abi = 20 }));
         Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(

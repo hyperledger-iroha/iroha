@@ -5210,28 +5210,6 @@ impl NodeHandle {
     }
 }
 
-impl potr::PotrLatencyRepairHandoff for NodeHandle {
-    fn enqueue_proof_outcome(
-        &self,
-        source_identity: [u8; 32],
-        receipt: &PotrReceiptV1,
-        admission_envelope_digest: [u8; 32],
-    ) -> Result<[u8; 32], potr::PotrRepairHandoffError> {
-        self.enqueue_potr_proof_outcome(source_identity, receipt, admission_envelope_digest)
-    }
-
-    fn enqueue_latency_repair(
-        &self,
-        source_identity: [u8; 32],
-        report: &RepairReportV1,
-    ) -> Result<[u8; 32], potr::PotrRepairHandoffError> {
-        let _ = (source_identity, report);
-        Err(potr::PotrRepairHandoffError(
-            "chain-authoritative repair transaction handoff is required".to_owned(),
-        ))
-    }
-}
-
 impl NodeHandle {
     /// Durably enqueue one final PoTR receipt for native proof-ledger submission.
     pub fn enqueue_potr_proof_outcome(
@@ -5887,21 +5865,18 @@ impl NodeHandle {
             }
         };
         let potr_state_dir = config.data_dir().join("potr-receipts");
-        let potr = storage
-            .as_ref()
-            .map(|_| {
-                PotrTracker::open(
-                    &potr_state_dir,
-                    state_entry_limit,
-                    config.runtime_retention().checkpoint_max_bytes(),
-                )
-                .map_err(|error| NodeInitError::Potr {
-                    path: potr_state_dir.clone(),
-                    message: error.to_string(),
-                })
-            })
-            .transpose()?
-            .unwrap_or_default();
+        // Receipt admission remains durable even when this process does not
+        // host provider storage. `enabled` controls chunk storage only; it
+        // must never select process-local PoTR state.
+        let potr = PotrTracker::open(
+            &potr_state_dir,
+            state_entry_limit,
+            config.runtime_retention().checkpoint_max_bytes(),
+        )
+        .map_err(|error| NodeInitError::Potr {
+            path: potr_state_dir.clone(),
+            message: error.to_string(),
+        })?;
         let proof_outcome_outbox_state_dir = config.data_dir().join("proof-outcome-forwarder");
         let proof_outcome_outbox_policy = ProofOutcomeOutboxPolicyV1 {
             max_pending: state_entry_limit,
@@ -5910,20 +5885,14 @@ impl NodeHandle {
             max_attempts: config.runtime_retention().proof_outcome_max_attempts(),
             checkpoint_max_bytes: config.runtime_retention().checkpoint_max_bytes(),
         };
-        let proof_outcome_outbox = if storage.is_some() {
+        // Proof-ledger handoff is a validator durability boundary independent
+        // of provider storage and is therefore always checkpoint-backed.
+        let proof_outcome_outbox =
             ProofOutcomeOutbox::open(&proof_outcome_outbox_state_dir, proof_outcome_outbox_policy)
                 .map_err(|error| NodeInitError::ProofOutcomeOutbox {
-                path: proof_outcome_outbox_state_dir.clone(),
-                message: error.to_string(),
-            })?
-        } else {
-            ProofOutcomeOutbox::in_memory(proof_outcome_outbox_policy).map_err(|error| {
-                NodeInitError::ProofOutcomeOutbox {
                     path: proof_outcome_outbox_state_dir.clone(),
                     message: error.to_string(),
-                }
-            })?
-        };
+                })?;
         let repair_transaction_state_dir = config.data_dir().join("repair-transaction-forwarder");
         let repair_transaction_policy = RepairTransactionForwarderPolicyV1 {
             max_pending: state_entry_limit,
@@ -5933,23 +5902,16 @@ impl NodeHandle {
             max_transaction_bytes: REPAIR_TRANSACTION_MAX_CANONICAL_BYTES_V1,
             checkpoint_max_bytes: config.runtime_retention().checkpoint_max_bytes(),
         };
-        let repair_transaction_forwarder = if storage.is_some() {
-            RepairTransactionForwarder::open(
-                &repair_transaction_state_dir,
-                repair_transaction_policy,
-            )
-            .map_err(|error| NodeInitError::RepairTransactionForwarder {
-                path: repair_transaction_state_dir.clone(),
-                message: error.to_string(),
-            })?
-        } else {
-            RepairTransactionForwarder::in_memory(repair_transaction_policy).map_err(|error| {
-                NodeInitError::RepairTransactionForwarder {
-                    path: repair_transaction_state_dir.clone(),
-                    message: error.to_string(),
-                }
-            })?
-        };
+        // Native repair operations remain durable on validator-only nodes;
+        // disabling provider storage must not introduce a process-local queue.
+        let repair_transaction_forwarder = RepairTransactionForwarder::open(
+            &repair_transaction_state_dir,
+            repair_transaction_policy,
+        )
+        .map_err(|error| NodeInitError::RepairTransactionForwarder {
+            path: repair_transaction_state_dir.clone(),
+            message: error.to_string(),
+        })?;
         let orderbook_worker_policy = config.orderbook_worker_policy();
         let orderbook_transaction_state_dir =
             config.data_dir().join("orderbook-transaction-forwarder");
@@ -8057,8 +8019,9 @@ impl NodeHandle {
         Ok(())
     }
 
-    /// Publish a typed SoraFS appeal finance report to the governance pipeline.
-    pub fn publish_appeal_finance_report(
+    /// Publish a typed SoraFS appeal finance report to the governance pipeline in tests.
+    #[cfg(test)]
+    fn publish_appeal_finance_report(
         &self,
         report: SoraFsAppealFinanceReportV1,
     ) -> Result<(), GovernancePublishError> {
@@ -9763,8 +9726,9 @@ impl NodeHandle {
         )
     }
 
-    /// Publish a typed SoraFS weekly appeal finance rollup to the governance pipeline.
-    pub fn publish_appeal_finance_weekly_rollup(
+    /// Publish a typed SoraFS weekly appeal finance rollup to the governance pipeline in tests.
+    #[cfg(test)]
+    fn publish_appeal_finance_weekly_rollup(
         &self,
         rollup: SoraFsAppealFinanceWeeklyRollupV1,
     ) -> Result<(), GovernancePublishError> {
@@ -14962,23 +14926,6 @@ impl NodeHandle {
         Ok(challenges)
     }
 
-    /// Record a PoTR receipt captured by the gateway.
-    pub fn record_potr_receipt(
-        &self,
-        receipt: PotrReceiptV1,
-        gateway_public_key: &[u8; 32],
-        admission: &AdmissionRecord,
-        admission_policy: &PotrAdmissionPolicyBindingV1,
-    ) -> Result<PotrRecordOutcome, PotrTrackerError> {
-        self.potr.record_receipt(
-            receipt,
-            gateway_public_key,
-            admission,
-            admission_policy,
-            self,
-        )
-    }
-
     /// Record a PoTR receipt using an explicit chain-authoritative repair handoff.
     pub fn record_potr_receipt_with_handoff(
         &self,
@@ -15910,6 +15857,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn potr_receipt_admission_requires_explicit_chain_authoritative_handoff() {
+        let source = include_str!("lib.rs");
+        let retired_default_impl =
+            ["impl potr::PotrLatencyRepairHandoff", " for NodeHandle"].concat();
+        let retired_implicit_api = ["pub fn ", "record_potr_receipt", "("].concat();
+        let explicit_api = ["pub fn ", "record_potr_receipt_with_handoff", "("].concat();
+
+        assert!(
+            !source.contains(&retired_default_impl),
+            "NodeHandle must not provide a partial process-local PoTR repair handoff"
+        );
+        assert!(
+            !source.contains(&retired_implicit_api),
+            "PoTR receipt admission must not select a fallback handoff implicitly"
+        );
+        assert!(
+            source.contains(&explicit_api),
+            "PoTR receipt admission must require an explicit chain-authoritative handoff"
+        );
+    }
+
     #[derive(Debug)]
     struct SuccessfulPorRepairHandoff;
 
@@ -15997,7 +15966,7 @@ mod tests {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("test Ed25519 key");
         let public_key = key_pair.public_key().to_bytes().1;
         let mut signing_public_key = [0_u8; 32];
-        signing_public_key.copy_from_slice(&public_key);
+        signing_public_key.copy_from_slice(public_key);
         PorFinalizedReplayArchiveBindingV1::try_new(
             [seed.wrapping_add(1); 32],
             7,
@@ -17371,6 +17340,59 @@ mod tests {
     }
 
     #[test]
+    fn validator_only_startup_opens_all_proof_and_repair_checkpoints() {
+        fn startup_with_corrupt_checkpoint(
+            root: &std::path::Path,
+            state_dir_name: &str,
+            checkpoint_name: &str,
+        ) -> NodeInitError {
+            let data_dir = root.join(state_dir_name.replace('-', "_"));
+            let checkpoint_dir = data_dir.join(state_dir_name);
+            std::fs::create_dir_all(&checkpoint_dir).expect("create checkpoint directory");
+            std::fs::write(
+                checkpoint_dir.join(checkpoint_name),
+                b"not canonical Norito",
+            )
+            .expect("write corrupt checkpoint");
+            let config = StorageConfig::builder()
+                .enabled(false)
+                .data_dir(data_dir)
+                .build();
+
+            NodeHandle::try_new(config)
+                .expect_err("validator-only startup must validate the durable checkpoint")
+        }
+
+        let temp_dir = tempfile::tempdir().expect("create validator-only state root");
+        let potr_error = startup_with_corrupt_checkpoint(
+            temp_dir.path(),
+            "potr-receipts",
+            crate::potr::POTR_TRACKER_CHECKPOINT_FILE_NAME_V1,
+        );
+        assert!(matches!(potr_error, NodeInitError::Potr { .. }));
+
+        let proof_error = startup_with_corrupt_checkpoint(
+            temp_dir.path(),
+            "proof-outcome-forwarder",
+            crate::proof_outcome_forwarder::PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1,
+        );
+        assert!(matches!(
+            proof_error,
+            NodeInitError::ProofOutcomeOutbox { .. }
+        ));
+
+        let repair_error = startup_with_corrupt_checkpoint(
+            temp_dir.path(),
+            "repair-transaction-forwarder",
+            crate::repair_transaction_forwarder::REPAIR_TRANSACTION_FORWARDER_CHECKPOINT_FILE_NAME_V1,
+        );
+        assert!(matches!(
+            repair_error,
+            NodeInitError::RepairTransactionForwarder { .. }
+        ));
+    }
+
+    #[test]
     fn node_startup_rejects_unsafe_programmatic_reserve_worker_policy() {
         let temp_dir = tempfile::tempdir().expect("create invalid reserve policy temp dir");
         let mut actual = iroha_config::parameters::actual::SorafsStorage::default();
@@ -17899,11 +17921,13 @@ mod tests {
         Arc::new(TestTransparencyLeaderLeaseProvider::default())
     }
 
+    type TestFencedTransparencyPublications =
+        BTreeMap<([u8; 32], [u8; 16]), ([u8; 32], [u8; 32], FencedTransparencyTargetHeadV1)>;
+
     #[derive(Debug, Default)]
     struct TestFencedTransparencyState {
         head: Option<FencedTransparencyTargetHeadV1>,
-        publications:
-            BTreeMap<([u8; 32], [u8; 16]), ([u8; 32], [u8; 32], FencedTransparencyTargetHeadV1)>,
+        publications: TestFencedTransparencyPublications,
         receipts: BTreeMap<
             [u8; 32],
             (

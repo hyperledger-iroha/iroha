@@ -25,7 +25,13 @@ def _write_executable(path: Path, payload: str) -> Path:
 def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, str]:
     binaries = tmp_path / "binaries"
     binaries.mkdir()
-    for name in ("irohad", "iroha", "kagami", "attachment_sanitizer"):
+    for name in (
+        "irohad",
+        "sorafs_governance_dag",
+        "iroha",
+        "kagami",
+        "attachment_sanitizer",
+    ):
         _write_executable(
             binaries / name,
             f"#!/bin/sh\nprintf '%s\\n' {name}\n",
@@ -142,6 +148,23 @@ def test_bundle_replay_is_byte_identical_and_metadata_normalized(
         assert all(member.uid == member.gid == 0 for member in members)
         assert all(member.uname == member.gname == "" for member in members)
         assert all(member.mode in {0o644, 0o755} for member in members)
+        bundle_root = f"iroha2-{VERSION}-linux-x86_64"
+        expected_binaries = {
+            f"{bundle_root}/bin/{name}"
+            for name in (
+                "irohad",
+                "sorafs_governance_dag",
+                "iroha",
+                "kagami",
+                "attachment_sanitizer",
+            )
+        }
+        actual_binaries = {
+            member.name
+            for member in members
+            if member.name.startswith(f"{bundle_root}/bin/")
+        }
+        assert actual_binaries == expected_binaries
     manifest = json.loads(outputs["manifest"].read_text(encoding="utf-8"))
     assert manifest["commit"] and len(manifest["commit"]) == 40
     assert manifest["source_date_epoch"] == EPOCH
